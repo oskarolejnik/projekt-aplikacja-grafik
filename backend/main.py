@@ -4,6 +4,7 @@ import re
 import os
 from datetime import date, time, timedelta
 from typing import Optional, List  # POPRAWKA TYPOWANIA DLA PYTHON 3.9
+from collections import defaultdict
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,6 +83,18 @@ def delete_stanowisko(sid: int, db: Session = Depends(get_db)):
     if not s:
         raise HTTPException(404, "Nie znaleziono.")
     db.delete(s); db.commit()
+
+@app.post("/api/stanowiska/{sid}/podkategorie", response_model=schemas.PodkategoriaOut)
+def create_podkategoria(sid: int, data: schemas.PodkategoriaCreate, db: Session = Depends(get_db)):
+    p = models.Podkategoria(**data.model_dump(), stanowisko_id=sid)
+    db.add(p); db.commit(); db.refresh(p)
+    return p
+
+@app.delete("/api/podkategorie/{pid}", status_code=204)
+def delete_podkategoria(pid: int, db: Session = Depends(get_db)):
+    p = db.get(models.Podkategoria, pid)
+    if p:
+        db.delete(p); db.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -527,35 +540,85 @@ def auto_assign_endpoint(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/eksport-csv")
-def eksport_csv(
-    start: Optional[date] = None,
-    end: Optional[date] = None,
-    db: Session = Depends(get_db)
-):
-    q = db.query(models.PrzydzialZmiany)
-    if start: q = q.filter(models.PrzydzialZmiany.data >= start)
-    if end:   q = q.filter(models.PrzydzialZmiany.data <= end)
-    rows = q.order_by(models.PrzydzialZmiany.data).all()
+def eksport_csv(start: date, end: date, db: Session = Depends(get_db)):
+    # 1. Pobieramy wszystkie przydziały z wybranego zakresu dat
+    przydzialy = db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data >= start,
+        models.PrzydzialZmiany.data <= end
+    ).all()
+    
+    # 2. Pobieramy wyłącznie pracowników, którzy są w grafiku "Aktywni"
+    pracownicy = db.query(models.Pracownik).filter(models.Pracownik.aktywny == True).all()
+    
+    # 3. Pobieramy nazwy stanowisk ze słownika (żeby nie wyświetlać samych numerów ID)
+    stanowiska_db = db.query(models.Stanowisko).all()
+    stanowiska_slownik = {s.id: s.nazwa for s in stanowiska_db}
+    
+    # 4. Matematyka dat: Tworzymy listę wszystkich dni pomiędzy 'start' i 'end'
+    ilosc_dni = (end - start).days
+    lista_dat = [start + timedelta(days=i) for i in range(ilosc_dni + 1)]
+    
+    # 5. Tworzymy specjalny słownik do sortowania przydziałów w konkretne "kratki" tabeli
+    # Kluczem jest (pracownik_id, data), a wartością lista tekstów ze zmianami
+    przydzialy_w_kratkach = defaultdict(list)
+    
+    for p in przydzialy:
+        # Odczytanie nazwy stanowiska
+        nazwa_stanowiska = stanowiska_slownik.get(p.stanowisko_id, "Nieznane")
+        
+        # Przygotowanie ładnego formatu godzin
+        g_od = p.godz_od.strftime("%H:%M") if p.godz_od else ""
+        g_do = p.godz_do.strftime("%H:%M") if p.godz_do else "Koniec"
+        
+        if g_od:
+            tekst_zmiany = f"{nazwa_stanowiska} ({g_od}-{g_do})"
+        else:
+            tekst_zmiany = f"{nazwa_stanowiska} (Cały dzień)"
+            
+        przydzialy_w_kratkach[(p.pracownik_id, p.data)].append(tekst_zmiany)
 
+    # 6. Tworzymy wirtualny plik CSV w pamięci serwera
     output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["data", "stanowisko", "pracownik", "godz_od", "godz_do"])
-    for r in rows:
-        writer.writerow([
-            r.data,
-            r.stanowisko.nazwa,
-            f"{r.pracownik.imie} {r.pracownik.nazwisko}",
-            str(r.godz_od) if r.godz_od else "",
-            str(r.godz_do) if r.godz_do else "",
-        ])
-
+    # Używamy średnika! Polski Excel często psuje układ, jeśli użyje się standardowego przecinka
+    writer = csv.writer(output, delimiter=';')
+    
+    # ---- TWORZENIE NAGŁÓWKA TABELI ----
+    # Wygląda tak: ["Pracownik", "2026-06-01", "2026-06-02", "2026-06-03"...]
+    naglowek = ["Pracownik"] + [d.strftime("%d.%m.%Y") for d in lista_dat]
+    writer.writerow(naglowek)
+    
+    # ---- TWORZENIE WIERSZY PRACOWNIKÓW ----
+    for pracownik in pracownicy:
+        wiersz = [f"{pracownik.imie} {pracownik.nazwisko}"]
+        
+        for d in lista_dat:
+            # Szukamy, czy pracownik ma w danym dniu wpisane zmiany
+            zmiany = przydzialy_w_kratkach.get((pracownik.id, d), [])
+            
+            if zmiany:
+                # Łączymy wszystkie zmiany pracownika z tego dnia znakiem |
+                # (Zabezpieczenie na wypadek, gdyby pracował np. rano na Barze, a po południu na Sali)
+                wiersz.append(" | ".join(zmiany))
+            else:
+                # Jeśli w tym dniu ma wolne, zostawiamy pustą komórkę
+                wiersz.append("")
+                
+        writer.writerow(wiersz)
+        
+    # Przygotowanie pliku do wysłania
     output.seek(0)
+    
+    headers = {
+        "Content-Disposition": f"attachment; filename=grafik_{start}_do_{end}.csv"
+    }
+    
+    # Konwersja na bajty z ukrytym znacznikiem 'utf-8-sig'. 
+    # Bez tego polskie znaki takie jak ą, ę, ł wyglądałyby w Excelu jak błędy (np. "krzaczki").
     return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=grafik.csv"},
+        iter([output.getvalue().encode("utf-8-sig")]), 
+        media_type="text/csv", 
+        headers=headers
     )
-
 
 # ── SERWOWANIE FRONTENDU (Z PEŁNĄ ŚCIEŻKĄ) ─────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

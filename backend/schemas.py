@@ -2,6 +2,19 @@ from pydantic import BaseModel, ConfigDict
 from datetime import date, time
 from typing import Optional, List
 
+#podkategoria
+
+class PodkategoriaCreate(BaseModel):
+    nazwa: str
+    godz_od: Optional[time] = None
+    godz_do: Optional[time] = None
+
+class PodkategoriaOut(PodkategoriaCreate):
+    id: int
+    stanowisko_id: int
+    class Config:
+        from_attributes = True
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SCHEMATY: STANOWISKA
 # ═══════════════════════════════════════════════════════════════════════════
@@ -14,7 +27,9 @@ class StanowiskoCreate(StanowiskoBase):
 
 class StanowiskoOut(StanowiskoBase):
     id: int
+    podkategorie: List[PodkategoriaOut] = []
     model_config = ConfigDict(from_attributes=True)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SCHEMATY: WYMAGANIA DNIA (ZAKTUALIZOWANE)
@@ -91,3 +106,4 @@ class PracownikOut(PracownikBase):
 class AutoAssignResult(BaseModel):
     przydzielone: int
     niedobory: List[dict]
+

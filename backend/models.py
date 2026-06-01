@@ -16,7 +16,6 @@ pracownik_stanowisko = Table(
     Column("stanowisko_id", Integer, ForeignKey("stanowiska.id"), primary_key=True),
 )
 
-
 class Pracownik(Base):
     __tablename__ = "pracownicy"
 
@@ -35,10 +34,26 @@ class Stanowisko(Base):
 
     id            = Column(Integer, primary_key=True, index=True)
     nazwa         = Column(String(64), nullable=False, unique=True)
-    tylko_weekend = Column(Boolean, default=False)   # pod-stanowiska Sali itp.
+    tylko_weekend = Column(Boolean, default=False)
 
     uprawnieni = relationship("Pracownik", secondary=pracownik_stanowisko, back_populates="kwalifikacje")
     przydzialy = relationship("PrzydzialZmiany", back_populates="stanowisko", cascade="all, delete-orphan")
+    
+    # NOWOŚĆ: Ta relacja łączy jedno stanowisko z wieloma rewirami (Podkategoriami)
+    podkategorie = relationship("Podkategoria", back_populates="stanowisko", cascade="all, delete-orphan")
+
+
+# NOWA TABELA: Pozwala zapisać dowolną liczbę rewirów (BarR1, BarR2) dla jednego Stanowiska (Bar)
+class Podkategoria(Base):
+    __tablename__ = "podkategorie"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    stanowisko_id = Column(Integer, ForeignKey("stanowiska.id", ondelete="CASCADE"), nullable=False)
+    nazwa = Column(String(64), nullable=False) # np. "BarR1", "BarR2", "Sala Góra"
+    godz_od = Column(Time, nullable=True)      # np. 12:00:00
+    godz_do = Column(Time, nullable=True)
+
+    stanowisko = relationship("Stanowisko", back_populates="podkategorie")
 
 
 class WymaganiaDnia(Base):
@@ -48,10 +63,9 @@ class WymaganiaDnia(Base):
     data = Column(Date, nullable=False)
     stanowisko_id = Column(Integer, ForeignKey("stanowiska.id"), nullable=False)
     
-    # NOWE POLA:
-    godz_od = Column(Time, nullable=True)     # np. 10:00:00
-    godz_do = Column(Time, nullable=True)     # np. 22:00:00
-    rewir = Column(String, nullable=True)     # np. "Parter", "Góra", "Namiot"
+    godz_od = Column(Time, nullable=True)
+    godz_do = Column(Time, nullable=True)
+    rewir = Column(String, nullable=True)
     liczba_osob = Column(Integer, default=1)
 
 
@@ -71,7 +85,9 @@ class Dyspozycja(Base):
 
 class PrzydzialZmiany(Base):
     __tablename__ = "przydzialy_zmian"
-    __table_args__ = (UniqueConstraint("data", "stanowisko_id", "pracownik_id"),)
+    
+    # POPRAWKA KRYTYCZNA: Dodano "godz_od", dzięki czemu w jednym dniu pracownik może mieć dwie różne zmiany!
+    __table_args__ = (UniqueConstraint("data", "stanowisko_id", "pracownik_id", "godz_od"),)
 
     id            = Column(Integer, primary_key=True, index=True)
     data          = Column(Date, nullable=False)

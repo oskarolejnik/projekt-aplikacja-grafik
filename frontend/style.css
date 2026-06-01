@@ -353,3 +353,10 @@ table:not(.modern-grid-table, #grafik-table) tr:hover {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* Styl dla aktywnego przycisku w nawigacji */
+nav button.active {
+    background-color: #2563eb; /* Odpowiednik bg-blue-600 w Tailwind */
+    color: #ffffff; /* Odpowiednik text-white */
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* Odpowiednik shadow-md */
+    transform: scale(1.05); /* Odpowiednik scale-105 */
+}

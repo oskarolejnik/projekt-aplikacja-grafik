@@ -1,27 +1,15 @@
 /**
  * Scheduler — frontend (vanilla JS, SPA)
- * Komunikuje się z FastAPI przez /api/*
- * Wersja z inteligentnym, globalnym zapamiętywaniem wybranego tygodnia
  */
 
 const API = "/api";
+let STATE = { stanowiska: [], pracownicy: [], wymagania: [], dyspozycje: [], przydzialy: [], wybranyTydzien: "" };
 
-// ── stan aplikacji ──────────────────────────────────────────────────────
-let STATE = {
-  stanowiska: [],
-  pracownicy: [],
-  wymagania:  [],
-  dyspozycje: [],
-  przydzialy: [],
-  wybranyTydzien: "" // Globalna pamięć wybranego tygodnia (format: "YYYY-MM-DD|YYYY-MM-DD")
-};
-
-// ── nawigacja zakładkami ────────────────────────────────────────────────
 document.querySelectorAll("nav button").forEach(btn => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll("nav button").forEach(b => b.classList.remove("active", "bg-blue-600", "text-white", "shadow-md"));
     document.querySelectorAll("section").forEach(s => s.classList.remove("active"));
-    btn.classList.add("active");
+    btn.classList.add("active", "bg-blue-600", "text-white", "shadow-md");
     document.getElementById(btn.dataset.tab).classList.add("active");
     loadTab(btn.dataset.tab);
   });
@@ -29,22 +17,18 @@ document.querySelectorAll("nav button").forEach(btn => {
 
 function loadTab(tab) {
   switch (tab) {
-    case "tab-pracownicy":   renderPracownicy(); break;
-    case "tab-stanowiska":   renderStanowiska(); break;
-    case "tab-wymagania":    renderWymagania();  break;
-    case "tab-dyspozycje":   /* nic — upload */ break;
-    case "tab-grafik":       renderGrafik();     break;
-    case "tab-eksport":      renderEksport();    break;
+    case "tab-pracownicy": renderPracownicy(); break;
+    case "tab-stanowiska": renderStanowiska(); break;
+    case "tab-wymagania":  renderWymagania();  break;
+    case "tab-dyspozycje": break;
+    case "tab-grafik":     renderGrafik();     break;
+    case "tab-eksport":    break;
   }
 }
 
-// ── fetch helper ────────────────────────────────────────────────────────
 async function api(path, method = "GET", body = null) {
   const opts = { method, headers: {} };
-  if (body) {
-    opts.headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body);
-  }
+  if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
   const res = await fetch(API + path, opts);
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
@@ -52,728 +36,442 @@ async function api(path, method = "GET", body = null) {
   return data;
 }
 
-// ── ładowanie słowników ─────────────────────────────────────────────────
 async function loadDicts() {
   STATE.stanowiska = await api("/stanowiska");
   STATE.pracownicy = await api("/pracownicy");
 }
 
-// ── GENERATOR TYGODNI (ŚRODA - WTOREK) ───────────────────────────────────
 function generujOpcjeTygodni() {
-  const opcje = [];
-  const dzis = new Date();
-  
+  const opcje = []; const dzis = new Date();
   const startSroda = new Date(dzis);
-  const ladowanyDzien = dzis.getDay(); 
-  let przesuniecie = ladowanyDzien - 3;
+  let przesuniecie = dzis.getDay() - 3;
   if (przesuniecie < 0) przesuniecie += 7;
   startSroda.setDate(dzis.getDate() - przesuniecie);
 
   for (let i = -2; i <= 5; i++) {
-    const sroda = new Date(startSroda);
-    sroda.setDate(startSroda.getDate() + (i * 7));
-    
-    const wtorek = new Date(sroda);
-    wtorek.setDate(sroda.getDate() + 6);
-    
-    const srodaStr = sroda.toISOString().slice(0, 10);
-    const wtorekStr = wtorek.toISOString().slice(0, 10);
-    
-    const fSroda = srodaStr.split('-').reverse().join('.');
-    const fWtorek = wtorekStr.split('-').reverse().join('.');
-    
-    const value = `${srodaStr}|${wtorekStr}`;
-    
-    // Jeśli to pierwsze uruchomienie i pamięć jest pusta, ustawiamy bieżący tydzień jako domyślny
-    if (!STATE.wybranyTydzien && i === 0) {
-      STATE.wybranyTydzien = value;
-    }
-    
-    opcje.push({
-      value: value,
-      label: `${fSroda} — ${fWtorek}`
-    });
+    const sroda = new Date(startSroda); sroda.setDate(startSroda.getDate() + (i * 7));
+    const wtorek = new Date(sroda); wtorek.setDate(sroda.getDate() + 6);
+    const sStr = sroda.toISOString().slice(0, 10); const wStr = wtorek.toISOString().slice(0, 10);
+    const value = `${sStr}|${wStr}`;
+    if (!STATE.wybranyTydzien && i === 0) STATE.wybranyTydzien = value;
+    opcje.push({ value: value, label: `${sStr.split('-').reverse().join('.')} — ${wStr.split('-').reverse().join('.')}` });
   }
   return opcje;
 }
 
-// Buduje dropdown i dba o to, by zaznaczony był tydzień zapisany w STATE
 function zbudujDropdownTygodni(idAkapitu, funkcjaZdarzenia) {
   const tygodnie = generujOpcjeTygodni();
-  return `
-    <select id="${idAkapitu}" onchange="STATE.wybranyTydzien = this.value; ${funkcjaZdarzenia}();" style="font-weight: 600; width: 260px; cursor: pointer;">
-      ${tygodnie.map(t => `<option value="${t.value}" ${STATE.wybranyTydzien === t.value ? "selected" : ""}>${t.label}</option>`).join("")}
-    </select>
-  `;
+  return `<select id="${idAkapitu}" onchange="STATE.wybranyTydzien = this.value; ${funkcjaZdarzenia}();" class="bg-white border border-slate-300 text-slate-800 font-semibold text-sm rounded-lg focus:ring-blue-500 block w-64 p-2 shadow-sm cursor-pointer">${tygodnie.map(t => `<option value="${t.value}" ${STATE.wybranyTydzien === t.value ? "selected" : ""}>${t.label}</option>`).join("")}</select>`;
 }
-
-
-// ══════════════════════════════════════════════════════════════════════════
-// STANOWISKA
-// ══════════════════════════════════════════════════════════════════════════
 
 async function renderStanowiska() {
   await loadDicts();
   const cont = document.getElementById("stanowiska-content");
+  
   let html = `
-    <h2>Stanowiska</h2>
-    <table>
-      <tr><th>ID</th><th>Nazwa</th><th>Tylko weekend</th><th>Akcje</th></tr>
-      ${STATE.stanowiska.map(s => `
-        <tr id="stan-row-${s.id}">
-          <td>${s.id}</td>
-          <td><input id="sn-${s.id}" value="${s.nazwa}" style="width:120px"></td>
-          <td><input type="checkbox" id="sw-${s.id}" ${s.tylko_weekend ? "checked" : ""}></td>
-          <td>
-            <button onclick="updateStanowisko(${s.id})">Zapisz</button>
-            <button class="danger" onclick="deleteStanowisko(${s.id})">Usuń</button>
-          </td>
-        </tr>`).join("")}
-    </table>
-    <fieldset>
-      <legend>Nowe stanowisko</legend>
-      <div class="row">
-        <label>Nazwa: <input id="new-stan-nazwa" placeholder="np. Kasa"></label>
-        <label><input type="checkbox" id="new-stan-weekend"> Tylko weekend</label>
-        <button onclick="createStanowisko()">Dodaj</button>
+    <div class="mb-8"><h2 class="text-2xl font-bold text-slate-800">Zarządzanie Stanowiskami</h2></div>
+    
+    <div class="bg-white border rounded-xl shadow-sm p-6 mb-8">
+      <h3 class="font-bold mb-4 text-slate-800">Nowe stanowisko (Kategoria Główna)</h3>
+      <div class="flex gap-4 items-center">
+        <input id="new-stan-nazwa" placeholder="Np. Sala, Bar..." class="border border-slate-300 rounded p-2 focus:ring-2 focus:ring-blue-500 outline-none w-64">
+        <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="new-stan-weekend" class="w-4 h-4 text-blue-600"> <span class="font-medium text-slate-600">Tylko weekend</span></label>
+        <button onclick="createStanowisko()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg shadow-sm">Dodaj</button>
       </div>
-    </fieldset>
+    </div>
+
+    <table class="w-full text-left bg-white rounded-xl shadow-sm overflow-hidden mb-8"><thead class="bg-slate-50 border-b border-slate-200"><tr><th class="p-4">ID</th><th>Nazwa</th><th>Tylko weekend</th><th>Akcje</th></tr></thead><tbody class="divide-y divide-slate-100">
+      ${STATE.stanowiska.map(s => `<tr><td class="p-4 text-slate-500">#${s.id}</td><td><input id="sn-${s.id}" value="${s.nazwa}" class="border p-1 rounded w-full max-w-[200px]"></td><td><input type="checkbox" id="sw-${s.id}" ${s.tylko_weekend ? "checked" : ""}></td><td><button onclick="updateStanowisko(${s.id})" class="text-blue-600 bg-blue-50 hover:bg-blue-100 p-2 rounded mr-2 font-medium">Zapisz</button><button onclick="deleteStanowisko(${s.id})" class="text-red-600 bg-red-50 hover:bg-red-100 p-2 rounded font-medium">Usuń</button></td></tr>`).join("")}
+    </tbody></table>
+    
+    <div class="bg-slate-50 border border-slate-200 rounded-xl shadow-sm p-6">
+      <h3 class="text-lg font-bold text-slate-800 mb-2">Szablony Rewirów / Zmian dla stanowisk</h3>
+      <p class="text-sm text-slate-500 mb-6">Dodaj gotowe szablony do stanowiska (np. BarR1, godz. 12:00). Dzięki temu przy tworzeniu grafiku wypełnią się one automatycznie.</p>
+      
+      <div class="flex flex-wrap items-end gap-4 mb-6 bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+        <label class="flex flex-col gap-1 w-full sm:w-auto">
+          <span class="text-sm font-medium text-slate-600">Do stanowiska:</span>
+          <select id="new-pk-stan" class="border border-slate-300 rounded-lg px-4 py-2 bg-white">
+             ${STATE.stanowiska.map(s => `<option value="${s.id}">${s.nazwa}</option>`).join("")}
+          </select>
+        </label>
+        <label class="flex flex-col gap-1 w-full sm:w-auto">
+          <span class="text-sm font-medium text-slate-600">Nazwa rewiru (np. BarR1):</span>
+          <input id="new-pk-nazwa" placeholder="Wpisz rewir..." class="border border-slate-300 rounded-lg px-4 py-2">
+        </label>
+        <label class="flex flex-col gap-1 w-full sm:w-auto">
+          <span class="text-sm font-medium text-slate-600">Godzina wejścia:</span>
+          <input type="time" id="new-pk-od" class="border border-slate-300 rounded-lg px-4 py-2">
+        </label>
+        <button onclick="createPodkategoria()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-6 rounded-lg shadow-sm">
+          + Dodaj Szablon
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        ${STATE.stanowiska.map(s => s.podkategorie && s.podkategorie.length > 0 ? `
+          <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+            <h4 class="font-bold text-indigo-700 border-b border-slate-100 pb-2 mb-3">📌 ${s.nazwa}</h4>
+            <div class="space-y-2">
+              ${s.podkategorie.map(pk => `
+                <div class="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100">
+                  <div>
+                    <div class="text-sm font-bold text-slate-800">${pk.nazwa}</div>
+                    <div class="text-xs font-mono text-slate-500 mt-0.5">⏰ Od: ${pk.godz_od ? pk.godz_od.slice(0,5) : 'dowolna'}</div>
+                  </div>
+                  <button onclick="deletePodkategoria(${pk.id})" class="text-red-500 hover:text-white hover:bg-red-500 bg-red-50 px-2 py-1.5 rounded transition-colors text-xs font-bold border border-red-100">Usuń</button>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        ` : "").join("")}
+      </div>
+    </div>
   `;
   cont.innerHTML = html;
 }
 
+// Funkcje API dla stanowisk i podkategorii
 async function createStanowisko() {
   const nazwa = document.getElementById("new-stan-nazwa").value.trim();
-  const tylko_weekend = document.getElementById("new-stan-weekend").checked;
   if (!nazwa) return alert("Podaj nazwę stanowiska.");
-  try {
-    await api("/stanowiska", "POST", { nazwa, tylko_weekend });
-    renderStanowiska();
-  } catch (e) { alert(e.message); }
+  try { await api("/stanowiska", "POST", { nazwa, tylko_weekend: document.getElementById("new-stan-weekend").checked }); renderStanowiska(); } catch (e) { alert(e.message); }
 }
-
 async function updateStanowisko(id) {
-  const nazwa = document.getElementById(`sn-${id}`).value.trim();
-  const tylko_weekend = document.getElementById(`sw-${id}`).checked;
-  try {
-    await api(`/stanowiska/${id}`, "PUT", { nazwa, tylko_weekend });
-    renderStanowiska();
-  } catch (e) { alert(e.message); }
+  try { await api(`/stanowiska/${id}`, "PUT", { nazwa: document.getElementById(`sn-${id}`).value.trim(), tylko_weekend: document.getElementById(`sw-${id}`).checked }); renderStanowiska(); } catch (e) { alert(e.message); }
 }
-
 async function deleteStanowisko(id) {
-  if (!confirm("Usunąć stanowisko?")) return;
-  try {
-    await api(`/stanowiska/${id}`, "DELETE");
-    renderStanowiska();
-  } catch (e) { alert(e.message); }
+  if (confirm("Usunąć stanowisko?")) try { await api(`/stanowiska/${id}`, "DELETE"); renderStanowiska(); } catch (e) { alert(e.message); }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// PRACOWNICI
-// ══════════════════════════════════════════════════════════════════════════
+window.createPodkategoria = async function() {
+  const sid = document.getElementById("new-pk-stan").value;
+  const nazwa = document.getElementById("new-pk-nazwa").value.trim();
+  let od = document.getElementById("new-pk-od").value;
+  if (!nazwa) return alert("Podaj nazwę rewiru/szablonu.");
+  od = od ? `${od}:00` : null;
+  try { await api(`/stanowiska/${sid}/podkategorie`, "POST", { nazwa: nazwa, godz_od: od, godz_do: null }); renderStanowiska(); } catch (e) { alert(e.message); }
+};
 
+window.deletePodkategoria = async function(pid) {
+  if(!confirm("Na pewno usunąć ten szablon rewiru?")) return;
+  try { await api(`/podkategorie/${pid}`, "DELETE"); renderStanowiska(); } catch(e) { alert(e.message); }
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+// PRACOWNICY
+// ══════════════════════════════════════════════════════════════════════════
 async function renderPracownicy() {
   await loadDicts();
   const cont = document.getElementById("pracownicy-content");
+  const stanChecks = (pracId, kwalIds, isNew = false) => `<div class="flex-1 overflow-y-auto pr-2 bg-slate-50 border border-slate-100 rounded-lg p-3">${STATE.stanowiska.map(s => `<label class="flex items-center gap-3 mb-2 cursor-pointer hover:bg-slate-200 p-1.5 rounded"><input type="checkbox" class="${isNew ? 'new-kwal' : `kwal-${pracId}`}" value="${s.id}" ${kwalIds.includes(s.id) ? "checked" : ""}><span>${s.nazwa}</span></label>`).join("")}</div>`;
 
-  const stanChecks = (pracId, kwalIds) => `
-    <div class="kwalifikacje-container">
-      ${STATE.stanowiska.map(s => `
-        <label class="kwalifikacja-item">
-          <input type="checkbox" class="kwal-${pracId}" value="${s.id}"
-            ${kwalIds.includes(s.id) ? "checked" : ""}>
-          <span>${s.nazwa}</span>
-        </label>
-      `).join("")}
-    </div>
-  `;
-
-  let html = `
-    <h2>Zarządzanie pracownikami</h2>
-    <table>
-      <tr><th>ID</th><th>Imię</th><th>Nazwisko</th><th>Aktywny</th><th>Kwalifikacje (Stanowiska)</th><th>Akcje</th></tr>
+  cont.innerHTML = `
+    <div class="mb-8"><h2 class="text-2xl font-bold text-slate-800">Zarządzanie Pracownikami</h2></div>
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+      <div class="bg-blue-50 border-2 border-dashed border-blue-300 rounded-xl p-5 flex flex-col h-[420px]">
+        <h3 class="text-lg font-bold text-blue-800 mb-2 shrink-0">➕ Nowy pracownik</h3>
+        <div class="flex gap-2 shrink-0 mb-2"><input id="new-p-imie" class="w-full border border-blue-200 p-2 rounded" placeholder="Imię"><input id="new-p-nazwisko" class="w-full border border-blue-200 p-2 rounded" placeholder="Nazwisko"></div>
+        <label class="shrink-0 mb-2 font-medium text-blue-800 flex items-center gap-2"><input type="checkbox" id="new-p-aktywny" checked class="w-4 h-4"> Aktywny</label>
+        ${stanChecks('new', [], true)}
+        <button onclick="createPracownik()" class="w-full bg-blue-600 text-white font-bold p-2.5 rounded-lg mt-4 shrink-0 shadow-sm">Dodaj pracownika</button>
+      </div>
       ${STATE.pracownicy.map(p => {
         const kwalIds = (p.kwalifikacje || []).map(k => k.id);
-        return `<tr>
-          <td>${p.id}</td>
-          <td><input id="pi-${p.id}" value="${p.imie}" style="width:100px"></td>
-          <td><input id="pn-${p.id}" value="${p.nazwisko}" style="width:130px"></td>
-          <td>
-            <label class="kwalifikacja-item" style="padding: 6px 10px; margin: 0;">
-              <input type="checkbox" id="pa-${p.id}" ${p.aktywny ? "checked" : ""}>
-              <span>Aktywny</span>
-            </label>
-          </td>
-          <td>${stanChecks(p.id, kwalIds)}</td>
-          <td>
-            <button onclick="updatePracownik(${p.id})">Zapisz</button>
-            <button class="danger" onclick="deletePracownik(${p.id})">Usuń</button>
-          </td>
-        </tr>`;
+        return `<div class="bg-white border rounded-xl shadow-sm p-5 flex flex-col h-[420px]">
+          <div class="shrink-0 flex justify-between mb-3"><div class="flex flex-col w-full pr-2"><input id="pi-${p.id}" value="${p.imie}" class="font-bold text-lg border-b border-transparent focus:border-blue-500 outline-none"><input id="pn-${p.id}" value="${p.nazwisko}" class="font-medium text-slate-600 border-b border-transparent focus:border-blue-500 outline-none mt-1"></div></div>
+          <label class="shrink-0 mb-2 text-sm font-medium flex items-center gap-2"><input type="checkbox" id="pa-${p.id}" ${p.aktywny ? "checked" : ""} class="w-4 h-4"> ${p.aktywny ? '<span class="text-emerald-600">Aktywny</span>' : '<span class="text-slate-400">Zablokowany</span>'}</label>
+          ${stanChecks(p.id, kwalIds)}
+          <div class="shrink-0 flex gap-2 mt-4"><button onclick="updatePracownik(${p.id})" class="flex-1 bg-slate-100 hover:bg-slate-200 p-2.5 rounded-lg border font-medium">Zapisz</button><button onclick="deletePracownik(${p.id})" class="text-red-500 bg-red-50 hover:bg-red-100 p-2.5 rounded-lg font-bold">Usuń</button></div>
+        </div>`;
       }).join("")}
-    </table>
-    
-    <fieldset style="margin-top: 30px;">
-      <legend>Nowy pracownik</legend>
-      <div class="row" style="margin-bottom: 16px;">
-        <label>Imię: <input id="new-p-imie" style="width:150px" placeholder="np. Jan"></label>
-        <label>Nazwisko: <input id="new-p-nazwisko" style="width:180px" placeholder="np. Kowalski"></label>
-        <label style="flex-direction: row; align-items: center; gap: 8px; margin-top: 25px; cursor: pointer;">
-          <input type="checkbox" id="new-p-aktywny" checked style="width:18px; height:18px; accent-color: #3b82f6;"> Aktywny pracownik
-        </label>
-      </div>
-      
-      <div style="margin: 16px 0;">
-        <p style="font-weight: 600; color: #334155; margin-bottom: 8px;">Kwalifikacje i uprawnienia stanowiskowe:</p>
-        <div class="kwalifikacje-container">
-          ${STATE.stanowiska.map(s => `
-            <label class="kwalifikacja-item">
-              <input type="checkbox" class="new-kwal" value="${s.id}">
-              <span>${s.nazwa}</span>
-            </label>
-          `).join("")}
-        </div>
-      </div>
-      
-      <button onclick="createPracownik()">Dodaj nowego pracownika</button>
-    </fieldset>
-  `;
-  cont.innerHTML = html;
+    </div>`;
 }
 
 async function createPracownik() {
-  const imie     = document.getElementById("new-p-imie").value.trim();
-  const nazwisko = document.getElementById("new-p-nazwisko").value.trim();
-  const aktywny  = document.getElementById("new-p-aktywny").checked;
-  const kwalifikacje_ids = [...document.querySelectorAll(".new-kwal:checked")].map(el => +el.value);
+  const imie = document.getElementById("new-p-imie").value.trim(), nazwisko = document.getElementById("new-p-nazwisko").value.trim();
   if (!imie || !nazwisko) return alert("Podaj imię i nazwisko.");
-  try {
-    await api("/pracownicy", "POST", { imie, nazwisko, aktywny, kwalifikacje_ids });
-    renderPracownicy();
-  } catch (e) { alert(e.message); }
+  try { await api("/pracownicy", "POST", { imie, nazwisko, aktywny: document.getElementById("new-p-aktywny").checked, kwalifikacje_ids: [...document.querySelectorAll(".new-kwal:checked")].map(el => +el.value) }); renderPracownicy(); } catch (e) { alert(e.message); }
 }
-
 async function updatePracownik(id) {
-  const imie     = document.getElementById(`pi-${id}`).value.trim();
-  const nazwisko = document.getElementById(`pn-${id}`).value.trim();
-  const aktywny  = document.getElementById(`pa-${id}`).checked;
-  const kwalifikacje_ids = [...document.querySelectorAll(`.kwal-${id}:checked`)].map(el => +el.value);
-  try {
-    await api(`/pracownicy/${id}`, "PUT", { imie, nazwisko, aktywny, kwalifikacje_ids });
-    renderPracownicy();
-  } catch (e) { alert(e.message); }
+  try { await api(`/pracownicy/${id}`, "PUT", { imie: document.getElementById(`pi-${id}`).value.trim(), nazwisko: document.getElementById(`pn-${id}`).value.trim(), aktywny: document.getElementById(`pa-${id}`).checked, kwalifikacje_ids: [...document.querySelectorAll(`.kwal-${id}:checked`)].map(el => +el.value) }); renderPracownicy(); } catch (e) { alert(e.message); }
 }
-
-async function deletePracownik(id) {
-  if (!confirm("Usunąć pracownika?")) return;
-  try {
-    await api(`/pracownicy/${id}`, "DELETE");
-    renderPracownicy();
-  } catch (e) { alert(e.message); }
-}
+async function deletePracownik(id) { if (confirm("Usunąć?")) try { await api(`/pracownicy/${id}`, "DELETE"); renderPracownicy(); } catch (e) { alert(e.message); } }
 
 // ══════════════════════════════════════════════════════════════════════════
-// WYMAGANIA DNIA
+// WYMAGANIA (Z automatycznym wczytywaniem szablonów)
 // ══════════════════════════════════════════════════════════════════════════
-
 async function renderWymagania() {
   await loadDicts();
   const cont = document.getElementById("wymagania-content");
-  const today = new Date().toISOString().slice(0, 10);
-
-  cont.innerHTML = `
-    <h2>Wymagania i Szablony Zmian</h2>
-    
-    <fieldset>
-      <legend>🔍 Wybierz tydzień rozliczeniowy (Śr — Wt)</legend>
-      <div class="row">
-        <label>Tydzień: ${zbudujDropdownTygodni("wym-tydzien-sel", "loadWymagania")}</label>
-      </div>
-    </fieldset>
-    
-    <div id="wym-table-cont" style="margin: 20px 0;"></div>
-    
-    <fieldset style="margin-top: 25px; background: #fafafa;">
-      <legend>➕ Dodaj nową zmianę / rewir do planu</legend>
-      
-      <div class="row" style="margin-bottom: 12px;">
-        <label>Data zmiany: <input type="date" id="wym-new-data" value="${today}"></label>
-        
-        <label>Stanowisko:
-          <select id="wym-new-stan">
-            ${STATE.stanowiska.map(s => `<option value="${s.id}">${s.nazwa}${s.tylko_weekend ? " [W]" : ""}</option>`).join("")}
-          </select>
-        </label>
-        
-        <label>Liczba osób: <input type="number" id="wym-new-liczba" value="1" min="1" style="width:70px"></label>
-      </div>
-      
-      <div class="row" style="border-top: 1px solid #e2e8f0; padding-top: 15px; margin-top: 10px;">
-        <label>Godzina OD: <input type="time" id="wym-new-od" value="10:00"></label>
-        <label>Godzina DO: <input type="time" id="wym-new-do" value="22:00"></label>
-        
-        <label>Rewir / Strefa (np. Parter, Góra): 
-          <input type="text" id="wym-new-rewir" placeholder="opcjonalnie, np. Parter" style="width:180px">
-        </label>
-      </div>
-      
-      <div style="margin-top: 15px;">
-        <button onclick="addWymaganie()" style="background: #10b981;">Dodaj zmianę do zapotrzebowania</button>
-      </div>
-    </fieldset>
-    
-    <fieldset style="margin-top: 25px;">
-      <legend>📋 Kopiuj cały dzień na zakres dat</legend>
-      <div class="row">
-        <label>Dzień źródłowy: <input type="date" id="kop-source" value="${today}"></label>
-        <label>Cel od: <input type="date" id="kop-start" value="${today}"></label>
-        <label>Cel do: <input type="date" id="kop-end" value="${today}"></label>
-        <button onclick="kopiujWymagania()" style="background: #3b82f6;">Kopiuj plan zmian</button>
-      </div>
-    </fieldset>
-  `;
   
+  cont.innerHTML = `
+    <div class="mb-8 flex justify-between items-end">
+      <div><h2 class="text-2xl font-bold text-slate-800">Wymagania Personalne</h2><p class="text-slate-500">Ilu pracowników potrzeba na dany dzień.</p></div>
+      <div class="bg-white p-2 rounded-xl border border-slate-200 shadow-sm">${zbudujDropdownTygodni("wym-tydzien-sel", "loadWymagania")}</div>
+    </div>
+    
+    <div id="wym-table-cont" class="bg-white rounded-xl shadow-sm border border-slate-200 mb-8 overflow-x-auto"></div>
+    
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <fieldset class="border border-slate-200 p-6 bg-white rounded-xl shadow-sm">
+        <legend class="text-lg font-bold text-emerald-700 px-2 bg-white">➕ Zaplanuj Zmianę</legend>
+        
+        <div class="space-y-4 mt-2">
+          <div class="grid grid-cols-2 gap-4">
+            <label class="flex flex-col gap-1"><span class="text-sm font-medium text-slate-600">Data</span><input type="date" id="wym-new-data" value="${new Date().toISOString().slice(0, 10)}" class="border border-slate-300 rounded-lg px-3 py-2"></label>
+            <label class="flex flex-col gap-1">
+              <span class="text-sm font-medium text-slate-600">Stanowisko (Wymóg)</span>
+              <select id="wym-new-stan" onchange="updateSubcatDropdown()" class="border border-slate-300 bg-white rounded-lg px-3 py-2">
+                <option value="">-- Wybierz --</option>
+                ${STATE.stanowiska.map(s => `<option value="${s.id}">${s.nazwa}</option>`).join("")}
+              </select>
+            </label>
+          </div>
+
+          <div id="subcat-container" class="bg-indigo-50 border border-indigo-200 p-3 rounded-lg" style="display:none;">
+            <label class="flex flex-col gap-1 w-full">
+              <span class="text-sm font-bold text-indigo-700 flex items-center gap-1">✨ Gotowy szablon (Automatycznie wypełni dane)</span>
+              <select id="wym-new-subcat" onchange="applySubcatTemplate()" class="border border-indigo-300 bg-white rounded px-3 py-2 cursor-pointer font-medium text-indigo-900"></select>
+            </label>
+          </div>
+
+          <div class="grid grid-cols-3 gap-4 border-t border-slate-100 pt-4">
+            <label class="flex flex-col gap-1"><span class="text-sm font-medium text-slate-600">Godz. OD</span><input type="time" id="wym-new-od" class="border border-slate-300 rounded-lg px-2 py-2"></label>
+            <label class="flex flex-col gap-1"><span class="text-sm font-medium text-slate-600">Godz. DO</span><input type="time" id="wym-new-do" class="border border-slate-300 rounded-lg px-2 py-2"></label>
+            <label class="flex flex-col gap-1"><span class="text-sm font-medium text-slate-600">Osób na zmianę</span><input type="number" id="wym-new-liczba" value="1" min="1" class="border border-slate-300 rounded-lg px-3 py-2 font-bold"></label>
+          </div>
+          
+          <label class="flex flex-col gap-1"><span class="text-sm font-medium text-slate-600">Nazwa Rewiru / Strefy</span><input id="wym-new-rewir" placeholder="np. BarR1, Ogród..." class="border border-slate-300 rounded-lg px-3 py-2"></label>
+          
+          <button onclick="addWymaganie()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 w-full mt-2 rounded-lg shadow-sm transition-colors">Dodaj Zmianę do planu</button>
+        </div>
+      </fieldset>
+    </div>`;
   loadWymagania();
 }
 
+// Logika pobierająca podkategorie na żywo z zapisanego STATE
+window.updateSubcatDropdown = function() {
+  const sid = +document.getElementById("wym-new-stan").value;
+  const s = STATE.stanowiska.find(x => x.id === sid);
+  const cont = document.getElementById("subcat-container");
+  const sel = document.getElementById("wym-new-subcat");
+
+  if (s && s.podkategorie && s.podkategorie.length > 0) {
+      let opts = `<option value="">-- Ignoruj szablony (Wpisz ręcznie poniżej) --</option>`;
+      s.podkategorie.forEach(pk => {
+          opts += `<option value="${pk.id}">${pk.nazwa} (Godz. Wejścia: ${pk.godz_od ? pk.godz_od.slice(0,5) : 'Brak'})</option>`;
+      });
+      sel.innerHTML = opts;
+      cont.style.display = "block";
+  } else {
+      sel.innerHTML = "";
+      cont.style.display = "none";
+  }
+};
+
+window.applySubcatTemplate = function() {
+  const sid = +document.getElementById("wym-new-stan").value;
+  const pid = +document.getElementById("wym-new-subcat").value;
+  const s = STATE.stanowiska.find(x => x.id === sid);
+  if(!s) return;
+  const pk = s.podkategorie.find(x => x.id === pid);
+  
+  if(pk) {
+    document.getElementById("wym-new-rewir").value = pk.nazwa || "";
+    document.getElementById("wym-new-od").value = pk.godz_od ? pk.godz_od.slice(0,5) : "";
+    document.getElementById("wym-new-do").value = pk.godz_do ? pk.godz_do.slice(0,5) : "";
+  }
+};
+
 async function loadWymagania() {
   const bocznyZasieg = STATE.wybranyTydzien.split("|");
-  const start = bocznyZasieg[0];
-  const end   = bocznyZasieg[1];
-
-  const data  = await api(`/wymagania?start=${start}&end=${end}`);
+  const data = await api(`/wymagania?start=${bocznyZasieg[0]}&end=${bocznyZasieg[1]}`);
   STATE.wymagania = data;
-
-  const byDate = {};
-  for (const w of data) {
-    if (!byDate[w.data]) byDate[w.data] = [];
-    byDate[w.data].push(w);
-  }
   const stanMap = Object.fromEntries(STATE.stanowiska.map(s => [s.id, s]));
-
-  let html = `
-    <table style="width:100%; border-collapse: collapse;">
-      <thead>
-        <tr>
-          <th>Data</th>
-          <th>Stanowisko / Rewir</th>
-          <th>Godziny pracy</th>
-          <th>Wymagana liczba osób</th>
-          <th>Akcje</th>
-        </tr>
-      </thead>
-      <tbody>`;
-      
-  const sortedDates = Object.keys(byDate).sort();
+  let html = `<table class="w-full text-left"><thead class="bg-slate-50 border-b border-slate-200"><tr><th class="p-4 font-semibold">Data</th><th class="font-semibold">Wymagana Pozycja (Rewir)</th><th class="font-semibold">Godziny</th><th class="text-center font-semibold">Osoby</th><th class="font-semibold">Akcje</th></tr></thead><tbody class="divide-y divide-slate-100">`;
   
-  if (sortedDates.length === 0) {
-    html += `<tr><td colspan="5" style="text-align:center; color:#64748b; padding:20px;">Brak zdefiniowanych wymagań dla wybranego tygodnia.</td></tr>`;
-  }
-
-  for (const dt of sortedDates) {
-    for (const r of byDate[dt]) {
-      const s = stanMap[r.stanowisko_id] || {};
-      
-      let stanowiskoWyswietlane = s.nazwa || `ID: ${r.stanowisko_id}`;
-      if (r.rewir) {
-        stanowiskoWyswietlane += ` <span style="color:#2563eb; font-weight:600;">(${r.rewir})</span>`;
-      }
-      if (s.tylko_weekend) {
-        stanowiskoWyswietlane += ` <small style="color:#ef4444; background:#fef2f2; padding:2px 4px; border-radius:4px; font-size:10px; margin-left:5px;">WEEKEND</small>`;
-      }
-
-      const g_od = r.godz_od ? r.godz_od.slice(0, 5) : "Brak";
-      const g_do = r.godz_do ? r.godz_do.slice(0, 5) : "Brak";
-      const godzinyWyswietlane = r.godz_od ? `<span class="badge-time">${g_od} - ${g_do}</span>` : `<span style="color:#94a3b8;">Niezdefiniowane</span>`;
-
-      html += `
-        <tr>
-          <td><strong>${dt}</strong></td>
-          <td>${stanowiskoWyswietlane}</td>
-          <td>${godzinyWyswietlane}</td>
-          <td style="text-align:center;">
-            <input type="number" id="wl-${r.id}" value="${r.liczba_osob}" min="1" style="width:60px; text-align:center;" onchange="updateWymaganieLiczba(${r.id}, this.value)"> os.
-          </td>
-          <td>
-            <button class="danger" onclick="deleteWymaganie(${r.id})" style="padding: 4px 8px; font-size: 12px;">Usuń</button>
-          </td>
-        </tr>`;
-    }
-  }
+  if(data.length === 0) { html += `<tr><td colspan="5" class="text-center p-8 text-slate-400">Brak zmian w wybranym tygodniu.</td></tr>`; }
   
-  html += "</tbody></table>";
+  data.forEach(r => {
+    html += `<tr class="hover:bg-slate-50"><td class="p-4 font-medium text-slate-900">${r.data}</td><td><span class="font-bold text-slate-800">${stanMap[r.stanowisko_id]?.nazwa}</span> ${r.rewir ? `<span class="text-blue-600 font-bold ml-1">(${r.rewir})</span>` : ""}</td><td><span class="bg-slate-100 border border-slate-200 px-2 py-1 rounded font-mono text-xs">${r.godz_od ? `${r.godz_od.slice(0,5)} - ${r.godz_do ? r.godz_do.slice(0,5) : 'Koniec'}` : "Cała Zmiana"}</span></td><td class="text-center"><input type="number" value="${r.liczba_osob}" onchange="updateWymaganieLiczba(${r.id}, this.value)" class="w-16 border border-slate-300 rounded text-center py-1 outline-none focus:border-blue-500 font-bold"></td><td><button onclick="deleteWymaganie(${r.id})" class="text-red-500 hover:text-red-700 bg-red-50 px-3 py-1.5 rounded-lg text-sm font-bold border border-red-100">Usuń</button></td></tr>`;
+  });
+  html += `</tbody></table>`;
   document.getElementById("wym-table-cont").innerHTML = html;
 }
 
 async function addWymaganie() {
-  const data          = document.getElementById("wym-new-data").value;
-  const stanowisko_id = +document.getElementById("wym-new-stan").value;
-  const PlatformLiczba   = +document.getElementById("wym-new-liczba").value;
-  
-  const raw_od        = document.getElementById("wym-new-od").value;
-  const raw_do        = document.getElementById("wym-new-do").value;
-  const raw_rewir     = document.getElementById("wym-new-rewir").value.trim();
-
-  const godz_od = raw_od ? `${raw_od}:00` : null;
-  const godz_do = raw_do ? `${raw_do}:00` : null;
-  const rewir   = raw_rewir ? raw_rewir : null;
-
-  try {
-    await api("/wymagania", "POST", { data, stanowisko_id, liczba_osob: PlatformLiczba, godz_od, godz_do, rewir });
-    document.getElementById("wym-new-rewir").value = "";
-    loadWymagania();
-  } catch (e) { alert(e.message); }
+  const sid = document.getElementById("wym-new-stan").value;
+  if(!sid) return alert("Musisz wybrać stanowisko główne (np. Sala)!");
+  try { await api("/wymagania", "POST", { data: document.getElementById("wym-new-data").value, stanowisko_id: +sid, liczba_osob: +document.getElementById("wym-new-liczba").value, godz_od: document.getElementById("wym-new-od").value ? `${document.getElementById("wym-new-od").value}:00` : null, godz_do: document.getElementById("wym-new-do").value ? `${document.getElementById("wym-new-do").value}:00` : null, rewir: document.getElementById("wym-new-rewir").value || null }); loadWymagania(); } catch (e) { alert(e.message); }
 }
-
-async function updateWymaganieLiczba(id, nowaLiczba) {
-  const istniejące = STATE.wymagania.find(w => w.id === id);
-  if (!istniejące) return;
-  try {
-    await api("/wymagania", "POST", {
-      data: istniejące.data,
-      stanowisko_id: istniejące.stanowisko_id,
-      liczba_osob: +nowaLiczba,
-      godz_od: istniejące.godz_od,
-      godz_do: istniejące.godz_do,
-      rewir: istniejące.rewir
-    });
-    loadWymagania();
-  } catch (e) { alert(e.message); }
+async function updateWymaganieLiczba(id, val) {
+  const w = STATE.wymagania.find(x => x.id === id); if(!w) return;
+  try { await api("/wymagania", "POST", { ...w, liczba_osob: +val }); loadWymagania(); } catch (e) { alert(e.message); }
 }
+async function deleteWymaganie(id) { try { await api(`/wymagania/${id}`, "DELETE"); loadWymagania(); } catch (e) { alert(e.message); } }
 
-async function deleteWymaganie(id) {
-  try {
-    await api(`/wymagania/${id}`, "DELETE");
-    loadWymagania();
-  } catch (e) { alert(e.message); }
-}
-
-async function kopiujWymagania() {
-  const source_date = document.getElementById("kop-source").value;
-  const start_date  = document.getElementById("kop-start").value;
-  const end_date    = document.getElementById("kop-end").value;
-  try {
-    const res = await api("/wymagania/kopiuj", "POST", { source_date, start_date, end_date });
-    alert(`Skopiowano ${res.skopiowano} szablonów zmian na wybrany zakres.`);
-    loadWymagania();
-  } catch (e) { alert(e.message); }
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// IMPORT DYSPOZYCJI (CSV)
-// ══════════════════════════════════════════════════════════════════════════
-
-document.getElementById("csv-upload-btn").addEventListener("click", async () => {
-  const fileInput = document.getElementById("csv-file");
-  if (!fileInput.files.length) return alert("Wybierz plik CSV.");
-  const formData = new FormData();
-  formData.append("file", fileInput.files[0]);
-
-  const res = await fetch(`${API}/dyspozycje/import-csv`, { method: "POST", body: formData });
-  const data = await res.json();
-
-  let html = `<p class="ok">Zapisano: ${data.zapisano} wierszy.</p>`;
-
-  if (data.podglad.length) {
-    html += `<h3>Podgląd zaimportowanych danych</h3>
-      <table><tr><th>Pracownik</th><th>Data</th><th>Dostępność</th><th>Od</th><th>Do</th></tr>
-      ${data.podglad.map(r => `
-        <tr>
-          <td>${r.pracownik}</td>
-          <td>${r.data}</td>
-          <td>${r.dostepnosc ? "TAK" : "NIE"}</td>
-          <td>${r.od}</td>
-          <td>${r.do}</td>
-        </tr>`).join("")}
-      </table>`;
-  }
-
-  if (data.konflikty.length) {
-    html += `<h3 class="error">Konflikty / błędy mapowania</h3>
-      <table><tr><th>Wiersz</th><th>Problem</th></tr>
-      ${data.konflikty.map(k => `
-        <tr><td>${k.wiersz}</td><td class="error">${k.problem}</td></tr>`).join("")}
-      </table>`;
-  }
-
-  document.getElementById("import-preview").innerHTML = html;
-});
 
 // ══════════════════════════════════════════════════════════════════════════
 // GRAFIK
 // ══════════════════════════════════════════════════════════════════════════
-
 async function renderGrafik() {
-  const cont = document.getElementById("grafik-content");
-  cont.innerHTML = `
-    <h2>Interaktywny Grafik Pracy</h2>
-    <div class="row" style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
-      <label>Wybierz tydzień grafiku: ${zbudujDropdownTygodni("g-tydzien-sel", "loadGrafik")}</label>
-      <button onclick="autoAssign()" style="background: #10b981; font-weight: bold; margin-left:10px;">🤖 Automatycznie przydziel</button>
-      <button class="danger" onclick="clearAssignments()">🗑 Wyczyść tydzień</button>
-    </div>
-    <div id="niedobory-box"></div>
-    <div class="scroll-x" id="grafik-table-cont" style="margin-top: 15px;"></div>
-  `;
-  
+  document.getElementById("grafik-content").innerHTML = `
+    <div class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-end gap-4"><h2 class="text-2xl font-bold">Interaktywny Grafik</h2>
+      <div class="flex flex-wrap gap-2 items-center bg-white border border-slate-200 p-2 rounded-xl shadow-sm">${zbudujDropdownTygodni("g-tydzien-sel", "loadGrafik")}<button onclick="autoAssign()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold p-2.5 rounded-lg transition-colors flex gap-2 items-center">🤖 Auto-Przydział</button><button onclick="clearAssignments()" class="bg-white border border-red-200 text-red-600 hover:bg-red-50 p-2.5 rounded-lg font-medium transition-colors">Wyczyść</button></div>
+    </div><div id="niedobory-box"></div><div class="overflow-x-auto bg-white rounded-xl shadow-sm border pb-2" id="grafik-table-cont"></div>`;
   loadGrafik();
 }
 
 async function loadGrafik() {
-  await loadDicts();
-  const bocznyZasieg = STATE.wybranyTydzien.split("|");
-  const start = bocznyZasieg[0];
-  const end   = bocznyZasieg[1];
-
-  const [przydzialy, dyspozycje, wymagania] = await Promise.all([
-    api(`/przydzialy?start=${start}&end=${end}`),
-    api(`/dyspozycje?start=${start}&end=${end}`),
-    api(`/wymagania?start=${start}&end=${end}`),
-  ]);
+  await loadDicts(); const [s, e] = STATE.wybranyTydzien.split("|");
+  const [przydzialy, dyspozycje, wymagania] = await Promise.all([api(`/przydzialy?start=${s}&end=${e}`), api(`/dyspozycje?start=${s}&end=${e}`), api(`/wymagania?start=${s}&end=${e}`)]);
+  STATE.przydzialy = przydzialy; STATE.dyspozycje = dyspozycje; STATE.wymagania = wymagania;
   
-  STATE.przydzialy  = przydzialy;
-  STATE.dyspozycje  = dyspozycje;
-  STATE.wymagania   = wymagania;
+  const dates = []; let cur = new Date(s); const endD = new Date(e);
+  while (cur <= endD) { dates.push(cur.toISOString().slice(0, 10)); cur.setDate(cur.getDate() + 1); }
+  const stanMap = Object.fromEntries(STATE.stanowiska.map(x => [x.id, x]));
+  const przyMap = {}; przydzialy.forEach(a => { const k = `${a.data}_${a.pracownik_id}`; przyMap[k] = przyMap[k] || []; przyMap[k].push(a); });
+  const dysMap = {}; dyspozycje.forEach(d => dysMap[`${d.data}_${d.pracownik_id}`] = d);
+  const wymMap = {}; wymagania.forEach(w => { wymMap[w.data] = wymMap[w.data] || []; wymMap[w.data].push(w); });
 
-  const dates = [];
-  let cur = new Date(start + "T00:00:00");
-  const endD = new Date(end + "T00:00:00");
-  while (cur <= endD) {
-    dates.push(cur.toISOString().slice(0, 10));
-    cur.setDate(cur.getDate() + 1);
-  }
-
-  const stanMap = Object.fromEntries(STATE.stanowiska.map(s => [s.id, s]));
+  let thead = `<tr class="bg-slate-100 border-b"><th class="p-3 sticky left-0 z-10 bg-slate-100 min-w-[160px] border-r">Pracownik</th>`;
+  dates.forEach(dt => thead += `<th class="p-3 text-center border-r font-semibold">${dt.slice(5)}</th>`); thead += `</tr>`;
   
-  const przyMap = {};
-  for (const a of przydzialy) {
-    const key = `${a.data}_${a.pracownik_id}`;
-    if (!przyMap[key]) przyMap[key] = [];
-    przyMap[key].push(a);
-  }
-  
-  const dysMap = {};
-  for (const d of dyspozycje) {
-    dysMap[`${d.data}_${d.pracownik_id}`] = d;
-  }
-
-  const wymMap = {};
-  for (const w of wymagania) {
-    if (!wymMap[w.data]) wymMap[w.data] = [];
-    wymMap[w.data].push(w);
-  }
-
-  const DZIEN = ["Nd","Pn","Wt","Śr","Cz","Pt","Sb"];
-
-  let thead = `<tr><th style="min-width: 200px; max-width: 200px; position: sticky; left: 0; background: #fff; z-index: 10; border-right: 2px solid #e2e8f0;">Pracownik</th>`;
-  for (const dt of dates) {
-    const d = new Date(dt + "T00:00:00");
-    const wd = DZIEN[d.getDay()];
-    const isW = d.getDay() === 0 || d.getDay() === 6;
-    const cellStyle = isW ? "background: #fef2f2; color: #ef4444; font-weight: bold;" : "";
-    thead += `<th style="${cellStyle} min-width: 110px; text-align: center;">${dt.slice(5)}<br><small>${wd}</small></th>`;
-  }
-  thead += "</tr>";
-
   let tbody = "";
-  for (const p of STATE.pracownicy) {
-    tbody += `<tr><td style="position: sticky; left: 0; background: #fff; font-weight: 600; border-right: 2px solid #e2e8f0; z-index: 5; white-space: nowrap;">${p.imie} ${p.nazwisko}</td>`;
-    
-    for (const dt of dates) {
-      const dys = dysMap[`${dt}_${p.id}`];
-      const pAt = przyMap[`${dt}_${p.id}`] || [];
-      const d = new Date(dt + "T00:00:00");
-      const isW = d.getDay() === 0 || d.getDay() === 6;
-
+  STATE.pracownicy.filter(p => p.aktywny).forEach(p => {
+    tbody += `<tr class="border-b hover:bg-slate-50"><td class="p-3 sticky left-0 bg-white shadow-sm font-bold border-r text-slate-800">${p.imie} ${p.nazwisko}</td>`;
+    dates.forEach(dt => {
+      const dys = dysMap[`${dt}_${p.id}`]; const pAt = przyMap[`${dt}_${p.id}`] || [];
+      const isW = new Date(dt).getDay() === 0 || new Date(dt).getDay() === 6;
       const kwalIds = new Set((p.kwalifikacje || []).map(k => k.id));
-      const dzisiejszeSzablony = (wymMap[dt] || []).filter(w => {
-        const stan = stanMap[w.stanowisko_id];
-        if (!stan) return false;
-        if (stan.tylko_weekend && !isW) return false;
-        return kwalIds.has(w.stanowisko_id);
-      });
-
-      let cellBg = "";
-      let statusTekst = "";
+      const szablony = (wymMap[dt] || []).filter(w => stanMap[w.stanowisko_id] && (!stanMap[w.stanowisko_id].tylko_weekend || isW) && kwalIds.has(w.stanowisko_id));
       
-      if (!dys) {
-        cellBg = "background-color: #f1f5f9; color: #94a3b8;";
-        statusTekst = `<div style="font-size: 10px; color: #94a3b8; text-align:center;">brak dysp.</div>`;
-      } else if (!dys.dostepnosc) {
-        cellBg = "background-color: #ffe4e6;";
-        statusTekst = `<div style="font-size: 10px; color: #be123c; text-align:center; font-weight:600;">X NIE</div>`;
-      } else {
-        cellBg = "background-color: #f0fdf4;"; 
-        if (dys.godz_od || dys.godz_do) {
-          const g_od = dys.godz_od ? dys.godz_od.slice(0, 5) : "00:00";
-          const g_do = dys.godz_do ? dys.godz_do.slice(0, 5) : "koniec";
-          statusTekst = `<div style="font-size: 9px; color: #166534; margin-bottom: 4px; text-align:center; background:#dcfce7; border-radius:4px; padding:1px;">⏱ ${g_od}-${g_do}</div>`;
-        }
+      let status = dys ? (dys.dostepnosc ? (dys.godz_od ? `✅ ${dys.godz_od.slice(0,5)}-${dys.godz_do ? dys.godz_do.slice(0,5):'Koniec'}` : "✅ Cały dzień") : "❌ Niedostępny") : "brak";
+      let cellBg = !dys ? 'bg-slate-50' : dys.dostepnosc ? 'bg-emerald-50/30' : 'bg-red-50/50';
+      let statusColor = !dys ? 'text-slate-400' : dys.dostepnosc ? 'text-emerald-700 bg-emerald-100' : 'text-red-700 bg-red-100';
+      
+      let cell = `<td class="p-2 border-r ${cellBg} align-top"><div class="text-[10px] text-center font-bold mb-1 border rounded px-1 w-fit mx-auto ${statusColor}">${status}</div><div class="flex flex-col gap-1.5 mt-1">`;
+      
+      pAt.forEach(a => {
+        const stan = stanMap[a.stanowisko_id];
+        const powiazanySzablon = szablony.find(w => w.stanowisko_id === a.stanowisko_id && w.godz_od === a.godz_od);
+        const rewirNapis = powiazanySzablon && powiazanySzablon.rewir ? ` <span class="text-blue-600">(${powiazanySzablon.rewir})</span>` : "";
+        cell += `<div class="bg-white border-l-4 border-blue-500 border rounded p-1.5 shadow-sm text-[11px] font-bold text-left leading-tight">${stan?.nazwa}${rewirNapis}<br><span class="font-mono font-normal text-slate-500 text-[10px]">⏰ ${a.godz_od ? a.godz_od.slice(0,5) : 'Cała zmiana'}</span><select onchange="changeAssignment(${a.id}, this.value)" class="w-full text-[10px] mt-1 border border-slate-200 rounded p-0.5 outline-none cursor-pointer"><option>Przypisany</option><option value="REMOVE">❌ Usuń zmianę</option></select></div>`;
+      });
+      if (dys?.dostepnosc && szablony.length > 0) {
+        cell += `<select onchange="addAdvancedAssignment(this, '${dt}', ${p.id})" class="w-full text-[10px] p-1 border border-dashed border-slate-300 rounded text-blue-600 font-medium cursor-pointer bg-white"><option>+ Dodaj zmianę</option>${szablony.map((w,i) => `<option value="${i}">${stanMap[w.stanowisko_id].nazwa} ${w.rewir ? `(${w.rewir})`:''} ${w.godz_od ? `[${w.godz_od.slice(0,5)}]`:''}</option>`).join("")}</select>`;
       }
-
-      let cellHtml = `<td style="${cellBg} padding: 6px; vertical-align: top; border: 1px solid #e2e8f0;">${statusTekst}`;
-
-      for (const a of pAt) {
-        const stan = stanMap[a.stanowisko_id] || { nazwa: `ID: ${a.stanowisko_id}` };
-        const powiazanySzablon = dzisiejszeSzablony.find(w => w.stanowisko_id === a.stanowisko_id && w.godz_od === a.godz_od);
-        const rewirWpisywany = powiazanySzablon && powiazanySzablon.rewir ? ` (${powiazanySzablon.rewir})` : "";
-
-        const g_od = a.godz_od ? a.godz_od.slice(0, 5) : "";
-        const g_do = a.godz_do ? a.godz_do.slice(0, 5) : "";
-        const godz_str = g_od ? `${g_od}-${g_do}` : "całość";
-
-        cellHtml += `
-          <div class="slot-item-assigned" style="background: #ffffff; border: 1px solid #3b82f6; border-radius: 6px; padding: 4px; margin-bottom: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-            <div style="font-weight: 700; font-size: 12px; color: #1e40af;">${stan.nazwa}${rewirWpisywany}</div>
-            <div style="font-size: 11px; font-family: monospace; color: #475569; margin: 2px 0;">⏰ ${godz_str}</div>
-            
-            <select onchange="changeAssignment(${a.id}, this.value, '${dt}', ${p.id})" style="width: 100%; font-size: 10px; padding: 2px; margin-top: 2px;">
-              <option value="STAY">— przypisany —</option>
-              <option value="REMOVE">❌ Usuń zmianę</option>
-            </select>
-          </div>`;
-      }
-
-      if (pAt.length === 0 && dys && dys.dostepnosc && dzisiejszeSzablony.length > 0) {
-        cellHtml += `
-          <div class="slot-item-add" style="margin-top: 4px;">
-            <select onchange="addAdvancedAssignment(this, '${dt}', ${p.id})" style="width:100%; font-size:11px; padding:3px; background:#fff; border-radius:4px; border:1px solid #cbd5e1; cursor:pointer;">
-              <option value="">+ Przydziel</option>
-              ${dzisiejszeSzablony.map((w, idx) => {
-                const sName = stanMap[w.stanowisko_id]?.nazwa || "Stanowisko";
-                const rName = w.rewir ? ` (${w.rewir})` : "";
-                const timeStr = w.godz_od ? ` [${w.godz_od.slice(0,5)}-${w.godz_do.slice(0,5)}]` : "";
-                return `<option value="${idx}">${sName}${rName}${timeStr}</option>`;
-              }).join("")}
-            </select>
-          </div>`;
-      }
-
-      cellHtml += "</td>";
-      tbody += cellHtml;
-    }
-    tbody += "</tr>";
-  }
-
-  document.getElementById("grafik-table-cont").innerHTML =
-    `<table id="grafik-table" class="modern-grid-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
+      tbody += cell + `</div></td>`;
+    });
+    tbody += `</tr>`;
+  });
+  document.getElementById("grafik-table-cont").innerHTML = `<table class="w-full"><thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
 }
 
-async function addAdvancedAssignment(select, dt, pracId) {
-  const idx = select.value;
-  if (idx === "") return;
-  
-  const d = new Date(dt + "T00:00:00");
-  const isW = d.getDay() === 0 || d.getDay() === 6;
-  
-  const wymMap = STATE.wymagania.filter(w => w.data === dt);
-  const stanMap = Object.fromEntries(STATE.stanowiska.map(s => [s.id, s]));
-  const p = STATE.pracownicy.find(x => x.id === pracId);
+async function addAdvancedAssignment(sel, dt, pId) {
+  const i = sel.value; if(i===" " || i==="+ Dodaj zmianę") return;
+  const isW = new Date(dt).getDay() === 0 || new Date(dt).getDay() === 6;
+  const stanMap = Object.fromEntries(STATE.stanowiska.map(x => [x.id, x]));
+  const p = STATE.pracownicy.find(x => x.id === pId);
   const kwalIds = new Set((p.kwalifikacje || []).map(k => k.id));
   
-  const dzisiejszeSzablony = wymMap.filter(w => {
+  const w = (STATE.wymagania.filter(x => x.data === dt).filter(w => {
     const stan = stanMap[w.stanowisko_id];
-    if (!stan) return false;
-    if (stan.tylko_weekend && !isW) return false;
-    return kwalIds.has(w.stanowisko_id);
-  });
-
-  const wybranySzablon = dzisiejszeSzablony[+idx];
-  if (!wybranySzablon) return;
-
-  try {
-    await api("/przydzialy", "POST", {
-      data: dt,
-      stanowisko_id: wybranySzablon.stanowisko_id,
-      pracownik_id: pracId,
-      godz_od: wybranySzablon.godz_od,
-      godz_do: wybranySzablon.godz_do
-    });
-    loadGrafik();
-  } catch (e) {
-    alert(e.message);
-    select.value = "";
-  }
+    return stan && (!stan.tylko_weekend || isW) && kwalIds.has(w.stanowisko_id);
+  }))[i];
+  
+  try { await api("/przydzialy", "POST", { data: dt, stanowisko_id: w.stanowisko_id, pracownik_id: pId, godz_od: w.godz_od, godz_do: w.godz_do }); loadGrafik(); } catch (e) { alert(e.message); sel.value="+ Dodaj zmianę"; }
 }
 
-async function changeAssignment(aid, action, dt, pracId) {
-  if (action === "REMOVE") {
-    try {
-      await api(`/przydzialy/${aid}`, "DELETE");
-      loadGrafik();
-    } catch (e) { alert(e.message); }
-  } else {
-    loadGrafik();
-  }
-}
+async function changeAssignment(aid, act) { if (act === "REMOVE") { await api(`/przydzialy/${aid}`, "DELETE"); loadGrafik(); } }
+async function autoAssign() { document.getElementById("niedobory-box").innerHTML = '<div class="bg-blue-50 text-blue-700 p-4 rounded-lg font-medium border border-blue-200 animate-pulse mb-4">⚙️ AI analizuje kwalifikacje i dyspozycyjność... Trwa generowanie harmonogramu.</div>'; try { await api(`/auto-assign?start=${STATE.wybranyTydzien.split("|")[0]}&end=${STATE.wybranyTydzien.split("|")[1]}`, "POST"); loadGrafik(); document.getElementById("niedobory-box").innerHTML = ''; } catch (e) { alert(e.message); } }
+async function clearAssignments() { if (confirm("Wyczyścić bieżący grafik?")) { await api(`/przydzialy?start=${STATE.wybranyTydzien.split("|")[0]}&end=${STATE.wybranyTydzien.split("|")[1]}`, "DELETE"); loadGrafik(); } }
+// ══════════════════════════════════════════════════════════════════════════
+// IMPORT DYSPOZYCJI (CSV)
+// ══════════════════════════════════════════════════════════════════════════
+document.getElementById("csv-upload-btn").addEventListener("click", async () => {
+  const fileInput = document.getElementById("csv-file");
+  if (!fileInput.files.length) return alert("Najpierw wybierz plik CSV z dysku.");
+  
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  
+  const previewCont = document.getElementById("import-preview");
+  previewCont.innerHTML = '<div class="text-blue-600 font-medium animate-pulse p-2">⏳ Trwa wgrywanie i analizowanie pliku...</div>';
 
-async function autoAssign() {
-  const bocznyZasieg = STATE.wybranyTydzien.split("|");
-  const start = bocznyZasieg[0];
-  const end   = bocznyZasieg[1];
-  const niedoboryBox = document.getElementById("niedobory-box");
-  
-  niedoboryBox.innerHTML = '<p style="color: #3b82f6; font-weight:600;">Sztuczna inteligencja analizuje kwalifikacje i godziny z formularzy... Generowanie grafiku.</p>';
-  
   try {
-    const res = await api(`/auto-assign?start=${start}&end=${end}`, "POST");
-    let html = `<div style="background:#dcfce7; border-left:4px solid #10b981; padding:12px; margin-bottom:15px; border-radius:4px;"><p class="ok" style="color:#15803d; font-weight:600; margin:0;">🚀 Sukces! Algorytm automatycznie obsadził: ${res.przydzielone} zmian roboczych.</p></div>`;
+    const res = await fetch(`${API}/dyspozycje/import-csv`, { method: "POST", body: formData });
+    const data = await res.json();
     
-    if (res.niedobory.length) {
+    if (!res.ok) throw new Error(data.detail || "Wystąpił błąd podczas importu.");
+
+    // Stylizacja sukcesu
+    let html = `<div class="bg-emerald-50 text-emerald-700 p-4 rounded-lg font-bold border border-emerald-200 mb-4 shadow-sm">✅ Import zakończony! Zapisano: ${data.zapisano} wierszy.</div>`;
+
+    // Tabelka z podglądem dodanych dyspozycji
+    if (data.podglad && data.podglad.length) {
       html += `
-        <div style="background:#fff7ed; border:1px solid #fed7aa; padding:15px; border-radius:8px;">
-          <h3 class="warn" style="color:#c2410c; margin-top:0;">⚠️ Wykaz nieobsadzonych rewirów / zmian (${res.niedobory.length})</h3>
-          <p style="font-size:13px; color:#7c2d12; margin-bottom:8px;">Poniższe zmiany nie zostały obsadzone, ponieważ nikt z uprawnieniami nie zadeklarował zgodnych godzin w Formularzu Google:</p>
-          <table style="width:100%; font-size:13px;">
-            <tr style="background:#ffedd5;"><th>Data</th><th>Wymagana zmiana (Rewir)</th><th>Status personelu w tym dniu</th></tr>
-            ${res.niedobory.map(n =>
-              `<tr><td><strong>${n.data}</strong></td><td><span style="color:#b45309; font-weight:600;">${n.stanowisko}</span></td><td style="color:#9a3412; font-size:12px;">${n.powod}</td></tr>`
-            ).join("")}
+        <h3 class="font-bold text-slate-800 mb-2">Podgląd pierwszych wierszy:</h3>
+        <div class="overflow-x-auto border border-slate-200 rounded-lg mb-4">
+          <table class="w-full text-sm text-left">
+            <thead class="bg-slate-100 text-slate-600">
+              <tr><th class="p-2">Pracownik</th><th class="p-2">Data</th><th class="p-2 text-center">Dostępność</th><th class="p-2">Od</th><th class="p-2">Do</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              ${data.podglad.map(r => `
+                <tr class="hover:bg-slate-50">
+                  <td class="p-2 font-medium">${r.pracownik}</td>
+                  <td class="p-2">${r.data}</td>
+                  <td class="p-2 text-center">${r.dostepnosc ? '<span class="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold text-xs">TAK</span>' : '<span class="bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold text-xs">NIE</span>'}</td>
+                  <td class="p-2 font-mono">${r.od || '-'}</td>
+                  <td class="p-2 font-mono">${r.do || '-'}</td>
+                </tr>`).join("")}
+            </tbody>
           </table>
         </div>`;
     }
-    niedoboryBox.innerHTML = html;
-    loadGrafik();
-  } catch (e) { alert(e.message); }
-}
 
-async function clearAssignments() {
-  const bocznyZasieg = STATE.wybranyTydzien.split("|");
-  const start = bocznyZasieg[0];
-  const end   = bocznyZasieg[1];
-  if (!confirm(`Czy na pewno chcesz całkowicie wyczyścić grafik dla wybranego tygodnia (${start} do ${end})?`)) return;
-  try {
-    await api(`/przydzialy?start=${start}&end=${end}`, "DELETE");
-    document.getElementById("niedobory-box").innerHTML = "";
-    loadGrafik();
-  } catch (e) { alert(e.message); }
-}
+    // Tabelka z błędami (jeśli wiersze w CSV były błędne)
+    if (data.konflikty && data.konflikty.length) {
+      html += `
+        <h3 class="font-bold text-red-700 mt-4 mb-2">⚠️ Pominięte wiersze (błędy)</h3>
+        <div class="overflow-x-auto border border-red-200 rounded-lg">
+          <table class="w-full text-sm text-left">
+            <thead class="bg-red-50 text-red-800">
+              <tr><th class="p-2 w-20">Wiersz</th><th class="p-2">Opis problemu</th></tr>
+            </thead>
+            <tbody class="divide-y divide-red-100">
+              ${data.konflikty.map(k => `
+                <tr class="bg-red-50/30">
+                  <td class="p-2 font-bold text-red-700">#${k.wiersz}</td>
+                  <td class="p-2 text-red-600">${k.problem}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    previewCont.innerHTML = html;
+    fileInput.value = ""; // Czyści pole wyboru pliku po pomyślnym imporcie
+  } catch (e) {
+    previewCont.innerHTML = `<div class="bg-red-50 text-red-700 p-4 rounded-lg font-bold border border-red-200 shadow-sm">❌ Błąd importu: ${e.message}</div>`;
+  }
+});
 
 // ══════════════════════════════════════════════════════════════════════════
-// EKSPORT
+// EKSPORT GRAFIKU DO CSV
 // ══════════════════════════════════════════════════════════════════════════
-
-function renderEksport() {
-  const cont = document.getElementById("tab-eksport");
-  cont.innerHTML = `
-    <h2>Eksport grafiku do CSV</h2>
-    <fieldset>
-      <legend>Wybierz tydzień do pobrania</legend>
-      <div class="row">
-        <label>Tydzień: ${zbudujDropdownTygodni("eksport-tydzien-sel", "pobierzEksportCSV")}</label>
-        <button id="eksport-btn" onclick="pobierzEksportCSV()" style="background: #10b981; margin-left:10px;">Pobierz grafik (CSV)</button>
-      </div>
-    </fieldset>
-  `;
-}
-
-function pobierzEksportCSV() {
-  const bocznyZasieg = STATE.wybranyTydzien.split("|");
-  const start = bocznyZasieg[0];
-  const end   = bocznyZasieg[1];
+document.getElementById("eksport-btn").addEventListener("click", () => {
+  const start = document.getElementById("eksport-start").value;
+  const end = document.getElementById("eksport-end").value;
+  
+  if (!start || !end) {
+    return alert("Wybierz zakres dat (Od - Do) przed próbą eksportu grafiku!");
+  }
+  
+  // Pobra plik z backendu 
   window.location.href = `${API}/eksport-csv?start=${start}&end=${end}`;
-}
-
-// ── init ────────────────────────────────────────────────────────────────
+});
 document.querySelector("nav button").click();
