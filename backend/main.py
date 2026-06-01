@@ -208,7 +208,7 @@ def kopiuj_wymagania(body: dict, db: Session = Depends(get_db)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DYSPOZYCJE (ZAKŁADKA IMPORTU)
+# DYSPOZYCJE (ZAKŁADKA IMPORtowania
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/dyspozycje", response_model=List[schemas.DyspozycjaOut])
