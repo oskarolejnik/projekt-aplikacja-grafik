@@ -44,12 +44,6 @@ def parse_date(s: str) -> date:
         return date(int(y), int(m), int(d))
     raise ValueError(f"Nieznany format daty: {s}")
 
-def parse_time(s: str) -> Optional[time]:
-    if not s or not s.strip():
-        return None
-    parts = s.strip().split(":")
-    return time(int(parts[0]), int(parts[1]))
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STANOWISKA
@@ -163,7 +157,6 @@ def create_wymagania(data: schemas.WymaganiaCreate, db: Session = Depends(get_db
     
     if existing:
         existing.liczba_osob = data.liczba_osob
-        existing.godz_do = data.godz_do
         db.commit(); db.refresh(existing)
         return existing
         
@@ -204,13 +197,11 @@ def kopiuj_wymagania(body: dict, db: Session = Depends(get_db)):
             
             if existing:
                 existing.liczba_osob = req.liczba_osob
-                existing.godz_do = req.godz_do
             else:
                 db.add(models.WymaganiaDnia(
                     data=current,
                     stanowisko_id=req.stanowisko_id,
                     godz_od=req.godz_od,
-                    godz_do=req.godz_do,
                     rewir=req.rewir,
                     liczba_osob=req.liczba_osob,
                 ))
@@ -289,23 +280,15 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     def parse_availability_text(val_str: str):
         t_lower = val_str.lower().strip()
         if t_lower == "nie" or not t_lower:
-            return False, None, None
+            return False, None
         
-        dostepnosc = True
-        godz_od = None
-        godz_do = None
+        dostepnosc = True      ;  godz_od = None
         
         od_match = re.search(r'\bod\s*(\d{1,2})(?::(\d{2}))?', t_lower)
         if od_match:
             h = int(od_match.group(1))
             m = int(od_match.group(2)) if od_match.group(2) else 0
             godz_od = time(h, m)
-            
-        do_match = re.search(r'\bdo\s*(\d{1,2})(?::(\d{2}))?', t_lower)
-        if do_match:
-            h = int(do_match.group(1))
-            m = int(do_match.group(2)) if do_match.group(2) else 0
-            godz_do = time(h, m)
             
         na_match = re.search(r'\bna\s*(\d{1,2})\b', t_lower)
         if na_match and not godz_od and "18stk" not in t_lower:
@@ -315,7 +298,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         if "od 12/13" in t_lower:
             godz_od = time(12, 0)
             
-        return dostepnosc, godz_od, godz_do
+        return dostepnosc, godz_od
 
     podglad = []
     konflikty = []
@@ -356,7 +339,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
 
             for col_name, parsed_date in date_cols:
                 val = (row.get(col_name) or "").strip()
-                dostepnosc, godz_od, godz_do = parse_availability_text(val)
+                dostepnosc, godz_od = parse_availability_text(val)
                 klucz = (p.id, parsed_date)
 
                 podglad.append({
@@ -364,20 +347,17 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                     "data": str(parsed_date),
                     "dostepnosc": dostepnosc,
                     "od": str(godz_od) if godz_od else "",
-                    "do": str(godz_do) if godz_do else "",
                 })
 
                 if klucz in lokalne_przydzialy:
                     existing = lokalne_przydzialy[klucz]
                     existing.dostepnosc = dostepnosc
                     existing.godz_od = godz_od
-                    existing.godz_do = godz_do
                 else:
                     existing = db.query(models.Dyspozycja).filter_by(pracownik_id=p.id, data=parsed_date).first()
                     if existing:
                         existing.dostepnosc = dostepnosc
                         existing.godz_od = godz_od
-                        existing.godz_do = godz_do
                         lokalne_przydzialy[klucz] = existing
                     else:
                         nowa_dyspozycja = models.Dyspozycja(
@@ -385,7 +365,6 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                             data=parsed_date,
                             dostepnosc=dostepnosc,
                             godz_od=godz_od,
-                            godz_do=godz_do,
                         )
                         db.add(nowa_dyspozycja)
                         lokalne_przydzialy[klucz] = nowa_dyspozycja
@@ -397,7 +376,6 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
             raw_date = (row.get("data") or row.get("date") or "").strip()
             raw_dost = (row.get("dostępność") or row.get("dostepnosc") or row.get("available") or "1").strip()
             raw_od   = (row.get("od") or row.get("from") or "").strip()
-            raw_do   = (row.get("do") or row.get("to") or "").strip()
 
             p = find_pracownik(raw_name)
             if not p:
@@ -411,8 +389,9 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 continue
 
             dostepnosc = raw_dost in ("1", "true", "tak", "yes", "t")
-            godz_od = parse_time(raw_od)
-            godz_do = parse_time(raw_do)
+            godz_od = None
+            if raw_od:
+                godz_od = time(*map(int, raw_od.split(":")))
             klucz = (p.id, parsed_date)
 
             podglad.append({
@@ -420,20 +399,17 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 "data": str(parsed_date),
                 "dostepnosc": dostepnosc,
                 "od": str(godz_od) if godz_od else "",
-                "do": str(godz_do) if godz_do else "",
             })
 
             if klucz in lokalne_przydzialy:
                 existing = lokalne_przydzialy[klucz]
                 existing.dostepnosc = dostepnosc
                 existing.godz_od = godz_od
-                existing.godz_do = godz_do
             else:
                 existing = db.query(models.Dyspozycja).filter_by(pracownik_id=p.id, data=parsed_date).first()
                 if existing:
                     existing.dostepnosc = dostepnosc
                     existing.godz_od = godz_od
-                    existing.godz_do = godz_do
                     lokalne_przydzialy[klucz] = existing
                 else:
                     nowa_dyspozycja = models.Dyspozycja(
@@ -441,7 +417,6 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                         data=parsed_date,
                         dostepnosc=dostepnosc,
                         godz_od=godz_od,
-                        godz_do=godz_do,
                     )
                     db.add(nowa_dyspozycja)
                     lokalne_przydzialy[klucz] = nowa_dyspozycja
@@ -568,16 +543,14 @@ def eksport_csv(start: date, end: date, db: Session = Depends(get_db)):
         
         # Przygotowanie ładnego formatu godzin
         g_od = p.godz_od.strftime("%H:%M") if p.godz_od else ""
-        g_do = p.godz_do.strftime("%H:%M") if p.godz_do else "Koniec"
         
         if g_od:
-            tekst_zmiany = f"{nazwa_stanowiska} ({g_od}-{g_do})"
+            tekst_zmiany = f"{nazwa_stanowiska} ({g_od})"
         else:
             tekst_zmiany = f"{nazwa_stanowiska} (Cały dzień)"
-            
+        
         przydzialy_w_kratkach[(p.pracownik_id, p.data)].append(tekst_zmiany)
 
-    # 6. Tworzymy wirtualny plik CSV w pamięci serwera
     output = io.StringIO()
     # Używamy średnika! Polski Excel często psuje układ, jeśli użyje się standardowego przecinka
     writer = csv.writer(output, delimiter=';')
