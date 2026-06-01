@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Grafik Pracy</title>
+  
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <nav>
+    <button data-tab="tab-pracownicy" class="active">Pracownicy</button>
+    <button data-tab="tab-stanowiska">Stanowiska</button>
+    <button data-tab="tab-wymagania">Wymagania</button>
+    <button data-tab="tab-dyspozycje">Dyspozycje (import)</button>
+    <button data-tab="tab-grafik">Grafik</button>
+    <button data-tab="tab-eksport">Eksport</button>
+  </nav>
+
+  <section id="tab-pracownicy" class="active">
+    <div id="pracownicy-content"></div>
+  </section>
+
+  <section id="tab-stanowiska">
+    <div id="stanowiska-content"></div>
+  </section>
+
+  <section id="tab-wymagania">
+    <div id="wymagania-content"></div>
+  </section>
+
+  <section id="tab-dyspozycje">
+    <h2>Import dyspozycji z CSV</h2>
+    <fieldset>
+      <legend>Plik CSV</legend>
+      <p>Oczekiwane kolumny: <code>pracownik, data, dostępność, od, do</code></p>
+      <p>Formaty dat: <code>YYYY-MM-DD</code> lub <code>DD.MM.YYYY</code></p>
+      <p>Dostępność: 1/0, true/false, tak/nie</p>
+      <br>
+      <input type="file" id="csv-file" accept=".csv">
+      <button id="csv-upload-btn">Importuj</button>
+    </fieldset>
+    <div id="import-preview"></div>
+  </section>
+
+  <section id="tab-grafik">
+    <div id="grafik-content"></div>
+  </section>
+
+  <section id="tab-eksport">
+    <h2>Eksport grafiku do CSV</h2>
+    <fieldset>
+      <legend>Zakres dat</legend>
+      <div class="row">
+        <label>Od: <input type="date" id="eksport-start"></label>
+        <label>Do: <input type="date" id="eksport-end"></label>
+        <button id="eksport-btn">Pobierz CSV</button>
+      </div>
+    </fieldset>
+  <section id="tab-eksport">
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

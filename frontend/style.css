@@ -1,0 +1,355 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+body {
+  background-color: #f4f6f9;
+  color: #333333;
+  display: flex; /* Układ: Sidebar po lewej, treść po prawej */
+  min-height: 100vh;
+}
+
+/* --- BOCZNY PANEL NAWIGACJI (SIDEBAR) --- */
+nav {
+  width: 260px;
+  background-color: #1e293b; /* Głęboki, elegancki granat */
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+  flex-shrink: 0;
+}
+
+/* Logo lub nagłówek nad menu */
+nav::before {
+  content: "Grafik Pracy";
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: 700;
+  padding: 0 12px 24px 12px;
+  border-bottom: 1px solid #334155;
+  margin-bottom: 16px;
+  letter-spacing: 0.5px;
+}
+
+nav button {
+  background: none;
+  border: none;
+  color: #94a3b8; /* Szary, niemęczący oczu tekst */
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 15px;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+}
+
+nav button:hover {
+  background-color: #334155;
+  color: #f8fafc;
+}
+
+nav button.active {
+  background-color: #3b82f6; /* Żywy, nowoczesny niebieski akcent */
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* --- GŁÓWNY KONTENER NA TREŚĆ --- */
+section {
+  display: none; /* Ukryte sekcje */
+  flex-grow: 1;
+  padding: 40px;
+  overflow-y: auto;
+}
+
+section.active {
+  display: block; /* Pokazuje aktywną sekcję */
+  animation: fadeIn 0.3s ease;
+}
+
+/* --- NAGŁÓWKI --- */
+h2 {
+  font-size: 24px;
+  color: #0f172a;
+  margin-bottom: 24px;
+  font-weight: 700;
+}
+
+h3 {
+  font-size: 18px;
+  color: #1e293b;
+  margin-top: 24px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+/* --- PANEL / FIELDSET (Nowoczesne karty) --- */
+fieldset {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.04);
+}
+
+legend {
+  font-weight: 600;
+  color: #475569;
+  padding: 0 8px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* --- ELEMENTY FORMULARZY --- */
+p {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+code {
+  background-color: #f1f5f9;
+  color: #ef4444;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #334155;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="time"],
+select {
+  padding: 10px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  background-color: #f8fafc;
+  outline: none;
+  transition: all 0.2s;
+  color: #1e293b;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="date"]:focus,
+input[type="time"]:focus,
+select:focus {
+  border-color: #3b82f6;
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+input[type="file"] {
+  background: #ffffff;
+  cursor: pointer;
+  padding: 8px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+}
+
+/* --- PRZYCISKI --- */
+button:not(nav button) {
+  background-color: #3b82f6;
+  color: #ffffff;
+  border: none;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+button:not(nav button):hover {
+  background-color: #2563eb;
+}
+
+button:not(nav button):active {
+  transform: scale(0.98);
+}
+
+button.danger {
+  background-color: #ef4444 !important;
+}
+button.danger:hover {
+  background-color: #dc2626 !important;
+}
+
+#csv-upload-btn {
+  background-color: #10b981;
+}
+#csv-upload-btn:hover {
+  background-color: #059669;
+}
+
+/* --- STANDARDOWE TABELE (Pracownicy, Stanowiska, Wymagania) --- */
+table:not(.modern-grid-table, #grafik-table) {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
+
+table:not(.modern-grid-table, #grafik-table) th {
+  background-color: #f8fafc;
+  color: #475569;
+  font-weight: 600;
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 2px solid #e2e8f0;
+  font-size: 14px;
+}
+
+table:not(.modern-grid-table, #grafik-table) td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #334155;
+  vertical-align: middle;
+}
+
+table:not(.modern-grid-table, #grafik-table) tr:hover {
+  background-color: #f8fafc;
+}
+
+/* --- SIATKA INTERAKTYWNEGO GRAFIKU --- */
+.modern-grid-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  background: #ffffff;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+
+.modern-grid-table th {
+  background: #f8fafc;
+  color: #334155;
+  padding: 12px 8px;
+  font-weight: 600;
+  border-bottom: 2px solid #e2e8f0;
+  border-right: 1px solid #e2e8f0;
+}
+
+.modern-grid-table td {
+  border-bottom: 1px solid #e2e8f0;
+  border-right: 1px solid #e2e8f0;
+  min-height: 90px;
+  transition: background-color 0.15s ease;
+}
+
+.scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+/* Wymuszenie imienia i nazwiska w jednej linii w grafiku */
+.modern-grid-table td:first-child, 
+#grafik-table td:first-child {
+  white-space: nowrap !important;
+  font-weight: 600;
+  padding: 12px 20px 12px 16px;
+  background: #ffffff;
+  border-right: 2px solid #e2e8f0 !important;
+}
+
+/* --- NOWY STYL: KAFELKI KWALIFIKACJI (STANOWISK) --- */
+.kwalifikacje-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+.kwalifikacja-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background-color: #f8fafc;
+  border: 1px solid #cbd5e1;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  font-size: 13px;
+}
+
+.kwalifikacja-item:hover {
+  background-color: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.kwalifikacja-item:has(input:checked) {
+  background-color: #eff6ff;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.kwalifikacja-item input[type="checkbox"] {
+  accent-color: #3b82f6;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+/* --- BADGE I PIGUŁKI CZASOWE --- */
+.badge-time {
+  background-color: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* Powiadomienia */
+.ok { color: #15803d; font-weight: 600; }
+.error { color: #b91c1c; font-weight: 600; }
+.warn { color: #c2410c; font-weight: 600; }
+
+/* --- ANIMACJA --- */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

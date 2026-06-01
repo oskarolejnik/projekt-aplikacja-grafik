@@ -1,0 +1,11 @@
+venv/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+backend/scheduler.db
+backend/test.db
+.DS_Store
+dist/
+*.app/
+*.asar

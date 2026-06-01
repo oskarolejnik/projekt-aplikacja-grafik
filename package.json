@@ -1,0 +1,41 @@
+{
+  "name": "grafik-pracy",
+  "version": "1.0.0",
+  "description": "Aplikacja do układania grafików pracy",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
+    "electron": "^29.0.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "pl.grafik.pracy",
+    "productName": "Grafik Pracy",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "frontend/**/*",
+      "backend/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend"
+      },
+      {
+        "from": "frontend",
+        "to": "frontend"
+      }
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.business"
+    }
+  }
+}

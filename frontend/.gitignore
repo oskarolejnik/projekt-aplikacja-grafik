@@ -1,0 +1,7 @@
+venv/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+backend/scheduler.db
+.DS_Store
