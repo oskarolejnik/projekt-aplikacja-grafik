@@ -9,3 +9,4 @@ backend/test.db
 dist/
 *.app/
 *.asar
+.claude/settings.local.json

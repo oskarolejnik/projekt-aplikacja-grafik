@@ -4,8 +4,11 @@
   "description": "Aplikacja do układania grafików pracy",
   "main": "electron/main.js",
   "scripts": {
-    "start": "electron .",
-    "build": "electron-builder"
+    "start": "cd frontend && npm run build && cd .. && electron .",
+    "start:dev": "VITE_DEV=1 electron .",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "build": "cd frontend && npm run build && cd .. && electron-builder"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.2",
@@ -19,9 +22,7 @@
       "output": "dist"
     },
     "files": [
-      "electron/**/*",
-      "frontend/**/*",
-      "backend/**/*"
+      "electron/**/*"
     ],
     "extraResources": [
       {
@@ -29,8 +30,8 @@
         "to": "backend"
       },
       {
-        "from": "frontend",
-        "to": "frontend"
+        "from": "frontend/dist",
+        "to": "frontend/dist"
       }
     ],
     "mac": {

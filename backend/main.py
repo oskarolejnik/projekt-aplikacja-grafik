@@ -653,6 +653,11 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
     db.commit()
 
     return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy}
-# ── SERWOWANIE FRONTENDU ─────────────────────────────────
+# ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-app.mount("/", StaticFiles(directory=os.path.abspath(os.path.join(BASE_DIR, "..", "frontend")), html=True), name="frontend")
+FRONTEND_DIST = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
+if os.path.isdir(FRONTEND_DIST):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+else:
+    # Tryb deweloperski: frontend serwuje Vite (:5173), backend udostępnia tylko /api.
+    print("UWAGA: frontend/dist nie istnieje — pomijam serwowanie frontu. Uruchom 'npm --prefix frontend run build' lub 'npm run dev'.")
