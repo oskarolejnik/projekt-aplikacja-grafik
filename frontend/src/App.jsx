@@ -1,18 +1,37 @@
-import { useState } from 'react'
+import { AuthProvider, useAuth } from './context/AuthContext'
 import { DataProvider } from './context/DataContext'
 import { ToastProvider } from './components/ui/Toast'
+import { Spinner } from './components/ui/Spinner'
 import Landing from './pages/Landing'
 import Dashboard from './Dashboard'
+import EmployeeAvailability from './pages/EmployeeAvailability'
 
-// Ekran startowy (Landing) działa jako markowy „splash” — wejście prowadzi do
-// panelu. Stan trzymany lokalnie; brak routingu po URL (upraszcza serwowanie SPA).
+// Routing wg stanu zalogowania i roli:
+//   brak użytkownika → ekran startowy (z logowaniem)
+//   admin            → pełny panel zarządzania
+//   employee         → samoobsługa dyspozycyjności
+function Routed() {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="grid min-h-dvh place-items-center bg-bg">
+        <Spinner className="h-7 w-7 text-muted" />
+      </div>
+    )
+  }
+  if (!user) return <Landing />
+  if (user.rola === 'admin') return <Dashboard />
+  return <EmployeeAvailability />
+}
+
 export default function App() {
-  const [entered, setEntered] = useState(false)
   return (
-    <DataProvider>
+    <AuthProvider>
       <ToastProvider>
-        {entered ? <Dashboard onExit={() => setEntered(false)} /> : <Landing onEnter={() => setEntered(true)} />}
+        <DataProvider>
+          <Routed />
+        </DataProvider>
       </ToastProvider>
-    </DataProvider>
+    </AuthProvider>
   )
 }

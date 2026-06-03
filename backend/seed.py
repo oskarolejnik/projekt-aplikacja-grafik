@@ -76,8 +76,30 @@ def seed():
             db.add(w)
 
     db.commit()
+
+    # ── konta logowania (admin + pracownicy) — DANE DEWELOPERSKIE ────────
+    from auth import hash_password
+    import unicodedata
+
+    def _slug(s: str) -> str:
+        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+        return "".join(c for c in s if c.isalnum())
+
+    if not db.query(models.User).filter_by(login="admin").first():
+        db.add(models.User(login="admin", haslo_hash=hash_password("admin123"), rola="admin"))
+
+    for p in db.query(models.Pracownik).all():
+        login = f"{_slug(p.imie)}.{_slug(p.nazwisko)}"
+        if db.query(models.User).filter_by(login=login).first():
+            continue
+        db.add(models.User(
+            login=login, haslo_hash=hash_password("haslo123"),
+            rola="employee", pracownik_id=p.id,
+        ))
+
+    db.commit()
     db.close()
-    print("Seed zakończony pomyślnie.")
+    print("Seed zakończony. Konta DEV: admin/admin123 oraz <imie.nazwisko>/haslo123 — ZMIEŃ HASŁA!")
 
 if __name__ == "__main__":
     seed()

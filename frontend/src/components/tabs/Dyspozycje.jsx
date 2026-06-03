@@ -1,133 +1,124 @@
-import { useState, useRef } from 'react'
-import { Card, SectionHeader } from '../ui/Card'
-import { Button } from '../ui/Button'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Card } from '../ui/Card'
+import { WeekSelect } from '../ui/WeekSelect'
 import { Banner } from '../ui/Banner'
-import { Icon } from '../../lib/icons'
-import { API } from '../../lib/api'
+import { Spinner } from '../ui/Spinner'
+import { api } from '../../lib/api'
+import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
-import { ddmmyyyy } from '../../lib/format'
+import { hhmm, zakresDni } from '../../lib/format'
 
-// Import dyspozycji pracowników z pliku CSV. Endpoint zwraca {zapisano, podglad, konflikty}.
+// Podgląd dyspozycyjności zgłoszonej przez pracowników (zastępuje import CSV).
+// Pracownicy zgłaszają się sami w swoim panelu; admin widzi tu zbiorcze zestawienie.
 export default function Dyspozycje() {
-  const fileRef = useRef(null)
-  const [fileName, setFileName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState(null)
+  const { pracownicy, week, reloadDicts } = useData()
   const { toast } = useToast()
+  const [dys, setDys] = useState([])
+  const [loading, setLoading] = useState(true)
 
-  const importuj = async () => {
-    const f = fileRef.current
-    if (!f?.files.length) {
-      toast('Najpierw wybierz plik CSV.', 'error')
-      return
-    }
-    const fd = new FormData()
-    fd.append('file', f.files[0])
-    setBusy(true)
-    setResult(null)
+  const [s, e] = week.split('|')
+  const daty = useMemo(() => zakresDni(s, e), [s, e])
+
+  const load = useCallback(async () => {
+    setLoading(true)
     try {
-      const res = await fetch(`${API}/dyspozycje/import-csv`, { method: 'POST', body: fd })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Błąd importu pliku.')
-      setResult(data)
-      toast(`Zaimportowano. Zapisano ${data.zapisano} nowych wpisów.`, 'success')
-    } catch (e) {
-      toast(e.message, 'error')
+      await reloadDicts()
+      setDys(await api(`/dyspozycje?start=${s}&end=${e}`))
+    } catch (err) {
+      toast(err.message, 'error')
     } finally {
-      setBusy(false)
+      setLoading(false)
     }
-  }
+  }, [s, e, reloadDicts, toast])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const map = useMemo(() => {
+    const m = {}
+    dys.forEach((d) => {
+      m[`${d.data}_${d.pracownik_id}`] = d
+    })
+    return m
+  }, [dys])
+
+  const aktywni = pracownicy.filter((p) => p.aktywny)
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <Card className="p-8">
-        <SectionHeader
-          title="Wgraj dyspozycje pracowników"
-          subtitle="Obsługiwany jest format wąski (pracownik, data, dostępność) oraz szeroki (kolumny z datami)."
-        />
-        <Banner variant="info" className="mb-6">
-          Upewnij się, że plik CSV ma poprawne nagłówki. W razie konfliktów (nieznany pracownik) system pokaże je poniżej.
-        </Banner>
-
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <label className="group flex flex-1 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-line bg-surface-2 px-4 py-3 text-sm text-muted transition hover:border-mint/50 hover:text-ink">
-            <Icon name="upload" className="h-5 w-5" />
-            <span className="truncate">{fileName || 'Wybierz plik .csv…'}</span>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={(e) => setFileName(e.target.files[0]?.name || '')}
-            />
-          </label>
-          <Button onClick={importuj} disabled={busy} className="whitespace-nowrap">
-            {busy ? 'Analiza…' : 'Importuj CSV'}
-          </Button>
+    <Card className="p-6 md:p-8">
+      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="font-display text-2xl font-bold text-ink">Dyspozycyjność pracowników</h2>
+          <p className="mt-1 text-sm text-muted">Zgłoszenia z paneli pracowników na wybrany tydzień.</p>
         </div>
-      </Card>
+        <WeekSelect />
+      </div>
 
-      {result && (
-        <Card className="p-8">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="rounded-xl border border-success/30 bg-success/10 px-4 py-2 text-sm font-semibold text-success">
-              Zapisano nowych: {result.zapisano}
-            </div>
-            {result.konflikty?.length > 0 && (
-              <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-2 text-sm font-semibold text-danger">
-                Konflikty: {result.konflikty.length}
-              </div>
-            )}
-          </div>
+      <Banner variant="info" className="mb-6">
+        Pracownicy zgłaszają dyspozycyjność samodzielnie po zalogowaniu. Ten widok służy tylko do podglądu.
+      </Banner>
 
-          {result.konflikty?.length > 0 && (
-            <div className="mt-5">
-              <h3 className="mb-2 text-sm font-bold text-danger">Nierozpoznane wiersze</h3>
-              <ul className="space-y-1 text-sm text-muted">
-                {result.konflikty.map((k, i) => (
-                  <li key={i} className="rounded-lg bg-white/[0.03] px-3 py-2">
-                    <span className="font-semibold text-ink">{k.wiersz || '—'}</span> — {k.problem}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {result.podglad?.length > 0 && (
-            <div className="mt-6">
-              <h3 className="mb-2 text-sm font-bold text-ink">Podgląd ({Math.min(result.podglad.length, 30)} z {result.podglad.length})</h3>
-              <div className="overflow-hidden rounded-xl border border-line">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-muted">
-                    <tr>
-                      <th className="px-4 py-3 font-semibold">Pracownik</th>
-                      <th className="px-4 py-3 font-semibold">Data</th>
-                      <th className="px-4 py-3 font-semibold">Dostępność</th>
-                      <th className="px-4 py-3 font-semibold">Od</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {result.podglad.slice(0, 30).map((p, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02]">
-                        <td className="px-4 py-2.5 font-medium text-ink">{p.pracownik}</td>
-                        <td className="px-4 py-2.5 text-muted">{ddmmyyyy(p.data)}</td>
-                        <td className="px-4 py-2.5">
-                          {p.dostepnosc ? (
-                            <span className="text-success">Dostępny</span>
-                          ) : (
-                            <span className="text-danger">Niedostępny</span>
-                          )}
+      {loading ? (
+        <div className="grid place-items-center py-16">
+          <Spinner className="h-6 w-6 text-muted" />
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-line">
+          <table className="w-full border-separate border-spacing-0 text-sm">
+            <thead>
+              <tr>
+                <th className="sticky left-0 z-10 min-w-[170px] border-b border-r border-line bg-surface-2 p-3 text-left text-xs font-bold uppercase tracking-wider text-muted">
+                  Pracownik
+                </th>
+                {daty.map((dt) => {
+                  const [, mm, dd] = dt.split('-')
+                  const isW = [0, 6].includes(new Date(dt).getDay())
+                  return (
+                    <th key={dt} className={`min-w-[92px] border-b border-r border-line p-3 text-center text-xs font-bold ${isW ? 'text-blush' : 'text-ink'}`}>
+                      {dd}.{mm}
+                    </th>
+                  )
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {aktywni.length === 0 ? (
+                <tr>
+                  <td colSpan={daty.length + 1} className="p-10 text-center text-muted">Brak aktywnych pracowników.</td>
+                </tr>
+              ) : (
+                aktywni.map((p) => (
+                  <tr key={p.id}>
+                    <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-3 font-semibold text-ink">
+                      {p.imie} {p.nazwisko}
+                    </td>
+                    {daty.map((dt) => {
+                      const d = map[`${dt}_${p.id}`]
+                      let cls = 'text-muted/40'
+                      let txt = '—'
+                      if (d) {
+                        if (d.dostepnosc) {
+                          cls = 'text-success'
+                          txt = d.godz_od ? `od ${hhmm(d.godz_od)}` : 'tak'
+                        } else {
+                          cls = 'text-danger'
+                          txt = 'nie'
+                        }
+                      }
+                      return (
+                        <td key={dt} className={`border-b border-r border-line p-3 text-center text-xs font-semibold ${cls}`}>
+                          {txt}
                         </td>
-                        <td className="px-4 py-2.5 font-mono text-muted">{p.od || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </Card>
+                      )
+                    })}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
-    </div>
+    </Card>
   )
 }

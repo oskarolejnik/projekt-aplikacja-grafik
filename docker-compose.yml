@@ -1,0 +1,23 @@
+# Lokalny PostgreSQL dla aplikacji "Grafik Pracy".
+# Uruchom:  docker compose up -d
+# Pasuje do domyślnego DATABASE_URL (postgresql+psycopg2://grafik:grafik@localhost:5432/grafik).
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: grafik-postgres
+    environment:
+      POSTGRES_USER: grafik
+      POSTGRES_PASSWORD: grafik
+      POSTGRES_DB: grafik
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grafik"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

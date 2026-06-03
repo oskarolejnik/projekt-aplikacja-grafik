@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { Icon } from './lib/icons'
+import { useAuth } from './context/AuthContext'
 import Pracownicy from './components/tabs/Pracownicy'
 import Stanowiska from './components/tabs/Stanowiska'
 import Wymagania from './components/tabs/Wymagania'
+import Konta from './components/tabs/Konta'
 import Imprezy from './components/tabs/Imprezy'
 import Dyspozycje from './components/tabs/Dyspozycje'
 import Grafik from './components/tabs/Grafik'
@@ -12,15 +14,17 @@ const TABS = [
   { id: 'pracownicy', label: 'Pracownicy', icon: 'users', group: 'Zarządzanie', title: 'Zarządzanie pracownikami', Comp: Pracownicy },
   { id: 'stanowiska', label: 'Stanowiska', icon: 'office', group: 'Zarządzanie', title: 'Struktura i stanowiska', Comp: Stanowiska },
   { id: 'wymagania', label: 'Wymagania (plan)', icon: 'clipboard', group: 'Zarządzanie', title: 'Planowanie zmian', Comp: Wymagania },
+  { id: 'konta', label: 'Konta pracowników', icon: 'key', group: 'Zarządzanie', title: 'Konta i dostęp', Comp: Konta },
   { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', group: 'Operacje', title: 'Baza imprez — serwer NAS', Comp: Imprezy },
-  { id: 'dyspozycje', label: 'Dyspozycje (CSV)', icon: 'upload', group: 'Operacje', title: 'Import dyspozycji', Comp: Dyspozycje },
+  { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', group: 'Operacje', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },
   { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', group: 'Operacje', title: 'Interaktywny grafik pracy', Comp: Grafik },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', group: 'Operacje', title: 'Eksport danych', Comp: Eksport },
 ]
 
 const GROUPS = ['Zarządzanie', 'Operacje']
 
-export default function Dashboard({ onExit }) {
+export default function Dashboard() {
+  const { user, logout } = useAuth()
   const [active, setActive] = useState('pracownicy')
   const [mobileOpen, setMobileOpen] = useState(false)
   const current = TABS.find((t) => t.id === active)
@@ -106,14 +110,14 @@ export default function Dashboard({ onExit }) {
             <h2 className="font-display text-lg font-bold text-ink md:text-xl">{current.title}</h2>
           </div>
           <div className="flex items-center gap-2">
-            <span className="hidden text-sm font-medium text-muted sm:inline">Konto administratora</span>
+            <span className="hidden text-sm font-medium text-muted sm:inline">{user?.login} · administrator</span>
             <button
-              onClick={onExit}
+              onClick={logout}
               className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
-              aria-label="Powrót do ekranu startowego"
+              aria-label="Wyloguj"
             >
               <Icon name="logout" className="h-4 w-4" />
-              <span className="hidden md:inline">Wyjdź</span>
+              <span className="hidden md:inline">Wyloguj</span>
             </button>
           </div>
         </header>
