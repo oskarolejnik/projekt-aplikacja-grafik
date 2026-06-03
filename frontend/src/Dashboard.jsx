@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Icon } from './lib/icons'
+import { Logo } from './components/Logo'
 import { useAuth } from './context/AuthContext'
 import Pracownicy from './components/tabs/Pracownicy'
 import Stanowiska from './components/tabs/Stanowiska'
@@ -52,8 +53,8 @@ export default function Dashboard() {
       >
         {/* Logo */}
         <div className="flex h-20 items-center gap-3 border-b border-line px-7">
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-accent-gradient text-bg">
-            <Icon name="sparkles" className="h-5 w-5" />
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-accent-gradient">
+            <Logo className="h-5" variant="bg" />
           </div>
           <h1 className="font-display text-xl font-bold tracking-tight text-ink">
             Grafik<span className="text-gradient">Pro</span>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../components/ui/Toast'
 import { Icon } from '../lib/icons'
+import { Logo } from '../components/Logo'
 import { Spinner } from '../components/ui/Spinner'
 
 // Panel logowania (modal nad ekranem startowym). Po sukcesie AuthContext ustawia
@@ -15,8 +16,15 @@ export default function Login({ onClose }) {
   const [busy, setBusy] = useState(false)
   const firstRef = useRef(null)
 
+  // Autofokus na pole logowania — TYLKO przy otwarciu modala (pusta tablica).
+  // Wcześniej zależność [onClose] powodowała ponowne ustawianie fokusu przy
+  // każdym renderze rodzica (zegar tyka co sekundę → fokus „uciekał" do loginu).
   useEffect(() => {
     firstRef.current?.focus()
+  }, [])
+
+  // Zamknięcie klawiszem Escape.
+  useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose?.()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -44,8 +52,8 @@ export default function Login({ onClose }) {
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div role="dialog" aria-modal="true" aria-label="Logowanie" className="card animate-fade-in relative z-10 w-full max-w-md p-8">
         <div className="mb-6 flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-accent-gradient text-bg">
-            <Icon name="sparkles" className="h-5 w-5" />
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-accent-gradient">
+            <Logo className="h-6" variant="bg" />
           </div>
           <div>
             <h2 className="font-display text-xl font-bold text-ink">Zaloguj się</h2>

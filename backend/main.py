@@ -40,7 +40,7 @@ app.add_middleware(
 @app.middleware("http")
 async def role_guard(request: Request, call_next):
     path = request.url.path
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health":
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -70,6 +70,13 @@ def ensure_admin():
 def startup():
     init_db()
     ensure_admin()
+
+
+@app.get("/api/health")
+def health():
+    """Publiczny status backendu (m.in. Electron sprawdza tu gotowość serwera)."""
+    return {"status": "ok"}
+
 
 # ... [Funkcja parse_date pozostaje bez zmian] ...
 def parse_date(s: str) -> date:

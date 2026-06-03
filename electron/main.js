@@ -71,7 +71,7 @@ function waitForBackend(retries, callback) {
   const options = {
     host: '127.0.0.1',
     port: 8000,
-    path: '/api/stanowiska',
+    path: '/api/health',
     timeout: 1000
   };
 

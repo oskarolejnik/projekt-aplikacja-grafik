@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Dopasowane czcionki zastępcze — fallback ma te same metryki co czcionka
+   webowa, więc po jej doczytaniu układ nie przeskakuje (zero CLS z font-swap). */
+@font-face {
+  font-family: 'Inter Fallback';
+  src: local('Arial');
+  ascent-override: 90.49%;
+  descent-override: 22.56%;
+  line-gap-override: 0%;
+  size-adjust: 107.06%;
+}
+@font-face {
+  font-family: 'Space Grotesk Fallback';
+  src: local('Arial');
+  ascent-override: 98%;
+  descent-override: 26%;
+  line-gap-override: 0%;
+  size-adjust: 101%;
+}
+
 @layer base {
   :root {
     color-scheme: dark;
@@ -10,6 +29,11 @@
   body,
   #root {
     height: 100%;
+  }
+  /* Rezerwujemy stałe miejsce na pasek przewijania — zawartość nie skacze
+     w bok przy przełączaniu widoków (m.in. podczas logowania). */
+  html {
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-bg text-ink font-sans antialiased;

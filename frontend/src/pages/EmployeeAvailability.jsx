@@ -6,6 +6,7 @@ import { WeekSelect } from '../components/ui/WeekSelect'
 import { Card } from '../components/ui/Card'
 import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
+import { Logo } from '../components/Logo'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
 
@@ -77,8 +78,8 @@ export default function EmployeeAvailability() {
       {/* Górny pasek */}
       <header className="relative z-10 flex h-20 items-center justify-between border-b border-line bg-bg-2/60 px-5 backdrop-blur md:px-10">
         <div className="flex items-center gap-3">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent-gradient text-bg">
-            <Icon name="calendar" className="h-5 w-5" />
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent-gradient">
+            <Logo className="h-5" variant="bg" />
           </span>
           <div>
             <h1 className="font-display text-base font-bold text-ink md:text-lg">Moja dyspozycyjność</h1>
