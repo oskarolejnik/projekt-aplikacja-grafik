@@ -21,6 +21,7 @@ from auth import (
     get_current_user, hash_password, verify_password,
     create_access_token, SECRET_KEY, ALGORITHM,
 )
+from validators import sprawdz_login, sprawdz_haslo
 
 import openpyxl
 
@@ -52,24 +53,11 @@ async def role_guard(request: Request, call_next):
     return await call_next(request)
 
 
-def ensure_admin():
-    """Tworzy konto administratora przy starcie, jeśli żadne nie istnieje."""
-    db = SessionLocal()
-    try:
-        if db.query(models.User).filter(models.User.rola == "admin").first() is None:
-            login = os.environ.get("ADMIN_LOGIN", "admin")
-            haslo = os.environ.get("ADMIN_PASSWORD", "admin123")
-            db.add(models.User(login=login, haslo_hash=hash_password(haslo), rola="admin"))
-            db.commit()
-            print(f"[AUTH] Utworzono konto admina: login='{login}'. ZMIEN HASLO po pierwszym logowaniu!")
-    finally:
-        db.close()
-
-
 @app.on_event("startup")
 def startup():
     init_db()
-    ensure_admin()
+    # Uwaga: konto administratora NIE jest już tworzone z pliku konfiguracyjnego (.env).
+    # Admina zakłada się wyłącznie w bazie skryptem: python create_admin.py
 
 
 @app.get("/api/health")
@@ -105,6 +93,32 @@ def login(dane: schemas.LoginIn, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.login == dane.login).first()
     if not user or not user.aktywny or not verify_password(dane.haslo, user.haslo_hash):
         raise HTTPException(401, "Nieprawidłowy login lub hasło.")
+    return schemas.TokenOut(access_token=create_access_token(user), user=_user_out(user))
+
+@app.post("/api/auth/register", response_model=schemas.TokenOut, status_code=201)
+def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
+    """Samodzielna rejestracja pracownika. Tworzy Pracownika + konto (rola employee)
+    i od razu loguje (zwraca token). Wszystkie zapytania przez ORM = parametryzowane
+    (brak ryzyka SQL Injection)."""
+    login = sprawdz_login(dane.login)        # min 5, tylko [A-Za-z0-9]
+    sprawdz_haslo(dane.haslo)                 # min 8, litera+cyfra+znak specjalny, ASCII
+    imie = (dane.imie or "").strip()
+    nazwisko = (dane.nazwisko or "").strip()
+    if not imie or not nazwisko:
+        raise HTTPException(400, "Podaj imię i nazwisko.")
+    if db.query(models.User).filter(models.User.login == login).first():
+        raise HTTPException(400, "Ten login jest już zajęty.")
+
+    prac = models.Pracownik(imie=imie, nazwisko=nazwisko, aktywny=True)
+    db.add(prac)
+    db.flush()  # nadaje prac.id bez commita
+    user = models.User(
+        login=login, haslo_hash=hash_password(dane.haslo),
+        rola="employee", pracownik_id=prac.id,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
     return schemas.TokenOut(access_token=create_access_token(user), user=_user_out(user))
 
 @app.get("/api/auth/me", response_model=schemas.UserOut)
@@ -201,6 +215,20 @@ def moje_dyspozycje(
     if start: q = q.filter(models.Dyspozycja.data >= start)
     if end:   q = q.filter(models.Dyspozycja.data <= end)
     return q.all()
+
+@app.get("/api/me/imprezy", response_model=List[schemas.ImprezaOut])
+def moje_imprezy(
+    start: date = Query(...), end: date = Query(...),
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Imprezy zaplanowane w danym zakresie — podgląd dla pracownika przy składaniu
+    dyspozycji (tylko odczyt; dostępne dla każdego zalogowanego)."""
+    return (
+        db.query(models.Impreza)
+        .filter(models.Impreza.data >= start, models.Impreza.data <= end)
+        .order_by(models.Impreza.data.asc(), models.Impreza.godzina.asc())
+        .all()
+    )
 
 @app.put("/api/me/dyspozycje", status_code=200)
 def zapisz_moje_dyspozycje(

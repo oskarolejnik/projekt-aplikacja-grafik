@@ -70,6 +70,12 @@ class LoginIn(BaseModel):
     login: str
     haslo: str
 
+class RegisterIn(BaseModel):
+    login: str
+    haslo: str
+    imie: str
+    nazwisko: str
+
 class UserOut(BaseModel):
     id: int
     login: str

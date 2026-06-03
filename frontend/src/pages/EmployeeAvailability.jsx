@@ -10,13 +10,22 @@ import { Logo } from '../components/Logo'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
 
+// Godzina imprezy z arkusza bywa łańcuchem ("14:30:00", "Brak", "None"...).
+const fmtGodzina = (g) => {
+  if (!g || g === 'None' || g === 'Brak') return ''
+  const m = String(g).match(/^(\d{1,2}):(\d{2})/)
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : String(g)
+}
+
 // Samoobsługa pracownika: zgłaszanie dyspozycyjności na wybrany tydzień.
-// Zastępuje import CSV — dane trafiają wprost do tabeli Dyspozycja (pod kontem).
+// Przy każdym dniu pokazujemy imprezy zaplanowane w tym terminie (z bazy imprez),
+// żeby pracownik mógł dopasować godziny — analogicznie do widoku wymagań u admina.
 export default function EmployeeAvailability() {
   const { user, logout } = useAuth()
   const { week } = useData()
   const { toast } = useToast()
   const [dni, setDni] = useState([])
+  const [imprezyMap, setImprezyMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -26,7 +35,10 @@ export default function EmployeeAvailability() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const existing = await api(`/me/dyspozycje?start=${s}&end=${e}`)
+      const [existing, imprezy] = await Promise.all([
+        api(`/me/dyspozycje?start=${s}&end=${e}`),
+        api(`/me/imprezy?start=${s}&end=${e}`),
+      ])
       const map = Object.fromEntries(existing.map((d) => [d.data, d]))
       setDni(
         daty.map((d) => {
@@ -38,6 +50,11 @@ export default function EmployeeAvailability() {
           }
         }),
       )
+      const im = {}
+      imprezy.forEach((x) => {
+        ;(im[x.data] = im[x.data] || []).push(x)
+      })
+      setImprezyMap(im)
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -108,42 +125,67 @@ export default function EmployeeAvailability() {
             </div>
           ) : (
             <div className="space-y-3">
-              {dni.map((d, i) => (
-                <div key={d.data} className="flex flex-col gap-3 rounded-xl border border-line bg-white/[0.02] p-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-[150px]">
-                    <div className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(d.data).getDay()]}</div>
-                    <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
-                  </div>
+              {dni.map((d, i) => {
+                const imprezy = imprezyMap[d.data] || []
+                return (
+                  <div key={d.data} className="rounded-xl border border-line bg-white/[0.02] p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-[150px]">
+                        <div className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(d.data).getDay()]}</div>
+                        <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
+                      </div>
 
-                  <div className="flex items-center gap-3">
-                    <div className="flex overflow-hidden rounded-lg border border-line">
-                      <button
-                        onClick={() => setDay(i, { dostepnosc: true })}
-                        className={`px-4 py-2 text-xs font-bold transition ${d.dostepnosc ? 'bg-success text-bg' : 'text-muted hover:text-ink'}`}
-                      >
-                        Dostępny
-                      </button>
-                      <button
-                        onClick={() => setDay(i, { dostepnosc: false })}
-                        className={`px-4 py-2 text-xs font-bold transition ${!d.dostepnosc ? 'bg-danger text-white' : 'text-muted hover:text-ink'}`}
-                      >
-                        Niedostępny
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <div className="flex overflow-hidden rounded-lg border border-line">
+                          <button
+                            onClick={() => setDay(i, { dostepnosc: true })}
+                            className={`px-4 py-2 text-xs font-bold transition ${d.dostepnosc ? 'bg-success text-bg' : 'text-muted hover:text-ink'}`}
+                          >
+                            Dostępny
+                          </button>
+                          <button
+                            onClick={() => setDay(i, { dostepnosc: false })}
+                            className={`px-4 py-2 text-xs font-bold transition ${!d.dostepnosc ? 'bg-danger text-white' : 'text-muted hover:text-ink'}`}
+                          >
+                            Niedostępny
+                          </button>
+                        </div>
+
+                        <label className="flex items-center gap-2 text-xs text-muted">
+                          <span className="hidden sm:inline">od</span>
+                          <input
+                            type="time"
+                            value={d.od}
+                            onChange={(ev) => setDay(i, { od: ev.target.value })}
+                            disabled={!d.dostepnosc}
+                            className="field w-28 px-2 py-2 disabled:opacity-40"
+                          />
+                        </label>
+                      </div>
                     </div>
 
-                    <label className="flex items-center gap-2 text-xs text-muted">
-                      <span className="hidden sm:inline">od</span>
-                      <input
-                        type="time"
-                        value={d.od}
-                        onChange={(ev) => setDay(i, { od: ev.target.value })}
-                        disabled={!d.dostepnosc}
-                        className="field w-28 px-2 py-2 disabled:opacity-40"
-                      />
-                    </label>
+                    {/* Imprezy zaplanowane tego dnia (z bazy imprez) */}
+                    {imprezy.length > 0 && (
+                      <div className="mt-3 space-y-1.5 border-t border-line pt-3">
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-blush">
+                          <Icon name="calendar" className="h-3.5 w-3.5" /> Imprezy tego dnia
+                        </div>
+                        {imprezy.map((imp) => (
+                          <div key={imp.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-xs">
+                            <span className="font-semibold text-ink">{imp.klient}</span>
+                            {fmtGodzina(imp.godzina) && (
+                              <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono font-semibold text-ink">
+                                {fmtGodzina(imp.godzina)}
+                              </span>
+                            )}
+                            {imp.liczba_osob > 0 && <span className="text-muted">· {imp.liczba_osob} os.</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
 

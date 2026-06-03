@@ -34,7 +34,15 @@ export function AuthProvider({ children }) {
     return res.user
   }, [])
 
-  const value = { user, loading, login, logout, isAdmin: user?.rola === 'admin' }
+  // Rejestracja pracownika — po sukcesie od razu loguje (backend zwraca token).
+  const register = useCallback(async (dane) => {
+    const res = await api('/auth/register', 'POST', dane)
+    setToken(res.access_token)
+    setUser(res.user)
+    return res.user
+  }, [])
+
+  const value = { user, loading, login, register, logout, isAdmin: user?.rola === 'admin' }
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 

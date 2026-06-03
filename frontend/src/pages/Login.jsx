@@ -5,23 +5,38 @@ import { Icon } from '../lib/icons'
 import { Logo } from '../components/Logo'
 import { Spinner } from '../components/ui/Spinner'
 
-// Panel logowania (modal nad ekranem startowym). Po sukcesie AuthContext ustawia
-// użytkownika, a App przełącza widok na panel admina lub samoobsługę pracownika.
+// Walidacja po stronie klienta (natychmiastowy feedback). Serwer waliduje ponownie
+// — to ta sama logika, ale front daje od razu czytelny komunikat.
+function walidujRejestracje({ login, haslo, imie, nazwisko }) {
+  if (!imie.trim() || !nazwisko.trim()) return 'Podaj imię i nazwisko.'
+  if (login.trim().length < 5) return 'Login musi mieć co najmniej 5 znaków.'
+  if (!/^[A-Za-z0-9]+$/.test(login.trim())) return 'Login: tylko litery i cyfry (bez spacji i polskich znaków).'
+  if (haslo.length < 8) return 'Hasło musi mieć co najmniej 8 znaków.'
+  if (/[^\x21-\x7e]/.test(haslo)) return 'Hasło: tylko znaki ASCII (bez spacji i polskich liter).'
+  if (!/[A-Za-z]/.test(haslo)) return 'Hasło musi zawierać literę.'
+  if (!/\d/.test(haslo)) return 'Hasło musi zawierać cyfrę.'
+  if (!/[^A-Za-z0-9]/.test(haslo)) return 'Hasło musi zawierać znak specjalny (np. ! @ # $).'
+  return null
+}
+
 export default function Login({ onClose }) {
-  const { login } = useAuth()
+  const { login, register } = useAuth()
   const { toast } = useToast()
+  const [tryb, setTryb] = useState('login') // 'login' | 'register'
   const [loginName, setLoginName] = useState('')
   const [haslo, setHaslo] = useState('')
+  const [imie, setImie] = useState('')
+  const [nazwisko, setNazwisko] = useState('')
   const [pokazHaslo, setPokazHaslo] = useState(false)
   const [busy, setBusy] = useState(false)
-  const firstRef = useRef(null)
+  const formRef = useRef(null)
 
-  // Autofokus na pole logowania — TYLKO przy otwarciu modala (pusta tablica).
-  // Wcześniej zależność [onClose] powodowała ponowne ustawianie fokusu przy
-  // każdym renderze rodzica (zegar tyka co sekundę → fokus „uciekał" do loginu).
+  const rejestracja = tryb === 'register'
+
+  // Fokus na pierwszym polu — przy otwarciu i po zmianie trybu (login/rejestracja).
   useEffect(() => {
-    firstRef.current?.focus()
-  }, [])
+    formRef.current?.querySelector('input')?.focus()
+  }, [tryb])
 
   // Zamknięcie klawiszem Escape.
   useEffect(() => {
@@ -32,13 +47,22 @@ export default function Login({ onClose }) {
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!loginName.trim() || !haslo) {
-      toast('Podaj login i hasło.', 'error')
-      return
-    }
     setBusy(true)
     try {
-      await login(loginName.trim(), haslo)
+      if (rejestracja) {
+        const blad = walidujRejestracje({ login: loginName, haslo, imie, nazwisko })
+        if (blad) {
+          toast(blad, 'error')
+          return
+        }
+        await register({ login: loginName.trim(), haslo, imie: imie.trim(), nazwisko: nazwisko.trim() })
+      } else {
+        if (!loginName.trim() || !haslo) {
+          toast('Podaj login i hasło.', 'error')
+          return
+        }
+        await login(loginName.trim(), haslo)
+      }
       // sukces — komponent zniknie wraz z przełączeniem widoku w App
     } catch (err) {
       toast(err.message, 'error')
@@ -50,28 +74,41 @@ export default function Login({ onClose }) {
   return (
     <div className="fixed inset-0 z-[1200] grid place-items-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label="Logowanie" className="card animate-fade-in relative z-10 w-full max-w-md p-8">
+      <div role="dialog" aria-modal="true" aria-label={rejestracja ? 'Rejestracja' : 'Logowanie'} className="card animate-fade-in relative z-10 w-full max-w-md p-8">
         <div className="mb-6 flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-xl bg-accent-gradient">
             <Logo className="h-6" variant="bg" />
           </div>
           <div>
-            <h2 className="font-display text-xl font-bold text-ink">Zaloguj się</h2>
-            <p className="text-xs text-muted">Grafik Pracy — panel</p>
+            <h2 className="font-display text-xl font-bold text-ink">{rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}</h2>
+            <p className="text-xs text-muted">{rejestracja ? 'Załóż konto pracownika' : 'Grafik Pracy — panel'}</p>
           </div>
         </div>
 
-        <form onSubmit={submit} className="space-y-4">
+        <form ref={formRef} onSubmit={submit} className="space-y-4">
+          {rejestracja && (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1.5">
+                <span className="field-label">Imię</span>
+                <input value={imie} onChange={(e) => setImie(e.target.value)} autoComplete="given-name" className="field" placeholder="Jan" />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="field-label">Nazwisko</span>
+                <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} autoComplete="family-name" className="field" placeholder="Kowalski" />
+              </label>
+            </div>
+          )}
+
           <label className="flex flex-col gap-1.5">
             <span className="field-label">Login</span>
             <input
-              ref={firstRef}
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
               autoComplete="username"
               className="field"
-              placeholder="np. jan.kowalski"
+              placeholder="np. jankowalski"
             />
+            {rejestracja && <span className="text-[11px] text-muted/80">min. 5 znaków, tylko litery i cyfry</span>}
           </label>
 
           <label className="flex flex-col gap-1.5">
@@ -81,7 +118,7 @@ export default function Login({ onClose }) {
                 type={pokazHaslo ? 'text' : 'password'}
                 value={haslo}
                 onChange={(e) => setHaslo(e.target.value)}
-                autoComplete="current-password"
+                autoComplete={rejestracja ? 'new-password' : 'current-password'}
                 className="field pr-11"
                 placeholder="••••••••"
               />
@@ -94,6 +131,7 @@ export default function Login({ onClose }) {
                 <Icon name={pokazHaslo ? 'close' : 'info'} className="h-4 w-4" />
               </button>
             </div>
+            {rejestracja && <span className="text-[11px] text-muted/80">min. 8 znaków, w tym cyfra i znak specjalny</span>}
           </label>
 
           <button
@@ -102,12 +140,30 @@ export default function Login({ onClose }) {
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3 text-sm font-bold uppercase tracking-[0.15em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.98] disabled:opacity-60"
           >
             {busy ? <Spinner className="h-4 w-4" /> : <Icon name="logout" className="h-4 w-4 rotate-180" />}
-            {busy ? 'Logowanie…' : 'Zaloguj się'}
+            {busy ? 'Chwila…' : rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}
           </button>
         </form>
 
+        <div className="mt-5 text-center text-xs text-muted">
+          {rejestracja ? (
+            <>
+              Masz już konto?{' '}
+              <button onClick={() => setTryb('login')} className="font-semibold text-ink underline-offset-2 hover:underline">
+                Zaloguj się
+              </button>
+            </>
+          ) : (
+            <>
+              Nie masz konta?{' '}
+              <button onClick={() => setTryb('register')} className="font-semibold text-ink underline-offset-2 hover:underline">
+                Zarejestruj się
+              </button>
+            </>
+          )}
+        </div>
+
         {onClose && (
-          <button onClick={onClose} className="mt-4 w-full text-center text-xs text-muted transition hover:text-ink">
+          <button onClick={onClose} className="mt-3 w-full text-center text-xs text-muted transition hover:text-ink">
             Anuluj
           </button>
         )}
