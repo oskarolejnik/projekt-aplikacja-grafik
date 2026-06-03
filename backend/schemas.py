@@ -63,3 +63,46 @@ class ImprezaOut(ImprezaBase):
 
     class Config:
         from_attributes = True  # Jeśli używasz starszej wersji Pydantic, zamień to na: orm_mode = True
+
+# --- AUTH / UŻYTKOWNICY ---
+
+class LoginIn(BaseModel):
+    login: str
+    haslo: str
+
+class UserOut(BaseModel):
+    id: int
+    login: str
+    rola: str
+    aktywny: bool = True
+    pracownik_id: Optional[int] = None
+    imie: Optional[str] = None        # uzupełniane z powiązanego Pracownika
+    nazwisko: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+class UserCreate(BaseModel):
+    login: str
+    haslo: str
+    rola: str = "employee"
+    pracownik_id: Optional[int] = None
+
+class UserUpdate(BaseModel):
+    rola: Optional[str] = None
+    aktywny: Optional[bool] = None
+    pracownik_id: Optional[int] = None
+
+class ResetHasloIn(BaseModel):
+    haslo: str
+
+class MojaDyspozycjaIn(BaseModel):
+    data: date
+    dostepnosc: bool = True
+    godz_od: Optional[time] = None
+
+class MojeDyspozycjeBatch(BaseModel):
+    dyspozycje: List[MojaDyspozycjaIn]

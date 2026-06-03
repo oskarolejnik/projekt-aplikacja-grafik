@@ -100,7 +100,7 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
 
             nowy_przydzial = models.PrzydzialZmiany(
                 data=current, stanowisko_id=req.stanowisko_id,
-                pracownik_id=wybrany.id, godz_od=req.godz_od, rewir=req.rewir
+                pracownik_id=wybrany.id, godz_od=req.godz_od
             )
             nowe_przydzialy.append(nowy_przydzial)
             busy_workers_per_day.add((current, wybrany.id))

@@ -6,30 +6,77 @@ from datetime import date, time, timedelta, datetime
 from typing import Optional, List
 from collections import defaultdict
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 import models, schemas
-from database import get_db, init_db
+from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
+
+import jwt
+from auth import (
+    get_current_user, hash_password, verify_password,
+    create_access_token, SECRET_KEY, ALGORITHM,
+)
 
 import openpyxl
 
 app = FastAPI(title="Scheduler API")
 
+ALLOWED_ORIGINS = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# Centralna ochrona API: /api/auth/* publiczne, /api/me/* dla każdego zalogowanego,
+# pozostałe /api/* tylko dla administratora. Statyczny frontend jest publiczny.
+@app.middleware("http")
+async def role_guard(request: Request, call_next):
+    path = request.url.path
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health":
+        header = request.headers.get("authorization", "")
+        token = header[7:] if header.lower().startswith("bearer ") else ""
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        except jwt.PyJWTError:
+            return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
+        if not path.startswith("/api/me/") and payload.get("rola") != "admin":
+            return JSONResponse({"detail": "Wymagane uprawnienia administratora."}, status_code=403)
+    return await call_next(request)
+
+
+def ensure_admin():
+    """Tworzy konto administratora przy starcie, jeśli żadne nie istnieje."""
+    db = SessionLocal()
+    try:
+        if db.query(models.User).filter(models.User.rola == "admin").first() is None:
+            login = os.environ.get("ADMIN_LOGIN", "admin")
+            haslo = os.environ.get("ADMIN_PASSWORD", "admin123")
+            db.add(models.User(login=login, haslo_hash=hash_password(haslo), rola="admin"))
+            db.commit()
+            print(f"[AUTH] Utworzono konto admina: login='{login}'. ZMIEN HASLO po pierwszym logowaniu!")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def startup():
     init_db()
+    ensure_admin()
+
+
+@app.get("/api/health")
+def health():
+    """Publiczny status backendu (m.in. Electron sprawdza tu gotowość serwera)."""
+    return {"status": "ok"}
+
 
 # ... [Funkcja parse_date pozostaje bez zmian] ...
 def parse_date(s: str) -> date:
@@ -39,6 +86,146 @@ def parse_date(s: str) -> date:
         d, m, y = s.split(".")
         return date(int(y), int(m), int(d))
     raise ValueError(f"Nieznany format daty: {s}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AUTORYZACJA / UŻYTKOWNICY
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _user_out(u: models.User) -> schemas.UserOut:
+    return schemas.UserOut(
+        id=u.id, login=u.login, rola=u.rola, aktywny=bool(u.aktywny),
+        pracownik_id=u.pracownik_id,
+        imie=u.pracownik.imie if u.pracownik else None,
+        nazwisko=u.pracownik.nazwisko if u.pracownik else None,
+    )
+
+@app.post("/api/auth/login", response_model=schemas.TokenOut)
+def login(dane: schemas.LoginIn, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.login == dane.login).first()
+    if not user or not user.aktywny or not verify_password(dane.haslo, user.haslo_hash):
+        raise HTTPException(401, "Nieprawidłowy login lub hasło.")
+    return schemas.TokenOut(access_token=create_access_token(user), user=_user_out(user))
+
+@app.get("/api/auth/me", response_model=schemas.UserOut)
+def auth_me(user: models.User = Depends(get_current_user)):
+    return _user_out(user)
+
+# --- Zarządzanie kontami (dostęp tylko admin — wymusza middleware) ---
+
+@app.get("/api/users", response_model=List[schemas.UserOut])
+def list_users(db: Session = Depends(get_db)):
+    return [_user_out(u) for u in db.query(models.User).order_by(models.User.id).all()]
+
+@app.post("/api/users", response_model=schemas.UserOut, status_code=201)
+def create_user(dane: schemas.UserCreate, db: Session = Depends(get_db)):
+    if dane.rola not in ("admin", "employee"):
+        raise HTTPException(400, "Nieprawidłowa rola.")
+    if db.query(models.User).filter(models.User.login == dane.login).first():
+        raise HTTPException(400, "Login jest już zajęty.")
+    if dane.pracownik_id is not None:
+        if not db.get(models.Pracownik, dane.pracownik_id):
+            raise HTTPException(404, "Nie znaleziono pracownika.")
+        if db.query(models.User).filter(models.User.pracownik_id == dane.pracownik_id).first():
+            raise HTTPException(400, "Ten pracownik ma już konto.")
+    u = models.User(
+        login=dane.login, haslo_hash=hash_password(dane.haslo),
+        rola=dane.rola, pracownik_id=dane.pracownik_id,
+    )
+    db.add(u); db.commit(); db.refresh(u)
+    return _user_out(u)
+
+@app.put("/api/users/{uid}", response_model=schemas.UserOut)
+def update_user(uid: int, dane: schemas.UserUpdate, db: Session = Depends(get_db)):
+    u = db.get(models.User, uid)
+    if not u:
+        raise HTTPException(404, "Nie znaleziono konta.")
+    if dane.rola is not None:
+        if dane.rola not in ("admin", "employee"):
+            raise HTTPException(400, "Nieprawidłowa rola.")
+        u.rola = dane.rola
+    if dane.aktywny is not None:
+        u.aktywny = dane.aktywny
+    if dane.pracownik_id is not None:
+        u.pracownik_id = dane.pracownik_id
+    db.commit(); db.refresh(u)
+    return _user_out(u)
+
+@app.post("/api/users/{uid}/reset-haslo", status_code=204)
+def reset_haslo(uid: int, dane: schemas.ResetHasloIn, db: Session = Depends(get_db)):
+    u = db.get(models.User, uid)
+    if not u:
+        raise HTTPException(404, "Nie znaleziono konta.")
+    u.haslo_hash = hash_password(dane.haslo)
+    db.commit()
+
+@app.delete("/api/users/{uid}", status_code=204)
+def delete_user(uid: int, db: Session = Depends(get_db)):
+    u = db.get(models.User, uid)
+    if not u:
+        raise HTTPException(404, "Nie znaleziono konta.")
+    db.delete(u); db.commit()
+
+@app.post("/api/users/provision", status_code=200)
+def provision_accounts(db: Session = Depends(get_db)):
+    """Tworzy konta (login=imie.nazwisko, hasło tymczasowe) dla pracowników bez konta."""
+    import unicodedata
+    def slug(s: str) -> str:
+        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+        return "".join(c for c in s if c.isalnum())
+    maja_konto = {u.pracownik_id for u in db.query(models.User).all() if u.pracownik_id}
+    utworzone = []
+    for p in db.query(models.Pracownik).all():
+        if p.id in maja_konto:
+            continue
+        base = f"{slug(p.imie)}.{slug(p.nazwisko)}" or f"user{p.id}"
+        login = base; i = 1
+        while db.query(models.User).filter(models.User.login == login).first():
+            i += 1; login = f"{base}{i}"
+        haslo = (slug(p.nazwisko) or "haslo") + "123"
+        db.add(models.User(login=login, haslo_hash=hash_password(haslo), rola="employee", pracownik_id=p.id))
+        utworzone.append({"pracownik": f"{p.imie} {p.nazwisko}", "login": login, "haslo_tymczasowe": haslo})
+    db.commit()
+    return {"utworzone": utworzone}
+
+# --- Samoobsługa: dyspozycyjność zalogowanego pracownika ---
+
+@app.get("/api/me/dyspozycje", response_model=List[schemas.DyspozycjaOut])
+def moje_dyspozycje(
+    start: Optional[date] = None, end: Optional[date] = None,
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    if not user.pracownik_id:
+        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    q = db.query(models.Dyspozycja).filter(models.Dyspozycja.pracownik_id == user.pracownik_id)
+    if start: q = q.filter(models.Dyspozycja.data >= start)
+    if end:   q = q.filter(models.Dyspozycja.data <= end)
+    return q.all()
+
+@app.put("/api/me/dyspozycje", status_code=200)
+def zapisz_moje_dyspozycje(
+    batch: schemas.MojeDyspozycjeBatch,
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    if not user.pracownik_id:
+        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    zapisano = 0
+    for d in batch.dyspozycje:
+        existing = db.query(models.Dyspozycja).filter_by(
+            pracownik_id=user.pracownik_id, data=d.data
+        ).first()
+        if existing:
+            existing.dostepnosc = d.dostepnosc
+            existing.godz_od = d.godz_od
+        else:
+            db.add(models.Dyspozycja(
+                pracownik_id=user.pracownik_id, data=d.data,
+                dostepnosc=d.dostepnosc, godz_od=d.godz_od,
+            ))
+        zapisano += 1
+    db.commit()
+    return {"zapisano": zapisano}
+
 
 @app.get("/api/stanowiska", response_model=List[schemas.StanowiskoOut])
 def get_stanowiska(db: Session = Depends(get_db)):
@@ -230,191 +417,6 @@ def create_dyspozycja(data: schemas.DyspozycjaCreate, db: Session = Depends(get_
     d = models.Dyspozycja(**data.model_dump())
     db.add(d); db.commit(); db.refresh(d)
     return d
-
-@app.post("/api/dyspozycje/import-csv")
-async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    content = await file.read()
-    text = content.decode("utf-8-sig")
-    
-    first_line = text.split("\n")[0] if text else ""
-    delimiter = ";" if ";" in first_line else ","
-    
-    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
-    fieldnames = reader.fieldnames or []
-    fieldnames_lower = [f.lower().strip() for f in fieldnames]
-    rows = list(reader)
-
-    if not rows:
-        return {"zapisano": 0, "podglad": [], "konflikty": []}
-
-    wszyscy = db.query(models.Pracownik).all()
-
-    def find_pracownik(raw_name: str):
-        name_clean = raw_name.lower().strip()
-        if not name_clean:
-            return None
-        for p in wszyscy:
-            if f"{p.imie} {p.nazwisko}".lower().strip() == name_clean:
-                return p
-        matches = [p for p in wszyscy if p.imie.lower().strip() == name_clean]
-        if len(matches) == 1:
-            return matches[0]
-        matches_partial = []
-        for p in wszyscy:
-            full = f"{p.imie} {p.nazwisko}".lower().strip()
-            if full in name_clean or name_clean in full:
-                matches_partial.append(p)
-        if len(matches_partial) >= 1:
-            return matches_partial[0]
-        return None
-
-    def parse_availability_text(val_str: str):
-        t_lower = val_str.lower().strip()
-        if t_lower == "nie" or not t_lower:
-            return False, None
-        
-        dostepnosc = True      ;  godz_od = None
-        
-        od_match = re.search(r'\bod\s*(\d{1,2})(?::(\d{2}))?', t_lower)
-        if od_match:
-            h = int(od_match.group(1))
-            m = int(od_match.group(2)) if od_match.group(2) else 0
-            godz_od = time(h, m)
-            
-        na_match = re.search(r'\bna\s*(\d{1,2})\b', t_lower)
-        if na_match and not godz_od and "18stk" not in t_lower:
-            h = int(na_match.group(1))
-            godz_od = time(h, 0)
-            
-        if "od 12/13" in t_lower:
-            godz_od = time(12, 0)
-            
-        return dostepnosc, godz_od
-
-    podglad = []
-    konflikty = []
-    zapisano = 0
-
-    is_wide_format = "imię i nazwisko" in fieldnames_lower or any("-" in f for f in fieldnames)
-
-    if is_wide_format:
-        name_col = next((f for f in fieldnames if f.lower().strip() == "imię i nazwisko"), fieldnames[1])
-        
-        year = 2026
-        ts_col = next((f for f in fieldnames if "sygnatura" in f.lower() or "timestamp" in f.lower()), None)
-        if ts_col and rows[0].get(ts_col):
-            match_year = re.match(r"(\d{4})", rows[0].get(ts_col).strip())
-            if match_year:
-                year = int(match_year.group(1))
-
-        date_cols = []
-        for col in fieldnames:
-            date_match = re.search(r"(\d+)\.(\d+)", col)
-            if date_match:
-                d_day = int(date_match.group(1))
-                d_month = int(date_match.group(2))
-                parsed_d = date(year, d_month, d_day)
-                date_cols.append((col, parsed_d))
-
-        lokalne_przydzialy = {}
-
-        for row in rows:
-            raw_name = (row.get(name_col) or "").strip()
-            if not raw_name:
-                continue
-                
-            p = find_pracownik(raw_name)
-            if not p:
-                konflikty.append({"wiersz": raw_name, "problem": "Nie znaleziono pracownika w bazie danych"})
-                continue
-
-            for col_name, parsed_date in date_cols:
-                val = (row.get(col_name) or "").strip()
-                dostepnosc, godz_od = parse_availability_text(val)
-                klucz = (p.id, parsed_date)
-
-                podglad.append({
-                    "pracownik": f"{p.imie} {p.nazwisko}",
-                    "data": str(parsed_date),
-                    "dostepnosc": dostepnosc,
-                    "od": str(godz_od) if godz_od else "",
-                })
-
-                if klucz in lokalne_przydzialy:
-                    existing = lokalne_przydzialy[klucz]
-                    existing.dostepnosc = dostepnosc
-                    existing.godz_od = godz_od
-                else:
-                    existing = db.query(models.Dyspozycja).filter_by(pracownik_id=p.id, data=parsed_date).first()
-                    if existing:
-                        existing.dostepnosc = dostepnosc
-                        existing.godz_od = godz_od
-                        lokalne_przydzialy[klucz] = existing
-                    else:
-                        nowa_dyspozycja = models.Dyspozycja(
-                            pracownik_id=p.id,
-                            data=parsed_date,
-                            dostepnosc=dostepnosc,
-                            godz_od=godz_od,
-                        )
-                        db.add(nowa_dyspozycja)
-                        lokalne_przydzialy[klucz] = nowa_dyspozycja
-                        zapisano += 1
-    else:
-        lokalne_przydzialy = {}
-        for row in rows:
-            raw_name = (row.get("pracownik") or "").strip()
-            raw_date = (row.get("data") or row.get("date") or "").strip()
-            raw_dost = (row.get("dostępność") or row.get("dostepnosc") or row.get("available") or "1").strip()
-            raw_od   = (row.get("od") or row.get("from") or "").strip()
-
-            p = find_pracownik(raw_name)
-            if not p:
-                konflikty.append({"wiersz": raw_name, "problem": "Nie znaleziono pracownika"})
-                continue
-
-            try:
-                parsed_date = parse_date(raw_date)
-            except ValueError as e:
-                konflikty.append({"wiersz": raw_name, "problem": str(e)})
-                continue
-
-            dostepnosc = raw_dost in ("1", "true", "tak", "yes", "t")
-            godz_od = None
-            if raw_od:
-                godz_od = time(*map(int, raw_od.split(":")))
-            klucz = (p.id, parsed_date)
-
-            podglad.append({
-                "pracownik": f"{p.imie} {p.nazwisko}",
-                "data": str(parsed_date),
-                "dostepnosc": dostepnosc,
-                "od": str(godz_od) if godz_od else "",
-            })
-
-            if klucz in lokalne_przydzialy:
-                existing = lokalne_przydzialy[klucz]
-                existing.dostepnosc = dostepnosc
-                existing.godz_od = godz_od
-            else:
-                existing = db.query(models.Dyspozycja).filter_by(pracownik_id=p.id, data=parsed_date).first()
-                if existing:
-                    existing.dostepnosc = dostepnosc
-                    existing.godz_od = godz_od
-                    lokalne_przydzialy[klucz] = existing
-                else:
-                    nowa_dyspozycja = models.Dyspozycja(
-                        pracownik_id=p.id,
-                        data=parsed_date,
-                        dostepnosc=dostepnosc,
-                        godz_od=godz_od,
-                    )
-                    db.add(nowa_dyspozycja)
-                    lokalne_przydzialy[klucz] = nowa_dyspozycja
-                    zapisano += 1
-
-    db.commit()
-    return {"zapisano": zapisano, "podglad": podglad, "konflikty": konflikty}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -653,6 +655,11 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
     db.commit()
 
     return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy}
-# ── SERWOWANIE FRONTENDU ─────────────────────────────────
+# ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-app.mount("/", StaticFiles(directory=os.path.abspath(os.path.join(BASE_DIR, "..", "frontend")), html=True), name="frontend")
+FRONTEND_DIST = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
+if os.path.isdir(FRONTEND_DIST):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+else:
+    # Tryb deweloperski: frontend serwuje Vite (:5173), backend udostępnia tylko /api.
+    print("UWAGA: frontend/dist nie istnieje — pomijam serwowanie frontu. Uruchom 'npm --prefix frontend run build' lub 'npm run dev'.")

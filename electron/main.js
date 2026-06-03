@@ -71,7 +71,7 @@ function waitForBackend(retries, callback) {
   const options = {
     host: '127.0.0.1',
     port: 8000,
-    path: '/api/stanowiska',
+    path: '/api/health',
     timeout: 1000
   };
 
@@ -121,9 +121,13 @@ function createWindow() {
     },
   });
 
+  // W trybie deweloperskim (VITE_DEV=1) ładujemy serwer Vite z hot-reloadem,
+  // w przeciwnym razie zbudowany frontend serwowany przez FastAPI na :8000.
+  const targetUrl = process.env.VITE_DEV ? 'http://localhost:5173' : 'http://127.0.0.1:8000';
+
   // POPRAWKA CACHE: Twarde wyczyszczenie pamięci podręcznej i zablokowanie cache w nagłówkach HTTP
   mainWindow.webContents.session.clearCache().then(() => {
-    mainWindow.loadURL('http://127.0.0.1:8000', {
+    mainWindow.loadURL(targetUrl, {
       extraHeaders: 'pragma: no-cache\ncache-control: no-cache\n'
     });
   });

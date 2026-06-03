@@ -90,3 +90,24 @@ class Impreza(Base):
     godzina       = Column(String(32), nullable=True) # Czytane z komórki J1
     sala          = Column(String(16), nullable=True) #czytanie z komórki J2
     sciezka_pliku = Column(String, unique=True, nullable=False) # Zabezpiecza przed duplikacją z tego samego pliku Excel
+
+# --- UŻYTKOWNICY / LOGOWANIE ---
+
+class User(Base):
+    """Konto logowania. Pracownik (rola=employee) jest powiązany z rekordem
+    Pracownik (1:1); administrator (rola=admin) może mieć pracownik_id = NULL."""
+    __tablename__ = "users"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    login        = Column(String(64), unique=True, nullable=False, index=True)
+    haslo_hash   = Column(String(255), nullable=False)          # bcrypt
+    rola         = Column(String(16), nullable=False, default="employee")  # 'admin' | 'employee'
+    aktywny      = Column(Boolean, default=True)
+    pracownik_id = Column(
+        Integer,
+        ForeignKey("pracownicy.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+
+    pracownik = relationship("Pracownik")
