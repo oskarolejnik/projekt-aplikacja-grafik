@@ -53,6 +53,7 @@ class WymaganiaDnia(Base):
     godz_od = Column(Time, nullable=True)     
     rewir = Column(String, nullable=True)     
     liczba_osob = Column(Integer, default=1)
+    jest_impreza = Column(Boolean, default=False)
 
 class Dyspozycja(Base):
     __tablename__ = "dyspozycje"
@@ -76,3 +77,16 @@ class PrzydzialZmiany(Base):
 
     stanowisko = relationship("Stanowisko", back_populates="przydzialy")
     pracownik  = relationship("Pracownik",  back_populates="przydzialy")
+
+# --- NOWE MODELE ---
+
+class Impreza(Base):
+    __tablename__ = "imprezy"
+    
+    id            = Column(Integer, primary_key=True, index=True)
+    data          = Column(Date, index=True, nullable=False)
+    klient        = Column(String(128), index=True, nullable=False)
+    liczba_osob   = Column(Integer, nullable=True)  # Czytane z komórki H8
+    godzina       = Column(String(32), nullable=True) # Czytane z komórki J1
+    sala          = Column(String(16), nullable=True) #czytanie z komórki J2
+    sciezka_pliku = Column(String, unique=True, nullable=False) # Zabezpiecza przed duplikacją z tego samego pliku Excel

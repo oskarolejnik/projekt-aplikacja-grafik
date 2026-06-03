@@ -297,6 +297,7 @@ table:not(.modern-grid-table, #grafik-table) tr:hover {
   margin-top: 6px;
   margin-bottom: 6px;
 }
+.hidden { display: none; }
 
 .kwalifikacja-item {
   display: inline-flex;

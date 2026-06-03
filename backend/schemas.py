@@ -20,6 +20,7 @@ class WymaganiaBase(BaseModel):
     data: date; stanowisko_id: int; liczba_osob: int = 1
     godz_od: Optional[time] = None
     rewir: Optional[str] = None
+    jest_impreza: bool = False
 class WymaganiaCreate(WymaganiaBase): pass
 class WymaganiaOut(WymaganiaBase):
     id: int; model_config = ConfigDict(from_attributes=True)
@@ -46,3 +47,19 @@ class PracownikOut(PracownikBase):
 
 class AutoAssignResult(BaseModel):
     przydzielone: int; niedobory: List[dict]
+
+# --- NOWE SCHEMATY DLA IMPREZ ---
+
+class ImprezaBase(BaseModel):
+    data: date
+    klient: str
+    liczba_osob: Optional[int] = None
+    godzina: Optional[str] = None
+    sala: Optional[str] = None
+    sciezka_pliku: str
+
+class ImprezaOut(ImprezaBase):
+    id: int
+
+    class Config:
+        from_attributes = True  # Jeśli używasz starszej wersji Pydantic, zamień to na: orm_mode = True

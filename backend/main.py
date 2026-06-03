@@ -2,8 +2,8 @@ import csv
 import io
 import re
 import os
-from datetime import date, time, timedelta
-from typing import Optional, List  # POPRAWKA TYPOWANIA DLA PYTHON 3.9
+from datetime import date, time, timedelta, datetime
+from typing import Optional, List
 from collections import defaultdict
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Query
@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 
 import models, schemas
 from database import get_db, init_db
-from algorithm import auto_assign as _auto_assign
+from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
+
+import openpyxl
 
 app = FastAPI(title="Scheduler API")
 
@@ -29,25 +31,14 @@ app.add_middleware(
 def startup():
     init_db()
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# POMOCNICZE
-# ═══════════════════════════════════════════════════════════════════════════
-
+# ... [Funkcja parse_date pozostaje bez zmian] ...
 def parse_date(s: str) -> date:
-    """Obsługuje YYYY-MM-DD and DD.MM.YYYY."""
     s = s.strip()
-    if re.match(r"\d{4}-\d{2}-\d{2}", s):
-        return date.fromisoformat(s)
+    if re.match(r"\d{4}-\d{2}-\d{2}", s): return date.fromisoformat(s)
     if re.match(r"\d{2}\.\d{2}\.\d{4}", s):
         d, m, y = s.split(".")
         return date(int(y), int(m), int(d))
     raise ValueError(f"Nieznany format daty: {s}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# STANOWISKA
-# ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/stanowiska", response_model=List[schemas.StanowiskoOut])
 def get_stanowiska(db: Session = Depends(get_db)):
@@ -593,10 +584,75 @@ def eksport_csv(start: date, end: date, db: Session = Depends(get_db)):
         headers=headers
     )
 
-# ── SERWOWANIE FRONTENDU (Z PEŁNĄ ŚCIEŻKĄ) ─────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# IMPREZY Z SERWERA NAS (ZINTEGROWANE Z AUTOMATYKĄ WYMAGAŃ)
+# ═══════════════════════════════════════════════════════════════════════════
+
+NAS_BASE_PATH = "/Volumes/RAJCULA/MENU - IMPREZY/USTALONE"
+
+@app.get("/api/imprezy", response_model=List[schemas.ImprezaOut])
+def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    return db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).order_by(models.Impreza.data.asc()).all()
+
+@app.post("/api/imprezy/sync")
+def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    if not os.path.exists(NAS_BASE_PATH):
+        raise HTTPException(status_code=404, detail="Brak połączenia z serwerem NAS.")
+
+    file_pattern = re.compile(r"(\d{4}\.\d{2}\.\d{2})\s*-\s*(.+)\.xlsx$")
+    dodano = zaktualizowano = bledy = 0
+
+    for root, dirs, files in os.walk(NAS_BASE_PATH):
+        for file in [f for f in files if not f.startswith('.')]:
+            match = file_pattern.match(file)
+            if not match: continue
+
+            event_date = datetime.strptime(match.group(1), "%Y.%m.%d").date()
+            if not (start <= event_date <= end): continue
+
+            file_path = os.path.join(root, file)
+            existing = db.query(models.Impreza).filter(models.Impreza.sciezka_pliku == file_path).first()
+
+            try:
+                wb = openpyxl.load_workbook(file_path, data_only=True)
+                ws = wb.active
+                godz = str(ws['J1'].value).strip() if ws['J1'].value else "Brak"
+                osob = int(ws['H8'].value) if isinstance(ws['H8'].value, (int, float)) else 0
+                sala = str(ws['J2'].value).strip() if ws['J2'].value else "Brak"
+                wb.close()
+            except: bledy += 1; continue
+
+            if existing:
+                if existing.liczba_osob != osob or existing.godzina != godz or existing.sala != sala:
+                    existing.liczba_osob, existing.godzina, existing.sala = osob, godz, sala
+                    zaktualizowano += 1
+            else:
+                db.add(models.Impreza(data=event_date, klient=match.group(2).strip(), liczba_osob=osob, godzina=godz, sala=sala, sciezka_pliku=file_path))
+                dodano += 1
+    db.commit()
+
+    # --- POBIERAMY ID STANOWISKA "IMPREZY" ---
+    stan = db.query(models.Stanowisko).filter(models.Stanowisko.nazwa == "Imprezy").first()
+    stan_id = stan.id if stan else 1 
+
+    # AUTOMATYCZNE PRZELICZENIE WYMAGAŃ
+    imprezy = db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).all()
+    nowe_wymagania = przelicz_imprezy_na_wymagania(imprezy)
+    
+    # Usuwamy stare automatyczne wymagania dla tego zakresu
+    db.query(models.WymaganiaDnia).filter(
+        models.WymaganiaDnia.data >= start, 
+        models.WymaganiaDnia.data <= end, 
+        models.WymaganiaDnia.jest_impreza == True
+    ).delete()
+    
+    for w in nowe_wymagania:
+        # Dodajemy stanowisko_id tutaj, a nie w słowniku w
+        db.add(models.WymaganiaDnia(**w, stanowisko_id=stan_id))
+        
+    db.commit()
+
+    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy}
+# ── SERWOWANIE FRONTENDU ─────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-frontend_path = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend"))
-
-print(f"--- SERWER PROWADZI DO: {frontend_path} ---")
-
-app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+app.mount("/", StaticFiles(directory=os.path.abspath(os.path.join(BASE_DIR, "..", "frontend")), html=True), name="frontend")

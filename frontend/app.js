@@ -1,5 +1,5 @@
 const API = "/api";
-let STATE = { stanowiska: [], pracownicy: [], wymagania: [], dyspozycje: [], przydzialy: [], wybranyTydzien: "" };
+let STATE = { stanowiska: [], pracownicy: [], wymagania: [], dyspozycje: [], przydzialy: [], imprezy: [], wybranyTydzien: "" };
 
 // Słownik profesjonalnych ikon wektorowych SVG
 const ICONS = {
@@ -16,6 +16,7 @@ const tabTitles = {
   "tab-pracownicy": "Zarządzanie Pracownikami",
   "tab-stanowiska": "Struktura i Stanowiska",
   "tab-wymagania": "Planowanie Zmian (Harmonogram)",
+  "tab-imprezy": "Baza Imprez (Zewnętrzny Serwer NAS)",
   "tab-dyspozycje": "Import Dyspozycji",
   "tab-grafik": "Interaktywny Grafik Pracy",
   "tab-eksport": "Eksport Danych"
@@ -36,12 +37,32 @@ document.querySelectorAll("nav button").forEach(btn => {
   });
 });
 
-function loadTab(tab) {
+// Zmiana w app.js: Ładujemy tylko jeśli to pierwsze wejście do zakładki
+async function loadTab(tab) {
+  // Ukrywanie wszystkich sekcji (poza tą wybraną)
+  // Wcześniej upewnij się, że w CSS dodałeś dla sekcji: display: none;
+  
   switch (tab) {
-    case "tab-pracownicy": renderPracownicy(); break;
-    case "tab-stanowiska": renderStanowiska(); break;
-    case "tab-wymagania":  renderWymagania();  break;
-    case "tab-grafik":     renderGrafik();     break;
+    case "tab-pracownicy": 
+        if (!document.getElementById("pracownicy-content").innerHTML) await renderPracownicy(); 
+        break;
+    case "tab-stanowiska": 
+        if (!document.getElementById("stanowiska-content").innerHTML) await renderStanowiska(); 
+        break;
+    case "tab-wymagania":  
+        // Tu nie blokujemy, bo chcemy odświeżyć wymagania po zmianie tygodnia
+        await renderWymagania();  
+        break;
+    case "tab-imprezy":    
+        const container = document.getElementById("imprezy-tydzien-container");
+        if (container && !container.innerHTML) {
+            container.innerHTML = zbudujDropdownTygodni("imp-tydzien-sel", "pobierzImprezy");
+        }
+        await pobierzImprezy();   
+        break;
+    case "tab-grafik":     
+        await renderGrafik();     
+        break;
   }
 }
 
@@ -128,13 +149,12 @@ window.createPodkategoria = async function() { const s = document.getElementById
 window.deletePodkategoria = async function(p) { if(confirm("Usunąć?")) try { await api(`/podkategorie/${p}`, "DELETE"); renderStanowiska(); } catch(e) { alert(e.message); } };
 
 // ══════════════════════════════════════════════════════════════════════════
-// PRACOWNICY (Nowy Kompaktowy Widok Tabeli z Dropdownem)
+// PRACOWNICY
 // ══════════════════════════════════════════════════════════════════════════
 async function renderPracownicy() {
   await loadDicts();
   const cont = document.getElementById("pracownicy-content");
 
-  // Kompaktowy Dropdown dla kwalifikacji (HTML5 details)
   const renderKwalifikacjeDropdown = (pracId, kwalIds, isNew = false) => `
     <details class="group bg-slate-50 rounded-xl border border-slate-200">
       <summary class="cursor-pointer font-medium text-xs px-3 py-2 flex justify-between items-center text-slate-700 list-none outline-none">
@@ -198,7 +218,7 @@ async function updatePracownik(id) { try { await api(`/pracownicy/${id}`, "PUT",
 async function deletePracownik(id) { if (confirm("Usunąć pracownika?")) try { await api(`/pracownicy/${id}`, "DELETE"); renderPracownicy(); } catch (e) { alert(e.message); } }
 
 // ══════════════════════════════════════════════════════════════════════════
-// WYMAGANIA (Karty Pogrupowane Po Dniach Tygodnia!)
+// WYMAGANIA
 // ══════════════════════════════════════════════════════════════════════════
 async function renderWymagania() {
   await loadDicts();
@@ -270,46 +290,46 @@ async function loadWymagania() {
   STATE.wymagania = data;
   const stanMap = Object.fromEntries(STATE.stanowiska.map(x => [x.id, x]));
   
-  // Grupowanie po dacie
   const days = {};
   data.forEach(w => { days[w.data] = days[w.data] || []; days[w.data].push(w); });
 
-  let html = `<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">`;
-  if(data.length === 0) html += `<div class="col-span-full text-center p-8 text-slate-400 font-medium bg-white rounded-2xl border border-dashed border-slate-300">Brak zmian w tym tygodniu.</div>`;
-  
+  let html = `<div class="space-y-3">`;
   const nazwyDni = ["Niedziela", "Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota"];
   
   Object.keys(days).sort().forEach(dt => {
     const dObj = new Date(dt);
-    html += `<div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-      <div class="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
-        <span class="font-bold text-slate-800">${nazwyDni[dObj.getDay()]}</span>
-        <span class="text-xs font-mono text-slate-500 font-bold bg-white px-2 py-1 rounded border shadow-sm">${dt.split('-').reverse().join('.')}</span>
+    html += `
+    <div class="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+      <button onclick="this.nextElementSibling.classList.toggle('hidden')" 
+              class="w-full flex justify-between items-center p-4 bg-slate-50 font-bold text-slate-800 hover:bg-slate-100 transition-colors">
+        ${nazwyDni[dObj.getDay()]} (${dt.split('-').reverse().join('.')})
+        <span>${ICONS.chevronDown}</span>
+      </button>
+      <div class="hidden p-4 border-t border-slate-100 space-y-3">
+        ${days[dt].map(r => {
+            const jestImpreza = r.jest_impreza;
+            return `<div class="flex justify-between items-center border ${jestImpreza ? 'border-blue-200 bg-blue-50' : 'border-slate-100 bg-slate-50'} rounded-lg p-4">
+                <div>
+                    <div class="font-bold text-sm text-slate-800">${stanMap[r.stanowisko_id]?.nazwa}</div>
+                    ${r.rewir ? `<div class="text-xs text-blue-700 font-medium mt-0.5">${r.rewir}</div>` : ""}
+                    <div class="text-xs text-slate-500 mt-1">${ICONS.clock} ${r.godz_od ? r.godz_od.slice(0,5) : "Dowolna"}</div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-[10px] uppercase font-bold text-slate-400">Osób:</span>
+                    <input type="number" 
+                           value="${r.liczba_osob}" 
+                           onclick="event.stopPropagation()" 
+                           onchange="updateWymaganieLiczba(${r.id}, this.value)" 
+                           class="w-16 text-center py-2 border-2 border-slate-300 rounded-lg text-lg font-bold text-slate-800 focus:border-blue-500 outline-none transition-all">
+                </div>
+            </div>`;
+        }).join("")}
       </div>
-      <div class="p-4 flex-1 space-y-3">`;
-      
-    days[dt].forEach(r => {
-      html += `<div class="flex justify-between items-center border border-slate-100 bg-slate-50 rounded-xl p-3 shadow-sm hover:shadow-md transition-shadow">
-        <div class="flex flex-col">
-          <div class="font-bold text-sm text-slate-900">${stanMap[r.stanowisko_id]?.nazwa} ${r.rewir ? `<span class="text-blue-600 bg-blue-100/50 px-1.5 py-0.5 rounded text-xs ml-1">${r.rewir}</span>` : ""}</div>
-          <div class="text-xs font-mono text-slate-500 mt-1">${ICONS.clock} ${r.godz_od ? r.godz_od.slice(0,5) : "Dowolna"}</div>
-        </div>
-        <div class="flex items-center gap-3">
-          <div class="flex items-center bg-white border rounded-lg px-2 shadow-sm">
-            <span class="text-xs font-bold text-slate-400 mr-2">Osób:</span>
-            <input type="number" value="${r.liczba_osob}" onchange="updateWymaganieLiczba(${r.id}, this.value)" class="w-10 text-center py-1 font-bold outline-none text-sm text-slate-800">
-          </div>
-          <button onclick="deleteWymaganie(${r.id})" class="text-red-500 bg-red-50 hover:bg-red-500 hover:text-white p-2 rounded-lg transition-colors" title="Usuń zmianę">${ICONS.trash}</button>
-        </div>
-      </div>`;
-    });
-    html += `</div></div>`;
+    </div>`;
   });
-  
   html += `</div>`;
   document.getElementById("wym-cards-cont").innerHTML = html;
 }
-
 async function addWymaganie() { const sid = document.getElementById("wym-new-stan").value; if(!sid) return; try { await api("/wymagania", "POST", { data: document.getElementById("wym-new-data").value, stanowisko_id: +sid, liczba_osob: +document.getElementById("wym-new-liczba").value, godz_od: document.getElementById("wym-new-od").value ? `${document.getElementById("wym-new-od").value}:00` : null, rewir: document.getElementById("wym-new-rewir").value || null }); loadWymagania(); } catch (e) { alert(e.message); } }
 async function updateWymaganieLiczba(id, val) { const w = STATE.wymagania.find(x => x.id === id); if(!w) return; try { await api("/wymagania", "POST", { ...w, liczba_osob: +val }); loadWymagania(); } catch (e) { alert(e.message); } }
 async function deleteWymaganie(id) { try { await api(`/wymagania/${id}`, "DELETE"); loadWymagania(); } catch (e) { alert(e.message); } }
@@ -345,7 +365,11 @@ async function loadGrafik() {
   const wymMap = {}; wymagania.forEach(w => { wymMap[w.data] = wymMap[w.data] || []; wymMap[w.data].push(w); });
 
   let thead = `<tr class="bg-slate-50 border-b border-slate-200"><th class="p-4 sticky left-0 z-10 bg-slate-50 min-w-[180px] border-r border-slate-200 text-left text-xs font-bold text-slate-500 uppercase tracking-wider shadow-[2px_0_5px_rgba(0,0,0,0.02)]">Pracownik</th>`;
-  dates.forEach(dt => thead += `<th class="p-4 text-center border-r border-slate-200 font-bold text-slate-800 min-w-[140px]">${dt.split('-').reverse().slice(0,2).join('.')}</th>`); thead += `</tr>`;
+  dates.forEach(dt => {
+      const dtParts = dt.split('-');
+      thead += `<th class="p-4 text-center border-r border-slate-200 font-bold text-slate-800 min-w-[140px]">${dtParts[2]}.${dtParts[1]}</th>`
+  });
+  thead += `</tr>`;
   
   let tbody = "";
   STATE.pracownicy.filter(p => p.aktywny).forEach(p => {
@@ -383,9 +407,119 @@ async function changeAssignment(aid, act) { if (act === "REMOVE") { await api(`/
 async function autoAssign() { document.getElementById("niedobory-box").innerHTML = `<div class="bg-blue-50 text-blue-800 p-4 rounded-xl font-bold border border-blue-200 animate-pulse mb-6 shadow-sm flex items-center gap-3">${ICONS.robot} Trwa procesowanie algorytmu...</div>`; try { await api(`/auto-assign?start=${STATE.wybranyTydzien.split("|")[0]}&end=${STATE.wybranyTydzien.split("|")[1]}`, "POST"); loadGrafik(); document.getElementById("niedobory-box").innerHTML = ''; } catch (e) { alert(e.message); } }
 async function clearAssignments() { if (confirm("Czy na pewno wyczyścić cały grafik?")) { await api(`/przydzialy?start=${STATE.wybranyTydzien.split("|")[0]}&end=${STATE.wybranyTydzien.split("|")[1]}`, "DELETE"); loadGrafik(); } }
 
-// Import/Export
+// ══════════════════════════════════════════════════════════════════════════
+// NOWA ZAKŁADKA: IMPREZY Z SERWERA NAS (Z AUTOMATYCZNYM PRZESUNIĘCIEM +7 DNI)
+// ══════════════════════════════════════════════════════════════════════════
+async function pobierzImprezy() {
+  const tbody = document.getElementById('tabela-imprezy-body');
+  if (!tbody) return;
+  
+  if (!STATE.wybranyTydzien || !STATE.wybranyTydzien.includes("|")) return;
+  const [s, e] = STATE.wybranyTydzien.split("|");
+
+  tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-8 text-center text-slate-500 text-sm font-medium">Ładowanie...</td></tr>';
+
+  // UX: Aktualizujemy podtytuł (format DD.MM.YYYY)
+  const subtytul = document.querySelector('#tab-imprezy p.text-slate-500');
+  if (subtytul) {
+      subtytul.innerHTML = `Podgląd imprez na wybrany tydzień: <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-lg font-mono font-bold">${s.split('-').reverse().join('.')} — ${e.split('-').reverse().join('.')}</span>`;
+  }
+  
+  try {
+      // Pobieramy dane dokładnie dla zakresu S - E
+      const imprezy = await api(`/imprezy?start=${s}&end=${e}`);
+      STATE.imprezy = imprezy;
+      
+      tbody.innerHTML = '';
+      if (!imprezy || imprezy.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="5" class="px-5 py-8 text-center text-slate-500 font-medium">Brak zaplanowanych imprez na ten (przyszły) tydzień. Kliknij "Synchronizuj NAS".</td></tr>`;
+          return;
+      }
+
+      imprezy.forEach(impreza => {
+          const tr = document.createElement('tr');
+          tr.className = "hover:bg-slate-50 transition-colors";
+          
+          const godzina = impreza.godzina && impreza.godzina !== "None" && impreza.godzina !== "Brak" 
+              ? impreza.godzina 
+              : '<span class="text-slate-400 italic font-normal">Brak</span>';
+              
+          const liczbaOsob = (impreza.liczba_osob && impreza.liczba_osob > 0) 
+              ? `<span class="font-bold text-slate-700">${impreza.liczba_osob} os.</span>` 
+              : '<span class="text-slate-400 italic font-normal">Brak</span>';
+
+          const sala = impreza.sala && impreza.sala !== "None" && impreza.sala !== "Brak" 
+              ? `<span class="inline-block px-2.5 py-1 font-mono text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg shadow-sm">${impreza.sala}</span>` 
+              : '<span class="text-slate-400 italic font-normal">Brak</span>';
+
+          const formatDaty = impreza.data.split('-').reverse().join('.');
+
+          tr.innerHTML = `
+              <td class="px-5 py-4 border-b border-slate-100 text-sm">
+                  <span class="font-semibold text-slate-800">${formatDaty}</span>
+              </td>
+              <td class="px-5 py-4 border-b border-slate-100 text-sm">
+                  <span class="text-slate-900 font-bold">${impreza.klient}</span>
+              </td>
+              <td class="px-5 py-4 border-b border-slate-100 text-sm">
+                  ${sala}
+              </td>
+              <td class="px-5 py-4 border-b border-slate-100 text-sm">
+                  <span class="inline-block px-3 py-1 font-semibold text-blue-900 bg-blue-100 rounded-lg shadow-sm leading-tight">
+                      ${godzina}
+                  </span>
+              </td>
+              <td class="px-5 py-4 border-b border-slate-100 text-sm text-slate-700">
+                  ${liczbaOsob}
+              </td>
+          `;
+          tbody.appendChild(tr);
+      });
+  } catch (error) {
+      console.error("Błąd podczas pobierania imprez:", error);
+      tbody.innerHTML = `<tr><td colspan="5" class="px-5 py-8 text-center text-red-500 font-bold">Błąd połączenia z bazą danych imprez: ${error.message}</td></tr>`;
+  }
+}
+
+window.synchronizujImprezy = async function() {
+  const btnText = document.getElementById('sync-text');
+  const btnIcon = document.getElementById('sync-icon');
+  const btn = document.getElementById('btn-sync-imprezy');
+  
+  if (!btn || !STATE.wybranyTydzien) return;
+
+  // Pobieramy czyste daty z wybranego tygodnia bez żadnych przesunięć
+  const [s, e] = STATE.wybranyTydzien.split("|");
+  
+  btn.disabled = true;
+  btn.classList.replace('bg-blue-600', 'bg-slate-400');
+  btn.classList.replace('hover:bg-blue-700', 'hover:bg-slate-500');
+  btnIcon.textContent = '⏳';
+  btnText.textContent = 'Skanowanie...';
+
+  try {
+      // Wywołujemy API z wybranymi datami S i E
+      const data = await api(`/imprezy/sync?start=${s}&end=${e}`, 'POST');
+      alert(`Synchronizacja zakończona!\nDodano nowych: ${data.dodano}\nZaktualizowano: ${data.zaktualizowano}\nBłędy odczytu: ${data.bledy}`);
+      
+      // Odświeżamy widok
+      await pobierzImprezy(); 
+  } catch (error) {
+      alert(`Wystąpił błąd podczas synchronizacji: ${error.message}`);
+  } finally {
+      btn.disabled = false;
+      btn.classList.replace('bg-slate-400', 'bg-blue-600');
+      btn.classList.replace('hover:bg-slate-500', 'hover:bg-blue-700');
+      btnIcon.textContent = '🔄';
+      btnText.textContent = 'Synchronizuj NAS';
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+// IMPORT / EXPORT CSV
+// ══════════════════════════════════════════════════════════════════════════
 document.getElementById("csv-upload-btn").addEventListener("click", async () => { const f = document.getElementById("csv-file"); if (!f.files.length) return; const fd = new FormData(); fd.append("file", f.files[0]); document.getElementById("import-preview").innerHTML = 'Analiza...'; try { const res = await fetch(`${API}/dyspozycje/import-csv`, { method: "POST", body: fd }); const data = await res.json(); document.getElementById("import-preview").innerHTML = `Zapisano ${data.zapisano} wierszy.`; f.value = ""; } catch (e) {} });
 document.getElementById("eksport-btn").addEventListener("click", () => { const s = document.getElementById("eksport-start").value, e = document.getElementById("eksport-end").value; if (!s || !e) return; window.location.href = `${API}/eksport-csv?start=${s}&end=${e}`; });
 
-// Uruchom
+// Uruchomienie aplikacji przy starcie
 document.querySelector("nav button").click();
