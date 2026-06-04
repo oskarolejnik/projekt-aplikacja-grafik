@@ -43,11 +43,11 @@ export default function Dashboard() {
       <div aria-hidden className="pointer-events-none fixed -bottom-40 left-40 h-80 w-80 rounded-full bg-mint opacity-[0.05] blur-3xl" />
 
       {/* Tło pod szufladę (mobile) */}
-      {mobileOpen && <div className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
+      {mobileOpen && <div className="fixed inset-0 z-30 animate-overlay-in bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 transform flex-col border-r border-line bg-bg-2/95 backdrop-blur transition-transform duration-300 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 transform flex-col border-r border-line bg-bg-2/95 backdrop-blur transition-transform duration-300 ease-drawer lg:static lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -122,7 +122,7 @@ export default function Dashboard() {
         </header>
 
         <main className="flex-1 overflow-y-auto p-5 md:p-8">
-          <div className="mx-auto w-full max-w-7xl animate-fade-in">
+          <div key={active} className="mx-auto w-full max-w-7xl animate-fade-up">
             <Active />
           </div>
         </main>

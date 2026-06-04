@@ -76,7 +76,7 @@ export function ToastProvider({ children }) {
           <div
             key={t.id}
             role="status"
-            className={`animate-fade-in pointer-events-auto flex items-start gap-3 rounded-xl border p-3.5 text-sm shadow-soft backdrop-blur ${toastStyle[t.type] || toastStyle.info}`}
+            className={`animate-toast-in pointer-events-auto flex items-start gap-3 rounded-xl border p-3.5 text-sm shadow-soft backdrop-blur ${toastStyle[t.type] || toastStyle.info}`}
           >
             <span className="mt-0.5 shrink-0">
               <Icon name={t.type === 'error' ? 'warning' : t.type === 'success' ? 'check' : 'info'} className="h-4 w-4" />
@@ -92,8 +92,8 @@ export function ToastProvider({ children }) {
       {/* Modal potwierdzenia (zastępuje confirm()) */}
       {confirmState && (
         <div className="fixed inset-0 z-[1100] grid place-items-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => closeConfirm(false)} />
-          <div role="alertdialog" aria-modal="true" className="card animate-fade-in relative z-10 w-full max-w-sm p-6">
+          <div className="absolute inset-0 animate-overlay-in bg-black/60 backdrop-blur-sm" onClick={() => closeConfirm(false)} />
+          <div role="alertdialog" aria-modal="true" className="card animate-modal-in relative z-10 w-full max-w-sm p-6">
             <h3 className="font-display text-lg font-bold text-ink">{confirmState.title}</h3>
             <p className="mt-2 text-sm leading-relaxed text-muted">{confirmState.message}</p>
             <div className="mt-6 flex justify-end gap-3">

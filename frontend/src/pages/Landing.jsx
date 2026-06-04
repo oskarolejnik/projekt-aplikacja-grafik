@@ -47,23 +47,26 @@ export default function Landing() {
       {/* Sekcja główna: logo Rajcula + zegar + jedyna akcja.
           pt-safe/pb-safe odsuwa treść od notcha iPhone (status bar black-translucent). */}
       <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-safe pt-safe text-center">
-        <Logo className="mb-9 h-24 sm:h-28" variant="gradient" />
+        <Logo className="mb-9 h-24 animate-fade-up sm:h-28" variant="gradient" />
 
-        <p className="mb-5 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-muted">
+        <p className="mb-5 flex animate-fade-up items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-muted" style={{ animationDelay: '80ms' }}>
           <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
           Czas lokalny — Polska
         </p>
 
-        <LiveClock />
+        <div className="animate-fade-up" style={{ animationDelay: '140ms' }}>
+          <LiveClock />
+        </div>
 
         <button
           onClick={openLogin}
-          className="mt-12 rounded-full bg-cream px-12 py-4 text-sm font-bold uppercase tracking-[0.2em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.98]"
+          className="mt-12 animate-fade-up rounded-full bg-cream px-12 py-4 text-sm font-bold uppercase tracking-[0.2em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.97]"
+          style={{ animationDelay: '200ms' }}
         >
           Zaloguj się
         </button>
 
-        <p className="mt-6 max-w-sm text-xs leading-relaxed text-muted/80">
+        <p className="mt-6 max-w-sm animate-fade-up text-xs leading-relaxed text-muted/80" style={{ animationDelay: '260ms' }}>
           Grafik pracy, dyspozycyjność i powiadomienia. Zaloguj się, aby zarządzać harmonogramem lub zgłosić swoją dyspozycyjność.
         </p>
       </main>

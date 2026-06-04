@@ -99,7 +99,7 @@ export default function EmployeeAvailability() {
             {dni.map((d, i) => {
               const imprezy = imprezyMap[d.data] || []
               return (
-                <div key={d.data} className="rounded-xl border border-line bg-white/[0.02] p-4">
+                <div key={d.data} className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-[150px]">
                       <div className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(d.data).getDay()]}</div>

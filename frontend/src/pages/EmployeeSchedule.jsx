@@ -67,8 +67,8 @@ export default function EmployeeSchedule({ onSeen }) {
           </Banner>
         ) : (
           <div className="space-y-3">
-            {dni.map(({ data, zmiany }) => (
-              <div key={data} className="rounded-xl border border-line bg-white/[0.02] p-4">
+            {dni.map(({ data, zmiany }, i) => (
+              <div key={data} className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
                 <div className="mb-3 flex items-baseline gap-2">
                   <span className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(data).getDay()]}</span>
                   <span className="text-xs text-muted">{ddmmyyyy(data)}</span>

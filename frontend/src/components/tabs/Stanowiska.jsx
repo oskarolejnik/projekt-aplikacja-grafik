@@ -10,7 +10,7 @@ import { hhmm } from '../../lib/format'
 // Karta stanowiska z edycją inline. Lokalny stan seedowany z propsów
 // (klucz=id => świeży stan po przeładowaniu listy). Układ kartowy zamiast tabeli —
 // nazwa ma pełną szerokość (czytelna na mobile), bez ucinania.
-function StanowiskoRow({ s, onChanged }) {
+function StanowiskoRow({ s, i = 0, onChanged }) {
   const { toast, confirm } = useToast()
   const [nazwa, setNazwa] = useState(s.nazwa)
   const [weekend, setWeekend] = useState(s.tylko_weekend)
@@ -39,7 +39,7 @@ function StanowiskoRow({ s, onChanged }) {
   }
 
   return (
-    <div className="rounded-2xl border border-line bg-white/[0.02] p-4">
+    <div className="animate-fade-up rounded-2xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <label className="flex flex-1 flex-col gap-1.5">
           <span className="field-label">Nazwa stanowiska <span className="font-mono text-muted/60">#{s.id}</span></span>
@@ -145,7 +145,7 @@ export default function Stanowiska() {
         {stanowiska.length === 0 ? (
           <Card className="p-8 text-center text-sm text-muted">Brak stanowisk. Dodaj pierwsze powyżej.</Card>
         ) : (
-          stanowiska.map((s) => <StanowiskoRow key={s.id} s={s} onChanged={reloadDicts} />)
+          stanowiska.map((s, i) => <StanowiskoRow key={s.id} s={s} i={i} onChanged={reloadDicts} />)
         )}
       </div>
 

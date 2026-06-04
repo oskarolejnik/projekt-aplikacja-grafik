@@ -73,8 +73,8 @@ export default function Login({ onClose }) {
 
   return (
     <div className="fixed inset-0 z-[1200] grid place-items-center p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label={rejestracja ? 'Rejestracja' : 'Logowanie'} className="card animate-fade-in relative z-10 w-full max-w-md p-8">
+      <div className="absolute inset-0 animate-overlay-in bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div role="dialog" aria-modal="true" aria-label={rejestracja ? 'Rejestracja' : 'Logowanie'} className="card animate-modal-in relative z-10 w-full max-w-md p-8">
         <div className="mb-6 flex items-center gap-3">
           <Logo className="h-9" variant="gradient" />
           <div>
