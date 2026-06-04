@@ -76,9 +76,7 @@ export default function Login({ onClose }) {
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div role="dialog" aria-modal="true" aria-label={rejestracja ? 'Rejestracja' : 'Logowanie'} className="card animate-fade-in relative z-10 w-full max-w-md p-8">
         <div className="mb-6 flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-accent-gradient">
-            <Logo className="h-6" variant="bg" />
-          </div>
+          <Logo className="h-9" variant="gradient" />
           <div>
             <h2 className="font-display text-xl font-bold text-ink">{rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}</h2>
             <p className="text-xs text-muted">{rejestracja ? 'Załóż konto pracownika' : 'Rajcula — panel'}</p>

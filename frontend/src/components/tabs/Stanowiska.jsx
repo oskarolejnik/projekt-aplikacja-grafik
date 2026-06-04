@@ -7,8 +7,9 @@ import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 import { hhmm } from '../../lib/format'
 
-// Wiersz tabeli stanowisk z edycją inline. Lokalny stan seedowany z propsów
-// (klucz=id => świeży stan po przeładowaniu listy).
+// Karta stanowiska z edycją inline. Lokalny stan seedowany z propsów
+// (klucz=id => świeży stan po przeładowaniu listy). Układ kartowy zamiast tabeli —
+// nazwa ma pełną szerokość (czytelna na mobile), bez ucinania.
 function StanowiskoRow({ s, onChanged }) {
   const { toast, confirm } = useToast()
   const [nazwa, setNazwa] = useState(s.nazwa)
@@ -38,16 +39,17 @@ function StanowiskoRow({ s, onChanged }) {
   }
 
   return (
-    <tr className="transition hover:bg-white/[0.02]">
-      <td className="px-4 py-3 font-mono text-xs text-muted">#{s.id}</td>
-      <td className="px-4 py-3">
-        <input value={nazwa} onChange={(e) => setNazwa(e.target.value)} className="field max-w-[240px] py-2" />
-      </td>
-      <td className="px-4 py-3 text-center">
-        <input type="checkbox" checked={weekend} onChange={(e) => setWeekend(e.target.checked)} className="h-4 w-4 accent-mint" />
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex justify-end gap-2">
+    <div className="rounded-2xl border border-line bg-white/[0.02] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <label className="flex flex-1 flex-col gap-1.5">
+          <span className="field-label">Nazwa stanowiska <span className="font-mono text-muted/60">#{s.id}</span></span>
+          <input value={nazwa} onChange={(e) => setNazwa(e.target.value)} className="field" />
+        </label>
+        <label className="flex items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
+          <input type="checkbox" checked={weekend} onChange={(e) => setWeekend(e.target.checked)} className="h-4 w-4 accent-mint" />
+          Tylko weekend
+        </label>
+        <div className="flex gap-2">
           <Button size="sm" variant="ghost" onClick={zapisz} disabled={busy}>
             <Icon name="check" className="h-4 w-4" /> Zapisz
           </Button>
@@ -55,8 +57,8 @@ function StanowiskoRow({ s, onChanged }) {
             <Icon name="trash" className="h-4 w-4" />
           </Button>
         </div>
-      </td>
-    </tr>
+      </div>
+    </div>
   )
 }
 
@@ -117,57 +119,43 @@ export default function Stanowiska() {
 
   return (
     <div className="space-y-8">
-      {/* Nowe stanowisko */}
-      <Card className="p-8">
-        <h3 className="mb-5 font-display text-lg font-bold text-ink">Nowe stanowisko (kategoria główna)</h3>
-        <div className="flex flex-wrap items-center gap-4">
+      {/* Nowe stanowisko — wyśrodkowana kolumna */}
+      <Card className="p-6 sm:p-8">
+        <h3 className="mb-5 text-center font-display text-lg font-bold text-ink">Nowe stanowisko (kategoria główna)</h3>
+        <div className="mx-auto flex max-w-md flex-col gap-4">
           <input
             value={nowa}
             onChange={(e) => setNowa(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && dodajStanowisko()}
             placeholder="Np. Sala, Bar…"
-            className="field w-64"
+            className="field"
           />
           <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
             <input type="checkbox" checked={nowaWeekend} onChange={(e) => setNowaWeekend(e.target.checked)} className="h-4 w-4 accent-mint" />
             Tylko weekend
           </label>
-          <Button onClick={dodajStanowisko}>
+          <Button onClick={dodajStanowisko} className="w-full">
             <Icon name="plus" className="h-4 w-4" /> Dodaj stanowisko
           </Button>
         </div>
       </Card>
 
-      {/* Lista stanowisk */}
-      <Card className="overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-muted">
-            <tr>
-              <th className="px-4 py-4 font-semibold">ID</th>
-              <th className="px-4 py-4 font-semibold">Nazwa</th>
-              <th className="px-4 py-4 text-center font-semibold">Tylko weekend</th>
-              <th className="px-4 py-4 text-right font-semibold">Akcje</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {stanowiska.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="px-4 py-10 text-center text-sm text-muted">Brak stanowisk. Dodaj pierwsze powyżej.</td>
-              </tr>
-            ) : (
-              stanowiska.map((s) => <StanowiskoRow key={s.id} s={s} onChanged={reloadDicts} />)
-            )}
-          </tbody>
-        </table>
-      </Card>
+      {/* Lista stanowisk — karty (nazwa pełnej szerokości, bez ucinania) */}
+      <div className="space-y-3">
+        {stanowiska.length === 0 ? (
+          <Card className="p-8 text-center text-sm text-muted">Brak stanowisk. Dodaj pierwsze powyżej.</Card>
+        ) : (
+          stanowiska.map((s) => <StanowiskoRow key={s.id} s={s} onChanged={reloadDicts} />)
+        )}
+      </div>
 
       {/* Szablony rewirów / zmian */}
-      <Card className="p-8">
+      <Card className="p-6 sm:p-8">
         <SectionHeader title="Szablony rewirów / zmian" subtitle="Przypisz gotowe rewiry i godziny wejścia do istniejących stanowisk." />
-        <div className="mb-8 flex flex-wrap items-end gap-4 rounded-2xl border border-line bg-surface-2/60 p-5">
+        <div className="mx-auto mb-8 flex max-w-md flex-col gap-4 rounded-2xl border border-line bg-surface-2/60 p-5">
           <label className="flex flex-col gap-1.5">
             <span className="field-label">Stanowisko</span>
-            <select value={pkStan} onChange={(e) => setPkStan(e.target.value)} className="field min-w-[180px]">
+            <select value={pkStan} onChange={(e) => setPkStan(e.target.value)} className="field">
               <option value="" className="bg-surface">Wybierz…</option>
               {stanowiska.map((s) => (
                 <option key={s.id} value={s.id} className="bg-surface text-ink">{s.nazwa}</option>
@@ -182,13 +170,13 @@ export default function Stanowiska() {
             <span className="field-label">Godzina wejścia</span>
             <input type="time" value={pkOd} onChange={(e) => setPkOd(e.target.value)} className="field" />
           </label>
-          <Button variant="accent" onClick={dodajSzablon}>
+          <Button variant="accent" onClick={dodajSzablon} className="w-full">
             <Icon name="plus" className="h-4 w-4" /> Dodaj szablon
           </Button>
         </div>
 
         {zSzablonami.length === 0 ? (
-          <p className="text-sm text-muted">Brak zdefiniowanych szablonów rewirów.</p>
+          <p className="text-center text-sm text-muted">Brak zdefiniowanych szablonów rewirów.</p>
         ) : (
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
             {zSzablonami.map((s) => (

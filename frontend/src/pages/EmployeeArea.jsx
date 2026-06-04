@@ -75,11 +75,9 @@ export default function EmployeeArea() {
     <div className="relative min-h-dvh bg-bg">
       <div aria-hidden className="pointer-events-none absolute -right-40 -top-40 h-96 w-96 rounded-full bg-page-glow opacity-[0.07] blur-3xl" />
 
-      <header className="relative z-10 flex min-h-[5rem] items-center justify-between border-b border-line bg-bg-2/60 px-safe pt-safe backdrop-blur">
+      <header className="relative z-10 flex items-center justify-between border-b border-line bg-bg-2/60 px-safe pt-[calc(env(safe-area-inset-top)+0.9rem)] pb-[0.9rem] backdrop-blur">
         <div className="flex items-center gap-3">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent-gradient">
-            <Logo className="h-5" variant="bg" />
-          </span>
+          <Logo className="h-8" variant="gradient" />
           <div>
             <h1 className="font-display text-base font-bold text-ink md:text-lg">Rajcula</h1>
             <p className="text-xs text-muted">Cześć, {imie}!</p>

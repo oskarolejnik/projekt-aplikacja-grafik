@@ -125,7 +125,7 @@ export default function EmployeeAvailability() {
 
                       {/* Godzina ma sens tylko gdy dostępny. Puste pole = dostępny przez cały dzień. */}
                       {d.dostepnosc && (
-                        <label className="flex items-center gap-2 text-xs text-muted">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
                           <span>od</span>
                           <input
                             type="time"
@@ -133,8 +133,18 @@ export default function EmployeeAvailability() {
                             onChange={(ev) => setDay(i, { od: ev.target.value })}
                             className="field w-28 px-2 py-2"
                           />
-                          {!d.od && <span className="font-semibold text-mint">cały dzień</span>}
-                        </label>
+                          {d.od ? (
+                            <button
+                              type="button"
+                              onClick={() => setDay(i, { od: '' })}
+                              className="flex items-center gap-1 rounded-lg border border-line bg-white/[0.04] px-2.5 py-2 font-semibold text-muted transition hover:text-ink"
+                            >
+                              <Icon name="close" className="h-3 w-3" /> cały dzień
+                            </button>
+                          ) : (
+                            <span className="font-semibold text-mint">cały dzień</span>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>

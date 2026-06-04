@@ -34,7 +34,7 @@ function WymRow({ w, nazwa, onChanged }) {
   }
 
   return (
-    <div className={`flex items-center justify-between rounded-xl border p-4 ${w.jest_impreza ? 'border-info/30 bg-info/10' : 'border-line bg-white/[0.03]'}`}>
+    <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 ${w.jest_impreza ? 'border-info/30 bg-info/10' : 'border-line bg-white/[0.03]'}`}>
       <div>
         <div className="flex items-center gap-2 text-sm font-bold text-ink">
           {nazwa}
@@ -204,8 +204,8 @@ export default function Wymagania() {
           <h3 className="mb-4 flex items-center gap-2 font-display text-lg font-bold text-ink">
             <Icon name="plus" className="h-5 w-5 text-mint" /> Zaplanuj zmianę
           </h3>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+          <div className="mx-auto max-w-md space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5">
                 <span className="field-label">Data</span>
                 <input type="date" value={fData} onChange={(e) => setFData(e.target.value)} className="field" />
@@ -244,7 +244,7 @@ export default function Wymagania() {
               </label>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5">
                 <span className="field-label">Przyjście</span>
                 <input type="time" value={fOd} onChange={(e) => setFOd(e.target.value)} className="field" />
@@ -270,12 +270,12 @@ export default function Wymagania() {
             <Icon name="clipboard" className="h-5 w-5 text-info" /> Kopiowanie (Pn–Pt)
           </h3>
           <p className="mb-4 text-xs text-muted">Wybierz wzorcowy dzień i skopiuj go na resztę tygodnia.</p>
-          <div className="space-y-4">
+          <div className="mx-auto max-w-md space-y-4">
             <label className="flex flex-col gap-1.5">
               <span className="field-label">Źródło (kopiuj z)</span>
               <input type="date" value={kopSource} onChange={(e) => setKopSource(e.target.value)} className="field" />
             </label>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5">
                 <span className="field-label">Od dnia</span>
                 <input type="date" value={kopStart} onChange={(e) => setKopStart(e.target.value)} className="field" />
