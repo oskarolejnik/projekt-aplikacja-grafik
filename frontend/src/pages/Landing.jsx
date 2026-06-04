@@ -47,7 +47,7 @@ export default function Landing() {
       {/* Sekcja główna: logo Rajcula + zegar + jedyna akcja.
           pt-safe/pb-safe odsuwa treść od notcha iPhone (status bar black-translucent). */}
       <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-safe pt-safe text-center">
-        <Logo className="mb-9 h-24 sm:h-28" variant="ink" />
+        <Logo className="mb-9 h-24 sm:h-28" variant="gradient" />
 
         <p className="mb-5 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-muted">
           <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
