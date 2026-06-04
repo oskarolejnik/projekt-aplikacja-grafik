@@ -30,7 +30,7 @@ export function Logo({ className = 'h-5', variant = 'ink' }) {
     <span
       role="img"
       aria-label="Rajcula"
-      className={`inline-block aspect-[1495/941] ${VARIANT_BG[variant] || VARIANT_BG.ink} ${className}`}
+      className={`inline-block aspect-[758/539] ${VARIANT_BG[variant] || VARIANT_BG.ink} ${className}`}
       style={maskStyle(markUrl)}
     />
   )
