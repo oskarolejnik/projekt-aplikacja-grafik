@@ -52,7 +52,7 @@ export default function Dashboard() {
         }`}
       >
         {/* Logo */}
-        <div className="flex h-20 items-center gap-3 border-b border-line px-7">
+        <div className="flex min-h-[5rem] items-center gap-3 border-b border-line px-7 pt-safe">
           <div className="grid h-9 w-9 place-items-center rounded-xl bg-accent-gradient">
             <Logo className="h-5" variant="bg" />
           </div>
@@ -99,7 +99,7 @@ export default function Dashboard() {
 
       {/* Główna kolumna */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-20 shrink-0 items-center justify-between border-b border-line bg-bg-2/60 px-5 backdrop-blur md:px-8">
+        <header className="flex min-h-[5rem] shrink-0 items-center justify-between border-b border-line bg-bg-2/60 px-5 pt-safe backdrop-blur md:px-8">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setMobileOpen(true)}

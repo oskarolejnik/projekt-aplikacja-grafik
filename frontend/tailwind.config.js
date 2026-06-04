@@ -43,12 +43,17 @@ export default {
         spinOrbitRev: { '0%': { transform: 'rotate(360deg)' }, '100%': { transform: 'rotate(0deg)' } },
         float: { '0%,100%': { transform: 'translateY(0)' }, '50%': { transform: 'translateY(-10px)' } },
         fadeIn: { '0%': { opacity: '0', transform: 'translateY(6px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+        // Kierunkowe wejście widoku przy przełączaniu zakładek (dyspozycyjność ↔ grafik)
+        slideInR: { '0%': { opacity: '0', transform: 'translateX(12px)' }, '100%': { opacity: '1', transform: 'translateX(0)' } },
+        slideInL: { '0%': { opacity: '0', transform: 'translateX(-12px)' }, '100%': { opacity: '1', transform: 'translateX(0)' } },
       },
       animation: {
         'spin-orbit': 'spinOrbit 48s linear infinite',
         'spin-orbit-rev': 'spinOrbitRev 60s linear infinite',
         float: 'float 7s ease-in-out infinite',
         'fade-in': 'fadeIn 0.3s ease both',
+        'slide-in-r': 'slideInR 0.28s ease both',
+        'slide-in-l': 'slideInL 0.28s ease both',
       },
     },
   },

@@ -75,7 +75,7 @@ export default function EmployeeArea() {
     <div className="relative min-h-dvh bg-bg">
       <div aria-hidden className="pointer-events-none absolute -right-40 -top-40 h-96 w-96 rounded-full bg-page-glow opacity-[0.07] blur-3xl" />
 
-      <header className="relative z-10 flex h-20 items-center justify-between border-b border-line bg-bg-2/60 px-4 backdrop-blur md:px-10">
+      <header className="relative z-10 flex min-h-[5rem] items-center justify-between border-b border-line bg-bg-2/60 px-safe pt-safe backdrop-blur">
         <div className="flex items-center gap-3">
           <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent-gradient">
             <Logo className="h-5" variant="bg" />
@@ -106,13 +106,17 @@ export default function EmployeeArea() {
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 md:py-10">
+      <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 pb-safe md:py-10">
         <div className="mb-6 flex gap-1.5 rounded-xl border border-line bg-white/[0.02] p-1.5">
           <Tab id="dyspozycyjnosc" label="Moja dyspozycyjność" />
           <Tab id="grafik" label="Mój grafik" badge={nowyGrafik} />
         </div>
 
-        {widok === 'dyspozycyjnosc' ? <EmployeeAvailability /> : <EmployeeSchedule onSeen={oznaczWidziany} />}
+        {/* key={widok} wymusza remount → animacja wjazdu odtwarza się przy każdej zmianie zakładki.
+            Kierunek zależy od pozycji zakładki (grafik = prawa → wjazd z prawej). */}
+        <div key={widok} className={widok === 'grafik' ? 'animate-slide-in-r' : 'animate-slide-in-l'}>
+          {widok === 'dyspozycyjnosc' ? <EmployeeAvailability /> : <EmployeeSchedule onSeen={oznaczWidziany} />}
+        </div>
       </main>
     </div>
   )

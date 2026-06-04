@@ -37,6 +37,9 @@
   }
   body {
     @apply bg-bg text-ink font-sans antialiased;
+    /* PWA „sztywna": brak podwójnego tapnięcia do zoomu i brak auto-skalowania tekstu na iOS */
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
   }
 
   /* Widoczny fokus dla nawigacji klawiaturą (dostępność) */
@@ -86,6 +89,29 @@
   /* Etykieta nad polem */
   .field-label {
     @apply text-xs font-semibold uppercase tracking-wider text-muted;
+  }
+}
+
+@layer utilities {
+  /* Bezpieczne wcięcia ekranu (notch / zaokrąglenia iPhone). Działa razem z
+     viewport-fit=cover + apple-mobile-web-app-status-bar-style=black-translucent. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* Poziome wcięcia (notch w orientacji poziomej) — nie schodzimy poniżej 1rem. */
+  .px-safe {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+}
+/* Na szerszych ekranach (md+) większy margines bazowy, dalej z zapasem na notch. */
+@media (min-width: 768px) {
+  .px-safe {
+    padding-left: max(2.5rem, env(safe-area-inset-left));
+    padding-right: max(2.5rem, env(safe-area-inset-right));
   }
 }
 

@@ -86,7 +86,7 @@ export default function EmployeeAvailability() {
     <>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <WeekSelect />
-        <span className="text-sm text-muted">Zaznacz dni i godziny, w których możesz pracować.</span>
+        <span className="text-sm text-muted">Zaznacz dni, w których możesz pracować. Puste pole „od" = dostępny przez cały dzień.</span>
       </div>
 
       <Card className="p-6">
@@ -106,32 +106,36 @@ export default function EmployeeAvailability() {
                       <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                      <div className="flex overflow-hidden rounded-lg border border-line">
+                    <div className="flex flex-wrap items-center gap-3">
+                      {/* Pełna szerokość na mobile, równy podział 50/50 — „Niedostępny" już się nie ucina. */}
+                      <div className="flex w-full overflow-hidden rounded-lg border border-line sm:w-auto">
                         <button
                           onClick={() => setDay(i, { dostepnosc: true })}
-                          className={`px-4 py-2 text-xs font-bold transition ${d.dostepnosc ? 'bg-success text-bg' : 'text-muted hover:text-ink'}`}
+                          className={`flex-1 px-4 py-2 text-xs font-bold transition sm:flex-none ${d.dostepnosc ? 'bg-success text-bg' : 'text-muted hover:text-ink'}`}
                         >
                           Dostępny
                         </button>
                         <button
                           onClick={() => setDay(i, { dostepnosc: false })}
-                          className={`px-4 py-2 text-xs font-bold transition ${!d.dostepnosc ? 'bg-danger text-white' : 'text-muted hover:text-ink'}`}
+                          className={`flex-1 px-4 py-2 text-xs font-bold transition sm:flex-none ${!d.dostepnosc ? 'bg-danger text-white' : 'text-muted hover:text-ink'}`}
                         >
                           Niedostępny
                         </button>
                       </div>
 
-                      <label className="flex items-center gap-2 text-xs text-muted">
-                        <span className="hidden sm:inline">od</span>
-                        <input
-                          type="time"
-                          value={d.od}
-                          onChange={(ev) => setDay(i, { od: ev.target.value })}
-                          disabled={!d.dostepnosc}
-                          className="field w-28 px-2 py-2 disabled:opacity-40"
-                        />
-                      </label>
+                      {/* Godzina ma sens tylko gdy dostępny. Puste pole = dostępny przez cały dzień. */}
+                      {d.dostepnosc && (
+                        <label className="flex items-center gap-2 text-xs text-muted">
+                          <span>od</span>
+                          <input
+                            type="time"
+                            value={d.od}
+                            onChange={(ev) => setDay(i, { od: ev.target.value })}
+                            className="field w-28 px-2 py-2"
+                          />
+                          {!d.od && <span className="font-semibold text-mint">cały dzień</span>}
+                        </label>
+                      )}
                     </div>
                   </div>
 
