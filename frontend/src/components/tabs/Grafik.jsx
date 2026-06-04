@@ -20,20 +20,24 @@ export default function Grafik() {
   const [wymagania, setWymagania] = useState([])
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
+  const [publikacja, setPublikacja] = useState({ opublikowany: false, opublikowano_at: null })
+  const [publikowanie, setPublikowanie] = useState(false)
 
   const load = useCallback(async () => {
     const [s, e] = week.split('|')
     setLoading(true)
     try {
       await reloadDicts()
-      const [pr, dy, wy] = await Promise.all([
+      const [pr, dy, wy, pub] = await Promise.all([
         api(`/przydzialy?start=${s}&end=${e}`),
         api(`/dyspozycje?start=${s}&end=${e}`),
         api(`/wymagania?start=${s}&end=${e}`),
+        api(`/grafik/publikacja?start=${s}&end=${e}`),
       ])
       setPrzydzialy(pr)
       setDyspozycje(dy)
       setWymagania(wy)
+      setPublikacja(pub)
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -89,7 +93,7 @@ export default function Grafik() {
 
   const dodajPrzydzial = async (dt, pId, w) => {
     try {
-      await api('/przydzialy', 'POST', { data: dt, stanowisko_id: w.stanowisko_id, pracownik_id: pId, godz_od: w.godz_od })
+      await api('/przydzialy', 'POST', { data: dt, stanowisko_id: w.stanowisko_id, pracownik_id: pId, godz_od: w.godz_od, rewir: w.rewir })
       load()
     } catch (err) {
       toast(err.message, 'error')
@@ -126,13 +130,26 @@ export default function Grafik() {
     }
   }
 
+  const udostepnij = async () => {
+    setPublikowanie(true)
+    try {
+      const r = await api(`/grafik/publikuj?start=${s}&end=${e}`, 'POST')
+      setPublikacja({ opublikowany: true, opublikowano_at: r.opublikowano_at })
+      toast(`Grafik udostępniony pracownikom${r.push_wyslano ? ` (powiadomienia: ${r.push_wyslano})` : ''}.`, 'success')
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setPublikowanie(false)
+    }
+  }
+
   const aktywni = pracownicy.filter((p) => p.aktywny)
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <WeekSelect />
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button variant="success" onClick={autoAssign} disabled={processing}>
             {processing ? <Spinner className="h-4 w-4" /> : <Icon name="robot" className="h-5 w-5" />}
             Auto-przydział AI
@@ -140,6 +157,15 @@ export default function Grafik() {
           <Button variant="ghost" onClick={wyczysc} className="text-danger hover:bg-danger/10">
             Wyczyść tabelę
           </Button>
+          <Button onClick={udostepnij} disabled={publikowanie}>
+            {publikowanie ? <Spinner className="h-4 w-4" /> : <Icon name="bell" className="h-4 w-4" />}
+            Udostępnij pracownikom
+          </Button>
+          <span className={`text-xs font-semibold ${publikacja.opublikowany ? 'text-success' : 'text-muted'}`}>
+            {publikacja.opublikowany
+              ? `Opublikowano: ${new Date(publikacja.opublikowano_at).toLocaleString('pl-PL')}`
+              : 'Nieopublikowane'}
+          </span>
         </div>
       </div>
 
@@ -217,7 +243,7 @@ export default function Grafik() {
                                   <div className="flex items-start justify-between gap-1">
                                     <span className="font-bold text-ink">
                                       {stan?.nazwa}
-                                      {szab?.rewir && <span className="text-mint"> ({szab.rewir})</span>}
+                                      {(a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
                                     </span>
                                     <button
                                       onClick={() => usunPrzydzial(a.id)}

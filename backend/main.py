@@ -22,6 +22,7 @@ from auth import (
     create_access_token, SECRET_KEY, ALGORITHM,
 )
 from validators import sprawdz_login, sprawdz_haslo
+from push import wyslij_push, VAPID_PUBLIC_KEY
 
 import openpyxl
 
@@ -253,6 +254,104 @@ def zapisz_moje_dyspozycje(
         zapisano += 1
     db.commit()
     return {"zapisano": zapisano}
+
+@app.get("/api/me/grafik", status_code=200)
+def moj_grafik(
+    start: date = Query(...), end: date = Query(...),
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Grafik zalogowanego pracownika — TYLKO jeśli tydzień został udostępniony przez
+    admina. Zwraca zmiany z rewirem oraz współpracownikami dzielącymi ten rewir."""
+    if not user.pracownik_id:
+        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    pub = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
+    if not pub:
+        return {"opublikowany": False, "opublikowano_at": None, "zmiany": []}
+
+    moje = (
+        db.query(models.PrzydzialZmiany)
+        .filter(
+            models.PrzydzialZmiany.pracownik_id == user.pracownik_id,
+            models.PrzydzialZmiany.data >= start,
+            models.PrzydzialZmiany.data <= end,
+        )
+        .order_by(models.PrzydzialZmiany.data.asc(), models.PrzydzialZmiany.godz_od.asc())
+        .all()
+    )
+    stan_map = {s.id: s.nazwa for s in db.query(models.Stanowisko).all()}
+    prac_map = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+
+    zmiany = []
+    for a in moje:
+        # Współpracownicy = inne przydziały tego samego slotu (data, stanowisko, godzina, rewir).
+        wspol = (
+            db.query(models.PrzydzialZmiany)
+            .filter(
+                models.PrzydzialZmiany.data == a.data,
+                models.PrzydzialZmiany.stanowisko_id == a.stanowisko_id,
+                models.PrzydzialZmiany.godz_od == a.godz_od,
+                models.PrzydzialZmiany.rewir == a.rewir,
+                models.PrzydzialZmiany.pracownik_id != user.pracownik_id,
+            )
+            .all()
+        )
+        zmiany.append({
+            "data": str(a.data),
+            "godz_od": a.godz_od.strftime("%H:%M") if a.godz_od else None,
+            "stanowisko": stan_map.get(a.stanowisko_id, ""),
+            "rewir": a.rewir,
+            "wspolpracownicy": [prac_map.get(w.pracownik_id, "") for w in wspol],
+        })
+    return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat(), "zmiany": zmiany}
+
+# --- POWIADOMIENIA WEB PUSH (pracownik) ---
+
+@app.get("/api/me/push/public-key", status_code=200)
+def push_public_key(user: models.User = Depends(get_current_user)):
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
+@app.post("/api/me/push/subscribe", status_code=204)
+def push_subscribe(sub: dict, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    endpoint = sub.get("endpoint")
+    keys = sub.get("keys") or {}
+    p256dh, auth = keys.get("p256dh"), keys.get("auth")
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(400, "Nieprawidłowa subskrypcja push.")
+    existing = db.query(models.PushSubscription).filter_by(endpoint=endpoint).first()
+    if existing:
+        existing.user_id, existing.p256dh, existing.auth = user.id, p256dh, auth
+    else:
+        db.add(models.PushSubscription(user_id=user.id, endpoint=endpoint, p256dh=p256dh, auth=auth))
+    db.commit()
+
+# --- PUBLIKACJA GRAFIKU (admin — chronione middleware) ---
+
+@app.get("/api/grafik/publikacja", status_code=200)
+def status_publikacji(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    p = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
+    return {"opublikowany": bool(p), "opublikowano_at": p.opublikowano_at.isoformat() if p else None}
+
+@app.post("/api/grafik/publikuj", status_code=200)
+def publikuj_grafik(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    teraz = datetime.utcnow()
+    p = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
+    if p:
+        p.opublikowano_at = teraz
+    else:
+        db.add(models.PublikacjaGrafiku(start=start, koniec=end, opublikowano_at=teraz))
+    db.commit()
+    wyslano = wyslij_push(
+        db,
+        "Grafik udostępniony",
+        f"Twój grafik na tydzień {start.strftime('%d.%m')}–{end.strftime('%d.%m')} jest gotowy.",
+        url="/",
+    )
+    return {"opublikowano_at": teraz.isoformat(), "push_wyslano": wyslano}
+
+@app.delete("/api/grafik/publikuj", status_code=204)
+def cofnij_publikacje(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).delete()
+    db.commit()
 
 
 @app.get("/api/stanowiska", response_model=List[schemas.StanowiskoOut])

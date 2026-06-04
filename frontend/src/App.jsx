@@ -4,7 +4,7 @@ import { ToastProvider } from './components/ui/Toast'
 import { Spinner } from './components/ui/Spinner'
 import Landing from './pages/Landing'
 import Dashboard from './Dashboard'
-import EmployeeAvailability from './pages/EmployeeAvailability'
+import EmployeeArea from './pages/EmployeeArea'
 
 // Routing wg stanu zalogowania i roli:
 //   brak użytkownika → ekran startowy (z logowaniem)
@@ -21,7 +21,7 @@ function Routed() {
   }
   if (!user) return <Landing />
   if (user.rola === 'admin') return <Dashboard />
-  return <EmployeeAvailability />
+  return <EmployeeArea />
 }
 
 export default function App() {

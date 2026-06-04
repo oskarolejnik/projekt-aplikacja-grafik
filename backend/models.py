@@ -1,7 +1,7 @@
 """Modele ORM — tabele SQLite przez SQLAlchemy."""
 
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Date, Time,
+    Column, Integer, String, Boolean, Date, Time, DateTime,
     ForeignKey, Table, UniqueConstraint
 )
 from sqlalchemy.orm import relationship, declarative_base
@@ -74,6 +74,7 @@ class PrzydzialZmiany(Base):
     stanowisko_id = Column(Integer, ForeignKey("stanowiska.id"), nullable=False)
     pracownik_id  = Column(Integer, ForeignKey("pracownicy.id"), nullable=False)
     godz_od       = Column(Time, nullable=True)
+    rewir         = Column(String, nullable=True)   # rewir/strefa zmiany (z wymagań)
 
     stanowisko = relationship("Stanowisko", back_populates="przydzialy")
     pracownik  = relationship("Pracownik",  back_populates="przydzialy")
@@ -111,3 +112,23 @@ class User(Base):
     )
 
     pracownik = relationship("Pracownik")
+
+
+class PublikacjaGrafiku(Base):
+    """Zapis udostępnienia grafiku na dany tydzień (środa–wtorek)."""
+    __tablename__ = "publikacje_grafiku"
+    __table_args__ = (UniqueConstraint("start", "koniec"),)
+    id              = Column(Integer, primary_key=True, index=True)
+    start           = Column(Date, nullable=False)
+    koniec          = Column(Date, nullable=False)
+    opublikowano_at = Column(DateTime, nullable=False)
+
+
+class PushSubscription(Base):
+    """Subskrypcja Web Push (jedna na urządzenie/przeglądarkę użytkownika)."""
+    __tablename__ = "push_subscriptions"
+    id       = Column(Integer, primary_key=True, index=True)
+    user_id  = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint = Column(String, unique=True, nullable=False)
+    p256dh   = Column(String, nullable=False)
+    auth     = Column(String, nullable=False)

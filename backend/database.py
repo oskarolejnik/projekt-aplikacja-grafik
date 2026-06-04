@@ -41,6 +41,20 @@ def get_db():
         db.close()
 
 
+def _ensure_schema():
+    """Lekka auto-migracja: dodaje brakujące kolumny w istniejących tabelach
+    (create_all nie modyfikuje już istniejących tabel). Działa na SQLite i PostgreSQL."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "przydzialy_zmian" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("przydzialy_zmian")}
+        if "rewir" not in kolumny:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN rewir VARCHAR"))
+
+
 def init_db():
-    """Tworzy tabele jeśli nie istnieją."""
+    """Tworzy tabele jeśli nie istnieją i domyka schemat (auto-migracja)."""
     Base.metadata.create_all(bind=engine)
+    _ensure_schema()

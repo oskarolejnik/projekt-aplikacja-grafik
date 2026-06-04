@@ -12,6 +12,10 @@ import '@fontsource/space-grotesk/700.css'
 
 import './index.css'
 import App from './App.jsx'
+import { registerSW } from 'virtual:pwa-register'
+
+// Rejestracja service workera (PWA + powiadomienia push). Auto-aktualizacja.
+registerSW({ immediate: true })
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

@@ -33,6 +33,7 @@ class DyspozycjaOut(DyspozycjaBase):
 
 class PrzydzialBase(BaseModel):
     data: date; stanowisko_id: int; pracownik_id: int; godz_od: Optional[time] = None
+    rewir: Optional[str] = None
 class PrzydzialCreate(PrzydzialBase): pass
 class PrzydzialOut(PrzydzialBase):
     id: int; model_config = ConfigDict(from_attributes=True)

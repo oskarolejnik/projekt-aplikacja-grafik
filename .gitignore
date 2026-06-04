@@ -11,3 +11,4 @@ dist/
 *.asar
 .claude/settings.local.json
 .env
+*.pem
