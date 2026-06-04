@@ -57,7 +57,7 @@ export default function Dashboard() {
             <Logo className="h-5" variant="bg" />
           </div>
           <h1 className="font-display text-xl font-bold tracking-tight text-ink">
-            Grafik<span className="text-gradient">Pro</span>
+            Raj<span className="text-gradient">cula</span>
           </h1>
         </div>
 

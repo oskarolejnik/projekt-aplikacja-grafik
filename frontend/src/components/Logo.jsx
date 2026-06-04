@@ -1,7 +1,8 @@
-import logoUrl from '../assets/logo.svg'
+import markUrl from '../assets/logo-mark.png'
+import fullUrl from '../assets/logo-rajcula.png'
 
-// Logo aplikacji renderowane przez maskę CSS. Plik SVG jest jednokolorowy
-// (czarny), więc maska pozwala nadać mu dowolny kolor motywu:
+// Logo Rajcula renderowane maską CSS (źródło jest jednokolorowe — maska pozwala
+// nadać dowolny kolor motywu):
 //   variant="ink"      -> jasny logotyp na ciemnym tle
 //   variant="bg"       -> ciemny logotyp na jasnym/gradientowym kaflu
 //   variant="gradient" -> logotyp w gradiencie akcentowym
@@ -12,22 +13,37 @@ const VARIANT_BG = {
   gradient: 'bg-accent-gradient',
 }
 
+const maskStyle = (url) => ({
+  WebkitMaskImage: `url(${url})`,
+  maskImage: `url(${url})`,
+  WebkitMaskRepeat: 'no-repeat',
+  maskRepeat: 'no-repeat',
+  WebkitMaskPosition: 'center',
+  maskPosition: 'center',
+  WebkitMaskSize: 'contain',
+  maskSize: 'contain',
+})
+
+// Sam znak (wiatrak + zabudowanie) — do małych kafli (nagłówki, logowanie).
 export function Logo({ className = 'h-5', variant = 'ink' }) {
   return (
     <span
       role="img"
-      aria-label="Logo Grafik Pracy"
-      className={`inline-block aspect-[780/545] ${VARIANT_BG[variant] || VARIANT_BG.ink} ${className}`}
-      style={{
-        WebkitMaskImage: `url(${logoUrl})`,
-        maskImage: `url(${logoUrl})`,
-        WebkitMaskRepeat: 'no-repeat',
-        maskRepeat: 'no-repeat',
-        WebkitMaskPosition: 'center',
-        maskPosition: 'center',
-        WebkitMaskSize: 'contain',
-        maskSize: 'contain',
-      }}
+      aria-label="Rajcula"
+      className={`inline-block aspect-[1495/941] ${VARIANT_BG[variant] || VARIANT_BG.ink} ${className}`}
+      style={maskStyle(markUrl)}
+    />
+  )
+}
+
+// Pełny logotyp (znak + napis „Rajcula") — np. ekran główny.
+export function LogoFull({ className = 'h-24', variant = 'ink' }) {
+  return (
+    <span
+      role="img"
+      aria-label="Rajcula"
+      className={`inline-block aspect-[2400/1681] ${VARIANT_BG[variant] || VARIANT_BG.ink} ${className}`}
+      style={maskStyle(fullUrl)}
     />
   )
 }

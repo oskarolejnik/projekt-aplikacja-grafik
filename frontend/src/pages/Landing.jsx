@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Logo } from '../components/Logo'
+import { LogoFull } from '../components/Logo'
 import Login from './Login'
 
 // Zegar czasu lokalnego w Polsce (Europe/Warsaw), aktualizowany co sekundę.
@@ -44,20 +44,11 @@ export default function Landing() {
       <div aria-hidden className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.10] blur-3xl" />
       <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-32 h-96 w-96 rounded-full bg-mint opacity-[0.06] blur-3xl" />
 
-      {/* Branding — jedyny element nagłówka (bez nawigacji) */}
-      <header className="relative z-10 flex items-center px-6 py-6 md:px-12">
-        <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-full border border-white/15">
-            <Logo className="h-6" variant="ink" />
-          </span>
-          <span className="font-display text-lg font-bold tracking-tight text-ink">
-            Grafik<span className="text-gradient">Pracy</span>
-          </span>
-        </div>
-      </header>
+      {/* Sekcja główna: logo Rajcula + zegar + jedyna akcja.
+          pt-safe/pb-safe odsuwa treść od notcha iPhone (status bar black-translucent). */}
+      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-safe pt-safe text-center">
+        <LogoFull className="mb-9 h-20 sm:h-24" variant="ink" />
 
-      {/* Sekcja główna: zegar + jedyna akcja */}
-      <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 text-center">
         <p className="mb-5 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-muted">
           <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
           Czas lokalny — Polska
@@ -73,7 +64,7 @@ export default function Landing() {
         </button>
 
         <p className="mt-6 max-w-sm text-xs leading-relaxed text-muted/80">
-          System grafików pracy. Zaloguj się, aby zarządzać harmonogramem lub zgłosić swoją dyspozycyjność.
+          Grafik pracy, dyspozycyjność i powiadomienia. Zaloguj się, aby zarządzać harmonogramem lub zgłosić swoją dyspozycyjność.
         </p>
       </main>
 

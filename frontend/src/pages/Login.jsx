@@ -81,7 +81,7 @@ export default function Login({ onClose }) {
           </div>
           <div>
             <h2 className="font-display text-xl font-bold text-ink">{rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}</h2>
-            <p className="text-xs text-muted">{rejestracja ? 'Załóż konto pracownika' : 'Grafik Pracy — panel'}</p>
+            <p className="text-xs text-muted">{rejestracja ? 'Załóż konto pracownika' : 'Rajcula — panel'}</p>
           </div>
         </div>
 

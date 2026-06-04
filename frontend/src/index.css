@@ -34,12 +34,16 @@
      w bok przy przełączaniu widoków (m.in. podczas logowania). */
   html {
     scrollbar-gutter: stable;
+    overflow-x: hidden;
   }
   body {
     @apply bg-bg text-ink font-sans antialiased;
-    /* PWA „sztywna": brak podwójnego tapnięcia do zoomu i brak auto-skalowania tekstu na iOS */
+    /* PWA „sztywna": brak zoomu (double-tap), brak auto-skalowania tekstu na iOS oraz
+       brak poziomego przesuwania/„gumkowania" — widok sztywno w proporcjach ekranu. */
     touch-action: manipulation;
     -webkit-text-size-adjust: 100%;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
   }
 
   /* Widoczny fokus dla nawigacji klawiaturą (dostępność) */

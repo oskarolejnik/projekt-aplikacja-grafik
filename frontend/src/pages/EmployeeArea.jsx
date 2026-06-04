@@ -81,7 +81,7 @@ export default function EmployeeArea() {
             <Logo className="h-5" variant="bg" />
           </span>
           <div>
-            <h1 className="font-display text-base font-bold text-ink md:text-lg">Grafik Pracy</h1>
+            <h1 className="font-display text-base font-bold text-ink md:text-lg">Rajcula</h1>
             <p className="text-xs text-muted">Cześć, {imie}!</p>
           </div>
         </div>
