@@ -9,7 +9,7 @@ import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 import { hhmm, zakresDni } from '../../lib/format'
 import { motion } from 'framer-motion'
-import { SPRING } from '../../lib/motion'
+import { SPRING_PILL } from '../../lib/motion'
 
 // Interaktywny grafik: pracownicy × dni. Status dyspozycji, przydziały zmian,
 // dodawanie z szablonów wymagań, auto-przydział i czyszczenie. Logika map 1:1.
@@ -271,7 +271,7 @@ export default function Grafik() {
                     style={{ WebkitTapHighlightColor: 'transparent' }}
                   >
                     {sel && (
-                      <motion.span layoutId="grafikDay" transition={SPRING} className="absolute inset-0 rounded-xl bg-accent-gradient shadow-glow" />
+                      <motion.span layoutId="grafikDay" transition={SPRING_PILL} className="absolute inset-0 rounded-xl bg-accent-gradient shadow-glow" />
                     )}
                     <span className={`relative z-10 text-[10px] font-bold uppercase tracking-wide ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-muted'}`}>{wd}</span>
                     <span className={`relative z-10 text-sm font-bold ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-ink'}`}>{dm}</span>

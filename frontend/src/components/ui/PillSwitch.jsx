@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { SPRING } from '../../lib/motion'
+import { SPRING_PILL } from '../../lib/motion'
 
 // Pill Switcher (styl Apple / Emil Kowalski): wskaźnik aktywnego stanu „podróżuje"
 // pod tekstem (Framer `layoutId` = shared element + fizyka sprężyny), zamiast
@@ -27,7 +27,7 @@ export function PillSwitch({ options, value, onChange, layoutId, className = '' 
             {active && (
               <motion.span
                 layoutId={layoutId}
-                transition={SPRING}
+                transition={SPRING_PILL}
                 className={`absolute inset-0 rounded-xl ${opt.activeBg || 'bg-accent-gradient'}`}
               />
             )}
