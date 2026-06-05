@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react'
 import { Icon } from '../../lib/icons'
+import { motion, AnimatePresence } from 'framer-motion'
+import { SPRING } from '../../lib/motion'
 
 // Powiadomienia (toasty) + modal potwierdzenia. Zastępują natywne alert()/confirm()
 // spójnym, dostępnym UI w ciemnym motywie.
@@ -72,50 +74,76 @@ export function ToastProvider({ children }) {
         className="pointer-events-none fixed right-[max(1rem,env(safe-area-inset-right))] top-[max(1rem,calc(env(safe-area-inset-top)+0.5rem))] z-[1000] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2"
         aria-live="polite"
       >
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            role="status"
-            className={`animate-toast-in pointer-events-auto flex items-start gap-3 rounded-xl border p-3.5 text-sm shadow-soft backdrop-blur ${toastStyle[t.type] || toastStyle.info}`}
-          >
-            <span className="mt-0.5 shrink-0">
-              <Icon name={t.type === 'error' ? 'warning' : t.type === 'success' ? 'check' : 'info'} className="h-4 w-4" />
-            </span>
-            <span className="flex-1 leading-snug">{t.message}</span>
-            <button onClick={() => dismiss(t.id)} className="shrink-0 opacity-70 transition hover:opacity-100" aria-label="Zamknij">
-              <Icon name="close" className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ))}
+        {/* Sonner-like: wjazd z góry, a `layout` sprawia, że stos płynnie się
+            przesuwa, gdy któryś toast znika. Wyjście szybsze niż wejście (Emil). */}
+        <AnimatePresence initial={false}>
+          {toasts.map((t) => (
+            <motion.div
+              key={t.id}
+              layout
+              role="status"
+              initial={{ opacity: 0, y: -20, scale: 0.92 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2, ease: 'easeIn' } }}
+              transition={SPRING}
+              className={`pointer-events-auto flex items-start gap-3 rounded-2xl border p-3.5 text-sm shadow-soft backdrop-blur ${toastStyle[t.type] || toastStyle.info}`}
+            >
+              <span className="mt-0.5 shrink-0">
+                <Icon name={t.type === 'error' ? 'warning' : t.type === 'success' ? 'check' : 'info'} className="h-4 w-4" />
+              </span>
+              <span className="flex-1 leading-snug">{t.message}</span>
+              <button onClick={() => dismiss(t.id)} className="shrink-0 opacity-70 transition hover:opacity-100" aria-label="Zamknij">
+                <Icon name="close" className="h-3.5 w-3.5" />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
 
-      {/* Modal potwierdzenia (zastępuje confirm()) */}
-      {confirmState && (
-        <div className="fixed inset-0 z-[1100] grid place-items-center p-4">
-          <div className="absolute inset-0 animate-overlay-in bg-black/60 backdrop-blur-sm" onClick={() => closeConfirm(false)} />
-          <div role="alertdialog" aria-modal="true" className="card animate-modal-in relative z-10 w-full max-w-sm p-6">
-            <h3 className="font-display text-lg font-bold text-ink">{confirmState.title}</h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted">{confirmState.message}</p>
-            <div className="mt-6 flex justify-end gap-3">
-              <button
-                onClick={() => closeConfirm(false)}
-                className="rounded-xl border border-line bg-white/[0.04] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-white/[0.09]"
-              >
-                {confirmState.cancelText}
-              </button>
-              <button
-                ref={confirmBtnRef}
-                onClick={() => closeConfirm(true)}
-                className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                  confirmState.danger ? 'bg-danger text-white hover:brightness-110' : 'bg-cream text-bg hover:brightness-[1.03]'
-                }`}
-              >
-                {confirmState.confirmText}
-              </button>
-            </div>
+      {/* Modal potwierdzenia (zastępuje confirm()) — Layered Entrance jak logowanie. */}
+      <AnimatePresence>
+        {confirmState && (
+          <div className="fixed inset-0 z-[1100] grid place-items-center p-4">
+            <motion.div
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+              onClick={() => closeConfirm(false)}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25, ease: 'circOut' }}
+            />
+            <motion.div
+              role="alertdialog"
+              aria-modal="true"
+              className="card relative z-10 w-full max-w-sm p-6"
+              initial={{ opacity: 0, scale: 0.98, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 10 }}
+              transition={{ duration: 0.3, ease: 'circOut' }}
+            >
+              <h3 className="font-display text-lg font-bold text-ink">{confirmState.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted">{confirmState.message}</p>
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  onClick={() => closeConfirm(false)}
+                  className="rounded-xl border border-line bg-white/[0.04] px-4 py-2 text-sm font-semibold text-ink transition active:scale-[0.97] hover:bg-white/[0.09]"
+                >
+                  {confirmState.cancelText}
+                </button>
+                <button
+                  ref={confirmBtnRef}
+                  onClick={() => closeConfirm(true)}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.97] ${
+                    confirmState.danger ? 'bg-danger text-white hover:brightness-110' : 'bg-cream text-bg hover:brightness-[1.03]'
+                  }`}
+                >
+                  {confirmState.confirmText}
+                </button>
+              </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
     </ToastContext.Provider>
   )
 }

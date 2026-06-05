@@ -8,6 +8,7 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 import { ddmmyyyy } from '../../lib/format'
+import { motion } from 'framer-motion'
 
 // Baza imprez z serwera NAS. Lista per tydzień + synchronizacja (skan plików .xlsx).
 const pusta = (v) => !v || v === 'None' || v === 'Brak'
@@ -77,10 +78,13 @@ export default function Imprezy() {
       ) : (
         <div className="space-y-3">
           {imprezy.map((imp, i) => (
-            <div
+            <motion.div
               key={imp.id}
-              className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4 transition hover:bg-white/[0.04]"
-              style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0, transition: { delay: Math.min(i, 8) * 0.045, duration: 0.4, ease: [0.23, 1, 0.32, 1] } }}
+              whileHover={{ y: -4 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="rounded-2xl border border-line bg-white/[0.02] p-4 transition-colors hover:bg-white/[0.04]"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <span className="font-bold text-ink">{imp.klient}</span>
@@ -106,7 +110,7 @@ export default function Imprezy() {
                   <span className="italic text-muted">Brak szczegółów</span>
                 )}
               </div>
-            </div>
+            </motion.div>
           ))}
         </div>
       )}
