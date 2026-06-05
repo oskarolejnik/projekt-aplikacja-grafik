@@ -9,3 +9,6 @@ export const SPRING_SNAPPY = { type: 'spring', bounce: 0.12, duration: 0.4 }
 
 // Pigułki (Pill Switcher) — wyraźniejszy, „apple'owy" bounce: gładki overshoot i miękkie osiadanie.
 export const SPRING_PILL = { type: 'spring', bounce: 0.34, duration: 0.6 }
+
+// Reflow/zwijanie layoutu (karty „podjeżdżają", pola się zwijają) — spójne ze sprężyną pigułek.
+export const SPRING_LAYOUT = { type: 'spring', bounce: 0.2, duration: 0.5 }

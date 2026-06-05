@@ -7,8 +7,8 @@ import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
-import { motion } from 'framer-motion'
-import { SPRING_PILL } from '../lib/motion'
+import { motion, AnimatePresence } from 'framer-motion'
+import { SPRING_PILL, SPRING_LAYOUT } from '../lib/motion'
 
 // Godzina imprezy z arkusza bywa łańcuchem ("14:30:00", "Brak", "None"...).
 const fmtGodzina = (g) => {
@@ -88,7 +88,7 @@ export default function EmployeeAvailability() {
     <>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <WeekSelect />
-        <span className="text-sm text-muted">Zaznacz dni, w których możesz pracować. Puste pole „od" = dostępny przez cały dzień.</span>
+        <span className="text-sm text-muted">Zaznacz dni, w których możesz pracować. Domyślnie „Cały dzień" — wyłącz przełącznik, aby podać godzinę od której.</span>
       </div>
 
       <Card className="p-6">
@@ -97,19 +97,26 @@ export default function EmployeeAvailability() {
             <Spinner className="h-6 w-6 text-muted" />
           </div>
         ) : (
-          <div className="space-y-3">
+          <motion.div layout className="space-y-3">
             {dni.map((d, i) => {
               const imprezy = imprezyMap[d.data] || []
+              const calyDzien = !d.od
               return (
-                <div key={d.data} className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <motion.div
+                  key={d.data}
+                  layout
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ layout: SPRING_LAYOUT, opacity: { delay: Math.min(i, 8) * 0.04, duration: 0.4 } }}
+                  className="rounded-xl border border-line bg-white/[0.02] p-4"
+                >
+                  <motion.div layout="position" className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-[150px]">
                       <div className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(d.data).getDay()]}</div>
                       <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-3">
-                      {/* Pełna szerokość na mobile, równy podział 50/50 — „Niedostępny" już się nie ucina. */}
+                    <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
                       {/* Pill switcher: kolorowa pigułka (sukces/danger) sunie pod aktywnym stanem. */}
                       <div className="relative flex w-full rounded-lg border border-line p-1 sm:w-auto">
                         {[true, false].map((val) => {
@@ -136,31 +143,62 @@ export default function EmployeeAvailability() {
                         })}
                       </div>
 
-                      {/* Godzina ma sens tylko gdy dostępny. Puste pole = dostępny przez cały dzień. */}
-                      {d.dostepnosc && (
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                          <span>od</span>
-                          <input
-                            type="time"
-                            value={d.od}
-                            onChange={(ev) => setDay(i, { od: ev.target.value })}
-                            className="field w-28 px-2 py-2"
-                          />
-                          {d.od ? (
-                            <button
-                              type="button"
-                              onClick={() => setDay(i, { od: '' })}
-                              className="flex items-center gap-1 rounded-lg border border-line bg-white/[0.04] px-2.5 py-2 font-semibold text-muted transition hover:text-ink"
-                            >
-                              <Icon name="close" className="h-3 w-3" /> cały dzień
-                            </button>
-                          ) : (
-                            <span className="font-semibold text-mint">cały dzień</span>
-                          )}
-                        </div>
-                      )}
+                      {/* Opcje godziny — gładko zwijane przy „Niedostępny". „Cały dzień" = switch. */}
+                      <AnimatePresence initial={false}>
+                        {d.dostepnosc && (
+                          <motion.div
+                            key="opcje"
+                            layout
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={SPRING_LAYOUT}
+                            style={{ overflow: 'hidden' }}
+                            className="w-full sm:w-auto"
+                          >
+                            <div className="flex flex-wrap items-center gap-3 pt-1 text-xs sm:justify-end">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={calyDzien}
+                                onClick={() => setDay(i, { od: calyDzien ? '08:00' : '' })}
+                                className="flex items-center gap-2 font-semibold text-muted transition active:scale-[0.96]"
+                                style={{ WebkitTapHighlightColor: 'transparent' }}
+                              >
+                                <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
+                                  <motion.span className="h-5 w-5 rounded-full bg-white shadow-sm" animate={{ x: calyDzien ? 20 : 0 }} transition={SPRING_PILL} />
+                                </span>
+                                Cały dzień
+                              </button>
+
+                              <AnimatePresence initial={false}>
+                                {!calyDzien && (
+                                  <motion.div
+                                    key="czas"
+                                    layout
+                                    initial={{ opacity: 0, width: 0 }}
+                                    animate={{ opacity: 1, width: 'auto' }}
+                                    exit={{ opacity: 0, width: 0 }}
+                                    transition={SPRING_LAYOUT}
+                                    style={{ overflow: 'hidden' }}
+                                    className="flex shrink-0 items-center gap-2 text-muted"
+                                  >
+                                    <span>od</span>
+                                    <input
+                                      type="time"
+                                      value={d.od}
+                                      onChange={(ev) => setDay(i, { od: ev.target.value })}
+                                      className="field w-28 px-2 py-2"
+                                    />
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
-                  </div>
+                  </motion.div>
 
                   {imprezy.length > 0 && (
                     <div className="mt-3 space-y-1.5 border-t border-line pt-3">
@@ -178,10 +216,10 @@ export default function EmployeeAvailability() {
                       ))}
                     </div>
                   )}
-                </div>
+                </motion.div>
               )
             })}
-          </div>
+          </motion.div>
         )}
 
         <button
