@@ -53,7 +53,7 @@ export default function Imprezy() {
   const [s, e] = week.split('|')
 
   return (
-    <Card className="max-w-5xl p-8">
+    <Card className="mx-auto max-w-3xl p-6 sm:p-8">
       <SectionHeader title="Baza Imprez (Ustalone)" subtitle={`Skan plików .xlsx dla tygodnia ${ddmmyyyy(s)} — ${ddmmyyyy(e)}`}>
         <Button onClick={synchronizuj} disabled={syncing}>
           {syncing ? <Spinner className="h-4 w-4" /> : <Icon name="refresh" className="h-4 w-4" />}
@@ -65,66 +65,51 @@ export default function Imprezy() {
         Upewnij się, że dysk z plikami imprez (NAS) jest podłączony w Finderze, zanim klikniesz synchronizację.
       </Banner>
 
-      <div className="overflow-hidden rounded-xl border border-line">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-muted">
-            <tr>
-              <th className="px-5 py-4 font-semibold">Data</th>
-              <th className="px-5 py-4 font-semibold">Nazwa klienta</th>
-              <th className="px-5 py-4 font-semibold">Sala</th>
-              <th className="px-5 py-4 font-semibold">Godzina</th>
-              <th className="px-5 py-4 font-semibold">Liczba osób</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {loading ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-muted">
-                  <Spinner className="mx-auto h-5 w-5" />
-                </td>
-              </tr>
-            ) : imprezy.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-muted">
-                  Brak imprez na ten tydzień. Kliknij „Synchronizuj NAS”.
-                </td>
-              </tr>
-            ) : (
-              imprezy.map((imp) => (
-                <tr key={imp.id} className="transition hover:bg-white/[0.02]">
-                  <td className="px-5 py-4">
-                    <span className="font-semibold text-ink">{ddmmyyyy(imp.data)}</span>
-                  </td>
-                  <td className="px-5 py-4 font-bold text-ink">{imp.klient}</td>
-                  <td className="px-5 py-4">
-                    {pusta(imp.sala) ? (
-                      <span className="italic text-muted">Brak</span>
-                    ) : (
-                      <span className="inline-block rounded-lg border border-mint/20 bg-mint/10 px-2.5 py-1 font-mono text-xs font-bold text-mint">
-                        {imp.sala}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-5 py-4">
-                    {pusta(imp.godzina) ? (
-                      <span className="italic text-muted">Brak</span>
-                    ) : (
-                      <span className="inline-block rounded-lg bg-white/[0.06] px-3 py-1 font-semibold text-ink">{imp.godzina}</span>
-                    )}
-                  </td>
-                  <td className="px-5 py-4 text-muted">
-                    {imp.liczba_osob > 0 ? (
-                      <span className="font-bold text-ink">{imp.liczba_osob} os.</span>
-                    ) : (
-                      <span className="italic text-muted">Brak</span>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      {/* Karty zamiast tabeli — czytelne na mobile, nic się nie ucina. */}
+      {loading ? (
+        <div className="grid place-items-center py-12">
+          <Spinner className="h-6 w-6 text-muted" />
+        </div>
+      ) : imprezy.length === 0 ? (
+        <div className="rounded-xl border border-line bg-white/[0.02] p-8 text-center text-sm text-muted">
+          Brak imprez na ten tydzień. Kliknij „Synchronizuj NAS”.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {imprezy.map((imp, i) => (
+            <div
+              key={imp.id}
+              className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4 transition hover:bg-white/[0.04]"
+              style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <span className="font-bold text-ink">{imp.klient}</span>
+                <span className="shrink-0 font-mono text-xs font-semibold text-muted">{ddmmyyyy(imp.data)}</span>
+              </div>
+              <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
+                {!pusta(imp.sala) && (
+                  <span className="inline-flex items-center gap-1 rounded-lg border border-mint/20 bg-mint/10 px-2.5 py-1 font-mono font-bold text-mint">
+                    <Icon name="pin" className="h-3 w-3" /> {imp.sala}
+                  </span>
+                )}
+                {!pusta(imp.godzina) && (
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-white/[0.06] px-2.5 py-1 font-mono font-semibold text-ink">
+                    <Icon name="clock" className="h-3 w-3" /> {imp.godzina}
+                  </span>
+                )}
+                {imp.liczba_osob > 0 && (
+                  <span className="inline-flex items-center gap-1 text-muted">
+                    <Icon name="users" className="h-3.5 w-3.5" /> <span className="font-bold text-ink">{imp.liczba_osob}</span> os.
+                  </span>
+                )}
+                {pusta(imp.sala) && pusta(imp.godzina) && !(imp.liczba_osob > 0) && (
+                  <span className="italic text-muted">Brak szczegółów</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   )
 }

@@ -10,8 +10,9 @@ import { useToast } from '../ui/Toast'
 import { hhmm, zakresDni } from '../../lib/format'
 
 // Interaktywny grafik: pracownicy × dni. Status dyspozycji, przydziały zmian,
-// dodawanie z szablonów wymagań, auto-przydział i czyszczenie. Logika map 1:1
-// z poprzednią aplikacją.
+// dodawanie z szablonów wymagań, auto-przydział i czyszczenie. Logika map 1:1.
+// Prezentacja responsywna: desktop = macierz (tabela), mobile = wybór dnia + lista
+// pracowników. Render pojedynczej komórki wydzielony do komorka(dt, p) — wspólny dla obu.
 export default function Grafik() {
   const { stanowiska, pracownicy, week, reloadDicts } = useData()
   const { toast, confirm } = useToast()
@@ -22,6 +23,7 @@ export default function Grafik() {
   const [processing, setProcessing] = useState(false)
   const [publikacja, setPublikacja] = useState({ opublikowany: false, opublikowano_at: null })
   const [publikowanie, setPublikowanie] = useState(false)
+  const [selDay, setSelDay] = useState('') // wybrany dzień w widoku mobilnym
 
   const load = useCallback(async () => {
     const [s, e] = week.split('|')
@@ -144,6 +146,79 @@ export default function Grafik() {
   }
 
   const aktywni = pracownicy.filter((p) => p.aktywny)
+  const selectedDay = dates.includes(selDay) ? selDay : dates[0]
+
+  const dayLabel = (dt) => {
+    const [, mm, dd] = dt.split('-')
+    return { wd: new Date(dt).toLocaleDateString('pl-PL', { weekday: 'short' }).replace('.', ''), dm: `${dd}.${mm}` }
+  }
+  const cellBgFor = (dt, p) => {
+    const dys = dysMap[`${dt}_${p.id}`]
+    return !dys ? 'bg-white/[0.01]' : dys.dostepnosc ? 'bg-success/[0.04]' : 'bg-danger/[0.04]'
+  }
+
+  // Render zawartości jednej komórki (status + przydziały + dodawanie). Wspólny dla
+  // tabeli (desktop) i kart dnia (mobile).
+  const komorka = (dt, p) => {
+    const dys = dysMap[`${dt}_${p.id}`]
+    const pAt = przyMap[`${dt}_${p.id}`] || []
+    const szablony = szablonyDla(dt, p)
+    const status = dys ? (dys.dostepnosc ? (dys.godz_od ? `Od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny') : 'brak'
+    const statusColor = !dys
+      ? 'text-muted border-line'
+      : dys.dostepnosc
+        ? 'text-success border-success/30 bg-success/10'
+        : 'text-danger border-danger/30 bg-danger/10'
+
+    return (
+      <>
+        <div className={`mb-2 w-fit rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusColor}`}>{status}</div>
+        <div className="flex flex-col gap-2">
+          {pAt.map((a) => {
+            const stan = stanMap[a.stanowisko_id]
+            const szab = szablony.find((w) => w.stanowisko_id === a.stanowisko_id && w.godz_od === a.godz_od)
+            return (
+              <div key={a.id} className="rounded-lg border border-line border-l-[3px] border-l-mint bg-surface-2 p-2 text-left text-xs">
+                <div className="flex items-start justify-between gap-1">
+                  <span className="font-bold text-ink">
+                    {stan?.nazwa}
+                    {(a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
+                  </span>
+                  <button onClick={() => usunPrzydzial(a.id)} className="shrink-0 text-muted transition hover:text-danger" aria-label="Anuluj zmianę">
+                    <Icon name="close" className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <span className="mt-1 flex items-center gap-1 font-mono text-[10px] text-muted">
+                  <Icon name="clock" className="h-3 w-3" /> {a.godz_od ? hhmm(a.godz_od) : 'Dowolnie'}
+                </span>
+              </div>
+            )
+          })}
+
+          {dys?.dostepnosc && szablony.length > 0 && (
+            <select
+              value=""
+              onChange={(ev) => {
+                const idx = ev.target.value
+                if (idx === '') return
+                dodajPrzydzial(dt, p.id, szablony[+idx])
+              }}
+              className="w-full cursor-pointer rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-mint outline-none transition hover:border-mint/50"
+            >
+              <option value="" className="bg-surface text-muted">+ Dodaj</option>
+              {szablony.map((w, i) => (
+                <option key={i} value={i} className="bg-surface text-ink">
+                  {stanMap[w.stanowisko_id].nazwa}
+                  {w.rewir ? ` (${w.rewir})` : ''}
+                  {w.godz_od ? ` [${hhmm(w.godz_od)}]` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -175,121 +250,90 @@ export default function Grafik() {
         <div className="grid place-items-center py-16">
           <Spinner className="h-6 w-6 text-muted" />
         </div>
+      ) : aktywni.length === 0 ? (
+        <Banner variant="info">Brak aktywnych pracowników.</Banner>
       ) : (
-        <div className="card overflow-x-auto p-0">
-          <table className="w-full border-separate border-spacing-0">
-            <thead>
-              <tr>
-                <th className="sticky left-0 z-20 min-w-[180px] border-b border-r border-line bg-surface-2 p-4 text-left text-xs font-bold uppercase tracking-wider text-muted">
-                  Pracownik
-                </th>
-                {dates.map((dt) => {
-                  const [, mm, dd] = dt.split('-')
-                  const isW = [0, 6].includes(new Date(dt).getDay())
-                  return (
-                    <th
-                      key={dt}
-                      className={`min-w-[150px] border-b border-r border-line p-4 text-center text-sm font-bold ${isW ? 'text-blush' : 'text-ink'}`}
-                    >
-                      {dd}.{mm}
+        <>
+          {/* MOBILE / wąskie ekrany: wybór dnia + lista pracowników na ten dzień */}
+          <div className="lg:hidden">
+            <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+              {dates.map((dt) => {
+                const { wd, dm } = dayLabel(dt)
+                const isW = [0, 6].includes(new Date(dt).getDay())
+                const sel = dt === selectedDay
+                return (
+                  <button
+                    key={dt}
+                    onClick={() => setSelDay(dt)}
+                    className={`flex shrink-0 flex-col items-center rounded-xl border px-3.5 py-2 transition active:scale-[0.97] ${
+                      sel
+                        ? 'border-transparent bg-accent-gradient text-bg shadow-glow'
+                        : `border-line bg-white/[0.03] ${isW ? 'text-blush' : 'text-muted'} hover:text-ink`
+                    }`}
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wide">{wd}</span>
+                    <span className="text-sm font-bold">{dm}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="space-y-3">
+              {aktywni.map((p, i) => (
+                <div
+                  key={p.id}
+                  className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4"
+                  style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
+                >
+                  <div className="mb-2.5 text-sm font-semibold text-ink">
+                    {p.imie} {p.nazwisko}
+                  </div>
+                  {komorka(selectedDay, p)}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* DESKTOP: pełna macierz pracownicy × dni (mniejsze nazwy) */}
+          <div className="hidden lg:block">
+            <div className="card overflow-x-auto p-0">
+              <table className="w-full border-separate border-spacing-0">
+                <thead>
+                  <tr>
+                    <th className="sticky left-0 z-20 min-w-[120px] border-b border-r border-line bg-surface-2 p-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted">
+                      Pracownik
                     </th>
-                  )
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {aktywni.length === 0 ? (
-                <tr>
-                  <td colSpan={dates.length + 1} className="p-10 text-center text-sm text-muted">
-                    Brak aktywnych pracowników.
-                  </td>
-                </tr>
-              ) : (
-                aktywni.map((p) => (
-                  <tr key={p.id} className="group">
-                    <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-4 font-bold text-ink shadow-[2px_0_8px_rgba(0,0,0,0.25)]">
-                      {p.imie} {p.nazwisko}
-                    </td>
                     {dates.map((dt) => {
-                      const dys = dysMap[`${dt}_${p.id}`]
-                      const pAt = przyMap[`${dt}_${p.id}`] || []
-                      const szablony = szablonyDla(dt, p)
-
-                      const status = dys
-                        ? dys.dostepnosc
-                          ? dys.godz_od
-                            ? `Od ${hhmm(dys.godz_od)}`
-                            : 'Dostępny'
-                          : 'Niedostępny'
-                        : 'brak'
-                      const cellBg = !dys ? 'bg-white/[0.01]' : dys.dostepnosc ? 'bg-success/[0.04]' : 'bg-danger/[0.04]'
-                      const statusColor = !dys
-                        ? 'text-muted border-line'
-                        : dys.dostepnosc
-                          ? 'text-success border-success/30 bg-success/10'
-                          : 'text-danger border-danger/30 bg-danger/10'
-
+                      const [, mm, dd] = dt.split('-')
+                      const isW = [0, 6].includes(new Date(dt).getDay())
                       return (
-                        <td key={dt} className={`border-b border-r border-line p-3 align-top ${cellBg}`}>
-                          <div className={`mx-auto mb-2 w-fit rounded-md border px-2 py-0.5 text-center text-[10px] font-bold ${statusColor}`}>
-                            {status}
-                          </div>
-                          <div className="flex flex-col gap-2">
-                            {pAt.map((a) => {
-                              const stan = stanMap[a.stanowisko_id]
-                              const szab = szablony.find((w) => w.stanowisko_id === a.stanowisko_id && w.godz_od === a.godz_od)
-                              return (
-                                <div key={a.id} className="rounded-lg border border-line border-l-[3px] border-l-mint bg-surface-2 p-2 text-left text-xs">
-                                  <div className="flex items-start justify-between gap-1">
-                                    <span className="font-bold text-ink">
-                                      {stan?.nazwa}
-                                      {(a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
-                                    </span>
-                                    <button
-                                      onClick={() => usunPrzydzial(a.id)}
-                                      className="shrink-0 text-muted transition hover:text-danger"
-                                      aria-label="Anuluj zmianę"
-                                    >
-                                      <Icon name="close" className="h-3.5 w-3.5" />
-                                    </button>
-                                  </div>
-                                  <span className="mt-1 flex items-center gap-1 font-mono text-[10px] text-muted">
-                                    <Icon name="clock" className="h-3 w-3" /> {a.godz_od ? hhmm(a.godz_od) : 'Dowolnie'}
-                                  </span>
-                                </div>
-                              )
-                            })}
-
-                            {dys?.dostepnosc && szablony.length > 0 && (
-                              <select
-                                value=""
-                                onChange={(ev) => {
-                                  const idx = ev.target.value
-                                  if (idx === '') return
-                                  dodajPrzydzial(dt, p.id, szablony[+idx])
-                                }}
-                                className="w-full cursor-pointer rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-mint outline-none transition hover:border-mint/50"
-                              >
-                                <option value="" className="bg-surface text-muted">+ Dodaj</option>
-                                {szablony.map((w, i) => (
-                                  <option key={i} value={i} className="bg-surface text-ink">
-                                    {stanMap[w.stanowisko_id].nazwa}
-                                    {w.rewir ? ` (${w.rewir})` : ''}
-                                    {w.godz_od ? ` [${hhmm(w.godz_od)}]` : ''}
-                                  </option>
-                                ))}
-                              </select>
-                            )}
-                          </div>
-                        </td>
+                        <th
+                          key={dt}
+                          className={`min-w-[140px] border-b border-r border-line p-3 text-center text-sm font-bold ${isW ? 'text-blush' : 'text-ink'}`}
+                        >
+                          {dd}.{mm}
+                        </th>
                       )
                     })}
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {aktywni.map((p) => (
+                    <tr key={p.id}>
+                      <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-3 text-xs font-semibold text-ink shadow-[2px_0_8px_rgba(0,0,0,0.25)]">
+                        {p.imie} {p.nazwisko}
+                      </td>
+                      {dates.map((dt) => (
+                        <td key={dt} className={`border-b border-r border-line p-2.5 align-top ${cellBgFor(dt, p)}`}>
+                          {komorka(dt, p)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
     </div>
   )
