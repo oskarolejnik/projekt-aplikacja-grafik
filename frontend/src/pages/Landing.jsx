@@ -42,8 +42,8 @@ export default function Landing() {
   return (
     <div className="relative flex min-h-dvh flex-col overflow-hidden bg-bg">
       {/* Subtelne pastelowe poświaty w tle */}
-      <div aria-hidden className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.10] blur-3xl" />
-      <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-32 h-96 w-96 rounded-full bg-mint opacity-[0.06] blur-3xl" />
+      <div aria-hidden className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.10] blur-2xl transform-gpu" />
+      <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-32 h-96 w-96 rounded-full bg-mint opacity-[0.06] blur-2xl transform-gpu" />
 
       {/* Sekcja główna: logo Rajcula + zegar + jedyna akcja.
           pt-safe/pb-safe odsuwa treść od notcha iPhone (status bar black-translucent). */}

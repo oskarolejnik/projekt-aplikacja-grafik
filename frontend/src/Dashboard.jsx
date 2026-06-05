@@ -39,8 +39,8 @@ export default function Dashboard() {
   return (
     <div className="relative flex h-dvh overflow-hidden bg-bg">
       {/* Dekoracyjna pastelowa poświata w tle (subtelna) */}
-      <div aria-hidden className="pointer-events-none fixed -right-40 -top-40 h-96 w-96 rounded-full bg-page-glow opacity-[0.07] blur-3xl" />
-      <div aria-hidden className="pointer-events-none fixed -bottom-40 left-40 h-80 w-80 rounded-full bg-mint opacity-[0.05] blur-3xl" />
+      <div aria-hidden className="pointer-events-none fixed -right-40 -top-40 h-96 w-96 rounded-full bg-page-glow opacity-[0.07] blur-2xl transform-gpu" />
+      <div aria-hidden className="pointer-events-none fixed -bottom-40 left-40 h-80 w-80 rounded-full bg-mint opacity-[0.05] blur-2xl transform-gpu" />
 
       {/* Tło pod szufladę (mobile) */}
       {mobileOpen && <div className="fixed inset-0 z-30 animate-overlay-in bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}

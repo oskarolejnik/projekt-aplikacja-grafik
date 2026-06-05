@@ -97,7 +97,7 @@ export default function EmployeeAvailability() {
             <Spinner className="h-6 w-6 text-muted" />
           </div>
         ) : (
-          <motion.div layout className="space-y-3">
+          <div className="space-y-3">
             {dni.map((d, i) => {
               const imprezy = imprezyMap[d.data] || []
               const calyDzien = !d.od
@@ -110,7 +110,7 @@ export default function EmployeeAvailability() {
                   transition={{ layout: SPRING_LAYOUT, opacity: { delay: Math.min(i, 8) * 0.04, duration: 0.4 } }}
                   className="rounded-xl border border-line bg-white/[0.02] p-4"
                 >
-                  <motion.div layout="position" className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-[150px]">
                       <div className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(d.data).getDay()]}</div>
                       <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
@@ -149,11 +149,10 @@ export default function EmployeeAvailability() {
                           <motion.div
                             key="opcje"
                             layout
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            transition={SPRING_LAYOUT}
-                            style={{ overflow: 'hidden' }}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ layout: SPRING_LAYOUT, opacity: { duration: 0.15 } }}
                             className="w-full sm:w-auto"
                           >
                             <div className="flex flex-wrap items-center gap-3 pt-1 text-xs sm:justify-end">
@@ -176,11 +175,10 @@ export default function EmployeeAvailability() {
                                   <motion.div
                                     key="czas"
                                     layout
-                                    initial={{ opacity: 0, width: 0 }}
-                                    animate={{ opacity: 1, width: 'auto' }}
-                                    exit={{ opacity: 0, width: 0 }}
-                                    transition={SPRING_LAYOUT}
-                                    style={{ overflow: 'hidden' }}
+                                    initial={{ opacity: 0 }}
+                                    animate={{ opacity: 1 }}
+                                    exit={{ opacity: 0 }}
+                                    transition={{ layout: SPRING_LAYOUT, opacity: { duration: 0.15 } }}
                                     className="flex shrink-0 items-center gap-2 text-muted"
                                   >
                                     <span>od</span>
@@ -198,7 +196,7 @@ export default function EmployeeAvailability() {
                         )}
                       </AnimatePresence>
                     </div>
-                  </motion.div>
+                  </div>
 
                   {imprezy.length > 0 && (
                     <div className="mt-3 space-y-1.5 border-t border-line pt-3">
@@ -219,7 +217,7 @@ export default function EmployeeAvailability() {
                 </motion.div>
               )
             })}
-          </motion.div>
+          </div>
         )}
 
         <button
