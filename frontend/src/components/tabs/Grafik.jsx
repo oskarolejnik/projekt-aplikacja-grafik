@@ -8,6 +8,8 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 import { hhmm, zakresDni } from '../../lib/format'
+import { motion } from 'framer-motion'
+import { SPRING } from '../../lib/motion'
 
 // Interaktywny grafik: pracownicy × dni. Status dyspozycji, przydziały zmian,
 // dodawanie z szablonów wymagań, auto-przydział i czyszczenie. Logika map 1:1.
@@ -265,14 +267,14 @@ export default function Grafik() {
                   <button
                     key={dt}
                     onClick={() => setSelDay(dt)}
-                    className={`flex shrink-0 flex-col items-center rounded-xl border px-3.5 py-2 transition active:scale-[0.97] ${
-                      sel
-                        ? 'border-transparent bg-accent-gradient text-bg shadow-glow'
-                        : `border-line bg-white/[0.03] ${isW ? 'text-blush' : 'text-muted'} hover:text-ink`
-                    }`}
+                    className="relative flex shrink-0 flex-col items-center rounded-xl border border-line bg-white/[0.03] px-3.5 py-2 transition-transform active:scale-[0.95]"
+                    style={{ WebkitTapHighlightColor: 'transparent' }}
                   >
-                    <span className="text-[10px] font-bold uppercase tracking-wide">{wd}</span>
-                    <span className="text-sm font-bold">{dm}</span>
+                    {sel && (
+                      <motion.span layoutId="grafikDay" transition={SPRING} className="absolute inset-0 rounded-xl bg-accent-gradient shadow-glow" />
+                    )}
+                    <span className={`relative z-10 text-[10px] font-bold uppercase tracking-wide ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-muted'}`}>{wd}</span>
+                    <span className={`relative z-10 text-sm font-bold ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-ink'}`}>{dm}</span>
                   </button>
                 )
               })}

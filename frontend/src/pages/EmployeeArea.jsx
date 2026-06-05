@@ -8,6 +8,8 @@ import { api } from '../lib/api'
 import { pushWspierany, wlaczPowiadomienia } from '../lib/push'
 import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
+import { motion, AnimatePresence } from 'framer-motion'
+import { PillSwitch } from '../components/ui/PillSwitch'
 
 const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
 
@@ -56,20 +58,10 @@ export default function EmployeeArea() {
     }
   }
 
-  const Tab = ({ id, label, badge }) => (
-    <button
-      onClick={() => {
-        setWidok(id)
-        if (id === 'grafik') setNowyGrafik(false)
-      }}
-      className={`relative flex-1 rounded-lg px-3 py-2 text-sm font-bold transition ${
-        widok === id ? 'bg-accent-gradient text-bg' : 'text-muted hover:text-ink'
-      }`}
-    >
-      {label}
-      {badge && <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
-    </button>
-  )
+  const zmienWidok = (v) => {
+    setWidok(v)
+    if (v === 'grafik') setNowyGrafik(false)
+  }
 
   return (
     <div className="relative min-h-dvh bg-bg">
@@ -105,16 +97,30 @@ export default function EmployeeArea() {
       </header>
 
       <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 pb-safe md:py-10">
-        <div className="mb-6 flex gap-1.5 rounded-xl border border-line bg-white/[0.02] p-1.5">
-          <Tab id="dyspozycyjnosc" label="Moja dyspozycyjność" />
-          <Tab id="grafik" label="Mój grafik" badge={nowyGrafik} />
-        </div>
+        {/* Pill Switcher: gradientowa pigułka „podróżuje" pod aktywną zakładką (layoutId + sprężyna). */}
+        <PillSwitch
+          className="mb-6"
+          layoutId="empTab"
+          value={widok}
+          onChange={zmienWidok}
+          options={[
+            { value: 'dyspozycyjnosc', label: 'Moja dyspozycyjność' },
+            { value: 'grafik', label: 'Mój grafik', badge: nowyGrafik },
+          ]}
+        />
 
-        {/* key={widok} wymusza remount → animacja wjazdu odtwarza się przy każdej zmianie zakładki.
-            Kierunek zależy od pozycji zakładki (grafik = prawa → wjazd z prawej). */}
-        <div key={widok} className={widok === 'grafik' ? 'animate-slide-in-r' : 'animate-slide-in-l'}>
-          {widok === 'dyspozycyjnosc' ? <EmployeeAvailability /> : <EmployeeSchedule onSeen={oznaczWidziany} />}
-        </div>
+        {/* Treść zakładki: miękki crossfade (Framer). Kierunkowość daje sama wędrująca pigułka. */}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={widok}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.26, ease: [0.23, 1, 0.32, 1] }}
+          >
+            {widok === 'dyspozycyjnosc' ? <EmployeeAvailability /> : <EmployeeSchedule onSeen={oznaczWidziany} />}
+          </motion.div>
+        </AnimatePresence>
       </main>
     </div>
   )

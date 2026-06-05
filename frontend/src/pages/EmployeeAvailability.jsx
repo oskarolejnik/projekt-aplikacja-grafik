@@ -7,6 +7,8 @@ import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
+import { motion } from 'framer-motion'
+import { SPRING } from '../lib/motion'
 
 // Godzina imprezy z arkusza bywa łańcuchem ("14:30:00", "Brak", "None"...).
 const fmtGodzina = (g) => {
@@ -108,19 +110,30 @@ export default function EmployeeAvailability() {
 
                     <div className="flex flex-wrap items-center gap-3">
                       {/* Pełna szerokość na mobile, równy podział 50/50 — „Niedostępny" już się nie ucina. */}
-                      <div className="flex w-full overflow-hidden rounded-lg border border-line sm:w-auto">
-                        <button
-                          onClick={() => setDay(i, { dostepnosc: true })}
-                          className={`flex-1 px-4 py-2 text-xs font-bold transition sm:flex-none ${d.dostepnosc ? 'bg-success text-bg' : 'text-muted hover:text-ink'}`}
-                        >
-                          Dostępny
-                        </button>
-                        <button
-                          onClick={() => setDay(i, { dostepnosc: false })}
-                          className={`flex-1 px-4 py-2 text-xs font-bold transition sm:flex-none ${!d.dostepnosc ? 'bg-danger text-white' : 'text-muted hover:text-ink'}`}
-                        >
-                          Niedostępny
-                        </button>
+                      {/* Pill switcher: kolorowa pigułka (sukces/danger) sunie pod aktywnym stanem. */}
+                      <div className="relative flex w-full rounded-lg border border-line p-1 sm:w-auto">
+                        {[true, false].map((val) => {
+                          const active = d.dostepnosc === val
+                          return (
+                            <button
+                              key={String(val)}
+                              onClick={() => setDay(i, { dostepnosc: val })}
+                              className="relative flex-1 rounded-md px-4 py-1.5 text-xs font-bold transition-[color,transform] duration-150 ease-snap active:scale-[0.95] sm:flex-none"
+                              style={{ WebkitTapHighlightColor: 'transparent' }}
+                            >
+                              {active && (
+                                <motion.span
+                                  layoutId={`avail-${d.data}`}
+                                  transition={SPRING}
+                                  className={`absolute inset-0 rounded-md ${val ? 'bg-success' : 'bg-danger'}`}
+                                />
+                              )}
+                              <span className={`relative z-10 ${active ? (val ? 'text-bg' : 'text-white') : 'text-muted hover:text-ink'}`}>
+                                {val ? 'Dostępny' : 'Niedostępny'}
+                              </span>
+                            </button>
+                          )
+                        })}
                       </div>
 
                       {/* Godzina ma sens tylko gdy dostępny. Puste pole = dostępny przez cały dzień. */}

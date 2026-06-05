@@ -1,3 +1,4 @@
+import { MotionConfig } from 'framer-motion'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { DataProvider } from './context/DataContext'
 import { ToastProvider } from './components/ui/Toast'
@@ -26,12 +27,14 @@ function Routed() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <ToastProvider>
-        <DataProvider>
-          <Routed />
-        </DataProvider>
-      </ToastProvider>
-    </AuthProvider>
+    <MotionConfig reducedMotion="user">
+      <AuthProvider>
+        <ToastProvider>
+          <DataProvider>
+            <Routed />
+          </DataProvider>
+        </ToastProvider>
+      </AuthProvider>
+    </MotionConfig>
   )
 }

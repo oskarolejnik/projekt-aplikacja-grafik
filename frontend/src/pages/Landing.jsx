@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Logo } from '../components/Logo'
 import Login from './Login'
+import { AnimatePresence } from 'framer-motion'
 
 // Zegar czasu lokalnego w Polsce (Europe/Warsaw), aktualizowany co sekundę.
 function usePolandClock() {
@@ -71,7 +72,7 @@ export default function Landing() {
         </p>
       </main>
 
-      {showLogin && <Login onClose={() => setShowLogin(false)} />}
+      <AnimatePresence>{showLogin && <Login key="login" onClose={() => setShowLogin(false)} />}</AnimatePresence>
     </div>
   )
 }

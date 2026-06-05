@@ -4,6 +4,7 @@ import { useToast } from '../components/ui/Toast'
 import { Icon } from '../lib/icons'
 import { Logo } from '../components/Logo'
 import { Spinner } from '../components/ui/Spinner'
+import { motion } from 'framer-motion'
 
 // Walidacja po stronie klienta (natychmiastowy feedback). Serwer waliduje ponownie
 // — to ta sama logika, ale front daje od razu czytelny komunikat.
@@ -73,8 +74,24 @@ export default function Login({ onClose }) {
 
   return (
     <div className="fixed inset-0 z-[1200] grid place-items-center p-4">
-      <div className="absolute inset-0 animate-overlay-in bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label={rejestracja ? 'Rejestracja' : 'Logowanie'} className="card animate-modal-in relative z-10 w-full max-w-md p-8">
+      <motion.div
+        className="absolute inset-0 bg-black/70 backdrop-blur-md"
+        onClick={onClose}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.3, ease: 'circOut' }}
+      />
+      <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-label={rejestracja ? 'Rejestracja' : 'Logowanie'}
+        className="card relative z-10 w-full max-w-md p-8"
+        initial={{ opacity: 0, scale: 0.98, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 10 }}
+        transition={{ duration: 0.32, ease: 'circOut' }}
+      >
         <div className="mb-6 flex items-center gap-3">
           <Logo className="h-9" variant="gradient" />
           <div>
@@ -165,7 +182,7 @@ export default function Login({ onClose }) {
             Anuluj
           </button>
         )}
-      </div>
+      </motion.div>
     </div>
   )
 }
