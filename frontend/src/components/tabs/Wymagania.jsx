@@ -8,6 +8,7 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 import { ddmmyyyy, hhmm, NAZWY_DNI } from '../../lib/format'
+import { generujOpcjeTygodni } from '../../lib/weeks'
 
 // Pojedyncze wymaganie w karcie dnia — edycja liczby osób (zapis na blur).
 function WymRow({ w, nazwa, onChanged }) {
@@ -80,10 +81,10 @@ export default function Wymagania() {
   const [fLiczba, setFLiczba] = useState(1)
   const [fRewir, setFRewir] = useState('')
 
-  // Formularz kopiowania
-  const [kopSource, setKopSource] = useState(dzis)
-  const [kopStart, setKopStart] = useState('')
-  const [kopEnd, setKopEnd] = useState('')
+  // Kopiowanie tygodnia
+  const tygodnie = useMemo(() => generujOpcjeTygodni(), [])
+  const [kopFrom, setKopFrom] = useState(tygodnie.domyslny)
+  const [kopTo, setKopTo] = useState('')
 
   const stanMap = useMemo(() => Object.fromEntries(stanowiska.map((s) => [s.id, s])), [stanowiska])
   const wybraneStan = stanMap[+fStan]
@@ -136,13 +137,20 @@ export default function Wymagania() {
   }
 
   const kopiuj = async () => {
-    if (!kopSource || !kopStart || !kopEnd) {
-      toast('Uzupełnij daty kopiowania.', 'error')
+    if (!kopFrom || !kopTo) {
+      toast('Wybierz tydzień źródłowy i docelowy.', 'error')
+      return
+    }
+    if (kopFrom === kopTo) {
+      toast('Tygodnie są takie same.', 'error')
       return
     }
     try {
-      const r = await api('/wymagania/kopiuj', 'POST', { source_date: kopSource, start_date: kopStart, end_date: kopEnd })
-      toast(`Skopiowano ${r.skopiowano ?? ''} wpisów.`, 'success')
+      const r = await api('/wymagania/kopiuj-tydzien', 'POST', {
+        source_start: kopFrom.split('|')[0],
+        target_start: kopTo.split('|')[0],
+      })
+      toast(`Skopiowano ${r.skopiowano ?? ''} wymagań na wybrany tydzień.`, 'success')
       load()
     } catch (e) {
       toast(e.message, 'error')
@@ -264,29 +272,32 @@ export default function Wymagania() {
           </div>
         </Card>
 
-        {/* Kopiowanie */}
+        {/* Kopiowanie tygodnia — przenosi cały tydzień na inny (dzień w dzień) */}
         <Card className="h-fit p-6">
           <h3 className="mb-2 flex items-center gap-2 font-display text-lg font-bold text-ink">
-            <Icon name="clipboard" className="h-5 w-5 text-info" /> Kopiowanie (Pn–Pt)
+            <Icon name="clipboard" className="h-5 w-5 text-info" /> Kopiuj tydzień
           </h3>
-          <p className="mb-4 text-xs text-muted">Wybierz wzorcowy dzień i skopiuj go na resztę tygodnia.</p>
+          <p className="mb-4 text-xs text-muted">Przenieś wszystkie wymagania z jednego tygodnia na drugi (dzień w dzień).</p>
           <div className="mx-auto max-w-md space-y-4">
             <label className="flex flex-col gap-1.5">
-              <span className="field-label">Źródło (kopiuj z)</span>
-              <input type="date" value={kopSource} onChange={(e) => setKopSource(e.target.value)} className="field" />
+              <span className="field-label">Z tygodnia</span>
+              <select value={kopFrom} onChange={(e) => setKopFrom(e.target.value)} className="field">
+                {tygodnie.opcje.map((o) => (
+                  <option key={o.value} value={o.value} className="bg-surface text-ink">{o.label}</option>
+                ))}
+              </select>
             </label>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <label className="flex flex-col gap-1.5">
-                <span className="field-label">Od dnia</span>
-                <input type="date" value={kopStart} onChange={(e) => setKopStart(e.target.value)} className="field" />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="field-label">Do dnia</span>
-                <input type="date" value={kopEnd} onChange={(e) => setKopEnd(e.target.value)} className="field" />
-              </label>
-            </div>
+            <label className="flex flex-col gap-1.5">
+              <span className="field-label">Na tydzień</span>
+              <select value={kopTo} onChange={(e) => setKopTo(e.target.value)} className="field">
+                <option value="" className="bg-surface">Wybierz…</option>
+                {tygodnie.opcje.map((o) => (
+                  <option key={o.value} value={o.value} className="bg-surface text-ink">{o.label}</option>
+                ))}
+              </select>
+            </label>
             <Button className="w-full" onClick={kopiuj}>
-              Duplikuj harmonogram
+              <Icon name="clipboard" className="h-4 w-4" /> Kopiuj tydzień
             </Button>
           </div>
         </Card>

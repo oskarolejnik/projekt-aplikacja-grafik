@@ -71,7 +71,7 @@ export function ToastProvider({ children }) {
 
       {/* Stos toastów (prawy górny róg) */}
       <div
-        className="pointer-events-none fixed right-[max(1rem,env(safe-area-inset-right))] top-[max(1rem,calc(env(safe-area-inset-top)+0.5rem))] z-[1000] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2"
+        className="pointer-events-none fixed left-1/2 top-[max(1rem,calc(env(safe-area-inset-top)+0.5rem))] z-[2000] flex w-80 max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2"
         aria-live="polite"
       >
         {/* Sonner-like: wjazd z góry, a `layout` sprawia, że stos płynnie się

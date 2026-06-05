@@ -53,6 +53,8 @@ export default {
         overlayIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
         // Toast: zjazd z góry + lekka skala (spójnie z pozycją top-right)
         toastIn: { '0%': { opacity: '0', transform: 'translateY(-12px) scale(0.96)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+        // Wejście treści zakładki (CSS, bez rAF) — fade + lekki scale/y, gładki ease-out.
+        tabIn: { '0%': { opacity: '0', transform: 'translateY(12px) scale(0.985)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
       },
       // Mocne krzywe wg Emila Kowalskiego (domyślne CSS są za słabe)
       transitionTimingFunction: {
@@ -71,6 +73,7 @@ export default {
         'modal-in': 'modalIn 0.24s cubic-bezier(0.23, 1, 0.32, 1) both',
         'overlay-in': 'overlayIn 0.2s ease-out both',
         'toast-in': 'toastIn 0.28s cubic-bezier(0.23, 1, 0.32, 1) both',
+        'tab-in': 'tabIn 0.42s cubic-bezier(0.23, 1, 0.32, 1) both',
       },
     },
   },

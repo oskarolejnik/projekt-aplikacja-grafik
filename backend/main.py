@@ -516,6 +516,45 @@ def kopiuj_wymagania(body: dict, db: Session = Depends(get_db)):
     return {"skopiowano": count}
 
 
+@app.post("/api/wymagania/kopiuj-tydzien", status_code=200)
+def kopiuj_wymagania_tydzien(body: dict, db: Session = Depends(get_db)):
+    """Kopiuje wszystkie wymagania z tygodnia źródłowego na docelowy (dzień w dzień,
+    przez offset dat). Tygodnie środa→wtorek mają ten sam układ dni tygodnia."""
+    src_start = date.fromisoformat(body["source_start"])
+    dst_start = date.fromisoformat(body["target_start"])
+    offset = (dst_start - src_start).days
+    if offset == 0:
+        raise HTTPException(400, "Tydzień źródłowy i docelowy są takie same.")
+    src_reqs = db.query(models.WymaganiaDnia).filter(
+        models.WymaganiaDnia.data >= src_start,
+        models.WymaganiaDnia.data <= src_start + timedelta(days=6),
+    ).all()
+    if not src_reqs:
+        raise HTTPException(404, "Brak wymagań w tygodniu źródłowym.")
+    count = 0
+    for req in src_reqs:
+        new_date = req.data + timedelta(days=offset)
+        existing = db.query(models.WymaganiaDnia).filter_by(
+            data=new_date,
+            stanowisko_id=req.stanowisko_id,
+            godz_od=req.godz_od,
+            rewir=req.rewir,
+        ).first()
+        if existing:
+            existing.liczba_osob = req.liczba_osob
+        else:
+            db.add(models.WymaganiaDnia(
+                data=new_date,
+                stanowisko_id=req.stanowisko_id,
+                godz_od=req.godz_od,
+                rewir=req.rewir,
+                liczba_osob=req.liczba_osob,
+            ))
+        count += 1
+    db.commit()
+    return {"skopiowano": count}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # DYSPOZYCJE (ZAKŁADKA IMPORtowania
 # ═══════════════════════════════════════════════════════════════════════════

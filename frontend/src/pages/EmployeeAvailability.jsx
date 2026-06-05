@@ -8,7 +8,7 @@ import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
 import { motion, AnimatePresence } from 'framer-motion'
-import { SPRING_LAYOUT, BOUNCE } from '../lib/motion'
+import { BOUNCE } from '../lib/motion'
 import { PillSwitch } from '../components/ui/PillSwitch'
 
 // Godzina imprezy z arkusza bywa łańcuchem ("14:30:00", "Brak", "None"...).
@@ -105,10 +105,9 @@ export default function EmployeeAvailability() {
               return (
                 <motion.div
                   key={d.data}
-                  layout
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  transition={{ layout: SPRING_LAYOUT, opacity: { delay: Math.min(i, 8) * 0.04, duration: 0.4 } }}
+                  transition={{ delay: Math.min(i, 8) * 0.04, duration: 0.4 }}
                   className="rounded-xl border border-line bg-white/[0.02] p-4"
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -134,14 +133,14 @@ export default function EmployeeAvailability() {
                         {d.dostepnosc && (
                           <motion.div
                             key="opcje"
-                            layout
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ layout: SPRING_LAYOUT, opacity: { duration: 0.15 } }}
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ height: { duration: 0.32, ease: [0.4, 0, 0.2, 1] }, opacity: { duration: 0.2 } }}
+                            style={{ overflow: 'hidden' }}
                             className="w-full sm:w-auto"
                           >
-                            <div className="flex flex-wrap items-center gap-3 pt-1 text-xs sm:justify-end">
+                            <div className="flex items-center gap-3 pt-1 text-xs sm:justify-end">
                               <button
                                 type="button"
                                 role="switch"
@@ -163,11 +162,11 @@ export default function EmployeeAvailability() {
                                 {!calyDzien && (
                                   <motion.div
                                     key="czas"
-                                    layout
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                    exit={{ opacity: 0 }}
-                                    transition={{ layout: SPRING_LAYOUT, opacity: { duration: 0.15 } }}
+                                    initial={{ width: 0, opacity: 0 }}
+                                    animate={{ width: 'auto', opacity: 1 }}
+                                    exit={{ width: 0, opacity: 0 }}
+                                    transition={{ width: { duration: 0.3, ease: [0.4, 0, 0.2, 1] }, opacity: { duration: 0.18 } }}
+                                    style={{ overflow: 'hidden' }}
                                     className="flex shrink-0 items-center gap-2 text-muted"
                                   >
                                     <span>od</span>

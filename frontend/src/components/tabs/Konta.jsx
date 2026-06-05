@@ -98,83 +98,82 @@ export default function Konta() {
 
   return (
     <div className="space-y-8">
-      <Card className="p-8">
+      <Card className="p-6 sm:p-8">
         <SectionHeader title="Nowe konto" subtitle="Utwórz login dla pracownika lub administratora.">
           <Button variant="ghost" onClick={provision}>
             <Icon name="users" className="h-4 w-4" /> Konta dla wszystkich
           </Button>
         </SectionHeader>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-          <input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="Login" className="field" autoComplete="off" />
-          <input value={haslo} onChange={(e) => setHaslo(e.target.value)} type="text" placeholder="Hasło" className="field" autoComplete="off" />
-          <select value={rola} onChange={(e) => setRola(e.target.value)} className="field">
-            <option value="employee" className="bg-surface">Pracownik</option>
-            <option value="admin" className="bg-surface">Administrator</option>
-          </select>
-          <select value={pracownikId} onChange={(e) => setPracownikId(e.target.value)} className="field">
-            <option value="" className="bg-surface">— Pracownik (opcjonalnie) —</option>
-            {pracownicy.map((p) => (
-              <option key={p.id} value={p.id} className="bg-surface text-ink">{p.imie} {p.nazwisko}</option>
-            ))}
-          </select>
+        <div className="mx-auto max-w-lg">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="Login" className="field" autoComplete="off" />
+            <input value={haslo} onChange={(e) => setHaslo(e.target.value)} type="text" placeholder="Hasło" className="field" autoComplete="off" />
+            <select value={rola} onChange={(e) => setRola(e.target.value)} className="field">
+              <option value="employee" className="bg-surface">Pracownik</option>
+              <option value="admin" className="bg-surface">Administrator</option>
+            </select>
+            <select value={pracownikId} onChange={(e) => setPracownikId(e.target.value)} className="field">
+              <option value="" className="bg-surface">— Pracownik (opcjonalnie) —</option>
+              {pracownicy.map((p) => (
+                <option key={p.id} value={p.id} className="bg-surface text-ink">{p.imie} {p.nazwisko}</option>
+              ))}
+            </select>
+          </div>
+          <Banner variant="info" className="mt-4">
+            Powiąż konto pracownika z osobą z listy — dzięki temu jego zgłoszenia trafią do właściwej dyspozycyjności.
+          </Banner>
+          <Button className="mt-5 w-full" onClick={utworz}>
+            <Icon name="plus" className="h-4 w-4" /> Utwórz konto
+          </Button>
         </div>
-        <Banner variant="info" className="mt-4">
-          Powiąż konto pracownika z osobą z listy — dzięki temu jego zgłoszenia trafią do właściwej dyspozycyjności.
-        </Banner>
-        <Button className="mt-5" onClick={utworz}>
-          <Icon name="plus" className="h-4 w-4" /> Utwórz konto
-        </Button>
       </Card>
 
-      <Card className="overflow-hidden">
-        {loading ? (
-          <div className="grid place-items-center py-16">
-            <Spinner className="h-6 w-6 text-muted" />
-          </div>
-        ) : (
-          <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-muted">
-              <tr>
-                <th className="px-4 py-4 font-semibold">Login</th>
-                <th className="px-4 py-4 font-semibold">Rola</th>
-                <th className="px-4 py-4 font-semibold">Pracownik</th>
-                <th className="px-4 py-4 text-center font-semibold">Aktywne</th>
-                <th className="px-4 py-4 text-right font-semibold">Akcje</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {users.map((u) => (
-                <tr key={u.id} className="transition hover:bg-white/[0.02]">
-                  <td className="px-4 py-3 font-semibold text-ink">{u.login}</td>
-                  <td className="px-4 py-3">
+      {/* Lista kont — karty (czytelne na mobile, nic się nie ucina) */}
+      {loading ? (
+        <div className="grid place-items-center py-12">
+          <Spinner className="h-6 w-6 text-muted" />
+        </div>
+      ) : users.length === 0 ? (
+        <Card className="p-8 text-center text-sm text-muted">Brak kont.</Card>
+      ) : (
+        <div className="space-y-3">
+          {users.map((u, i) => (
+            <div key={u.id} className="animate-fade-up rounded-2xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-bold text-ink">{u.login}</span>
                     <span className={`rounded-md px-2 py-0.5 text-xs font-bold ${u.rola === 'admin' ? 'bg-lemon/15 text-lemon' : 'bg-mint/15 text-mint'}`}>
                       {u.rola === 'admin' ? 'Administrator' : 'Pracownik'}
                     </span>
-                  </td>
-                  <td className="px-4 py-3 text-muted">{u.imie ? `${u.imie} ${u.nazwisko}` : '—'}</td>
-                  <td className="px-4 py-3 text-center">
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-muted">
+                    Aktywne
                     <button
                       onClick={() => toggleAktywny(u)}
-                      className={`relative h-5 w-9 rounded-full transition ${u.aktywny ? 'bg-success' : 'bg-white/15'}`}
+                      className={`relative h-5 w-9 rounded-full transition-colors ${u.aktywny ? 'bg-success' : 'bg-white/15'}`}
                       aria-label="Przełącz aktywność konta"
                     >
                       <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${u.aktywny ? 'left-[18px]' : 'left-0.5'}`} />
                     </button>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      <Button size="sm" variant="ghost" onClick={() => resetHaslo(u)}>Reset hasła</Button>
-                      <Button size="sm" variant="danger" onClick={() => usun(u)} aria-label="Usuń konto">
-                        <Icon name="trash" className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+                  </label>
+                </div>
+
+                <div className="text-xs text-muted">
+                  Pracownik: <span className="text-ink">{u.imie ? `${u.imie} ${u.nazwisko}` : '— niepowiązane —'}</span>
+                </div>
+
+                <div className="flex justify-end gap-2 border-t border-line pt-3">
+                  <Button size="sm" variant="ghost" onClick={() => resetHaslo(u)}>Reset hasła</Button>
+                  <Button size="sm" variant="danger" onClick={() => usun(u)} aria-label="Usuń konto">
+                    <Icon name="trash" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

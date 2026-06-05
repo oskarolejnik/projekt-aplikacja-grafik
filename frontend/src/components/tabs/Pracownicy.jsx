@@ -6,27 +6,31 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 
-// Rozwijana lista kwalifikacji (checkboxy stanowisk).
+// Rozwijana lista kwalifikacji (checkboxy stanowisk). Pełna szerokość = czytelne nazwy.
 function KwalifikacjeDropdown({ stanowiska, selected, onToggle }) {
   return (
     <details className="group rounded-xl border border-line bg-surface-2">
-      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs font-medium text-ink outline-none [&::-webkit-details-marker]:hidden">
-        Wybierz kwalifikacje ({selected.length})
-        <Icon name="chevronDown" className="h-4 w-4 text-muted transition group-open:rotate-180" />
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-sm font-medium text-ink outline-none [&::-webkit-details-marker]:hidden">
+        <span>Wybierz kwalifikacje ({selected.length})</span>
+        <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
       </summary>
-      <div className="grid max-h-44 grid-cols-2 gap-1 overflow-y-auto border-t border-line p-3 lg:grid-cols-3">
-        {stanowiska.map((s) => (
-          <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded-lg p-1.5 text-xs hover:bg-white/[0.05]">
-            <input type="checkbox" checked={selected.includes(s.id)} onChange={() => onToggle(s.id)} className="h-3.5 w-3.5 accent-mint" />
-            <span className="truncate">{s.nazwa}</span>
-          </label>
-        ))}
+      <div className="grid max-h-52 grid-cols-1 gap-1 overflow-y-auto border-t border-line p-3 sm:grid-cols-2 lg:grid-cols-3">
+        {stanowiska.length === 0 ? (
+          <span className="p-1.5 text-xs text-muted">Brak stanowisk — dodaj je w zakładce „Stanowiska".</span>
+        ) : (
+          stanowiska.map((s) => (
+            <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded-lg p-2 text-sm hover:bg-white/[0.05]">
+              <input type="checkbox" checked={selected.includes(s.id)} onChange={() => onToggle(s.id)} className="h-4 w-4 shrink-0 accent-mint" />
+              <span className="truncate">{s.nazwa}</span>
+            </label>
+          ))
+        )}
       </div>
     </details>
   )
 }
 
-function PracownikRow({ p, stanowiska, onChanged }) {
+function PracownikRow({ p, i, stanowiska, onChanged }) {
   const { toast, confirm } = useToast()
   const [imie, setImie] = useState(p.imie)
   const [nazwisko, setNazwisko] = useState(p.nazwisko)
@@ -59,20 +63,24 @@ function PracownikRow({ p, stanowiska, onChanged }) {
   }
 
   return (
-    <tr className="align-top transition hover:bg-white/[0.02]">
-      <td className="px-4 py-4">
-        <div className="flex flex-col gap-1">
-          <input value={imie} onChange={(e) => setImie(e.target.value)} className="w-full border-b border-transparent bg-transparent text-base font-bold text-ink outline-none focus:border-mint/60" />
-          <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} className="w-full border-b border-transparent bg-transparent text-xs font-medium text-muted outline-none focus:border-mint/60" />
+    <div className="animate-fade-up rounded-2xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-1 flex-col gap-1">
+            <input value={imie} onChange={(e) => setImie(e.target.value)} placeholder="Imię" className="w-full border-b border-transparent bg-transparent text-base font-bold text-ink outline-none focus:border-mint/60" />
+            <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="w-full border-b border-transparent bg-transparent text-xs font-medium text-muted outline-none focus:border-mint/60" />
+          </div>
+          <label className="flex shrink-0 cursor-pointer items-center gap-2 rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs font-medium text-ink">
+            <input type="checkbox" checked={aktywny} onChange={(e) => setAktywny(e.target.checked)} className="h-4 w-4 accent-success" />
+            Aktywny
+          </label>
         </div>
-      </td>
-      <td className="px-4 py-4 text-center">
-        <input type="checkbox" checked={aktywny} onChange={(e) => setAktywny(e.target.checked)} className="h-5 w-5 accent-success" aria-label="Aktywny" />
-      </td>
-      <td className="px-4 py-4">
-        <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
-      </td>
-      <td className="px-4 py-4">
+
+        <label className="flex flex-col gap-1.5">
+          <span className="field-label">Kwalifikacje</span>
+          <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
+        </label>
+
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={zapisz} disabled={busy}>
             <Icon name="check" className="h-4 w-4" /> Zapisz
@@ -81,8 +89,8 @@ function PracownikRow({ p, stanowiska, onChanged }) {
             <Icon name="trash" className="h-4 w-4" />
           </Button>
         </div>
-      </td>
-    </tr>
+      </div>
+    </div>
   )
 }
 
@@ -117,45 +125,31 @@ export default function Pracownicy() {
 
   return (
     <div className="space-y-8">
-      {/* Dodaj pracownika */}
-      <Card className="border-dashed p-6">
-        <h3 className="mb-4 flex items-center gap-2 font-display text-lg font-bold text-ink">
+      {/* Dodaj pracownika — wyśrodkowana kolumna */}
+      <Card className="border-dashed p-6 sm:p-8">
+        <h3 className="mb-5 flex items-center justify-center gap-2 font-display text-lg font-bold text-ink">
           <Icon name="plus" className="h-5 w-5 text-mint" /> Dodaj pracownika
         </h3>
-        <div className="flex flex-col items-start gap-4 md:flex-row md:items-center">
-          <input value={imie} onChange={(e) => setImie(e.target.value)} placeholder="Imię" className="field md:w-48" />
-          <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="field md:w-48" />
-          <div className="w-full flex-1">
-            <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
+        <div className="mx-auto flex max-w-md flex-col gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <input value={imie} onChange={(e) => setImie(e.target.value)} placeholder="Imię" className="field" />
+            <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="field" />
           </div>
-          <Button onClick={utworz} className="w-full whitespace-nowrap md:w-auto">
-            Utwórz konto
+          <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
+          <Button onClick={utworz} className="w-full">
+            <Icon name="plus" className="h-4 w-4" /> Utwórz pracownika
           </Button>
         </div>
       </Card>
 
-      {/* Lista pracowników */}
-      <Card className="overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-muted">
-            <tr>
-              <th className="px-4 py-4 font-semibold">Imię i nazwisko</th>
-              <th className="w-24 px-4 py-4 text-center font-semibold">Aktywny</th>
-              <th className="px-4 py-4 font-semibold">Kwalifikacje</th>
-              <th className="w-48 px-4 py-4 text-right font-semibold">Akcje</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {pracownicy.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="px-4 py-10 text-center text-sm text-muted">Brak pracowników. Dodaj pierwszego powyżej.</td>
-              </tr>
-            ) : (
-              pracownicy.map((p) => <PracownikRow key={p.id} p={p} stanowiska={stanowiska} onChanged={reloadDicts} />)
-            )}
-          </tbody>
-        </table>
-      </Card>
+      {/* Lista pracowników — karty (czytelne na mobile, kwalifikacje pełnej szerokości) */}
+      <div className="space-y-3">
+        {pracownicy.length === 0 ? (
+          <Card className="p-8 text-center text-sm text-muted">Brak pracowników. Dodaj pierwszego powyżej.</Card>
+        ) : (
+          pracownicy.map((p, i) => <PracownikRow key={p.id} p={p} i={i} stanowiska={stanowiska} onChanged={reloadDicts} />)
+        )}
+      </div>
     </div>
   )
 }

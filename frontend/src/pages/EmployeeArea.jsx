@@ -8,7 +8,6 @@ import { api } from '../lib/api'
 import { pushWspierany, wlaczPowiadomienia } from '../lib/push'
 import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
-import { motion, AnimatePresence } from 'framer-motion'
 import { PillSwitch } from '../components/ui/PillSwitch'
 
 const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
@@ -109,17 +108,10 @@ export default function EmployeeArea() {
         />
 
         {/* Treść zakładki: miękki crossfade (Framer). Kierunkowość daje sama wędrująca pigułka. */}
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={widok}
-            initial={{ opacity: 0, scale: 0.97, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.985, y: -8, transition: { duration: 0.16, ease: 'easeIn' } }}
-            transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-          >
-            {widok === 'dyspozycyjnosc' ? <EmployeeAvailability /> : <EmployeeSchedule onSeen={oznaczWidziany} />}
-          </motion.div>
-        </AnimatePresence>
+        {/* Reveal treści na czystym CSS (kompozytor; brak rAF-stuttera Framer AnimatePresence). */}
+        <div key={widok} className="animate-tab-in">
+          {widok === 'dyspozycyjnosc' ? <EmployeeAvailability /> : <EmployeeSchedule onSeen={oznaczWidziany} />}
+        </div>
       </main>
     </div>
   )
