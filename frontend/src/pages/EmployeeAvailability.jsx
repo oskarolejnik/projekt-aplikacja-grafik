@@ -8,7 +8,8 @@ import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
 import { motion, AnimatePresence } from 'framer-motion'
-import { SPRING_PILL, SPRING_LAYOUT } from '../lib/motion'
+import { SPRING_LAYOUT, BOUNCE } from '../lib/motion'
+import { PillSwitch } from '../components/ui/PillSwitch'
 
 // Godzina imprezy z arkusza bywa łańcuchem ("14:30:00", "Brak", "None"...).
 const fmtGodzina = (g) => {
@@ -117,31 +118,16 @@ export default function EmployeeAvailability() {
                     </div>
 
                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
-                      {/* Pill switcher: kolorowa pigułka (sukces/danger) sunie pod aktywnym stanem. */}
-                      <div className="relative flex w-full rounded-lg border border-line p-1 sm:w-auto">
-                        {[true, false].map((val) => {
-                          const active = d.dostepnosc === val
-                          return (
-                            <button
-                              key={String(val)}
-                              onClick={() => setDay(i, { dostepnosc: val })}
-                              className="relative flex-1 rounded-md px-4 py-1.5 text-xs font-bold transition-[color,transform] duration-150 ease-snap active:scale-[0.95] sm:flex-none"
-                              style={{ WebkitTapHighlightColor: 'transparent' }}
-                            >
-                              {active && (
-                                <motion.span
-                                  layoutId={`avail-${d.data}`}
-                                  transition={SPRING_PILL}
-                                  className={`absolute inset-0 rounded-md ${val ? 'bg-success' : 'bg-danger'}`}
-                                />
-                              )}
-                              <span className={`relative z-10 ${active ? (val ? 'text-bg' : 'text-white') : 'text-muted hover:text-ink'}`}>
-                                {val ? 'Dostępny' : 'Niedostępny'}
-                              </span>
-                            </button>
-                          )
-                        })}
-                      </div>
+                      {/* Pill switcher (CSS) — wskaźnik sukces/danger sunie pod aktywnym stanem. */}
+                      <PillSwitch
+                        className="w-full sm:w-60"
+                        value={d.dostepnosc}
+                        onChange={(v) => setDay(i, { dostepnosc: v })}
+                        options={[
+                          { value: true, label: 'Dostępny', activeBg: 'bg-success', activeText: 'text-bg' },
+                          { value: false, label: 'Niedostępny', activeBg: 'bg-danger', activeText: 'text-white' },
+                        ]}
+                      />
 
                       {/* Opcje godziny — gładko zwijane przy „Niedostępny". „Cały dzień" = switch. */}
                       <AnimatePresence initial={false}>
@@ -165,7 +151,10 @@ export default function EmployeeAvailability() {
                                 style={{ WebkitTapHighlightColor: 'transparent' }}
                               >
                                 <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
-                                  <motion.span className="h-5 w-5 rounded-full bg-white shadow-sm" animate={{ x: calyDzien ? 20 : 0 }} transition={SPRING_PILL} />
+                                  <span
+                                    className="h-5 w-5 rounded-full bg-white shadow-sm will-change-transform"
+                                    style={{ transform: `translateX(${calyDzien ? 20 : 0}px)`, transition: `transform 420ms ${BOUNCE}` }}
+                                  />
                                 </span>
                                 Cały dzień
                               </button>

@@ -100,7 +100,6 @@ export default function EmployeeArea() {
         {/* Pill Switcher: gradientowa pigułka „podróżuje" pod aktywną zakładką (layoutId + sprężyna). */}
         <PillSwitch
           className="mb-6"
-          layoutId="empTab"
           value={widok}
           onChange={zmienWidok}
           options={[
