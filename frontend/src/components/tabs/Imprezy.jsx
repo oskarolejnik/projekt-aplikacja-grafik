@@ -77,10 +77,20 @@ export default function Imprezy() {
           const wb = XLSX.read(new Uint8Array(await f.arrayBuffer()), { type: 'array' })
           const ws = wb.Sheets[wb.SheetNames[0]]
           const v = (addr) => (ws[addr] ? ws[addr].v : undefined)
+          // Komórka czasu w Excelu to UŁAMEK DOBY (18:00 = 0.75). Zamieniamy na "HH:MM".
+          const godzina = (addr) => {
+            const c = ws[addr]
+            if (!c || c.v == null) return null
+            if (typeof c.v === 'number') {
+              const min = (((Math.round((c.v - Math.floor(c.v)) * 1440)) % 1440) + 1440) % 1440
+              return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+            }
+            return String(c.v).trim() // już tekst (np. "18:00")
+          }
           imprezy.push({
             data: `${m[1]}-${m[2]}-${m[3]}`,
             klient: m[4].trim(),
-            godzina: v('J1') != null ? String(v('J1')).trim() : null, // godzina
+            godzina: godzina('J1'), // godzina (ułamek doby → HH:MM)
             sala: v('J2') != null ? String(v('J2')).trim() : null, // sala
             liczba_osob: Number.isFinite(+v('H8')) ? Math.trunc(+v('H8')) : 0, // ilość osób
             nazwa_pliku: f.name,
