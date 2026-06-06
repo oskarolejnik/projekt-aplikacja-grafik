@@ -8,6 +8,7 @@ import { api } from '../lib/api'
 import { pushWspierany, wlaczPowiadomienia } from '../lib/push'
 import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
+import EmployeeHours from './EmployeeHours'
 import { PillSwitch } from '../components/ui/PillSwitch'
 
 const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
@@ -102,15 +103,18 @@ export default function EmployeeArea() {
           value={widok}
           onChange={zmienWidok}
           options={[
-            { value: 'dyspozycyjnosc', label: 'Moja dyspozycyjność' },
-            { value: 'grafik', label: 'Mój grafik', badge: nowyGrafik },
+            { value: 'dyspozycyjnosc', label: 'Dyspozycyjność' },
+            { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
+            { value: 'godziny', label: 'Godziny' },
           ]}
         />
 
         {/* Treść zakładki: miękki crossfade (Framer). Kierunkowość daje sama wędrująca pigułka. */}
         {/* Reveal treści na czystym CSS (kompozytor; brak rAF-stuttera Framer AnimatePresence). */}
         <div key={widok} className="animate-tab-in">
-          {widok === 'dyspozycyjnosc' ? <EmployeeAvailability /> : <EmployeeSchedule onSeen={oznaczWidziany} />}
+          {widok === 'dyspozycyjnosc' && <EmployeeAvailability />}
+          {widok === 'grafik' && <EmployeeSchedule onSeen={oznaczWidziany} />}
+          {widok === 'godziny' && <EmployeeHours />}
         </div>
       </main>
     </div>

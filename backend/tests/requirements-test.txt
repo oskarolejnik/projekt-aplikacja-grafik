@@ -1,0 +1,6 @@
+# Zależności do uruchomienia testów backendu.
+# Instalacja:  pip install -r tests/requirements-test.txt
+pytest>=8,<9
+factory_boy>=3.3,<4
+Faker>=30
+httpx>=0.27          # wymagane przez fastapi.testclient (Starlette TestClient)

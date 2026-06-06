@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas
+import models, schemas, raporty
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -22,7 +22,7 @@ from auth import (
     create_access_token, SECRET_KEY, ALGORITHM,
 )
 from validators import sprawdz_login, sprawdz_haslo
-from push import wyslij_push, VAPID_PUBLIC_KEY
+from push import wyslij_push, wyslij_push_do_pracownika, VAPID_PUBLIC_KEY
 
 import openpyxl
 
@@ -42,7 +42,8 @@ app.add_middleware(
 @app.middleware("http")
 async def role_guard(request: Request, call_next):
     path = request.url.path
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health":
+    # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest":
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -756,7 +757,9 @@ def eksport_csv(start: date, end: date, db: Session = Depends(get_db)):
 # IMPREZY Z SERWERA NAS (ZINTEGROWANE Z AUTOMATYKĄ WYMAGAŃ)
 # ═══════════════════════════════════════════════════════════════════════════
 
-NAS_BASE_PATH = "/Volumes/RAJCULA/MENU - IMPREZY/USTALONE"
+# Ścieżka do plików imprez. Domyślnie macowy mount NAS; na serwerze ustaw IMPREZY_PATH
+# na katalog, do którego lokalny agent wgrywa kopie plików (VPS tylko je odczytuje).
+NAS_BASE_PATH = os.environ.get("IMPREZY_PATH", "/Volumes/RAJCULA/MENU - IMPREZY/USTALONE")
 
 @app.get("/api/imprezy", response_model=List[schemas.ImprezaOut])
 def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
@@ -821,6 +824,195 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
     db.commit()
 
     return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IMPREZY — INGEST Z LAPTOPA (admin wysyła już sparsowane pola, nie całe pliki)
+#   Laptop ma NAS w Finderze, czyta pliki .xlsx LOKALNIE, wyciąga (data, klient, godzina,
+#   sala, liczba_osob) i wysyła maleńki JSON. VPS nie parsuje Excela i nie czyta NAS-a.
+# ═══════════════════════════════════════════════════════════════════════════
+@app.post("/api/imprezy/ingest")
+def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    """Przyjmuje listę sparsowanych imprez, upsertuje (klucz = nazwa pliku lub data|klient),
+    a na końcu przelicza automatyczne wymagania dla [start, end] — jak skan NAS."""
+    lista = payload.get("imprezy", []) if isinstance(payload, dict) else []
+    dodano = zaktualizowano = bledy = 0
+    for it in lista:
+        try:
+            data_imp = date.fromisoformat(str(it["data"])[:10])
+            klient = (it.get("klient") or "").strip()
+            godz = str(it["godzina"]).strip() if it.get("godzina") not in (None, "") else "Brak"
+            sala = str(it["sala"]).strip() if it.get("sala") not in (None, "") else "Brak"
+            osob = int(it.get("liczba_osob") or 0)
+            klucz = (it.get("nazwa_pliku") or f"{data_imp}|{klient}").strip()
+        except (KeyError, ValueError, TypeError):
+            bledy += 1
+            continue
+
+        existing = db.query(models.Impreza).filter(models.Impreza.sciezka_pliku == klucz).first()
+        if existing:
+            zmiana = (
+                existing.liczba_osob != osob or existing.godzina != godz or existing.sala != sala
+                or existing.klient != klient or existing.data != data_imp
+            )
+            if zmiana:
+                existing.liczba_osob, existing.godzina, existing.sala = osob, godz, sala
+                existing.klient, existing.data = klient, data_imp
+                zaktualizowano += 1
+        else:
+            db.add(models.Impreza(
+                data=data_imp, klient=klient, liczba_osob=osob,
+                godzina=godz, sala=sala, sciezka_pliku=klucz,
+            ))
+            dodano += 1
+    db.commit()
+
+    # Przeliczenie automatycznych wymagań dla zakresu (jak w sync_imprezy).
+    stan = db.query(models.Stanowisko).filter(models.Stanowisko.nazwa == "Imprezy").first()
+    if stan:
+        imprezy = db.query(models.Impreza).filter(
+            models.Impreza.data >= start, models.Impreza.data <= end
+        ).all()
+        nowe_wymagania = przelicz_imprezy_na_wymagania(imprezy)
+        db.query(models.WymaganiaDnia).filter(
+            models.WymaganiaDnia.data >= start, models.WymaganiaDnia.data <= end,
+            models.WymaganiaDnia.jest_impreza == True,
+        ).delete()
+        for w in nowe_wymagania:
+            db.add(models.WymaganiaDnia(**w, stanowisko_id=stan.id))
+        db.commit()
+
+    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RCP — ODBICIA (przyjmowane od lokalnego agenta) + GODZINY/STANOWISKO
+#   VPS nie łączy się z bazą RCP/Gastro. Lokalny agent (na serwerze Gastro) czyta
+#   odbicia read-only (NOLOCK) i WYPYCHA je tutaj. Autoryzacja: stały token X-RCP-Token.
+# ═══════════════════════════════════════════════════════════════════════════
+import unicodedata
+
+RCP_INGEST_TOKEN = os.environ.get("RCP_INGEST_TOKEN", "")
+
+
+# Litery 'ł/Ł' (i kilka innych) NIE rozkładają się przez NFKD — mapujemy je ręcznie,
+# inaczej wypadłyby z dopasowania imion (np. „Łukasz" → „ukasz").
+_PL_SPEC = str.maketrans({"ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D"})
+
+
+def _norm_nazwa(s: str) -> str:
+    s = (s or "").translate(_PL_SPEC)
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+    return " ".join(s.split())
+
+
+def _parse_dt(v):
+    if not v:
+        return None
+    if isinstance(v, datetime):
+        return v
+    s = str(v)
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(s, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+@app.post("/api/rcp/ingest")
+def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Przyjmuje paczkę odbić od lokalnego agenta i robi upsert po `rcp_id`.
+    Wykrywa wejście (push „start zmiany") i wyjście (push „koniec zmiany" + godziny).
+    Idempotentne — flagi powiadomień zapobiegają dublom."""
+    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+        raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta RCP.")
+
+    odbicia = payload.get("odbicia", []) if isinstance(payload, dict) else []
+    mapa = {}
+    for p in db.query(models.Pracownik).all():
+        mapa.setdefault(_norm_nazwa(f"{p.imie} {p.nazwisko}"), p.id)
+        mapa.setdefault(_norm_nazwa(f"{p.nazwisko} {p.imie}"), p.id)
+
+    nowe = zakonczone = powiadomienia = 0
+    for o in odbicia:
+        try:
+            rcp_id = str(o["rcp_id"])
+            nazwa = (o.get("imie_nazwisko") or "").strip()
+            d = date.fromisoformat(str(o["data"])[:10])
+        except (KeyError, ValueError, TypeError):
+            continue
+        wejscie = _parse_dt(o.get("wejscie"))
+        wyjscie = _parse_dt(o.get("wyjscie"))
+        pid = mapa.get(_norm_nazwa(nazwa))
+
+        rec = db.query(models.OdbicieRcp).filter_by(rcp_id=rcp_id).first()
+        if rec is None:
+            rec = models.OdbicieRcp(
+                rcp_id=rcp_id, imie_nazwisko=nazwa, pracownik_id=pid, data=d,
+                wejscie=wejscie, wyjscie=wyjscie,
+            )
+            db.add(rec)
+            nowe += 1
+        else:
+            if nazwa:
+                rec.imie_nazwisko = nazwa
+            if pid is not None:
+                rec.pracownik_id = pid
+            if wejscie:
+                rec.wejscie = wejscie
+            if wyjscie:
+                rec.wyjscie = wyjscie
+        if rec.wejscie and rec.wyjscie:
+            rec.godziny = round((rec.wyjscie - rec.wejscie).total_seconds() / 3600.0, 2)
+        rec.zaktualizowano_at = datetime.utcnow()
+        db.flush()
+
+        if rec.wejscie and rec.pracownik_id and not rec.powiadomiono_wejscie:
+            powiadomienia += wyslij_push_do_pracownika(
+                db, rec.pracownik_id, "Rozpoczęto zmianę",
+                f"Odbicie o {rec.wejscie.strftime('%H:%M')} — miłej pracy!", url="/",
+            )
+            rec.powiadomiono_wejscie = True
+        if rec.wyjscie and rec.pracownik_id and not rec.powiadomiono_wyjscie:
+            powiadomienia += wyslij_push_do_pracownika(
+                db, rec.pracownik_id, "Zakończono zmianę",
+                f"Przepracowano {rec.godziny:.2f} h — dopisano do konta.", url="/",
+            )
+            rec.powiadomiono_wyjscie = True
+            zakonczone += 1
+
+    db.commit()
+    return {"przyjeto": len(odbicia), "nowe": nowe, "zakonczone": zakonczone, "powiadomienia": powiadomienia}
+
+
+@app.get("/api/me/godziny", status_code=200)
+def moje_godziny(
+    rok: int = Query(...), miesiac: int = Query(...),
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Miesięczne podsumowanie przepracowanych godzin zalogowanego pracownika
+    z podziałem na stanowiska (z opublikowanego grafiku)."""
+    if not user.pracownik_id:
+        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    raport = raporty.raport_godzin_miesiac(db, rok, miesiac, tylko_pracownik_id=user.pracownik_id)
+    moj = next((p for p in raport["pracownicy"] if p["pracownik_id"] == user.pracownik_id), None)
+    return {
+        "rok": rok, "miesiac": miesiac,
+        "suma_godzin": moj["suma_godzin"] if moj else 0.0,
+        "stanowiska": moj["stanowiska"] if moj else [],
+    }
+
+
+@app.get("/api/raporty/godziny", status_code=200)
+def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
+    """Raport godzin wszystkich pracowników (tylko admin — wymusza middleware)."""
+    return raporty.raport_godzin_miesiac(db, rok, miesiac)
+
+
 # ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIST = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))

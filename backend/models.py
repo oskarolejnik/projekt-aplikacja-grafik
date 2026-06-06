@@ -1,7 +1,7 @@
 """Modele ORM — tabele SQLite przez SQLAlchemy."""
 
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Date, Time, DateTime,
+    Column, Integer, String, Boolean, Date, Time, DateTime, Float,
     ForeignKey, Table, UniqueConstraint
 )
 from sqlalchemy.orm import relationship, declarative_base
@@ -132,3 +132,24 @@ class PushSubscription(Base):
     endpoint = Column(String, unique=True, nullable=False)
     p256dh   = Column(String, nullable=False)
     auth     = Column(String, nullable=False)
+
+
+class OdbicieRcp(Base):
+    """Odbicie z Rejestracji Czasu Pracy (RCP) — KOPIA wypchnięta na VPS przez lokalnego
+    agenta. VPS NIGDY nie łączy się z bazą RCP/Gastro; to jest jego własny, lokalny zapis.
+
+    Jeden rekord = jedna zmiana (wejście, opcjonalnie później wyjście). `rcp_id` to stabilny
+    identyfikator rekordu w RCP — pozwala bezpiecznie aktualizować (upsert) i nie powiadamiać
+    dwa razy o tym samym."""
+    __tablename__ = "odbicia_rcp"
+    id            = Column(Integer, primary_key=True, index=True)
+    rcp_id        = Column(String(128), unique=True, nullable=False, index=True)
+    imie_nazwisko = Column(String(128), nullable=False)
+    pracownik_id  = Column(Integer, ForeignKey("pracownicy.id", ondelete="SET NULL"), nullable=True, index=True)
+    data          = Column(Date, nullable=False, index=True)
+    wejscie       = Column(DateTime, nullable=True)
+    wyjscie       = Column(DateTime, nullable=True)
+    godziny       = Column(Float, nullable=True)            # liczone z (wyjscie - wejscie)
+    powiadomiono_wejscie = Column(Boolean, default=False)   # czy wysłano push „start zmiany"
+    powiadomiono_wyjscie = Column(Boolean, default=False)   # czy wysłano push „koniec zmiany"
+    zaktualizowano_at    = Column(DateTime, nullable=True)

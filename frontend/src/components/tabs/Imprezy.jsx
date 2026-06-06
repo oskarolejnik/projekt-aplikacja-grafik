@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
@@ -19,6 +19,7 @@ export default function Imprezy() {
   const [imprezy, setImprezy] = useState([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
+  const fileInputRef = useRef(null)
 
   const pobierz = useCallback(async () => {
     const [s, e] = week.split('|')
@@ -37,12 +38,62 @@ export default function Imprezy() {
     pobierz()
   }, [pobierz])
 
-  const synchronizuj = async () => {
-    const [s, e] = week.split('|')
+  // Pozwalamy wskazać CAŁY FOLDER (np. „USTALONE"); atrybuty ustawiamy przez ref.
+  useEffect(() => {
+    const el = fileInputRef.current
+    if (el) {
+      el.setAttribute('webkitdirectory', '')
+      el.setAttribute('directory', '')
+    }
+  }, [])
+
+  const wzorPliku = /^(\d{4})\.(\d{2})\.(\d{2})\s*-\s*(.+)\.xlsx$/i
+
+  // Synchronizacja: laptop czyta pliki z wybranego folderu (NAS w Finderze), parsuje je
+  // LOKALNIE (SheetJS) i wysyła na serwer tylko pola (data, klient, godzina, sala, osoby).
+  const naWyborFolderu = async (e) => {
+    const wszystkie = Array.from(e.target.files || [])
+    e.target.value = '' // pozwól wybrać ten sam folder ponownie
+    const [s, en] = week.split('|')
+    const kandydaci = wszystkie.filter((f) => {
+      const m = f.name.match(wzorPliku)
+      if (!m) return false
+      const d = `${m[1]}-${m[2]}-${m[3]}`
+      return d >= s && d <= en // tylko pliki z bieżącego tygodnia
+    })
+    if (kandydaci.length === 0) {
+      toast('Brak plików imprez (.xlsx) z tego tygodnia w wybranym folderze.', 'info')
+      return
+    }
+
     setSyncing(true)
     try {
-      const data = await api(`/imprezy/sync?start=${s}&end=${e}`, 'POST')
-      toast(`Synchronizacja OK — dodano ${data.dodano}, zaktualizowano ${data.zaktualizowano}, błędy ${data.bledy}.`, 'success')
+      const XLSX = await import('xlsx') // doczytywane na żądanie (osobny chunk)
+      const imprezy = []
+      let bledyParsowania = 0
+      for (const f of kandydaci) {
+        const m = f.name.match(wzorPliku)
+        try {
+          const wb = XLSX.read(new Uint8Array(await f.arrayBuffer()), { type: 'array' })
+          const ws = wb.Sheets[wb.SheetNames[0]]
+          const v = (addr) => (ws[addr] ? ws[addr].v : undefined)
+          imprezy.push({
+            data: `${m[1]}-${m[2]}-${m[3]}`,
+            klient: m[4].trim(),
+            godzina: v('J1') != null ? String(v('J1')).trim() : null, // godzina
+            sala: v('J2') != null ? String(v('J2')).trim() : null, // sala
+            liczba_osob: Number.isFinite(+v('H8')) ? Math.trunc(+v('H8')) : 0, // ilość osób
+            nazwa_pliku: f.name,
+          })
+        } catch {
+          bledyParsowania += 1
+        }
+      }
+      const data = await api(`/imprezy/ingest?start=${s}&end=${en}`, 'POST', { imprezy })
+      toast(
+        `Wysłano ${imprezy.length} imprez — dodano ${data.dodano}, zaktualizowano ${data.zaktualizowano}, błędy ${data.bledy + bledyParsowania}.`,
+        'success',
+      )
       await pobierz()
     } catch (err) {
       toast(`Błąd synchronizacji: ${err.message}`, 'error')
@@ -56,14 +107,17 @@ export default function Imprezy() {
   return (
     <Card className="mx-auto max-w-3xl p-6 sm:p-8">
       <SectionHeader title="Baza Imprez (Ustalone)" subtitle={`Skan plików .xlsx dla tygodnia ${ddmmyyyy(s)} — ${ddmmyyyy(e)}`}>
-        <Button onClick={synchronizuj} disabled={syncing}>
+        <Button onClick={() => fileInputRef.current?.click()} disabled={syncing}>
           {syncing ? <Spinner className="h-4 w-4" /> : <Icon name="refresh" className="h-4 w-4" />}
-          {syncing ? 'Skanowanie…' : 'Synchronizuj NAS'}
+          {syncing ? 'Synchronizacja…' : 'Synchronizuj'}
         </Button>
+        <input ref={fileInputRef} type="file" multiple accept=".xlsx" className="hidden" onChange={naWyborFolderu} />
       </SectionHeader>
 
-      <Banner variant="warn" className="mb-6">
-        Upewnij się, że dysk z plikami imprez (NAS) jest podłączony w Finderze, zanim klikniesz synchronizację.
+      <Banner variant="info" className="mb-6">
+        Podłącz dysk NAS w Finderze, kliknij „Synchronizuj" i wskaż folder z plikami imprez (np. „USTALONE”).
+        Pliki z tego tygodnia są odczytywane <strong>na Twoim laptopie</strong> — na serwer leci tylko data,
+        klient, godzina, sala i liczba osób (serwer nie czyta NAS-a i nie parsuje Excela).
       </Banner>
 
       {/* Karty zamiast tabeli — czytelne na mobile, nic się nie ucina. */}
