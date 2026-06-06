@@ -173,3 +173,56 @@ def test_raport_admin_dostepny_dla_admina(admin_client, db):
     r = admin_client.get("/api/raporty/godziny", params={"rok": 2026, "miesiac": 6})
     assert r.status_code == 200
     assert "pracownicy" in r.json()
+
+
+# ── Back-fill: nowy/edytowany pracownik podlinkowuje zalegle odbicia RCP ──────
+def test_utworzenie_pracownika_podlinkowuje_zalegle_odbicia(client, admin_client, db):
+    # odbicie przychodzi ZANIM pracownik istnieje -> niedopasowane (pid NULL)
+    client.post("/api/rcp/ingest", headers=TOKEN, json={"odbicia": [
+        {"rcp_id": "100", "imie_nazwisko": "NOWY PRACOWNIK", "data": "2026-06-01",
+         "wejscie": "2026-06-01T10:00:00", "wyjscie": "2026-06-01T18:00:00"}]})
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="100").one().pracownik_id is None
+
+    # tworzymy pracownika o pasujacym (inna wielkosc liter) nazwisku -> podlinkowane od razu
+    r = admin_client.post("/api/pracownicy", json={
+        "imie": "Nowy", "nazwisko": "Pracownik", "aktywny": True, "kwalifikacje_ids": []})
+    assert r.status_code == 201
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="100").one().pracownik_id == r.json()["id"]
+
+
+def test_edycja_nazwiska_podlinkowuje_odbicia(client, admin_client, db):
+    p = factories.PracownikFactory(imie="Stare", nazwisko="Nazwisko")
+    client.post("/api/rcp/ingest", headers=TOKEN, json={"odbicia": [
+        {"rcp_id": "101", "imie_nazwisko": "Anna Nowak", "data": "2026-06-01",
+         "wejscie": "2026-06-01T10:00:00"}]})
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="101").one().pracownik_id is None
+
+    admin_client.put(f"/api/pracownicy/{p.id}", json={
+        "imie": "Anna", "nazwisko": "Nowak", "aktywny": True, "kwalifikacje_ids": []})
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="101").one().pracownik_id == p.id
+
+
+def test_rejestracja_konta_podlinkowuje_odbicia(client, db):
+    client.post("/api/rcp/ingest", headers=TOKEN, json={"odbicia": [
+        {"rcp_id": "102", "imie_nazwisko": "Piotr Zielinski", "data": "2026-06-01",
+         "wejscie": "2026-06-01T10:00:00"}]})
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="102").one().pracownik_id is None
+
+    r = client.post("/api/auth/register", json={
+        "login": "piotrz", "haslo": "Haslo123!", "imie": "Piotr", "nazwisko": "Zielinski"})
+    assert r.status_code == 201
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="102").one().pracownik_id is not None
+
+
+def test_backfill_nie_dotyka_juz_dopasowanych(client, admin_client, db):
+    # istniejacy pracownik + odbicie do niego; nowy pracownik o INNYM nazwisku nie przejmuje
+    p1 = factories.PracownikFactory(imie="Jan", nazwisko="Kowalski")
+    client.post("/api/rcp/ingest", headers=TOKEN, json={"odbicia": [
+        {"rcp_id": "103", "imie_nazwisko": "Jan Kowalski", "data": "2026-06-01",
+         "wejscie": "2026-06-01T10:00:00"}]})
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="103").one().pracownik_id == p1.id
+
+    admin_client.post("/api/pracownicy", json={
+        "imie": "Ewa", "nazwisko": "Inna", "aktywny": True, "kwalifikacje_ids": []})
+    # nadal przypisane do p1, nie podmienione
+    assert db.query(models.OdbicieRcp).filter_by(rcp_id="103").one().pracownik_id == p1.id

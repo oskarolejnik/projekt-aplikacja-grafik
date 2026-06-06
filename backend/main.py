@@ -121,6 +121,7 @@ def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    _przypisz_odbicia_do_pracownika(db, prac)  # podlinkuj zalegle odbicia RCP do nowego konta
     return schemas.TokenOut(access_token=create_access_token(user), user=_user_out(user))
 
 @app.get("/api/auth/me", response_model=schemas.UserOut)
@@ -413,6 +414,7 @@ def create_pracownik(data: schemas.PracownikCreate, db: Session = Depends(get_db
             models.Stanowisko.id.in_(data.kwalifikacje_ids)
         ).all()
     db.add(p); db.commit(); db.refresh(p)
+    _przypisz_odbicia_do_pracownika(db, p)  # podlinkuj zalegle odbicia RCP od razu
     return p
 
 @app.put("/api/pracownicy/{pid}", response_model=schemas.PracownikOut)
@@ -427,6 +429,7 @@ def update_pracownik(pid: int, data: schemas.PracownikCreate, db: Session = Depe
         models.Stanowisko.id.in_(data.kwalifikacje_ids)
     ).all()
     db.commit(); db.refresh(p)
+    _przypisz_odbicia_do_pracownika(db, p)  # nazwisko moglo sie zmienic -> sprobuj podlinkowac
     return p
 
 @app.delete("/api/pracownicy/{pid}", status_code=204)
@@ -937,6 +940,28 @@ def _norm_nazwa(s: str) -> str:
     s = (s or "").translate(_PL_SPEC)
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
     return " ".join(s.split())
+
+
+def _przypisz_odbicia_do_pracownika(db, prac) -> int:
+    """Po dodaniu/edycji pracownika podlinkuj wczesniej NIEDOPASOWANE odbicia RCP
+    (pracownik_id IS NULL), ktorych znormalizowane imie+nazwisko pasuje do tego pracownika.
+    Dzieki temu godziny z RCP trafiaja na konto od razu, bez czekania na okno agenta
+    (agent dosyla tylko ostatnie OKNO_DNI dni). Zwraca liczbe podlinkowanych odbic."""
+    cele = {
+        _norm_nazwa(f"{prac.imie} {prac.nazwisko}"),
+        _norm_nazwa(f"{prac.nazwisko} {prac.imie}"),
+    }
+    cele.discard("")
+    if not cele:
+        return 0
+    n = 0
+    for o in db.query(models.OdbicieRcp).filter(models.OdbicieRcp.pracownik_id.is_(None)).all():
+        if _norm_nazwa(o.imie_nazwisko or "") in cele:
+            o.pracownik_id = prac.id
+            n += 1
+    if n:
+        db.commit()
+    return n
 
 
 def _parse_dt(v):
