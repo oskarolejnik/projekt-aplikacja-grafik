@@ -103,7 +103,7 @@ export default function EmployeeArea() {
           value={widok}
           onChange={zmienWidok}
           options={[
-            { value: 'dyspozycyjnosc', label: 'Dyspozycyjność' },
+            { value: 'dyspozycyjnosc', label: 'Dyspo' },
             { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
             { value: 'godziny', label: 'Godziny' },
           ]}
