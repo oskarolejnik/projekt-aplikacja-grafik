@@ -4,7 +4,15 @@ Mały, zawsze włączony agent w sieci lokalnej. Czyta odbicia z bazy RCP **tylk
 (NOLOCK)** i **wypycha** je na VPS. **VPS nigdy nie łączy się do tej sieci** — więc nie może
 zaburzyć Gastro LSI. Pliki/baza zostają na lokalu; na VPS idą tylko kopie odbić.
 
-## Wymagania
+## Dwa warianty agenta
+- **PowerShell — `agent_rcp.ps1` (ZALECANY, gdy nie wolno instalować Pythona).** Zero instalacji —
+  korzysta z wbudowanych w Windows: PowerShell + .NET (`System.Data.SqlClient`, `Invoke-RestMethod`).
+  Konfiguracja w `agent_rcp.env`. Runbook na dole („Wariant PowerShell").
+- **Python — `agent.py`.** Wymaga Pythona 3.9+ na serwerze. Konfiguracja w `.env`.
+
+Oba robią to samo i mówią do tego samego endpointu na VPS — wybierz jeden.
+
+## Wymagania (wariant Python)
 - Konto bazy RCP **TYLKO DO ODCZYTU** (poproś IT Admina). Bez praw zapisu.
 - Python 3.9+ na serwerze lokalnym (lub innym zawsze włączonym urządzeniu w LAN).
 - Wyjście **HTTPS** z lokalu do VPS (port 443). Żaden port lokalny nie jest otwierany na zewnątrz.
@@ -57,3 +65,31 @@ RCP (Gastro) --SELECT NOLOCK co 30s--> agent.py --HTTPS push--> /api/rcp/ingest 
 - Nowe wejście → push „Rozpoczęto zmianę".
 - Pojawia się wyjście → liczone godziny → push „Zakończono zmianę: +X h".
 - Zakładka „Godziny" w aplikacji: miesięczne sumy z podziałem na stanowiska (z opublikowanego grafiku).
+
+## Wariant PowerShell (bez Pythona) — runbook
+Nic nie instalujesz. Wszystko jest w Windows.
+
+1. Skopiuj na serwer Gastro pliki `agent_rcp.ps1` i `agent_rcp.env.example` (np. do `C:\agent_rcp\`).
+2. Utwórz konfigurację i uzupełnij ją:
+   ```
+   copy agent_rcp.env.example agent_rcp.env
+   notepad agent_rcp.env
+   ```
+   - `RCP_CONNECTION_STRING` — konto **read-only** (`db_datareader`) na `Gastro`. Instancja nazwana:
+     `Server=SERWER\INSTANCJA`; domyślna: `Server=SERWER` lub `Server=SERWER,1433`.
+   - `RCP_SQL` — już wpisany (gotowe zmiany z `NGastroCzasPracy`, parametry `@start`/`@end`).
+   - `VPS_INGEST_URL`, `RCP_INGEST_TOKEN` — adres VPS i wspólny token (ten sam co na VPS).
+   - Token wygeneruj np.: `powershell -Command "[guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')"`.
+3. Test ręczny (Ctrl+C po pierwszym „Wysłano N odbić → VPS"; logi w `agent_rcp.log`):
+   ```
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\agent_rcp\agent_rcp.ps1
+   ```
+4. Autostart bez zalogowanego użytkownika (wbudowany Harmonogram zadań — `cmd` jako administrator):
+   ```
+   schtasks /Create /TN "AgentRCP" /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\agent_rcp\agent_rcp.ps1" /SC ONSTART /RU SYSTEM /RL HIGHEST /F
+   schtasks /Run /TN "AgentRCP"
+   ```
+   Stop/again: `schtasks /End /TN "AgentRCP"` / `schtasks /Run /TN "AgentRCP"`. Usunięcie: `schtasks /Delete /TN "AgentRCP" /F`.
+
+Bezpieczeństwo jak w checkliście wyżej: konto read-only, `WITH (NOLOCK)`, małe `OKNO_DNI`, `agent_rcp.env`
+tylko na lokalu, HTTPS do VPS, brak ścieżki przychodzącej z VPS.

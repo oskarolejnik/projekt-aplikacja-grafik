@@ -11,4 +11,6 @@ dist/
 *.asar
 .claude/settings.local.json
 .env
+agent_lokalny/agent_rcp.env
+*.log
 *.pem
