@@ -77,6 +77,22 @@ export default function EmployeeHours() {
         </div>
       ) : (
         <>
+          {/* Trwająca, niezakończona zmiana — „dziś jesteś na zmianie" (pulsująca kropka). */}
+          {dane?.aktywna_zmiana && (
+            <Card className="flex items-center gap-3 border-mint/30 bg-mint/[0.06] p-4">
+              <span className="relative flex h-3 w-3 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-75" />
+                <span className="relative inline-flex h-3 w-3 rounded-full bg-mint" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-ink">Zmiana w toku — dziś</div>
+                <div className="text-xs text-muted">
+                  Rozpoczęta o {dane.aktywna_zmiana.wejscie.slice(11, 16)} — godziny doliczą się po wybiciu wyjścia.
+                </div>
+              </div>
+            </Card>
+          )}
+
           {/* Suma godzin */}
           <Card className="p-6 text-center">
             <div className="text-xs font-semibold uppercase tracking-wider text-muted">Łącznie w miesiącu</div>

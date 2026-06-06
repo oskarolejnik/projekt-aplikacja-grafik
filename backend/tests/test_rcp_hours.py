@@ -169,6 +169,42 @@ def test_me_godziny_wymaga_logowania(client):
     assert client.get("/api/me/godziny", params={"rok": 2026, "miesiac": 6}).status_code == 401
 
 
+def test_me_godziny_pokazuje_trwajaca_zmiane(client, db):
+    import main
+    from datetime import datetime
+    p = factories.PracownikFactory(imie="Jan", nazwisko="Kowalski")
+    emp = factories.UserFactory(login="janopen", rola="employee", pracownik=p)
+    teraz = main._teraz_lokalnie() or datetime.now()
+    db.add(models.OdbicieRcp(
+        rcp_id="open1", imie_nazwisko="Jan Kowalski", pracownik_id=p.id,
+        data=teraz.date(), wejscie=teraz.replace(microsecond=0), wyjscie=None,
+    ))
+    db.commit()
+    r = client.get("/api/me/godziny", headers=_h(emp), params={"rok": teraz.year, "miesiac": teraz.month})
+    assert r.status_code == 200
+    akt = r.json()["aktywna_zmiana"]
+    assert akt is not None
+    assert akt["wejscie"].startswith(teraz.date().isoformat())
+
+
+def test_me_godziny_stara_otwarta_zmiana_pominieta(client, db):
+    import main
+    from datetime import datetime, timedelta
+    if main._teraz_lokalnie() is None:
+        import pytest
+        pytest.skip("brak strefy czasu (zoneinfo) — bramka swiezosci wylaczona")
+    p = factories.PracownikFactory(imie="Anna", nazwisko="Stara")
+    emp = factories.UserFactory(login="annastara", rola="employee", pracownik=p)
+    stara = (main._teraz_lokalnie() - timedelta(days=3)).replace(microsecond=0)
+    db.add(models.OdbicieRcp(
+        rcp_id="open_old", imie_nazwisko="Anna Stara", pracownik_id=p.id,
+        data=stara.date(), wejscie=stara, wyjscie=None,
+    ))
+    db.commit()
+    r = client.get("/api/me/godziny", headers=_h(emp), params={"rok": stara.year, "miesiac": stara.month})
+    assert r.json()["aktywna_zmiana"] is None
+
+
 def test_raport_admin_dostepny_dla_admina(admin_client, db):
     r = admin_client.get("/api/raporty/godziny", params={"rok": 2026, "miesiac": 6})
     assert r.status_code == 200

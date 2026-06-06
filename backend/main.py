@@ -1076,10 +1076,30 @@ def moje_godziny(
         raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac, tylko_pracownik_id=user.pracownik_id)
     moj = next((p for p in raport["pracownicy"] if p["pracownik_id"] == user.pracownik_id), None)
+
+    # Trwajaca (niezakonczona) zmiana: wejscie jest, wyjscia brak. Pokazujemy tylko swieza
+    # (rozpoczeta w ostatnich ~18h), zeby nie wyswietlac zapomnianych odbic sprzed dni.
+    aktywna_out = None
+    aktywna = (
+        db.query(models.OdbicieRcp)
+        .filter(
+            models.OdbicieRcp.pracownik_id == user.pracownik_id,
+            models.OdbicieRcp.wyjscie.is_(None),
+            models.OdbicieRcp.wejscie.isnot(None),
+        )
+        .order_by(models.OdbicieRcp.wejscie.desc())
+        .first()
+    )
+    if aktywna:
+        teraz = _teraz_lokalnie()
+        if teraz is None or aktywna.wejscie >= teraz - timedelta(hours=18):
+            aktywna_out = {"data": aktywna.data.isoformat(), "wejscie": aktywna.wejscie.isoformat()}
+
     return {
         "rok": rok, "miesiac": miesiac,
         "suma_godzin": moj["suma_godzin"] if moj else 0.0,
         "stanowiska": moj["stanowiska"] if moj else [],
+        "aktywna_zmiana": aktywna_out,
     }
 
 
