@@ -930,6 +930,21 @@ import unicodedata
 
 RCP_INGEST_TOKEN = os.environ.get("RCP_INGEST_TOKEN", "")
 
+# Push wysylamy tylko dla SWIEZYCH zdarzen (wejscie/wyjscie w ostatnich N minutach),
+# zeby pierwszy ingest / restart agenta nie zasypal pracownikow powiadomieniami o starych
+# zmianach. Dane i tak zapisujemy zawsze — bramka dotyczy WYLACZNIE powiadomien.
+RCP_POWIADOM_OKNO = timedelta(minutes=int(os.environ.get("RCP_POWIADOM_OKNO_MIN", "60")))
+
+
+def _teraz_lokalnie():
+    """Czas sciany zegarowej w strefie RCP (Europe/Warsaw) jako naive datetime — timestampy
+    z RCP sa lokalne i naive. Gdy strefa niedostepna -> None (wtedy NIE blokujemy powiadomien)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Warsaw")).replace(tzinfo=None)
+    except Exception:
+        return None
+
 
 # Litery 'ł/Ł' (i kilka innych) NIE rozkładają się przez NFKD — mapujemy je ręcznie,
 # inaczej wypadłyby z dopasowania imion (np. „Łukasz" → „ukasz").
@@ -996,6 +1011,7 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
         mapa.setdefault(_norm_nazwa(f"{p.nazwisko} {p.imie}"), p.id)
 
     nowe = zakonczone = powiadomienia = 0
+    teraz = _teraz_lokalnie()  # do bramki swiezosci powiadomien
     for o in odbicia:
         try:
             rcp_id = str(o["rcp_id"])
@@ -1030,16 +1046,18 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
         db.flush()
 
         if rec.wejscie and rec.pracownik_id and not rec.powiadomiono_wejscie:
-            powiadomienia += wyslij_push_do_pracownika(
-                db, rec.pracownik_id, "Rozpoczęto zmianę",
-                f"Odbicie o {rec.wejscie.strftime('%H:%M')} — miłej pracy!", url="/",
-            )
-            rec.powiadomiono_wejscie = True
+            if teraz is None or rec.wejscie >= teraz - RCP_POWIADOM_OKNO:
+                powiadomienia += wyslij_push_do_pracownika(
+                    db, rec.pracownik_id, "Rozpoczęto zmianę",
+                    f"Odbicie o {rec.wejscie.strftime('%H:%M')} — miłej pracy!", url="/",
+                )
+            rec.powiadomiono_wejscie = True  # zaznaczamy obsluzone (stare = bez spamu)
         if rec.wyjscie and rec.pracownik_id and not rec.powiadomiono_wyjscie:
-            powiadomienia += wyslij_push_do_pracownika(
-                db, rec.pracownik_id, "Zakończono zmianę",
-                f"Przepracowano {rec.godziny:.2f} h — dopisano do konta.", url="/",
-            )
+            if teraz is None or rec.wyjscie >= teraz - RCP_POWIADOM_OKNO:
+                powiadomienia += wyslij_push_do_pracownika(
+                    db, rec.pracownik_id, "Zakończono zmianę",
+                    f"Przepracowano {rec.godziny:.2f} h — dopisano do konta.", url="/",
+                )
             rec.powiadomiono_wyjscie = True
             zakonczone += 1
 

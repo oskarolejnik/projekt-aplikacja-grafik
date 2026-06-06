@@ -214,6 +214,34 @@ def test_rejestracja_konta_podlinkowuje_odbicia(client, db):
     assert db.query(models.OdbicieRcp).filter_by(rcp_id="102").one().pracownik_id is not None
 
 
+def test_powiadomienie_tylko_dla_swiezych_zdarzen(client, db, monkeypatch):
+    """Push leci tylko dla zdarzen w oknie RCP_POWIADOM_OKNO; stare (np. z pierwszego
+    ingestu/restartu agenta) sa pomijane, ale rekord i tak sie zapisuje."""
+    import main
+    from datetime import timedelta as _td
+    teraz = main._teraz_lokalnie()
+    if teraz is None:
+        import pytest
+        pytest.skip("brak strefy czasu (zoneinfo) — bramka swiezosci wylaczona")
+
+    wyslane = []
+    monkeypatch.setattr(main, "wyslij_push_do_pracownika",
+                        lambda db, pid, tytul, tresc, url="/": (wyslane.append(tytul) or 1))
+    factories.PracownikFactory(imie="Jan", nazwisko="Kowalski")
+
+    swieze = teraz.replace(microsecond=0)
+    stare = swieze - _td(hours=5)
+    client.post("/api/rcp/ingest", headers=TOKEN, json={"odbicia": [
+        {"rcp_id": "200", "imie_nazwisko": "Jan Kowalski", "data": stare.date().isoformat(),
+         "wejscie": stare.isoformat()},
+        {"rcp_id": "201", "imie_nazwisko": "Jan Kowalski", "data": swieze.date().isoformat(),
+         "wejscie": swieze.isoformat()},
+    ]})
+    assert wyslane == ["Rozpoczęto zmianę"]  # tylko swieze; stare pominiete
+    # ale OBA rekordy zapisane i dopasowane
+    assert db.query(models.OdbicieRcp).filter(models.OdbicieRcp.rcp_id.in_(["200", "201"])).count() == 2
+
+
 def test_backfill_nie_dotyka_juz_dopasowanych(client, admin_client, db):
     # istniejacy pracownik + odbicie do niego; nowy pracownik o INNYM nazwisku nie przejmuje
     p1 = factories.PracownikFactory(imie="Jan", nazwisko="Kowalski")
