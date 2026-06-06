@@ -41,31 +41,33 @@ export function Logo({ className = 'h-5', variant = 'ink' }) {
 }
 
 // Animowane logo: zabudowanie stoi nieruchomo, a skrzydła wiatraka obracają się płasko
-// (360°) wokół piasty (różowy okrąg z pliku autora → oś 70.77%/40.07% kadru, na wieży).
-// Skrzydła są celowo proporcjonalne/symetryczne, więc płaski obrót wygląda naturalnie bez
-// pochylenia perspektywicznego. Obie warstwy to maski CSS (SVG z konkretnymi wymiarami +
-// mask-size 100% — inaczej maska znikała na Safari i kręcił się sam gradientowy prostokąt)
-// w „płynącym" gradiencie akcentowym. Mocny cień pod skrzydłami odcina je od budynku.
-// Dwie osobne warstwy = przestrzeń za skrzydłami pozostaje nienaruszona podczas ruchu.
-const FLOW = 'bg-accent-flow bg-[length:250%_100%] animate-gradient-flow'
-// Maska rozciągnięta 1:1 do kafla (kafel ma proporcje SVG) — pewniejsze na Safari niż „contain".
-const maskFill = (url) => ({ ...maskStyle(url), WebkitMaskSize: '100% 100%', maskSize: '100% 100%' })
+// (360°) wokół piasty (oś 70.77%/40.07% kadru, na wieży). Renderowane jako DWA obrazki SVG
+// z WBUDOWANYM gradientem — celowo NIE maska CSS, bo maska na SVG nie działa na iOS Safari
+// (zostawał sam gradientowy prostokąt). <img> SVG renderuje się wszędzie, a skrzydła obracam
+// transformą CSS (kompozytor → płynnie 120 Hz). Mocny cień odcina skrzydła od budynku.
+// Osobne warstwy = przestrzeń za skrzydłami pozostaje nienaruszona podczas ruchu.
 export function AnimatedLogo({ className = 'h-24', spin = true }) {
   return (
     <span role="img" aria-label="Rajcula" className={`relative inline-block aspect-[756/569] ${className}`}>
-      {/* budynek — statyczny */}
-      <span className={`absolute inset-0 ${FLOW}`} style={maskFill(buildingSvg)} />
-      {/* skrzydła — płaski obrót 360° wokół piasty + mocny cień odcinający od budynku */}
-      <span
-        className={`absolute inset-0 ${spin ? 'animate-windmill motion-reduce:animate-none' : ''}`}
+      <img
+        src={buildingSvg}
+        alt=""
+        aria-hidden="true"
+        draggable="false"
+        className="pointer-events-none absolute inset-0 h-full w-full select-none"
+      />
+      <img
+        src={bladesSvg}
+        alt=""
+        aria-hidden="true"
+        draggable="false"
+        className={`pointer-events-none absolute inset-0 h-full w-full select-none ${spin ? 'animate-windmill motion-reduce:animate-none' : ''}`}
         style={{
           transformOrigin: '70.77% 40.07%',
           filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.8)) drop-shadow(0 0 2px rgba(0,0,0,0.6))',
           willChange: 'transform',
         }}
-      >
-        <span className={`absolute inset-0 ${FLOW}`} style={maskFill(bladesSvg)} />
-      </span>
+      />
     </span>
   )
 }
