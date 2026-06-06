@@ -118,13 +118,14 @@ def test_dzien_wolny_jest_twardy_nawet_przy_niedoborze(db):
 
 
 # ── 6. Detekcja nakładania (po godzinach) ────────────────────────────────────
-@pytest.mark.xfail(reason="Brak detekcji nakładania — zmiany nie mają godziny końca.", strict=False)
 def test_nakladajace_sie_zmiany_powinny_byc_odrzucone(admin_client):
+    """Zmiany nie mają godziny końca, ale reguła „maks. 1 zmiana/dzień" i tak blokuje
+    drugi przydział (10:00 + 11:00 tego samego dnia) — realizuje detekcję nakładania."""
     stan = factories.StanowiskoFactory()
     prac = factories.PracownikFactory()
     admin_client.post("/api/przydzialy", json=_p(stan, prac, PON, "10:00"))
     r = admin_client.post("/api/przydzialy", json=_p(stan, prac, PON, "11:00"))
-    assert r.status_code == 400, "OCZEKIWANE: 11:00 nakłada się na trwającą zmianę od 10:00"
+    assert r.status_code == 400, "OCZEKIWANE: druga zmiana tego samego dnia odrzucona (maks. 1/dzień)"
 
 
 # ── 7. Ręczny przydział a kwalifikacje/dyspozycyjność ────────────────────────

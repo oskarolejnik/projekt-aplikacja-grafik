@@ -585,6 +585,14 @@ def create_dyspozycja(data: schemas.DyspozycjaCreate, db: Session = Depends(get_
     db.add(d); db.commit(); db.refresh(d)
     return d
 
+@app.delete("/api/dyspozycje/{did}", status_code=204)
+def delete_dyspozycja(did: int, db: Session = Depends(get_db)):
+    """Czyści dyspozycyjność (admin) — wraca do stanu „brak zgłoszenia"."""
+    d = db.get(models.Dyspozycja, did)
+    if not d:
+        raise HTTPException(404, "Nie znaleziono.")
+    db.delete(d); db.commit()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PRZYDZIAŁY (ZAKTUALIZOWANE DLA WIELU ZMIAN CZASOWYCH)
@@ -607,16 +615,14 @@ def create_przydział(data: schemas.PrzydzialCreate, db: Session = Depends(get_d
     if stan and stan.tylko_weekend and data.data.weekday() < 5:
         raise HTTPException(400, f"Stanowisko '{stan.nazwa}' jest aktywne tylko w weekendy.")
     
-    # POPRAWKA KRYTYCZNA: Sprawdzamy, czy pracownik nie ma już przypisanej zmiany DOKŁADNIE w tych samych godzinach,
-    # zamiast blokować mu cały dzień roboczy na inne, niezależne zmiany.
-    overlapping_shift = db.query(models.PrzydzialZmiany).filter_by(
-        data=data.data, 
+    # Zasada biznesowa: maksymalnie JEDNA zmiana na pracownika w danym dniu.
+    istniejaca = db.query(models.PrzydzialZmiany).filter_by(
+        data=data.data,
         pracownik_id=data.pracownik_id,
-        godz_od=data.godz_od
     ).first()
-    
-    if overlapping_shift:
-        raise HTTPException(400, "Pracownik ma już przydział na tę konkretną godzinę w tym dniu.")
+
+    if istniejaca:
+        raise HTTPException(400, "Pracownik ma już przydzieloną zmianę w tym dniu (maks. 1 zmiana dziennie).")
 
     a = models.PrzydzialZmiany(**data.model_dump())
     db.add(a); db.commit(); db.refresh(a)
@@ -630,7 +636,16 @@ def update_przydział(aid: int, data: schemas.PrzydzialCreate, db: Session = Dep
     stan = db.get(models.Stanowisko, data.stanowisko_id)
     if stan and stan.tylko_weekend and data.data.weekday() < 5:
         raise HTTPException(400, f"Stanowisko '{stan.nazwa}' jest aktywne tylko w weekendy.")
-        
+
+    # Maks. 1 zmiana/dzień — blokuj przeniesienie na dzień, gdzie pracownik ma już inną zmianę.
+    kolizja = db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data == data.data,
+        models.PrzydzialZmiany.pracownik_id == data.pracownik_id,
+        models.PrzydzialZmiany.id != aid,
+    ).first()
+    if kolizja:
+        raise HTTPException(400, "Pracownik ma już przydzieloną zmianę w tym dniu (maks. 1 zmiana dziennie).")
+
     for k, v in data.model_dump().items():
         setattr(a, k, v)
     db.commit(); db.refresh(a)

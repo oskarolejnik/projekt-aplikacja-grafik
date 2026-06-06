@@ -1,14 +1,14 @@
 """CEL 3 — Różnorodne godziny pracy i zmiany.
 
 Aplikacja modeluje zmianę przez godzinę startu (`godz_od`) + rewir; nie ma osobnego
-typu ani godziny końca. Dlatego „poranna/wieczorna/nocna" = różne `godz_od`, a
-„zmiana dzielona (split)" = dwa przydziały tego samego dnia o różnych godzinach.
+typu ani godziny końca. Dlatego „poranna/wieczorna/nocna" = różne `godz_od`.
+
+Reguła biznesowa: pracownik może mieć maks. JEDNĄ zmianę dziennie.
 
 Testujemy też próby konfliktów na ręcznym przydziale (POST /api/przydzialy):
+  • druga zmiana tego samego dnia (dowolna godzina)     -> blokada 400 (maks. 1/dzień),
   • dokładny duplikat (ta sama data+pracownik+godzina)  -> blokada 400,
-  • stanowisko weekend-only w dzień roboczy             -> blokada 400,
-  • split / różne godziny tego samego dnia              -> dozwolone (świadoma decyzja),
-  • nakładające się godziny (np. 10:00 i 11:00)         -> NIE wykrywane (brak godz. końca).
+  • stanowisko weekend-only w dzień roboczy             -> blokada 400.
 """
 
 import pytest
@@ -73,15 +73,17 @@ def test_zmiana_bez_godziny_dozwolona(admin_client):
     assert r.json()["godz_od"] is None
 
 
-# ── Zmiana dzielona (split shift) ─────────────────────────────────────────────
-def test_split_shift_dwie_zmiany_tego_samego_dnia(admin_client, db):
-    """Ten sam pracownik może mieć rano i wieczorem (różne godz_od) — split shift."""
+# ── Maks. 1 zmiana na pracownika dziennie ─────────────────────────────────────
+def test_druga_zmiana_tego_samego_dnia_zablokowana(admin_client, db):
+    """Reguła biznesowa: pracownik ma maks. JEDNĄ zmianę dziennie. Druga zmiana tego
+    samego dnia (nawet o innej godzinie: rano + wieczorem) jest odrzucana (400)."""
     stan = factories.StanowiskoFactory()
     prac = factories.PracownikFactory()
     r1 = admin_client.post("/api/przydzialy", json=_przydzial(stan, prac, DZIEN_ROBOCZY, ZMIANA_PORANNA))
     r2 = admin_client.post("/api/przydzialy", json=_przydzial(stan, prac, DZIEN_ROBOCZY, ZMIANA_WIECZORNA))
-    assert r1.status_code == 201 and r2.status_code == 201
-    assert db.query(models.PrzydzialZmiany).filter_by(pracownik_id=prac.id, data=DZIEN_ROBOCZY).count() == 2
+    assert r1.status_code == 201
+    assert r2.status_code == 400
+    assert db.query(models.PrzydzialZmiany).filter_by(pracownik_id=prac.id, data=DZIEN_ROBOCZY).count() == 1
 
 
 # ── Konflikty ─────────────────────────────────────────────────────────────────
@@ -93,7 +95,7 @@ def test_dokladny_duplikat_zablokowany(admin_client):
     assert admin_client.post("/api/przydzialy", json=body).status_code == 201
     r = admin_client.post("/api/przydzialy", json=body)
     assert r.status_code == 400
-    assert "już przydział" in r.json()["detail"]
+    assert "już" in r.json()["detail"]
 
 
 def test_stanowisko_weekendowe_w_dzien_roboczy_zablokowane(admin_client):
@@ -111,11 +113,9 @@ def test_stanowisko_weekendowe_w_sobote_dozwolone(admin_client):
     assert r.status_code == 201
 
 
-def test_nakladajace_sie_godziny_nie_sa_wykrywane(admin_client, db):
-    """OGRANICZENIE APLIKACJI: zmiany nie mają godziny końca, więc realne nakładanie
-    (np. 10:00 trwająca 8h vs 11:00) NIE jest wykrywane — oba przydziały przechodzą.
-    Test dokumentuje obecne zachowanie (charakteryzacja). Patrz test_constraint_gaps.py.
-    """
+def test_nakladajace_sie_godziny_blokowane_przez_limit_dzienny(admin_client, db):
+    """Zmiany nie mają godziny końca, więc realnego nakładania (10:00 vs 11:00) nie da się
+    wykryć wprost — ale reguła „maks. 1 zmiana/dzień" i tak blokuje drugi przydział."""
     from datetime import time
 
     stan = factories.StanowiskoFactory()
@@ -123,8 +123,8 @@ def test_nakladajace_sie_godziny_nie_sa_wykrywane(admin_client, db):
     r1 = admin_client.post("/api/przydzialy", json=_przydzial(stan, prac, DZIEN_ROBOCZY, time(10, 0)))
     r2 = admin_client.post("/api/przydzialy", json=_przydzial(stan, prac, DZIEN_ROBOCZY, time(11, 0)))
     assert r1.status_code == 201
-    assert r2.status_code == 201, "Brak detekcji nakładania (brak godziny końca zmiany)"
-    assert db.query(models.PrzydzialZmiany).filter_by(pracownik_id=prac.id, data=DZIEN_ROBOCZY).count() == 2
+    assert r2.status_code == 400
+    assert db.query(models.PrzydzialZmiany).filter_by(pracownik_id=prac.id, data=DZIEN_ROBOCZY).count() == 1
 
 
 def test_ten_sam_slot_rozni_pracownicy_dozwoleni(admin_client):

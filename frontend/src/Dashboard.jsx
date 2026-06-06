@@ -9,6 +9,7 @@ import Konta from './components/tabs/Konta'
 import Imprezy from './components/tabs/Imprezy'
 import Dyspozycje from './components/tabs/Dyspozycje'
 import Grafik from './components/tabs/Grafik'
+import RaportGodzin from './components/tabs/RaportGodzin'
 import Eksport from './components/tabs/Eksport'
 
 const TABS = [
@@ -19,6 +20,7 @@ const TABS = [
   { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', group: 'Operacje', title: 'Baza imprez — serwer NAS', Comp: Imprezy },
   { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', group: 'Operacje', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },
   { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', group: 'Operacje', title: 'Interaktywny grafik pracy', Comp: Grafik },
+  { id: 'godziny', label: 'Raport godzin', icon: 'clock', group: 'Operacje', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', group: 'Operacje', title: 'Eksport danych', Comp: Eksport },
 ]
 

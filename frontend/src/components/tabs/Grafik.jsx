@@ -197,7 +197,8 @@ export default function Grafik() {
             )
           })}
 
-          {dys?.dostepnosc && szablony.length > 0 && (
+          {/* Maks. 1 zmiana/dzień — „+ Dodaj" znika, gdy pracownik ma już przydział tego dnia. */}
+          {dys?.dostepnosc && pAt.length === 0 && szablony.length > 0 && (
             <select
               value=""
               onChange={(ev) => {
