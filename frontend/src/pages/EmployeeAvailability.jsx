@@ -105,7 +105,7 @@ export default function EmployeeAvailability() {
                 <div
                   key={d.data}
                   className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4"
-                  style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}
+                  style={{ animationDelay: `${Math.min(i, 8) * 55}ms`, animationDuration: '480ms' }}
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-[150px]">
@@ -125,14 +125,14 @@ export default function EmployeeAvailability() {
                         ]}
                       />
 
-                      {/* Zwijanie PIONOWE bez Framera: grid-template-rows 0fr↔1fr.
-                          Czysty CSS — zero mierzenia wysokości, więc brak „podwójnego" skoku. */}
+                      {/* Zwijanie opcji (Dostępny→Niedostępny) PIONOWO: grid-template-rows 0fr↔1fr.
+                          Czysty CSS — zero mierzenia wysokości, brak „podwójnego" skoku. */}
                       <div
-                        className="grid w-full transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] sm:w-auto"
+                        className="grid w-full transition-all duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)] sm:w-auto"
                         style={{ gridTemplateRows: d.dostepnosc ? '1fr' : '0fr', opacity: d.dostepnosc ? 1 : 0 }}
                       >
                         <div className="min-h-0 overflow-hidden">
-                          <div className="flex flex-col pt-2 text-xs sm:items-end">
+                          <div className="flex items-center gap-3 pt-2 text-xs sm:justify-end">
                             <button
                               type="button"
                               role="switch"
@@ -144,30 +144,28 @@ export default function EmployeeAvailability() {
                               <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
                                 <span
                                   className="h-5 w-5 rounded-full bg-white shadow-sm will-change-transform"
-                                  style={{ transform: `translateX(${calyDzien ? 20 : 0}px)`, transition: `transform 420ms ${BOUNCE}` }}
+                                  style={{ transform: `translateX(${calyDzien ? 20 : 0}px)`, transition: `transform 450ms ${BOUNCE}` }}
                                 />
                               </span>
                               Cały dzień
                             </button>
 
-                            {/* Pole godziny zwijane PIONOWO (grid-rows 0fr↔1fr) — pod przełącznikiem.
-                                Poziome fr/max-width w kurczliwym flexie psuło szerokość inputu,
-                                więc cała mechanika jest pionowa (wysokość rozwiązuje się do treści). */}
+                            {/* Pole godziny „wyjeżdża z boku" — animowany max-width (0↔12rem).
+                                Input ma stałą szerokość (7rem), więc treść się nie zapada;
+                                overflow-hidden przycina ją podczas wysuwania. */}
                             <div
-                              className="grid transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
-                              style={{ gridTemplateRows: calyDzien ? '0fr' : '1fr', opacity: calyDzien ? 0 : 1 }}
+                              className="overflow-hidden transition-all duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+                              style={{ maxWidth: calyDzien ? 0 : '12rem', opacity: calyDzien ? 0 : 1 }}
                             >
-                              <div className="min-h-0 overflow-hidden">
-                                <div className="flex items-center gap-2 pt-2 text-muted sm:justify-end">
-                                  <span>od</span>
-                                  <input
-                                    type="time"
-                                    value={d.od}
-                                    onChange={(ev) => setDay(i, { od: ev.target.value })}
-                                    className="field px-2 py-2"
-                                    style={{ width: '7rem' }}
-                                  />
-                                </div>
+                              <div className="flex shrink-0 items-center gap-2 whitespace-nowrap pl-1 text-muted">
+                                <span>od</span>
+                                <input
+                                  type="time"
+                                  value={d.od}
+                                  onChange={(ev) => setDay(i, { od: ev.target.value })}
+                                  className="field px-2 py-2"
+                                  style={{ width: '7rem' }}
+                                />
                               </div>
                             </div>
                           </div>

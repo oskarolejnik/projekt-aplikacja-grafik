@@ -40,40 +40,31 @@ export function Logo({ className = 'h-5', variant = 'ink' }) {
   )
 }
 
-// Animowane logo: zabudowanie stoi nieruchomo, a 4 skrzydła wiatraka obracają się
-// wokół piasty (różowy okrąg z pliku autora → oś 67.87%/44.32% kadru, na wieży).
-// Obrót w płaszczyźnie pochylonej wokół osi PIONOWEj (rotateY = --wtilt, ujemny →
-// lewa strona się oddala/zmniejsza) zgodnej z perspektywą wieży, z lekką głębią
-// (perspective). Obie warstwy to maski CSS w „płynącym" gradiencie akcentowym. Lekki
-// cień pod skrzydłami odcina je od tła. Dwie osobne warstwy = przestrzeń za skrzydłami
-// pozostaje nienaruszona podczas ruchu.
+// Animowane logo: zabudowanie stoi nieruchomo, a skrzydła wiatraka obracają się płasko
+// (360°) wokół piasty (różowy okrąg z pliku autora → oś 70.77%/40.07% kadru, na wieży).
+// Skrzydła są celowo proporcjonalne/symetryczne, więc płaski obrót wygląda naturalnie bez
+// pochylenia perspektywicznego. Obie warstwy to maski CSS (SVG z konkretnymi wymiarami +
+// mask-size 100% — inaczej maska znikała na Safari i kręcił się sam gradientowy prostokąt)
+// w „płynącym" gradiencie akcentowym. Mocny cień pod skrzydłami odcina je od budynku.
+// Dwie osobne warstwy = przestrzeń za skrzydłami pozostaje nienaruszona podczas ruchu.
 const FLOW = 'bg-accent-flow bg-[length:250%_100%] animate-gradient-flow'
+// Maska rozciągnięta 1:1 do kafla (kafel ma proporcje SVG) — pewniejsze na Safari niż „contain".
+const maskFill = (url) => ({ ...maskStyle(url), WebkitMaskSize: '100% 100%', maskSize: '100% 100%' })
 export function AnimatedLogo({ className = 'h-24', spin = true }) {
   return (
-    <span
-      role="img"
-      aria-label="Rajcula"
-      className={`relative inline-block aspect-[803/607] ${className}`}
-      style={{ perspective: '1200px' }}
-    >
+    <span role="img" aria-label="Rajcula" className={`relative inline-block aspect-[756/569] ${className}`}>
       {/* budynek — statyczny */}
-      <span className={`absolute inset-0 ${FLOW}`} style={maskStyle(buildingSvg)} />
-      {/* skrzydła — obrót wokół piasty w pochylonej płaszczyźnie + cień odcinający od tła.
-          Pochylenie i obrót są ROZDZIELONE na dwie właściwości (inaczej mieszanie rotateY+rotate
-          w jednej animacji psuje interpolację → brak ruchu):
-          • rotate: y -15deg  — statyczne pochylenie wokół osi pionowej (lewa strona się oddala),
-          • transform: rotate(0→360) (animate-windmill) — obrót skrzydeł.
-          Kolejność CSS (transform przed rotate) sprawia, że obrót dzieje się w pochylonej płaszczyźnie. */}
+      <span className={`absolute inset-0 ${FLOW}`} style={maskFill(buildingSvg)} />
+      {/* skrzydła — płaski obrót 360° wokół piasty + mocny cień odcinający od budynku */}
       <span
         className={`absolute inset-0 ${spin ? 'animate-windmill motion-reduce:animate-none' : ''}`}
         style={{
-          transformOrigin: '67.87% 44.32%',
-          rotate: 'y -15deg',
-          filter: 'drop-shadow(0 1.5px 2px rgba(0,0,0,0.5))',
+          transformOrigin: '70.77% 40.07%',
+          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.8)) drop-shadow(0 0 2px rgba(0,0,0,0.6))',
           willChange: 'transform',
         }}
       >
-        <span className={`absolute inset-0 ${FLOW}`} style={maskStyle(bladesSvg)} />
+        <span className={`absolute inset-0 ${FLOW}`} style={maskFill(bladesSvg)} />
       </span>
     </span>
   )
