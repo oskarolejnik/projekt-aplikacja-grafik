@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
+import { WeekSelect } from '../ui/WeekSelect'
 import { Icon } from '../../lib/icons'
 import { Spinner } from '../ui/Spinner'
 import { api } from '../../lib/api'
@@ -116,6 +117,10 @@ export default function Imprezy() {
 
   return (
     <Card className="mx-auto max-w-3xl p-6 sm:p-8">
+      {/* Wybór tygodnia, na który skanujemy imprezy (zmienia też wspólny tydzień aplikacji). */}
+      <div className="mb-5">
+        <WeekSelect />
+      </div>
       <SectionHeader title="Baza Imprez (Ustalone)" subtitle={`Skan plików .xlsx dla tygodnia ${ddmmyyyy(s)} — ${ddmmyyyy(e)}`}>
         <Button onClick={() => fileInputRef.current?.click()} disabled={syncing}>
           {syncing ? <Spinner className="h-4 w-4" /> : <Icon name="refresh" className="h-4 w-4" />}

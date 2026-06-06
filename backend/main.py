@@ -831,6 +831,24 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
 #   Laptop ma NAS w Finderze, czyta pliki .xlsx LOKALNIE, wyciąga (data, klient, godzina,
 #   sala, liczba_osob) i wysyła maleńki JSON. VPS nie parsuje Excela i nie czyta NAS-a.
 # ═══════════════════════════════════════════════════════════════════════════
+def _normalizuj_godzine(g) -> str:
+    """Godzina może przyjść jako ułamek doby z Excela (np. '0.6041666' = 14:30),
+    jako 'HH:MM' lub 'HH:MM:SS'. Sprowadzamy do 'HH:MM' (albo 'Brak')."""
+    if g is None:
+        return "Brak"
+    s = str(g).strip()
+    if not s or s.lower() in ("none", "brak"):
+        return "Brak"
+    try:
+        f = float(s.replace(",", "."))
+        if 0 <= f < 1:  # ułamek doby
+            total = round(f * 1440) % 1440
+            return f"{total // 60:02d}:{total % 60:02d}"
+    except ValueError:
+        pass
+    return s  # już tekst typu '14:30' lub '14:30:00' (backend przeliczy oba)
+
+
 @app.post("/api/imprezy/ingest")
 def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     """Przyjmuje listę sparsowanych imprez, upsertuje (klucz = nazwa pliku lub data|klient),
@@ -841,7 +859,7 @@ def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(..
         try:
             data_imp = date.fromisoformat(str(it["data"])[:10])
             klient = (it.get("klient") or "").strip()
-            godz = str(it["godzina"]).strip() if it.get("godzina") not in (None, "") else "Brak"
+            godz = _normalizuj_godzine(it.get("godzina"))
             sala = str(it["sala"]).strip() if it.get("sala") not in (None, "") else "Brak"
             osob = int(it.get("liczba_osob") or 0)
             klucz = (it.get("nazwa_pliku") or f"{data_imp}|{klient}").strip()

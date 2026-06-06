@@ -63,6 +63,17 @@ def test_ingest_pusta_godzina_i_sala(admin_client, db):
     assert imp.sala == "Brak"
 
 
+def test_ingest_godzina_ulamek_doby_na_hhmm(admin_client, db):
+    # Excel zwraca godzinę jako ułamek doby: 0.6041666… = 14:30
+    admin_client.post("/api/imprezy/ingest", params=ZAKRES, json={"imprezy": [_impreza(godzina="0.6041666666666666")]})
+    assert db.query(models.Impreza).one().godzina == "14:30"
+
+
+def test_ingest_godzina_hhmmss_zachowana(admin_client, db):
+    admin_client.post("/api/imprezy/ingest", params=ZAKRES, json={"imprezy": [_impreza(godzina="14:30:00")]})
+    assert db.query(models.Impreza).one().godzina == "14:30:00"
+
+
 def test_ingest_wymaga_admina(make_employee_client):
     prac = factories.PracownikFactory()
     c, _ = make_employee_client(prac)
