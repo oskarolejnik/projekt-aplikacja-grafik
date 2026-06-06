@@ -7,7 +7,6 @@ import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
-import { motion, AnimatePresence } from 'framer-motion'
 import { BOUNCE } from '../lib/motion'
 import { PillSwitch } from '../components/ui/PillSwitch'
 
@@ -103,12 +102,10 @@ export default function EmployeeAvailability() {
               const imprezy = imprezyMap[d.data] || []
               const calyDzien = !d.od
               return (
-                <motion.div
+                <div
                   key={d.data}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: Math.min(i, 8) * 0.04, duration: 0.4 }}
-                  className="rounded-xl border border-line bg-white/[0.02] p-4"
+                  className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4"
+                  style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-[150px]">
@@ -116,7 +113,7 @@ export default function EmployeeAvailability() {
                       <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
                     </div>
 
-                    <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+                    <div className="flex w-full flex-col sm:w-auto sm:items-end">
                       {/* Pill switcher (CSS) — wskaźnik sukces/danger sunie pod aktywnym stanem. */}
                       <PillSwitch
                         className="w-full sm:w-60"
@@ -128,61 +125,54 @@ export default function EmployeeAvailability() {
                         ]}
                       />
 
-                      {/* Opcje godziny — gładko zwijane przy „Niedostępny". „Cały dzień" = switch. */}
-                      <AnimatePresence initial={false}>
-                        {d.dostepnosc && (
-                          <motion.div
-                            key="opcje"
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: 'auto', opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            transition={{ height: { duration: 0.32, ease: [0.4, 0, 0.2, 1] }, opacity: { duration: 0.2 } }}
-                            style={{ overflow: 'hidden' }}
-                            className="w-full sm:w-auto"
-                          >
-                            <div className="flex items-center gap-3 pt-1 text-xs sm:justify-end">
-                              <button
-                                type="button"
-                                role="switch"
-                                aria-checked={calyDzien}
-                                onClick={() => setDay(i, { od: calyDzien ? '08:00' : '' })}
-                                className="flex items-center gap-2 font-semibold text-muted transition active:scale-[0.96]"
-                                style={{ WebkitTapHighlightColor: 'transparent' }}
-                              >
-                                <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
-                                  <span
-                                    className="h-5 w-5 rounded-full bg-white shadow-sm will-change-transform"
-                                    style={{ transform: `translateX(${calyDzien ? 20 : 0}px)`, transition: `transform 420ms ${BOUNCE}` }}
-                                  />
-                                </span>
-                                Cały dzień
-                              </button>
+                      {/* Zwijanie PIONOWE bez Framera: grid-template-rows 0fr↔1fr.
+                          Czysty CSS — zero mierzenia wysokości, więc brak „podwójnego" skoku. */}
+                      <div
+                        className="grid w-full transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] sm:w-auto"
+                        style={{ gridTemplateRows: d.dostepnosc ? '1fr' : '0fr', opacity: d.dostepnosc ? 1 : 0 }}
+                      >
+                        <div className="min-h-0 overflow-hidden">
+                          <div className="flex flex-col pt-2 text-xs sm:items-end">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={calyDzien}
+                              onClick={() => setDay(i, { od: calyDzien ? '08:00' : '' })}
+                              className="flex shrink-0 items-center gap-2 font-semibold text-muted transition active:scale-[0.96]"
+                              style={{ WebkitTapHighlightColor: 'transparent' }}
+                            >
+                              <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
+                                <span
+                                  className="h-5 w-5 rounded-full bg-white shadow-sm will-change-transform"
+                                  style={{ transform: `translateX(${calyDzien ? 20 : 0}px)`, transition: `transform 420ms ${BOUNCE}` }}
+                                />
+                              </span>
+                              Cały dzień
+                            </button>
 
-                              <AnimatePresence initial={false}>
-                                {!calyDzien && (
-                                  <motion.div
-                                    key="czas"
-                                    initial={{ width: 0, opacity: 0 }}
-                                    animate={{ width: 'auto', opacity: 1 }}
-                                    exit={{ width: 0, opacity: 0 }}
-                                    transition={{ width: { duration: 0.3, ease: [0.4, 0, 0.2, 1] }, opacity: { duration: 0.18 } }}
-                                    style={{ overflow: 'hidden' }}
-                                    className="flex shrink-0 items-center gap-2 text-muted"
-                                  >
-                                    <span>od</span>
-                                    <input
-                                      type="time"
-                                      value={d.od}
-                                      onChange={(ev) => setDay(i, { od: ev.target.value })}
-                                      className="field w-28 px-2 py-2"
-                                    />
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
+                            {/* Pole godziny zwijane PIONOWO (grid-rows 0fr↔1fr) — pod przełącznikiem.
+                                Poziome fr/max-width w kurczliwym flexie psuło szerokość inputu,
+                                więc cała mechanika jest pionowa (wysokość rozwiązuje się do treści). */}
+                            <div
+                              className="grid transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+                              style={{ gridTemplateRows: calyDzien ? '0fr' : '1fr', opacity: calyDzien ? 0 : 1 }}
+                            >
+                              <div className="min-h-0 overflow-hidden">
+                                <div className="flex items-center gap-2 pt-2 text-muted sm:justify-end">
+                                  <span>od</span>
+                                  <input
+                                    type="time"
+                                    value={d.od}
+                                    onChange={(ev) => setDay(i, { od: ev.target.value })}
+                                    className="field px-2 py-2"
+                                    style={{ width: '7rem' }}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -202,7 +192,7 @@ export default function EmployeeAvailability() {
                       ))}
                     </div>
                   )}
-                </motion.div>
+                </div>
               )
             })}
           </div>

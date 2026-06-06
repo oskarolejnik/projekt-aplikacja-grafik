@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Logo } from '../components/Logo'
+import { AnimatedLogo } from '../components/Logo'
 import Login from './Login'
 import { AnimatePresence } from 'framer-motion'
 
@@ -27,7 +27,7 @@ function LiveClock() {
   const { data, czas } = usePolandClock()
   return (
     <>
-      <div className="font-display text-6xl font-bold leading-none tracking-tight text-gradient tabular-nums sm:text-7xl md:text-8xl">
+      <div className="font-display text-6xl font-bold leading-none tracking-tight tabular-nums sm:text-7xl md:text-8xl bg-accent-flow bg-[length:250%_100%] bg-clip-text text-transparent animate-gradient-flow">
         {czas}
       </div>
       <div className="mt-4 text-base font-medium capitalize text-muted sm:text-lg">{data}</div>
@@ -42,13 +42,13 @@ export default function Landing() {
   return (
     <div className="relative flex min-h-dvh flex-col overflow-hidden bg-bg">
       {/* Subtelne pastelowe poświaty w tle */}
-      <div aria-hidden className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.10] blur-2xl transform-gpu" />
-      <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-32 h-96 w-96 rounded-full bg-mint opacity-[0.06] blur-2xl transform-gpu" />
+      <div aria-hidden className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.16] blur-2xl will-change-transform animate-drift-a" />
+      <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-32 h-96 w-96 rounded-full bg-mint opacity-[0.11] blur-2xl will-change-transform animate-drift-b" />
 
       {/* Sekcja główna: logo Rajcula + zegar + jedyna akcja.
           pt-safe/pb-safe odsuwa treść od notcha iPhone (status bar black-translucent). */}
       <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-safe pt-safe text-center">
-        <Logo className="mb-9 h-24 animate-fade-up sm:h-28" variant="gradient" />
+        <AnimatedLogo className="mb-9 h-24 animate-fade-up sm:h-28" />
 
         <p className="mb-5 flex animate-fade-up items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-muted" style={{ animationDelay: '80ms' }}>
           <span className="h-2 w-2 animate-pulse rounded-full bg-success" />

@@ -35,6 +35,9 @@ export default {
       },
       backgroundImage: {
         'accent-gradient': 'linear-gradient(90deg,#F4E2A0,#A7D7C5,#F2B8CB)',
+        // Symetryczny wariant (złoto→mięta→róż→mięta→złoto) — przy background-size 200%
+        // i przesuwaniu pozycji kolory płynnie „kołyszą się" bez szwu na zapętleniu.
+        'accent-flow': 'linear-gradient(90deg,#F4E2A0,#A7D7C5,#F2B8CB,#A7D7C5,#F4E2A0)',
         'page-glow': 'linear-gradient(120deg,#bfe3cd 0%,#f4e7c6 45%,#f1c2d2 100%)',
         'surface-grad': 'linear-gradient(160deg,#2A2A2D 0%,#202022 100%)',
       },
@@ -55,6 +58,18 @@ export default {
         toastIn: { '0%': { opacity: '0', transform: 'translateY(-12px) scale(0.96)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
         // Wejście treści zakładki (CSS, bez rAF) — fade + lekki scale/y, gładki ease-out.
         tabIn: { '0%': { opacity: '0', transform: 'translateY(12px) scale(0.985)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
+        // Delikatne przesuwanie pozycji gradientu (kołysanie kolorów na logo i zegarze)
+        gradientFlow: { '0%': { backgroundPosition: '0% 50%' }, '100%': { backgroundPosition: '100% 50%' } },
+        // Powolny, organiczny dryf poświat w tle ekranu logowania (różne tory = brak rytmu)
+        driftA: {
+          '0%, 100%': { transform: 'translate3d(0,0,0) scale(1)' },
+          '33%': { transform: 'translate3d(52px,34px,0) scale(1.12)' },
+          '66%': { transform: 'translate3d(26px,-30px,0) scale(0.95)' },
+        },
+        driftB: {
+          '0%, 100%': { transform: 'translate3d(0,0,0) scale(1)' },
+          '50%': { transform: 'translate3d(-48px,-38px,0) scale(1.1)' },
+        },
       },
       // Mocne krzywe wg Emila Kowalskiego (domyślne CSS są za słabe)
       transitionTimingFunction: {
@@ -65,6 +80,8 @@ export default {
       animation: {
         'spin-orbit': 'spinOrbit 48s linear infinite',
         'spin-orbit-rev': 'spinOrbitRev 60s linear infinite',
+        // Skrzydła wiatraka w logo — powolny, równy obrót wokół piasty
+        windmill: 'spinOrbit 12s linear infinite',
         float: 'float 7s ease-in-out infinite',
         'fade-in': 'fadeIn 0.3s cubic-bezier(0.23, 1, 0.32, 1) both',
         'fade-up': 'fadeUp 0.32s cubic-bezier(0.23, 1, 0.32, 1) both',
@@ -74,6 +91,11 @@ export default {
         'overlay-in': 'overlayIn 0.2s ease-out both',
         'toast-in': 'toastIn 0.28s cubic-bezier(0.23, 1, 0.32, 1) both',
         'tab-in': 'tabIn 0.42s cubic-bezier(0.23, 1, 0.32, 1) both',
+        // Łagodne kołysanie gradientu w obie strony (logo + zegar) — trochę żywsze
+        'gradient-flow': 'gradientFlow 7s ease-in-out infinite alternate',
+        // Dryf poświat w tle (kompozytor — transform 3d, płynnie)
+        'drift-a': 'driftA 20s ease-in-out infinite',
+        'drift-b': 'driftB 16s ease-in-out infinite',
       },
     },
   },
