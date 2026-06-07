@@ -205,6 +205,25 @@ def test_me_godziny_stara_otwarta_zmiana_pominieta(client, db):
     assert r.json()["aktywna_zmiana"] is None
 
 
+def test_me_godziny_podzial_na_dni(client, db):
+    from datetime import datetime
+    p = factories.PracownikFactory(imie="Jan", nazwisko="Dniowy")
+    emp = factories.UserFactory(login="jandni", rola="employee", pracownik=p)
+    db.add_all([  # dwie zmiany 01.06 + jedna 03.06
+        models.OdbicieRcp(rcp_id="d1", imie_nazwisko="Jan Dniowy", pracownik_id=p.id, data=factories.dzien(0),
+                          wejscie=datetime(2026, 6, 1, 8, 0), wyjscie=datetime(2026, 6, 1, 12, 0), godziny=4.0),
+        models.OdbicieRcp(rcp_id="d2", imie_nazwisko="Jan Dniowy", pracownik_id=p.id, data=factories.dzien(0),
+                          wejscie=datetime(2026, 6, 1, 18, 0), wyjscie=datetime(2026, 6, 1, 20, 30), godziny=2.5),
+        models.OdbicieRcp(rcp_id="d3", imie_nazwisko="Jan Dniowy", pracownik_id=p.id, data=factories.dzien(2),
+                          wejscie=datetime(2026, 6, 3, 10, 0), wyjscie=datetime(2026, 6, 3, 18, 0), godziny=8.0),
+    ])
+    db.commit()
+    r = client.get("/api/me/godziny", headers=_h(emp), params={"rok": 2026, "miesiac": 6})
+    d_map = {d["data"]: d["godziny"] for d in r.json()["dni"]}
+    assert d_map[str(factories.dzien(0))] == 6.5  # 4.0 + 2.5 zsumowane w jednym dniu
+    assert d_map[str(factories.dzien(2))] == 8.0
+
+
 def test_raport_admin_dostepny_dla_admina(admin_client, db):
     r = admin_client.get("/api/raporty/godziny", params={"rok": 2026, "miesiac": 6})
     assert r.status_code == 200

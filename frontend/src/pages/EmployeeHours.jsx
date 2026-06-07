@@ -4,9 +4,10 @@ import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { useToast } from '../components/ui/Toast'
+import { godzinyHM, NAZWY_DNI, ddmmyyyy } from '../lib/format'
 
 // Zakładka „Godziny": miesięczne podsumowanie przepracowanych godzin pracownika
-// z podziałem na stanowiska (dane z RCP × opublikowany grafik). Tylko odczyt.
+// — suma u góry (HH:MM), podział na dni i na stanowiska (dane z RCP × opublikowany grafik).
 export default function EmployeeHours() {
   const { toast } = useToast()
   const dzis = new Date()
@@ -56,6 +57,7 @@ export default function EmployeeHours() {
   }
 
   const stanowiska = dane?.stanowiska || []
+  const dni = dane?.dni || []
   const maxGodziny = Math.max(1, ...stanowiska.map((s) => s.godziny))
   const naPrzyszlosc = rok > dzis.getFullYear() || (rok === dzis.getFullYear() && miesiac >= dzis.getMonth() + 1)
 
@@ -103,38 +105,59 @@ export default function EmployeeHours() {
             </Card>
           )}
 
-          {/* Suma godzin */}
+          {/* Suma godzin (u góry, format HH:MM) */}
           <Card className="p-6 text-center">
             <div className="text-xs font-semibold uppercase tracking-wider text-muted">Łącznie w miesiącu</div>
             <div className="mt-1 font-display text-5xl font-bold text-gradient tabular-nums">
-              {(dane?.suma_godzin ?? 0).toFixed(1)}
-              <span className="ml-1 text-2xl text-muted">h</span>
+              {godzinyHM(dane?.suma_godzin)}
             </div>
           </Card>
 
-          {/* Rozbicie na stanowiska */}
-          {stanowiska.length === 0 ? (
+          {(dane?.suma_godzin ?? 0) === 0 ? (
             <Card className="p-8 text-center text-sm text-muted">
-              Brak zarejestrowanych godzin w tym miesiącu. Godziny pojawią się po odbiciach RCP
-              i opublikowaniu grafiku.
+              Brak zarejestrowanych godzin w tym miesiącu. Godziny pojawią się po odbiciach RCP.
             </Card>
           ) : (
-            <div className="space-y-3">
-              {stanowiska.map((s) => (
-                <Card key={s.stanowisko} className="p-4">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="font-semibold text-ink">{s.stanowisko}</span>
-                    <span className="font-display font-bold tabular-nums text-ink">{s.godziny.toFixed(1)} h</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
-                    <div
-                      className="h-full rounded-full bg-accent-gradient transition-[width] duration-500"
-                      style={{ width: `${(s.godziny / maxGodziny) * 100}%` }}
-                    />
+            <>
+              {/* Podział na dni — w jakim dniu ile przepracowano */}
+              {dni.length > 0 && (
+                <Card className="p-4 sm:p-5">
+                  <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">Według dni</div>
+                  <div className="space-y-0.5">
+                    {dni.map((d) => (
+                      <div key={d.data} className="flex items-center justify-between border-b border-line/60 py-2 last:border-0">
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(d.data).getDay()]}</span>
+                          <span className="text-xs text-muted">{ddmmyyyy(d.data)}</span>
+                        </div>
+                        <span className="font-mono font-bold tabular-nums text-ink">{godzinyHM(d.godziny)}</span>
+                      </div>
+                    ))}
                   </div>
                 </Card>
-              ))}
-            </div>
+              )}
+
+              {/* Rozbicie na stanowiska */}
+              {stanowiska.length > 0 && (
+                <div className="space-y-3">
+                  <div className="px-1 text-xs font-semibold uppercase tracking-wider text-muted">Według stanowisk</div>
+                  {stanowiska.map((s) => (
+                    <Card key={s.stanowisko} className="p-4">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="font-semibold text-ink">{s.stanowisko}</span>
+                        <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(s.godziny)}</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                        <div
+                          className="h-full rounded-full bg-accent-gradient transition-[width] duration-500"
+                          style={{ width: `${(s.godziny / maxGodziny) * 100}%` }}
+                        />
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </>
       )}

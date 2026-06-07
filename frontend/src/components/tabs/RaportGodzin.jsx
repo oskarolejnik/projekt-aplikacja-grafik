@@ -5,6 +5,7 @@ import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
+import { godzinyHM } from '../../lib/format'
 
 // Raport godzin (admin): miesięczne podsumowanie przepracowanych godzin wszystkich
 // pracowników z rozbiciem na stanowiska (RCP × opublikowany grafik). Tylko odczyt.
@@ -123,7 +124,7 @@ export default function RaportGodzin() {
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Łącznie (wszyscy)</div>
               <div className="font-display text-2xl font-bold text-gradient tabular-nums">
-                {sumaWszystkich.toFixed(1)}<span className="ml-1 text-base text-muted">h</span>
+                {godzinyHM(sumaWszystkich)}
               </div>
             </div>
             <div>
@@ -145,7 +146,7 @@ export default function RaportGodzin() {
                   <div key={p.pracownik_id} className="rounded-xl border border-line bg-white/[0.02] p-4">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <span className="font-semibold text-ink">{p.pracownik}</span>
-                      <span className="shrink-0 font-display font-bold tabular-nums text-ink">{p.suma_godzin.toFixed(1)} h</span>
+                      <span className="shrink-0 font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
                     </div>
                     <div className="space-y-2">
                       {p.stanowiska.map((s) => (
@@ -154,7 +155,7 @@ export default function RaportGodzin() {
                           <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
                             <div className="h-full rounded-full bg-accent-gradient" style={{ width: `${(s.godziny / maxG) * 100}%` }} />
                           </div>
-                          <span className="w-14 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{s.godziny.toFixed(1)}h</span>
+                          <span className="w-14 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
                         </div>
                       ))}
                     </div>
@@ -175,7 +176,7 @@ export default function RaportGodzin() {
                 {niedopasowani.map((n) => (
                   <li key={n.imie_nazwisko} className="flex justify-between gap-3">
                     <span>{n.imie_nazwisko || '(brak nazwiska)'}</span>
-                    <span className="font-mono font-bold tabular-nums">{n.godziny.toFixed(1)} h</span>
+                    <span className="font-mono font-bold tabular-nums">{godzinyHM(n.godziny)}</span>
                   </li>
                 ))}
               </ul>

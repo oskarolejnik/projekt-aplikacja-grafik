@@ -6,6 +6,14 @@ export const ddmmyyyy = (iso) => (iso || '').split('-').reverse().join('.')
 // "08:00:00" -> "08:00"
 export const hhmm = (t) => (t ? String(t).slice(0, 5) : '')
 
+// Godziny dziesiętne -> "HH:MM" (np. 8.5 -> "08:30", 160 -> "160:00")
+export const godzinyHM = (h) => {
+  const total = Math.max(0, Math.round((Number(h) || 0) * 60))
+  const hh = Math.floor(total / 60)
+  const mm = total % 60
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+}
+
 // Indeks getDay() -> polska nazwa dnia
 export const NAZWY_DNI = [
   'Niedziela',

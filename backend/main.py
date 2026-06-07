@@ -1106,10 +1106,25 @@ def moje_godziny(
         if teraz is None or aktywna.wejscie >= teraz - timedelta(hours=18):
             aktywna_out = {"data": aktywna.data.isoformat(), "wejscie": aktywna.wejscie.isoformat()}
 
+    # Podzial na DNI: ile godzin pracownik przepracowal kazdego dnia (zakonczone zmiany).
+    from calendar import monthrange
+    start = date(rok, miesiac, 1)
+    end = date(rok, miesiac, monthrange(rok, miesiac)[1])
+    per_dzien = {}
+    for o in db.query(models.OdbicieRcp).filter(
+        models.OdbicieRcp.pracownik_id == user.pracownik_id,
+        models.OdbicieRcp.data >= start,
+        models.OdbicieRcp.data <= end,
+        models.OdbicieRcp.wyjscie.isnot(None),
+    ).all():
+        per_dzien[o.data] = per_dzien.get(o.data, 0.0) + float(o.godziny or 0.0)
+    dni_out = [{"data": d.isoformat(), "godziny": round(g, 2)} for d, g in sorted(per_dzien.items())]
+
     return {
         "rok": rok, "miesiac": miesiac,
         "suma_godzin": moj["suma_godzin"] if moj else 0.0,
         "stanowiska": moj["stanowiska"] if moj else [],
+        "dni": dni_out,
         "aktywna_zmiana": aktywna_out,
     }
 
