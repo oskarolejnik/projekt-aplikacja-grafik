@@ -181,7 +181,9 @@ export default function EmployeeAvailability() {
                       </div>
                       {imprezy.map((imp) => (
                         <div key={imp.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-xs">
-                          <span className="font-semibold text-ink">{imp.klient}</span>
+                          <span className="font-semibold text-ink">
+                            {imp.sala && !['Brak', 'None', ''].includes(String(imp.sala)) ? `Sala ${imp.sala}` : 'Impreza'}
+                          </span>
                           {fmtGodzina(imp.godzina) && (
                             <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono font-semibold text-ink">{fmtGodzina(imp.godzina)}</span>
                           )}

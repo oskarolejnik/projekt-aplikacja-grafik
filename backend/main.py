@@ -230,19 +230,23 @@ def moje_dyspozycje(
     if end:   q = q.filter(models.Dyspozycja.data <= end)
     return q.all()
 
-@app.get("/api/me/imprezy", response_model=List[schemas.ImprezaOut])
+@app.get("/api/me/imprezy")
 def moje_imprezy(
     start: date = Query(...), end: date = Query(...),
     user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
-    """Imprezy zaplanowane w danym zakresie — podgląd dla pracownika przy składaniu
-    dyspozycji (tylko odczyt; dostępne dla każdego zalogowanego)."""
-    return (
+    """Imprezy w zakresie — podgląd dla pracownika przy składaniu dyspozycji.
+    PRYWATNOŚĆ: pracownik NIE dostaje nazwy klienta/imprezy — tylko salę, godzinę, liczbę osób."""
+    imprezy = (
         db.query(models.Impreza)
         .filter(models.Impreza.data >= start, models.Impreza.data <= end)
         .order_by(models.Impreza.data.asc(), models.Impreza.godzina.asc())
         .all()
     )
+    return [
+        {"id": i.id, "data": str(i.data), "godzina": i.godzina, "sala": i.sala, "liczba_osob": i.liczba_osob}
+        for i in imprezy
+    ]
 
 @app.put("/api/me/dyspozycje", status_code=200)
 def zapisz_moje_dyspozycje(
@@ -267,6 +271,16 @@ def zapisz_moje_dyspozycje(
         zapisano += 1
     db.commit()
     return {"zapisano": zapisano}
+
+
+def _rewir_dla_pracownika(rewir):
+    """Ukrywa nazwę klienta/imprezy przed pracownikiem. Rewir imprezy ma postać
+    „IMPREZA: {klient} ({sala})" — zwracamy tylko „Impreza ({sala})". Zwykłe rewiry bez zmian."""
+    if rewir and rewir.startswith("IMPREZA:"):
+        sala = rewir[rewir.rfind("(") + 1 : -1].strip() if rewir.endswith(")") and "(" in rewir else ""
+        return f"Impreza ({sala})" if sala and sala.lower() not in ("brak", "none") else "Impreza"
+    return rewir
+
 
 @app.get("/api/me/grafik", status_code=200)
 def moj_grafik(
@@ -312,7 +326,7 @@ def moj_grafik(
             "data": str(a.data),
             "godz_od": a.godz_od.strftime("%H:%M") if a.godz_od else None,
             "stanowisko": stan_map.get(a.stanowisko_id, ""),
-            "rewir": a.rewir,
+            "rewir": _rewir_dla_pracownika(a.rewir),
             "wspolpracownicy": [prac_map.get(w.pracownik_id, "") for w in wspol],
         })
     return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat(), "zmiany": zmiany}
