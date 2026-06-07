@@ -79,10 +79,11 @@ export default function StolyLive() {
             <Tile label="Na wynos" value={dane?.wynos} accent />
           </div>
 
-          {/* Kuchnia — zamówienia do wydania (z KDS, kierunek Kuchnia). Osobna metryka. */}
+          {/* Kuchnia — zamówienia do wydania (z KDS, kierunek Kuchnia) + liczba pozycji. */}
           <div className="mt-3 rounded-xl border border-lemon/30 bg-lemon/[0.06] p-4 text-center">
             <div className="font-display text-3xl font-bold tabular-nums text-ink">{dane?.kuchnia ?? 0}</div>
-            <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-muted">Kuchnia — do wydania</div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted">Kuchnia — do wydania</div>
+            <div className="mt-1 text-xs text-muted"><span className="font-bold text-ink">{dane?.kuchnia_pozycje ?? 0}</span> pozycji</div>
           </div>
 
           {dane?.zaktualizowano_at && (

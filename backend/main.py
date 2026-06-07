@@ -1190,7 +1190,8 @@ def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session 
 STOLY_WEWNATRZ = [(42, "Parter"), (52, "Góra"), (56, "Zielona"), (57, "Kryształowa")]
 STOLY_ZEWNATRZ = [54, 55, 53, 108]   # TARAS, STRZECHA, ABCD+FLINSTONY, Zetka+Ka → suma
 STOLY_WYNOS = 46
-STOLY_KUCHNIA = -1   # pseudo-rewir: zamówienia „do wydania" na kuchni (firingi KDS, kierunek Kuchnia)
+STOLY_KUCHNIA = -1          # pseudo-rewir: zamówienia „do wydania" na kuchni (firingi KDS, kierunek Kuchnia)
+STOLY_KUCHNIA_POZYCJE = -2  # pseudo-rewir: liczba pozycji (dań) na tych niewydanych bloczkach
 
 
 @app.post("/api/gastro/stoly")
@@ -1227,6 +1228,7 @@ def gastro_stoly(db: Session = Depends(get_db)):
         "na_zewnatrz": sum(stan.get(nr, 0) for nr in STOLY_ZEWNATRZ),
         "wynos": stan.get(STOLY_WYNOS, 0),
         "kuchnia": stan.get(STOLY_KUCHNIA, 0),
+        "kuchnia_pozycje": stan.get(STOLY_KUCHNIA_POZYCJE, 0),
         "zaktualizowano_at": last.zaktualizowano_at.isoformat() if last and last.zaktualizowano_at else None,
     }
 
