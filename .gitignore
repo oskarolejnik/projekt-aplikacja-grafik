@@ -12,5 +12,7 @@ dist/
 .claude/settings.local.json
 .env
 agent_lokalny/agent_rcp.env
+google_sa.json
+*-service-account*.json
 *.log
 *.pem
