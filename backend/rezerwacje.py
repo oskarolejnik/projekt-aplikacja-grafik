@@ -14,14 +14,23 @@ import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 
+from dotenv import load_dotenv
+
+load_dotenv()  # wczytaj .env, gdy moduł jest importowany niezależnie / przed innymi (jak database.py/push.py)
+
 try:
     from zoneinfo import ZoneInfo
     _TZ = ZoneInfo("Europe/Warsaw")
 except Exception:  # noqa: BLE001
     _TZ = None
 
-GOOGLE_SA_JSON = os.environ.get("GOOGLE_SA_JSON", "")
-GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "")
+
+def _sa_json() -> str:
+    return os.environ.get("GOOGLE_SA_JSON", "")
+
+
+def _cal_id() -> str:
+    return os.environ.get("GOOGLE_CALENDAR_ID", "")
 
 _OSOBY_RE = re.compile(r"Liczba\s+os[oó]b\s*:\s*(\d+)", re.IGNORECASE)
 _CACHE_TTL = 60  # sekundy
@@ -29,7 +38,8 @@ _cache = {"ts": 0.0, "dane": None}
 
 
 def skonfigurowane() -> bool:
-    return bool(GOOGLE_SA_JSON and GOOGLE_CALENDAR_ID and os.path.isfile(GOOGLE_SA_JSON))
+    p = _sa_json()
+    return bool(p and _cal_id() and os.path.isfile(p))
 
 
 def _osoby_z_opisu(opis: str) -> int:
@@ -83,13 +93,13 @@ def _pobierz_wydarzenia(time_min: str, time_max: str):
     from googleapiclient.discovery import build
 
     creds = service_account.Credentials.from_service_account_file(
-        GOOGLE_SA_JSON, scopes=["https://www.googleapis.com/auth/calendar.readonly"]
+        _sa_json(), scopes=["https://www.googleapis.com/auth/calendar.readonly"]
     )
     svc = build("calendar", "v3", credentials=creds, cache_discovery=False)
     items, token = [], None
     while True:
         resp = svc.events().list(
-            calendarId=GOOGLE_CALENDAR_ID, timeMin=time_min, timeMax=time_max,
+            calendarId=_cal_id(), timeMin=time_min, timeMax=time_max,
             singleEvents=True, orderBy="startTime", maxResults=2500, pageToken=token,
         ).execute()
         items.extend(resp.get("items", []))
