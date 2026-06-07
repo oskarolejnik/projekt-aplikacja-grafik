@@ -147,6 +147,20 @@ export default function Grafik() {
     }
   }
 
+  const cofnijPublikacje = async () => {
+    if (!(await confirm('Cofnąć publikację grafiku na ten tydzień? Pracownicy przestaną go widzieć.', { title: 'Cofnij publikację', confirmText: 'Cofnij publikację' }))) return
+    setPublikowanie(true)
+    try {
+      await api(`/grafik/publikuj?start=${s}&end=${e}`, 'DELETE')
+      setPublikacja({ opublikowany: false, opublikowano_at: null })
+      toast('Publikacja cofnięta — grafik ukryty przed pracownikami.', 'success')
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setPublikowanie(false)
+    }
+  }
+
   const aktywni = pracownicy.filter((p) => p.aktywny)
   const selectedDay = dates.includes(selDay) ? selDay : dates[0]
 
@@ -237,8 +251,13 @@ export default function Grafik() {
           </Button>
           <Button onClick={udostepnij} disabled={publikowanie}>
             {publikowanie ? <Spinner className="h-4 w-4" /> : <Icon name="bell" className="h-4 w-4" />}
-            Udostępnij pracownikom
+            {publikacja.opublikowany ? 'Udostępnij ponownie' : 'Udostępnij pracownikom'}
           </Button>
+          {publikacja.opublikowany && (
+            <Button variant="ghost" onClick={cofnijPublikacje} disabled={publikowanie} className="text-danger hover:bg-danger/10">
+              Cofnij publikację
+            </Button>
+          )}
           <span className={`text-xs font-semibold ${publikacja.opublikowany ? 'text-success' : 'text-muted'}`}>
             {publikacja.opublikowany
               ? `Opublikowano: ${new Date(publikacja.opublikowano_at).toLocaleString('pl-PL')}`

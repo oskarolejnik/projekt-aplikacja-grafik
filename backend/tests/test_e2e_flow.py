@@ -149,6 +149,15 @@ def test_pelny_przeplyw_od_dyspozycyjnosci_do_grafiku(client, db):
     assert body["zmiany"][0]["stanowisko"] == "Sala"
     assert body["zmiany"][0]["data"] == start
 
+    # 7) Admin: COFNIĘCIE publikacji
+    r = client.delete("/api/grafik/publikuj", headers=_h(admin), params={"start": start, "end": end})
+    assert r.status_code == 204
+
+    # 8) Pracownik: po cofnięciu znów nie widzi grafiku
+    r = client.get("/api/me/grafik", headers=_h(emp), params={"start": start, "end": end})
+    assert r.json()["opublikowany"] is False
+    assert r.json()["zmiany"] == []
+
 
 def test_kopiowanie_wymagan_na_kolejny_tydzien(admin_client, db):
     """Integracja: wymagania z tygodnia źródłowego kopiowane dzień-w-dzień na docelowy."""
