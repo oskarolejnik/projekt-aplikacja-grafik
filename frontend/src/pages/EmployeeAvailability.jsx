@@ -24,6 +24,7 @@ export default function EmployeeAvailability() {
   const { toast } = useToast()
   const [dni, setDni] = useState([])
   const [imprezyMap, setImprezyMap] = useState({})
+  const [rezerwacjeMap, setRezerwacjeMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -33,10 +34,12 @@ export default function EmployeeAvailability() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [existing, imprezy] = await Promise.all([
+      const [existing, imprezy, rez] = await Promise.all([
         api(`/me/dyspozycje?start=${s}&end=${e}`),
         api(`/me/imprezy?start=${s}&end=${e}`),
+        api('/me/rezerwacje').catch(() => ({ dni: [] })),
       ])
+      setRezerwacjeMap(Object.fromEntries((rez?.dni || []).map((d) => [d.data, d])))
       const map = Object.fromEntries(existing.map((d) => [d.data, d]))
       setDni(
         daty.map((d) => {
@@ -100,6 +103,7 @@ export default function EmployeeAvailability() {
           <div className="space-y-3">
             {dni.map((d, i) => {
               const imprezy = imprezyMap[d.data] || []
+              const rez = rezerwacjeMap[d.data]
               const calyDzien = !d.od
               return (
                 <div
@@ -111,6 +115,11 @@ export default function EmployeeAvailability() {
                     <div className="min-w-[150px]">
                       <div className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(d.data).getDay()]}</div>
                       <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
+                      {rez && rez.liczba > 0 && (
+                        <div className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-blush/10 px-1.5 py-0.5 text-[11px] font-semibold text-blush">
+                          <Icon name="calendar" className="h-3 w-3" /> {rez.liczba} rez. · {rez.osoby} os.
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex w-full flex-col sm:w-auto sm:items-end">

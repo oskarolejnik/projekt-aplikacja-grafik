@@ -2,11 +2,19 @@ import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
-import { PillSwitch } from '../components/ui/PillSwitch'
 import StolyLive from '../components/tabs/StolyLive'
 import RaportGodzin from '../components/tabs/RaportGodzin'
 import SzefGrafik from '../components/tabs/SzefGrafik'
 import SzefImprezy from '../components/tabs/SzefImprezy'
+import Rezerwacje from '../components/tabs/Rezerwacje'
+
+const TABY = [
+  { value: 'stoly', label: 'Stoły' },
+  { value: 'godziny', label: 'Godziny' },
+  { value: 'grafik', label: 'Grafik' },
+  { value: 'imprezy', label: 'Imprezy' },
+  { value: 'rezerwacje', label: 'Rezerwacje' },
+]
 
 // Panel „Szef" — oversight tylko do odczytu: kto pracuje + godziny (Raport godzin),
 // opublikowany grafik, kalendarz imprez. Bez żadnej edycji.
@@ -37,23 +45,28 @@ export default function SzefView() {
       </header>
 
       <main className="relative z-10 mx-auto w-full max-w-5xl px-4 py-6 pb-safe md:py-10">
-        <PillSwitch
-          className="mb-6 max-w-lg"
-          value={widok}
-          onChange={setWidok}
-          options={[
-            { value: 'stoly', label: 'Stoły' },
-            { value: 'godziny', label: 'Godziny' },
-            { value: 'grafik', label: 'Grafik' },
-            { value: 'imprezy', label: 'Imprezy' },
-          ]}
-        />
+        {/* Przewijany pasek zakładek (mieści dowolną liczbę pozycji na mobile). */}
+        <div className="mb-6 flex gap-2 overflow-x-auto pb-1">
+          {TABY.map((t) => (
+            <button
+              key={t.value}
+              onClick={() => setWidok(t.value)}
+              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-bold transition active:scale-[0.97] ${
+                widok === t.value ? 'bg-accent-gradient text-bg shadow-glow' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
+              }`}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
         <div key={widok} className="animate-tab-in">
           {widok === 'stoly' && <StolyLive />}
           {widok === 'godziny' && <RaportGodzin />}
           {widok === 'grafik' && <SzefGrafik />}
           {widok === 'imprezy' && <SzefImprezy />}
+          {widok === 'rezerwacje' && <Rezerwacje />}
         </div>
       </main>
     </div>

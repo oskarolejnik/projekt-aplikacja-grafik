@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty
+import models, schemas, raporty, rezerwacje
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -57,6 +57,7 @@ async def role_guard(request: Request, call_next):
                 path.startswith(p) for p in (
                     "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
                     "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
+                    "/api/rezerwacje",
                 )
             )
             if not (rola == "szef" and szef_ok):
@@ -1231,6 +1232,21 @@ def gastro_stoly(db: Session = Depends(get_db)):
         "kuchnia_pozycje": stan.get(STOLY_KUCHNIA_POZYCJE, 0),
         "zaktualizowano_at": last.zaktualizowano_at.isoformat() if last and last.zaktualizowano_at else None,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REZERWACJE (Google Calendar) — odczyt; pracownik widzi tylko sumy dzienne.
+@app.get("/api/rezerwacje")
+def get_rezerwacje():
+    """Admin + szef: rezerwacje na 30 dni — per dzień z rozbiciem per godzina."""
+    return {"dni": rezerwacje.rezerwacje_per_dzien(30)}
+
+
+@app.get("/api/me/rezerwacje")
+def moje_rezerwacje(user: models.User = Depends(get_current_user)):
+    """Pracownik: TYLKO sumy dzienne (liczba rezerwacji + suma osób), bez godzin i danych klienta."""
+    dane = rezerwacje.rezerwacje_per_dzien(30)
+    return {"dni": [{"data": d["data"], "liczba": d["liczba"], "osoby": d["osoby"]} for d in dane]}
 
 
 # ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────
