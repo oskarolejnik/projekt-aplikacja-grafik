@@ -266,6 +266,27 @@ def test_rejestracja_konta_podlinkowuje_odbicia(client, db):
     assert db.query(models.OdbicieRcp).filter_by(rcp_id="102").one().pracownik_id is not None
 
 
+def test_rejestracja_nie_duplikuje_istniejacego_pracownika(client, db):
+    """Rejestracja na nazwisko istniejacego pracownika BEZ konta podpina sie pod niego
+    (zamiast tworzyc duplikat) — dzieki czemu konto od razu ma jego godziny z RCP."""
+    from datetime import datetime
+    p = factories.PracownikFactory(imie="Mateusz", nazwisko="Kajda")
+    db.add(models.OdbicieRcp(
+        rcp_id="kajda1", imie_nazwisko="MATEUSZ KAJDA", pracownik_id=p.id,
+        data=factories.dzien(0), wejscie=datetime(2026, 6, 1, 10, 0),
+        wyjscie=datetime(2026, 6, 1, 18, 0), godziny=8.0,
+    ))
+    db.commit()
+    r = client.post("/api/auth/register", json={
+        "login": "mkajda", "haslo": "Haslo123!", "imie": "Mateusz", "nazwisko": "Kajda"})
+    assert r.status_code == 201
+    # nie powstal duplikat
+    assert db.query(models.Pracownik).filter_by(nazwisko="Kajda").count() == 1
+    # konto wskazuje na istniejacego pracownika (z jego godzinami)
+    u = db.get(models.User, r.json()["user"]["id"])
+    assert u.pracownik_id == p.id
+
+
 def test_powiadomienie_tylko_dla_swiezych_zdarzen(client, db, monkeypatch):
     """Push leci tylko dla zdarzen w oknie RCP_POWIADOM_OKNO; stare (np. z pierwszego
     ingestu/restartu agenta) sa pomijane, ale rekord i tak sie zapisuje."""

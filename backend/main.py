@@ -111,9 +111,20 @@ def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
     if db.query(models.User).filter(models.User.login == login).first():
         raise HTTPException(400, "Ten login jest już zajęty.")
 
-    prac = models.Pracownik(imie=imie, nazwisko=nazwisko, aktywny=True)
-    db.add(prac)
-    db.flush()  # nadaje prac.id bez commita
+    # Nie duplikuj pracownika: jesli istnieje juz ktos o tym samym (znormalizowanym) imieniu
+    # i nazwisku BEZ konta (np. zalozony wczesniej albo dopasowany przez RCP) — podepnij konto
+    # pod niego, zeby od razu mialo jego godziny. Inaczej tworzymy nowego pracownika.
+    norm = _norm_nazwa(f"{imie} {nazwisko}")
+    zajete = {u.pracownik_id for u in db.query(models.User).all() if u.pracownik_id}
+    prac = next(
+        (p for p in db.query(models.Pracownik).all()
+         if p.id not in zajete and _norm_nazwa(f"{p.imie} {p.nazwisko}") == norm),
+        None,
+    )
+    if prac is None:
+        prac = models.Pracownik(imie=imie, nazwisko=nazwisko, aktywny=True)
+        db.add(prac)
+        db.flush()  # nadaje prac.id bez commita
     user = models.User(
         login=login, haslo_hash=hash_password(dane.haslo),
         rola="employee", pracownik_id=prac.id,
