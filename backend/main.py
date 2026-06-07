@@ -43,7 +43,7 @@ app.add_middleware(
 async def role_guard(request: Request, call_next):
     path = request.url.path
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest":
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path == "/api/gastro/stoly" and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -56,7 +56,7 @@ async def role_guard(request: Request, call_next):
             szef_ok = request.method == "GET" and any(
                 path.startswith(p) for p in (
                     "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
-                    "/api/imprezy", "/api/pracownicy", "/api/stanowiska",
+                    "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
                 )
             )
             if not (rola == "szef" and szef_ok):
@@ -1182,6 +1182,51 @@ def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session 
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
     raport["na_zmianie"] = _trwajace_zmiany(db)
     return raport
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STOŁY (live z Gastro) — osobna, addytywna ścieżka. NIE dotyka RCP/godzin.
+# Mapowanie rewirów (NGastroUzytkownik.Numer) na widok:
+STOLY_WEWNATRZ = [(42, "Parter"), (52, "Góra"), (56, "Zielona"), (57, "Kryształowa")]
+STOLY_ZEWNATRZ = [54, 55, 53, 108]   # TARAS, STRZECHA, ABCD+FLINSTONY, Zetka+Ka → suma
+STOLY_WYNOS = 46
+
+
+@app.post("/api/gastro/stoly")
+def gastro_stoly_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Snapshot zajętości stołów od agenta (X-RCP-Token). Upsert per rewir. NIE dotyka RCP."""
+    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+        raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
+    teraz = datetime.utcnow()
+    for it in (payload.get("stoly") or []):
+        try:
+            nr = int(it["rewir_nr"])
+            ile = int(it.get("otwarte") or 0)
+        except (KeyError, ValueError, TypeError):
+            continue
+        rec = db.get(models.StanStolow, nr)
+        if rec is None:
+            db.add(models.StanStolow(rewir_nr=nr, otwarte=ile, zaktualizowano_at=teraz))
+        else:
+            rec.otwarte = ile
+            rec.zaktualizowano_at = teraz
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/gastro/stoly")
+def gastro_stoly(db: Session = Depends(get_db)):
+    """Aktualny stan stołów (admin + szef): wewnątrz (sale osobno) + na zewnątrz (suma) + wynos."""
+    stan = {s.rewir_nr: s.otwarte for s in db.query(models.StanStolow).all()}
+    last = db.query(models.StanStolow).order_by(models.StanStolow.zaktualizowano_at.desc()).first()
+    wewnatrz = [{"nazwa": nazwa, "liczba": stan.get(nr, 0)} for nr, nazwa in STOLY_WEWNATRZ]
+    return {
+        "wewnatrz": wewnatrz,
+        "wewnatrz_suma": sum(w["liczba"] for w in wewnatrz),
+        "na_zewnatrz": sum(stan.get(nr, 0) for nr in STOLY_ZEWNATRZ),
+        "wynos": stan.get(STOLY_WYNOS, 0),
+        "zaktualizowano_at": last.zaktualizowano_at.isoformat() if last and last.zaktualizowano_at else None,
+    }
 
 
 # ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────

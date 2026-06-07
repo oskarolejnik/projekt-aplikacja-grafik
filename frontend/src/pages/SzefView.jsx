@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
 import { PillSwitch } from '../components/ui/PillSwitch'
+import StolyLive from '../components/tabs/StolyLive'
 import RaportGodzin from '../components/tabs/RaportGodzin'
 import SzefGrafik from '../components/tabs/SzefGrafik'
 import SzefImprezy from '../components/tabs/SzefImprezy'
@@ -11,7 +12,7 @@ import SzefImprezy from '../components/tabs/SzefImprezy'
 // opublikowany grafik, kalendarz imprez. Bez żadnej edycji.
 export default function SzefView() {
   const { user, logout } = useAuth()
-  const [widok, setWidok] = useState('godziny')
+  const [widok, setWidok] = useState('stoly')
   const imie = user?.imie || user?.login
 
   return (
@@ -37,10 +38,11 @@ export default function SzefView() {
 
       <main className="relative z-10 mx-auto w-full max-w-5xl px-4 py-6 pb-safe md:py-10">
         <PillSwitch
-          className="mb-6 max-w-md"
+          className="mb-6 max-w-lg"
           value={widok}
           onChange={setWidok}
           options={[
+            { value: 'stoly', label: 'Stoły' },
             { value: 'godziny', label: 'Godziny' },
             { value: 'grafik', label: 'Grafik' },
             { value: 'imprezy', label: 'Imprezy' },
@@ -48,6 +50,7 @@ export default function SzefView() {
         />
 
         <div key={widok} className="animate-tab-in">
+          {widok === 'stoly' && <StolyLive />}
           {widok === 'godziny' && <RaportGodzin />}
           {widok === 'grafik' && <SzefGrafik />}
           {widok === 'imprezy' && <SzefImprezy />}

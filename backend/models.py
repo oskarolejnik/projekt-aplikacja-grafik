@@ -153,3 +153,13 @@ class OdbicieRcp(Base):
     powiadomiono_wejscie = Column(Boolean, default=False)   # czy wysłano push „start zmiany"
     powiadomiono_wyjscie = Column(Boolean, default=False)   # czy wysłano push „koniec zmiany"
     zaktualizowano_at    = Column(DateTime, nullable=True)
+
+
+class StanStolow(Base):
+    """Snapshot zajętości stołów (live) z Gastro — wypychany przez lokalnego agenta.
+    Jeden wiersz = jeden rewir (po numerze użytkownika Gastro). VPS tylko przechowuje
+    ostatni stan; grupowanie na sale/zewnątrz/wynos robi endpoint. NIE dotyka RCP/godzin."""
+    __tablename__ = "stan_stolow"
+    rewir_nr          = Column(Integer, primary_key=True)   # NGastroUzytkownik.Numer
+    otwarte           = Column(Integer, nullable=False, default=0)
+    zaktualizowano_at = Column(DateTime, nullable=True)

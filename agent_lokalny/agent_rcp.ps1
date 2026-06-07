@@ -101,16 +101,63 @@ function Send-ToVps($cfg, $odbicia) {
         -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
 }
 
-function Invoke-Cykl($cfg, [int]$oknoDni) {
-    $end = (Get-Date).Date
-    $start = $end.AddDays(-1 * $oknoDni)
-    $odbicia = Get-Odbicia $cfg $start $end
-    if ($odbicia.Count -eq 0) {
-        Write-Log ('Brak odbic w oknie {0:yyyy-MM-dd}..{1:yyyy-MM-dd}.' -f $start, $end)
-        return
+# -- STOLY (opcjonalne, OSOBNA sciezka - RCP nietkniete) -----------------------
+function Get-Stoly($cfg) {
+    $out = New-Object System.Collections.ArrayList
+    $conn = New-Object System.Data.SqlClient.SqlConnection $cfg.RCP_CONNECTION_STRING
+    try {
+        $conn.Open()
+        $c0 = $conn.CreateCommand()
+        $c0.CommandText = 'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED'
+        [void]$c0.ExecuteNonQuery()
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $cfg.STOLY_SQL
+        $cmd.CommandTimeout = 30
+        $r = $cmd.ExecuteReader()
+        try {
+            while ($r.Read()) {
+                [void]$out.Add([ordered]@{ rewir_nr = [int]$r['rewir_nr']; otwarte = [int]$r['otwarte'] })
+            }
+        }
+        finally { $r.Close() }
     }
-    $wynik = Send-ToVps $cfg $odbicia
-    Write-Log ('Wyslano {0} odbic -> VPS: {1}' -f $odbicia.Count, ($wynik | ConvertTo-Json -Compress -Depth 4))
+    finally { $conn.Close() }
+    return $out
+}
+
+function Send-Stoly($cfg, $stoly) {
+    $payload = @{ stoly = @($stoly) } | ConvertTo-Json -Depth 5
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    return Invoke-RestMethod -Uri $cfg.VPS_STOLY_URL -Method Post `
+        -Headers @{ 'X-RCP-Token' = $cfg.RCP_INGEST_TOKEN } `
+        -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
+}
+
+function Invoke-Cykl($cfg, [int]$oknoDni) {
+    # 1) RCP / godziny - wlasny try, zeby blad nie zablokowal stolow
+    try {
+        $end = (Get-Date).Date
+        $start = $end.AddDays(-1 * $oknoDni)
+        $odbicia = Get-Odbicia $cfg $start $end
+        if ($odbicia.Count -eq 0) {
+            Write-Log ('Brak odbic w oknie {0:yyyy-MM-dd}..{1:yyyy-MM-dd}.' -f $start, $end)
+        }
+        else {
+            $wynik = Send-ToVps $cfg $odbicia
+            Write-Log ('Wyslano {0} odbic -> VPS: {1}' -f $odbicia.Count, ($wynik | ConvertTo-Json -Compress -Depth 4))
+        }
+    }
+    catch { Write-Log ('Blad RCP (pomijam ten cykl): {0}' -f $_.Exception.Message) }
+
+    # 2) STOLY - tylko jesli skonfigurowane; wlasny try (RCP dziala niezaleznie)
+    if ($cfg.ContainsKey('STOLY_SQL') -and $cfg['STOLY_SQL'] -and $cfg.ContainsKey('VPS_STOLY_URL') -and $cfg['VPS_STOLY_URL']) {
+        try {
+            $stoly = Get-Stoly $cfg
+            Send-Stoly $cfg $stoly | Out-Null
+            Write-Log ('Stoly: wyslano {0} rewirow -> VPS.' -f $stoly.Count)
+        }
+        catch { Write-Log ('Blad stolow (pomijam): {0}' -f $_.Exception.Message) }
+    }
 }
 
 # -- main ----------------------------------------------------------------------
