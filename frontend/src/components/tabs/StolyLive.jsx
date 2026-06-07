@@ -79,6 +79,12 @@ export default function StolyLive() {
             <Tile label="Na wynos" value={dane?.wynos} accent />
           </div>
 
+          {/* Kuchnia — zamówienia do wydania (z KDS, kierunek Kuchnia). Osobna metryka. */}
+          <div className="mt-3 rounded-xl border border-lemon/30 bg-lemon/[0.06] p-4 text-center">
+            <div className="font-display text-3xl font-bold tabular-nums text-ink">{dane?.kuchnia ?? 0}</div>
+            <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-muted">Kuchnia — do wydania</div>
+          </div>
+
           {dane?.zaktualizowano_at && (
             <div className="mt-4 text-right text-xs text-muted">
               Aktualizacja: {new Date(dane.zaktualizowano_at).toLocaleTimeString('pl-PL')}

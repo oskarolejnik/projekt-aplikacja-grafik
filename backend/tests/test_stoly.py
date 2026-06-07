@@ -24,6 +24,7 @@ def test_ingest_i_grupowanie(client, admin_client, db):
         {"rewir_nr": 55, "otwarte": 4},   # STRZECHA (zewnątrz)
         {"rewir_nr": 108, "otwarte": 5},  # Zetka+Ka (zewnątrz)
         {"rewir_nr": 46, "otwarte": 3},   # WYNOS
+        {"rewir_nr": -1, "otwarte": 8},   # KUCHNIA (pseudo-rewir)
     ]}
     assert client.post("/api/gastro/stoly", headers=TOKEN, json=payload).status_code == 200
     d = admin_client.get("/api/gastro/stoly").json()
@@ -32,6 +33,7 @@ def test_ingest_i_grupowanie(client, admin_client, db):
     assert d["wewnatrz_suma"] == 19            # 4+5+10+0
     assert d["na_zewnatrz"] == 16              # 7+4+0(FLINSTONY brak)+5
     assert d["wynos"] == 3
+    assert d["kuchnia"] == 8
 
 
 def test_upsert_nadpisuje_snapshot(client, admin_client, db):
