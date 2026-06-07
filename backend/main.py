@@ -50,8 +50,17 @@ async def role_guard(request: Request, call_next):
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         except jwt.PyJWTError:
             return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
-        if not path.startswith("/api/me/") and payload.get("rola") != "admin":
-            return JSONResponse({"detail": "Wymagane uprawnienia administratora."}, status_code=403)
+        rola = payload.get("rola")
+        if not path.startswith("/api/me/") and rola != "admin":
+            # Rola "szef" — oversight: tylko ODCZYT (GET) wybranych zasobow.
+            szef_ok = request.method == "GET" and any(
+                path.startswith(p) for p in (
+                    "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
+                    "/api/imprezy", "/api/pracownicy", "/api/stanowiska",
+                )
+            )
+            if not (rola == "szef" and szef_ok):
+                return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
     return await call_next(request)
 
 
@@ -147,7 +156,7 @@ def list_users(db: Session = Depends(get_db)):
 
 @app.post("/api/users", response_model=schemas.UserOut, status_code=201)
 def create_user(dane: schemas.UserCreate, db: Session = Depends(get_db)):
-    if dane.rola not in ("admin", "employee"):
+    if dane.rola not in ("admin", "employee", "szef"):
         raise HTTPException(400, "Nieprawidłowa rola.")
     if db.query(models.User).filter(models.User.login == dane.login).first():
         raise HTTPException(400, "Login jest już zajęty.")
@@ -169,7 +178,7 @@ def update_user(uid: int, dane: schemas.UserUpdate, db: Session = Depends(get_db
     if not u:
         raise HTTPException(404, "Nie znaleziono konta.")
     if dane.rola is not None:
-        if dane.rola not in ("admin", "employee"):
+        if dane.rola not in ("admin", "employee", "szef"):
             raise HTTPException(400, "Nieprawidłowa rola.")
         u.rola = dane.rola
     if dane.aktywny is not None:

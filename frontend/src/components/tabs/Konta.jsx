@@ -110,6 +110,7 @@ export default function Konta() {
             <input value={haslo} onChange={(e) => setHaslo(e.target.value)} type="text" placeholder="Hasło" className="field" autoComplete="off" />
             <select value={rola} onChange={(e) => setRola(e.target.value)} className="field">
               <option value="employee" className="bg-surface">Pracownik</option>
+              <option value="szef" className="bg-surface">Szef (podgląd)</option>
               <option value="admin" className="bg-surface">Administrator</option>
             </select>
             <select value={pracownikId} onChange={(e) => setPracownikId(e.target.value)} className="field">
@@ -143,9 +144,10 @@ export default function Konta() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-ink">{u.login}</span>
-                    <span className={`rounded-md px-2 py-0.5 text-xs font-bold ${u.rola === 'admin' ? 'bg-lemon/15 text-lemon' : 'bg-mint/15 text-mint'}`}>
-                      {u.rola === 'admin' ? 'Administrator' : 'Pracownik'}
-                    </span>
+                    {(() => {
+                      const r = { admin: ['bg-lemon/15 text-lemon', 'Administrator'], szef: ['bg-blush/15 text-blush', 'Szef'] }[u.rola] || ['bg-mint/15 text-mint', 'Pracownik']
+                      return <span className={`rounded-md px-2 py-0.5 text-xs font-bold ${r[0]}`}>{r[1]}</span>
+                    })()}
                   </div>
                   <label className="flex items-center gap-2 text-xs text-muted">
                     Aktywne
