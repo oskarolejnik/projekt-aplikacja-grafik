@@ -22,20 +22,30 @@ export default function RaportGodzin() {
     [rok, miesiac],
   )
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       setDane(await api(`/raporty/godziny?rok=${rok}&miesiac=${miesiac}`))
     } catch (e) {
-      toast(e.message, 'error')
-      setDane(null)
+      if (!silent) {
+        toast(e.message, 'error')
+        setDane(null)
+      }
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [rok, miesiac, toast])
 
   useEffect(() => {
     load()
+  }, [load])
+
+  // Live: ciche odświeżanie co 20 s (bez spinnera), tylko gdy karta jest widoczna.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') load(true)
+    }, 20000)
+    return () => clearInterval(id)
   }, [load])
 
   const przesunMiesiac = (delta) => {
@@ -86,6 +96,28 @@ export default function RaportGodzin() {
         </div>
       ) : (
         <>
+          {/* Na zmianie TERAZ (live) — niezakończone odbicia. Odświeża się co 20 s. */}
+          {dane?.na_zmianie?.length > 0 && (
+            <div className="mb-6 rounded-xl border border-mint/30 bg-mint/[0.05] p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-mint" />
+                </span>
+                <span className="text-sm font-bold text-ink">Na zmianie teraz ({dane.na_zmianie.length})</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {dane.na_zmianie.map((z, i) => (
+                  <span key={i} className="inline-flex items-center gap-2 rounded-lg border border-line bg-white/[0.03] px-2.5 py-1 text-xs">
+                    <span className="font-semibold text-ink">{z.pracownik}</span>
+                    <span className="font-mono text-muted">od {z.wejscie.slice(11, 16)}</span>
+                    {!z.dopasowany && <span className="rounded bg-lemon/15 px-1 text-[10px] font-bold text-lemon">niedopasowany</span>}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Pasek podsumowania zbiorczego */}
           <div className="mb-6 flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border border-line bg-white/[0.02] px-5 py-4">
             <div>

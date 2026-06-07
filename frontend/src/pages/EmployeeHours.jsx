@@ -20,20 +20,30 @@ export default function EmployeeHours() {
     [rok, miesiac],
   )
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       setDane(await api(`/me/godziny?rok=${rok}&miesiac=${miesiac}`))
     } catch (e) {
-      toast(e.message, 'error')
-      setDane(null)
+      if (!silent) {
+        toast(e.message, 'error')
+        setDane(null)
+      }
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [rok, miesiac, toast])
 
   useEffect(() => {
     load()
+  }, [load])
+
+  // Live: ciche odświeżanie co 20 s (bez spinnera), tylko gdy karta jest widoczna.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') load(true)
+    }, 20000)
+    return () => clearInterval(id)
   }, [load])
 
   const przesunMiesiac = (delta) => {

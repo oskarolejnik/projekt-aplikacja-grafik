@@ -209,6 +209,22 @@ def test_raport_admin_dostepny_dla_admina(admin_client, db):
     r = admin_client.get("/api/raporty/godziny", params={"rok": 2026, "miesiac": 6})
     assert r.status_code == 200
     assert "pracownicy" in r.json()
+    assert "na_zmianie" in r.json()
+
+
+def test_raport_na_zmianie_pokazuje_trwajace(admin_client, db):
+    import main
+    from datetime import datetime
+    p = factories.PracownikFactory(imie="Live", nazwisko="Osoba")
+    teraz = main._teraz_lokalnie() or datetime.now()
+    db.add(models.OdbicieRcp(
+        rcp_id="live1", imie_nazwisko="Live Osoba", pracownik_id=p.id,
+        data=teraz.date(), wejscie=teraz.replace(microsecond=0), wyjscie=None,
+    ))
+    db.commit()
+    r = admin_client.get("/api/raporty/godziny", params={"rok": teraz.year, "miesiac": teraz.month})
+    nz = r.json()["na_zmianie"]
+    assert any(z["pracownik"] == "Live Osoba" and z["dopasowany"] for z in nz)
 
 
 # ── Back-fill: nowy/edytowany pracownik podlinkowuje zalegle odbicia RCP ──────

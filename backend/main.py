@@ -1103,10 +1103,36 @@ def moje_godziny(
     }
 
 
+def _trwajace_zmiany(db):
+    """Pracownicy aktualnie NA ZMIANIE: wejscie jest, wyjscia brak, rozpoczete w ~18h.
+    Dopasowani -> imie+nazwisko z konta; niedopasowani -> nazwa z RCP."""
+    teraz = _teraz_lokalnie()
+    prac = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    out = []
+    for o in (
+        db.query(models.OdbicieRcp)
+        .filter(models.OdbicieRcp.wyjscie.is_(None), models.OdbicieRcp.wejscie.isnot(None))
+        .order_by(models.OdbicieRcp.wejscie.desc())
+        .all()
+    ):
+        if teraz is not None and o.wejscie < teraz - timedelta(hours=18):
+            continue
+        out.append({
+            "pracownik_id": o.pracownik_id,
+            "pracownik": prac.get(o.pracownik_id) or o.imie_nazwisko,
+            "wejscie": o.wejscie.isoformat(),
+            "dopasowany": o.pracownik_id is not None,
+        })
+    return out
+
+
 @app.get("/api/raporty/godziny", status_code=200)
 def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
-    """Raport godzin wszystkich pracowników (tylko admin — wymusza middleware)."""
-    return raporty.raport_godzin_miesiac(db, rok, miesiac)
+    """Raport godzin wszystkich pracowników (tylko admin — wymusza middleware).
+    Dorzuca `na_zmianie`: kto jest teraz na zmianie (live)."""
+    raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
+    raport["na_zmianie"] = _trwajace_zmiany(db)
+    return raport
 
 
 # ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────
