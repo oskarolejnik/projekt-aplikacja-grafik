@@ -70,16 +70,14 @@ export default function Rezerwacje() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="font-display text-2xl font-bold text-ink">Rezerwacje</h2>
-          <p className="mt-1 text-sm text-muted">Ile jeszcze dziś przyjdzie · dni rozwijane (na żywo).</p>
+          <p className="mt-1 text-sm text-muted">Na żywo z kalendarza · dni rozwijane.</p>
         </div>
-        <div className="flex gap-6">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Jeszcze dziś</div>
-            <div className="font-display text-2xl font-bold text-gradient tabular-nums">{dzisRez}</div>
-          </div>
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Osoby</div>
-            <div className="font-display text-2xl font-bold text-ink tabular-nums">{dzisOsob}</div>
+        <div className="text-right">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Jeszcze dziś</div>
+          <div className="flex items-baseline justify-end gap-2">
+            <span className="font-display text-3xl font-bold text-gradient tabular-nums">{dzisRez}</span>
+            <span className="text-sm font-semibold text-muted">rez.</span>
+            <span className="text-sm text-muted">· {dzisOsob} os.</span>
           </div>
         </div>
       </div>
@@ -106,12 +104,15 @@ export default function Rezerwacje() {
                   className="flex w-full items-center gap-2 p-4 text-left transition active:scale-[0.99]"
                   style={{ WebkitTapHighlightColor: 'transparent' }}
                 >
-                  <div className="flex items-baseline gap-2">
-                    <span className={`font-semibold capitalize ${isW ? 'text-blush' : 'text-ink'}`}>{NAZWY_DNI[new Date(d.data).getDay()]}</span>
-                    <span className="text-xs text-muted">{ddmmyyyy(d.data)}</span>
-                    {d.data === today && <span className="rounded-md bg-accent-gradient px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-bg">dziś</span>}
+                  <div className="flex min-w-0 items-baseline gap-2">
+                    <span className={`truncate font-semibold capitalize ${isW ? 'text-blush' : 'text-ink'}`}>{NAZWY_DNI[new Date(d.data).getDay()]}</span>
+                    <span className="shrink-0 text-xs text-muted">{ddmmyyyy(d.data).slice(0, 5)}</span>
+                    {d.data === today && <span className="shrink-0 rounded-md bg-accent-gradient px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-bg">dziś</span>}
                   </div>
-                  <span className="ml-auto text-sm font-bold text-ink">{d.liczba} rez. · {d.osoby} os.</span>
+                  <span className="ml-auto flex shrink-0 items-baseline gap-1.5">
+                    <span className="text-lg font-bold tabular-nums text-ink">{d.liczba}</span>
+                    <span className="text-xs text-muted">rez. · {d.osoby} os.</span>
+                  </span>
                   <Icon name="chevronDown" className={`h-4 w-4 shrink-0 text-muted transition-transform duration-300 ${open ? 'rotate-180' : ''}`} />
                 </button>
 
@@ -120,10 +121,11 @@ export default function Rezerwacje() {
                   <div className="min-h-0 overflow-hidden">
                     <div className="space-y-1 px-4 pb-4">
                       {d.godziny.map((g) => (
-                        <div key={g.godzina} className="flex items-center gap-3 border-b border-line/50 py-1 text-sm last:border-0">
-                          <span className="w-16 shrink-0 font-mono font-semibold text-ink">{g.godzina}</span>
-                          <span className="text-muted">{g.liczba} rez.</span>
-                          <span className="ml-auto font-mono font-bold tabular-nums text-ink">{g.osoby} os.</span>
+                        <div key={g.godzina} className="flex items-center gap-3 border-b border-line/50 py-1.5 text-sm last:border-0">
+                          <span className="w-14 shrink-0 font-mono font-semibold text-muted">{g.godzina}</span>
+                          <span className="text-base font-bold tabular-nums text-ink">{g.liczba}</span>
+                          <span className="text-xs text-muted">rez.</span>
+                          <span className="ml-auto text-xs text-muted">{g.osoby} os.</span>
                         </div>
                       ))}
                     </div>
