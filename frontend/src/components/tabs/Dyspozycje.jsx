@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Card } from '../ui/Card'
 import { WeekSelect } from '../ui/WeekSelect'
 import { Banner } from '../ui/Banner'
@@ -15,25 +15,34 @@ import { motion, AnimatePresence } from 'framer-motion'
 // administrator może tu DOWOLNIE ustawić/zmienić/wyczyścić dyspozycję — klik w komórkę
 // otwiera edytor (dostępny / niedostępny / od której godziny). Zapis: POST/DELETE /api/dyspozycje.
 export default function Dyspozycje() {
-  const { pracownicy, week, reloadDicts } = useData()
+  const { pracownicy, week, przyszly, setWeek, reloadDicts } = useData()
   const { toast } = useToast()
+
+  // Na wejściu w Dyspozycyjność pokaż tydzień przyszły (składane z wyprzedzeniem).
+  useEffect(() => {
+    setWeek(przyszly)
+  }, [przyszly, setWeek])
   const [dys, setDys] = useState([])
   const [loading, setLoading] = useState(true)
   const [edit, setEdit] = useState(null) // { prac, dt, dostepnosc, od, id }
   const [saving, setSaving] = useState(false)
+  const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
   const [s, e] = week.split('|')
   const daty = useMemo(() => zakresDni(s, e), [s, e])
 
   const load = useCallback(async () => {
+    const id = ++reqId.current
     setLoading(true)
     try {
       await reloadDicts()
-      setDys(await api(`/dyspozycje?start=${s}&end=${e}`))
+      const d = await api(`/dyspozycje?start=${s}&end=${e}`)
+      if (id !== reqId.current) return // starsze zapytanie (zmienił się tydzień) — pomiń
+      setDys(d)
     } catch (err) {
-      toast(err.message, 'error')
+      if (id === reqId.current) toast(err.message, 'error')
     } finally {
-      setLoading(false)
+      if (id === reqId.current) setLoading(false)
     }
   }, [s, e, reloadDicts, toast])
 
@@ -58,6 +67,7 @@ export default function Dyspozycje() {
       dt,
       dostepnosc: d ? d.dostepnosc : true,
       od: d && d.godz_od ? hhmm(d.godz_od) : '',
+      do: d && d.godz_do ? hhmm(d.godz_do) : '',
       id: d ? d.id : null,
     })
   }
@@ -74,6 +84,7 @@ export default function Dyspozycje() {
         data: edit.dt,
         dostepnosc: edit.dostepnosc,
         godz_od: edit.dostepnosc && edit.od ? `${edit.od}:00` : null,
+        godz_do: edit.dostepnosc && edit.do ? `${edit.do}:00` : null,
       })
       toast('Zapisano dyspozycyjność.', 'success')
       setEdit(null)
@@ -103,7 +114,7 @@ export default function Dyspozycje() {
     }
   }
 
-  const calyDzien = edit ? !edit.od : true
+  const calyDzien = edit ? !edit.od && !edit.do : true
 
   return (
     <Card className="p-6 md:p-8">
@@ -160,7 +171,9 @@ export default function Dyspozycje() {
                       if (d) {
                         if (d.dostepnosc) {
                           cls = 'text-success'
-                          txt = d.godz_od ? `od ${hhmm(d.godz_od)}` : 'tak'
+                          const o = d.godz_od ? hhmm(d.godz_od) : ''
+                          const dd = d.godz_do ? hhmm(d.godz_do) : ''
+                          txt = o && dd ? `${o}–${dd}` : o ? `od ${o}` : dd ? `do ${dd}` : 'tak'
                         } else {
                           cls = 'text-danger'
                           txt = 'nie'
@@ -232,13 +245,13 @@ export default function Dyspozycje() {
               />
 
               {edit.dostepnosc && (
-                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-line bg-white/[0.02] p-3">
+                <div className="mt-4 flex flex-col gap-3 rounded-xl border border-line bg-white/[0.02] p-3">
                   <button
                     type="button"
                     role="switch"
                     aria-checked={calyDzien}
-                    onClick={() => setEdit((st) => ({ ...st, od: calyDzien ? '08:00' : '' }))}
-                    className="flex items-center gap-2 text-sm font-semibold text-muted transition active:scale-[0.97]"
+                    onClick={() => setEdit((st) => (calyDzien ? { ...st, od: '08:00', do: '' } : { ...st, od: '', do: '' }))}
+                    className="flex items-center gap-2 self-start text-sm font-semibold text-muted transition active:scale-[0.97]"
                     style={{ WebkitTapHighlightColor: 'transparent' }}
                   >
                     <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
@@ -250,14 +263,22 @@ export default function Dyspozycje() {
                     Cały dzień
                   </button>
                   {!calyDzien && (
-                    <div className="flex items-center gap-2 text-sm text-muted">
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
                       <span>od</span>
                       <input
                         type="time"
                         value={edit.od}
                         onChange={(ev) => setEdit((st) => ({ ...st, od: ev.target.value }))}
                         className="field px-2 py-2"
-                        style={{ width: '7rem' }}
+                        style={{ width: '6.5rem' }}
+                      />
+                      <span>do</span>
+                      <input
+                        type="time"
+                        value={edit.do}
+                        onChange={(ev) => setEdit((st) => ({ ...st, do: ev.target.value }))}
+                        className="field px-2 py-2"
+                        style={{ width: '6.5rem' }}
                       />
                     </div>
                   )}

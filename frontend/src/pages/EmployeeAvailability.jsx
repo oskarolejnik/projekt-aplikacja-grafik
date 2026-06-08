@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useData } from '../context/DataContext'
 import { useToast } from '../components/ui/Toast'
 import { WeekSelect } from '../components/ui/WeekSelect'
@@ -18,27 +18,40 @@ const fmtGodzina = (g) => {
 }
 
 // Treść widoku „Moja dyspozycyjność" (nagłówek/powłokę dostarcza EmployeeArea).
-// Przy każdym dniu pokazujemy imprezy z bazy, by pracownik dopasował godziny.
+// Domyślnie pokazujemy tydzień PRZYSZŁY (dyspozycje składa się z wyprzedzeniem).
+// Zapisaną dyspozycyjność wczytujemy z serwera, więc pracownik widzi, co zaznaczył,
+// i może to zmieniać aż do publikacji grafiku (potem widok jest zablokowany).
 export default function EmployeeAvailability() {
-  const { week } = useData()
+  const { week, przyszly, setWeek } = useData()
   const { toast } = useToast()
   const [dni, setDni] = useState([])
   const [imprezyMap, setImprezyMap] = useState({})
   const [rezerwacjeMap, setRezerwacjeMap] = useState({})
+  const [zablokowane, setZablokowane] = useState(false) // grafik opublikowany -> read-only
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const reqId = useRef(0) // chroni przed wyścigiem: stare ładowanie nie nadpisze nowego (zmiana tygodnia)
+
+  // Na wejściu w widok ustaw tydzień przyszły (raz, przy montażu).
+  useEffect(() => {
+    setWeek(przyszly)
+  }, [przyszly, setWeek])
 
   const [s, e] = week.split('|')
   const daty = useMemo(() => zakresDni(s, e), [s, e])
 
   const load = useCallback(async () => {
+    const id = ++reqId.current
     setLoading(true)
     try {
-      const [existing, imprezy, rez] = await Promise.all([
+      const [existing, imprezy, rez, grafik] = await Promise.all([
         api(`/me/dyspozycje?start=${s}&end=${e}`),
         api(`/me/imprezy?start=${s}&end=${e}`),
         api('/me/rezerwacje').catch(() => ({ dni: [] })),
+        api(`/me/grafik?start=${s}&end=${e}`).catch(() => ({ opublikowany: false })),
       ])
+      if (id !== reqId.current) return // starsze zapytanie (tydzień się zmienił) — pomiń wynik
+      setZablokowane(!!grafik?.opublikowany)
       setRezerwacjeMap(Object.fromEntries((rez?.dni || []).map((d) => [d.data, d])))
       const map = Object.fromEntries(existing.map((d) => [d.data, d]))
       setDni(
@@ -48,6 +61,7 @@ export default function EmployeeAvailability() {
             data: d,
             dostepnosc: rec ? rec.dostepnosc : true, // domyślnie dostępny
             od: rec && rec.godz_od ? hhmm(rec.godz_od) : '',
+            do: rec && rec.godz_do ? hhmm(rec.godz_do) : '',
           }
         }),
       )
@@ -57,9 +71,9 @@ export default function EmployeeAvailability() {
       })
       setImprezyMap(im)
     } catch (err) {
-      toast(err.message, 'error')
+      if (id === reqId.current) toast(err.message, 'error')
     } finally {
-      setLoading(false)
+      if (id === reqId.current) setLoading(false)
     }
   }, [s, e, daty, toast])
 
@@ -77,10 +91,16 @@ export default function EmployeeAvailability() {
           data: d.data,
           dostepnosc: d.dostepnosc,
           godz_od: d.dostepnosc && d.od ? `${d.od}:00` : null,
+          godz_do: d.dostepnosc && d.do ? `${d.do}:00` : null,
         })),
       })
       toast('Zapisano Twoją dyspozycyjność.', 'success')
     } catch (err) {
+      // 409 = grafik opublikowany w międzyczasie -> zablokuj i przeładuj zapisany stan.
+      if (/opublikowan/i.test(err.message)) {
+        setZablokowane(true)
+        load()
+      }
       toast(err.message, 'error')
     } finally {
       setSaving(false)
@@ -91,8 +111,19 @@ export default function EmployeeAvailability() {
     <>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <WeekSelect />
-        <span className="text-sm text-muted">Zaznacz dni, w których możesz pracować. Domyślnie „Cały dzień" — wyłącz przełącznik, aby podać godzinę od której.</span>
+        <span className="text-sm text-muted">
+          {zablokowane
+            ? 'Grafik na ten tydzień jest opublikowany — dyspozycji nie można już zmieniać.'
+            : 'Zaznacz dni, w których możesz pracować. Domyślnie „Cały dzień" — wyłącz przełącznik, aby podać godziny od–do.'}
+        </span>
       </div>
+
+      {zablokowane && (
+        <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-line bg-white/[0.03] px-4 py-3 text-sm font-semibold text-muted">
+          <Icon name="check" className="h-4 w-4 text-success" />
+          Grafik opublikowany. Poniżej Twoja zapisana dyspozycyjność (tylko do podglądu).
+        </div>
+      )}
 
       <Card className="p-6">
         {loading ? (
@@ -100,11 +131,11 @@ export default function EmployeeAvailability() {
             <Spinner className="h-6 w-6 text-muted" />
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className={`space-y-3 ${zablokowane ? 'pointer-events-none select-none opacity-70' : ''}`}>
             {dni.map((d, i) => {
               const imprezy = imprezyMap[d.data] || []
               const rez = rezerwacjeMap[d.data]
-              const calyDzien = !d.od
+              const calyDzien = !d.od && !d.do
               return (
                 <div
                   key={d.data}
@@ -134,20 +165,19 @@ export default function EmployeeAvailability() {
                         ]}
                       />
 
-                      {/* Zwijanie opcji (Dostępny→Niedostępny) PIONOWO: grid-template-rows 0fr↔1fr.
-                          Czysty CSS — zero mierzenia wysokości, brak „podwójnego" skoku. */}
+                      {/* Zwijanie opcji (Dostępny→Niedostępny) PIONOWO: grid-template-rows 0fr↔1fr. */}
                       <div
                         className="grid w-full transition-all duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)] sm:w-auto"
                         style={{ gridTemplateRows: d.dostepnosc ? '1fr' : '0fr', opacity: d.dostepnosc ? 1 : 0 }}
                       >
                         <div className="min-h-0 overflow-hidden">
-                          <div className="flex items-center gap-3 pt-2 text-xs sm:justify-end">
+                          <div className="flex flex-col items-stretch gap-2 pt-2 text-xs sm:items-end">
                             <button
                               type="button"
                               role="switch"
                               aria-checked={calyDzien}
-                              onClick={() => setDay(i, { od: calyDzien ? '08:00' : '' })}
-                              className="flex shrink-0 items-center gap-2 font-semibold text-muted transition active:scale-[0.96]"
+                              onClick={() => setDay(i, calyDzien ? { od: '08:00', do: '' } : { od: '', do: '' })}
+                              className="flex shrink-0 items-center gap-2 self-start font-semibold text-muted transition active:scale-[0.96] sm:self-end"
                               style={{ WebkitTapHighlightColor: 'transparent' }}
                             >
                               <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
@@ -159,22 +189,30 @@ export default function EmployeeAvailability() {
                               Cały dzień
                             </button>
 
-                            {/* Pole godziny „wyjeżdża z boku" — animowany max-width (0↔12rem).
-                                Input ma stałą szerokość (7rem), więc treść się nie zapada;
-                                overflow-hidden przycina ją podczas wysuwania. */}
+                            {/* Pola od–do wyjeżdżają w dół, gdy „Cały dzień" jest wyłączony. */}
                             <div
-                              className="overflow-hidden transition-all duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
-                              style={{ maxWidth: calyDzien ? 0 : '12rem', opacity: calyDzien ? 0 : 1 }}
+                              className="grid transition-all duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+                              style={{ gridTemplateRows: calyDzien ? '0fr' : '1fr', opacity: calyDzien ? 0 : 1 }}
                             >
-                              <div className="flex shrink-0 items-center gap-2 whitespace-nowrap pl-1 text-muted">
-                                <span>od</span>
-                                <input
-                                  type="time"
-                                  value={d.od}
-                                  onChange={(ev) => setDay(i, { od: ev.target.value })}
-                                  className="field px-2 py-2"
-                                  style={{ width: '7rem' }}
-                                />
+                              <div className="min-h-0 overflow-hidden">
+                                <div className="flex flex-wrap items-center gap-2 pt-1 text-muted sm:justify-end">
+                                  <span>od</span>
+                                  <input
+                                    type="time"
+                                    value={d.od}
+                                    onChange={(ev) => setDay(i, { od: ev.target.value })}
+                                    className="field px-2 py-2"
+                                    style={{ width: '7rem' }}
+                                  />
+                                  <span>do</span>
+                                  <input
+                                    type="time"
+                                    value={d.do}
+                                    onChange={(ev) => setDay(i, { do: ev.target.value })}
+                                    className="field px-2 py-2"
+                                    style={{ width: '7rem' }}
+                                  />
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -207,14 +245,16 @@ export default function EmployeeAvailability() {
           </div>
         )}
 
-        <button
-          onClick={zapisz}
-          disabled={saving || loading}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3.5 text-sm font-bold uppercase tracking-[0.15em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.98] disabled:opacity-60"
-        >
-          {saving ? <Spinner className="h-4 w-4" /> : <Icon name="check" className="h-4 w-4" />}
-          {saving ? 'Zapisywanie…' : 'Zapisz dyspozycyjność'}
-        </button>
+        {!zablokowane && (
+          <button
+            onClick={zapisz}
+            disabled={saving || loading}
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3.5 text-sm font-bold uppercase tracking-[0.15em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.98] disabled:opacity-60"
+          >
+            {saving ? <Spinner className="h-4 w-4" /> : <Icon name="check" className="h-4 w-4" />}
+            {saving ? 'Zapisywanie…' : 'Zapisz dyspozycyjność'}
+          </button>
+        )}
       </Card>
     </>
   )

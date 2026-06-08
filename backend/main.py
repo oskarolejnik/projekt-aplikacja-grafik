@@ -43,7 +43,7 @@ app.add_middleware(
 async def role_guard(request: Request, call_next):
     path = request.url.path
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path == "/api/gastro/stoly" and request.method == "POST"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -265,6 +265,15 @@ def zapisz_moje_dyspozycje(
 ):
     if not user.pracownik_id:
         raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    # Edycja dyspozycji możliwa tylko DO publikacji grafiku danego tygodnia.
+    daty = [d.data for d in batch.dyspozycje]
+    if daty:
+        opub = db.query(models.PublikacjaGrafiku).filter(
+            models.PublikacjaGrafiku.start <= min(daty),
+            models.PublikacjaGrafiku.koniec >= max(daty),
+        ).first()
+        if opub:
+            raise HTTPException(409, "Grafik na ten tydzień jest już opublikowany — dyspozycji nie można już zmieniać.")
     zapisano = 0
     for d in batch.dyspozycje:
         existing = db.query(models.Dyspozycja).filter_by(
@@ -273,10 +282,11 @@ def zapisz_moje_dyspozycje(
         if existing:
             existing.dostepnosc = d.dostepnosc
             existing.godz_od = d.godz_od
+            existing.godz_do = d.godz_do
         else:
             db.add(models.Dyspozycja(
                 pracownik_id=user.pracownik_id, data=d.data,
-                dostepnosc=d.dostepnosc, godz_od=d.godz_od,
+                dostepnosc=d.dostepnosc, godz_od=d.godz_od, godz_do=d.godz_do,
             ))
         zapisano += 1
     db.commit()
@@ -1232,6 +1242,41 @@ def gastro_stoly(db: Session = Depends(get_db)):
         "kuchnia_pozycje": stan.get(STOLY_KUCHNIA_POZYCJE, 0),
         "zaktualizowano_at": last.zaktualizowano_at.isoformat() if last and last.zaktualizowano_at else None,
     }
+
+
+@app.post("/api/gastro/stoly-historia")
+def gastro_stoly_historia_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Dzienna historia liczby stolików od agenta (X-RCP-Token). Upsert per dzień. NIE dotyka RCP."""
+    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+        raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
+    teraz = datetime.utcnow()
+    for it in (payload.get("dni") or []):
+        try:
+            d = date.fromisoformat(str(it["data"])[:10])
+            ile = int(it.get("liczba") or 0)
+        except (KeyError, ValueError, TypeError):
+            continue
+        rec = db.get(models.StolikiHistoria, d)
+        if rec is None:
+            db.add(models.StolikiHistoria(data=d, liczba=ile, zaktualizowano_at=teraz))
+        else:
+            rec.liczba = ile
+            rec.zaktualizowano_at = teraz
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/gastro/stoly-historia")
+def gastro_stoly_historia(db: Session = Depends(get_db)):
+    """Historia liczby obsłużonych stolików na dzień (admin + szef) — ostatnie 30 dni."""
+    od = date.today() - timedelta(days=30)
+    rows = (
+        db.query(models.StolikiHistoria)
+        .filter(models.StolikiHistoria.data >= od)
+        .order_by(models.StolikiHistoria.data.asc())
+        .all()
+    )
+    return {"dni": [{"data": r.data.isoformat(), "liczba": r.liczba} for r in rows]}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useData } from '../context/DataContext'
 import { useToast } from '../components/ui/Toast'
 import { WeekSelect } from '../components/ui/WeekSelect'
@@ -12,22 +12,30 @@ import { ddmmyyyy, NAZWY_DNI } from '../lib/format'
 // „Mój grafik" — pracownik widzi swoje zmiany TYLKO po udostępnieniu przez admina:
 // dzień, godzina, stanowisko + rewir oraz z kim dzieli rewir.
 export default function EmployeeSchedule({ onSeen }) {
-  const { week } = useData()
+  const { week, biezacy, setWeek } = useData()
   const { toast } = useToast()
   const [stan, setStan] = useState({ opublikowany: false, zmiany: [] })
   const [loading, setLoading] = useState(true)
+  const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
   const [s, e] = week.split('|')
 
+  // Na wejściu w „Mój grafik" pokaż tydzień bieżący.
+  useEffect(() => {
+    setWeek(biezacy)
+  }, [biezacy, setWeek])
+
   const load = useCallback(async () => {
+    const id = ++reqId.current
     setLoading(true)
     try {
       const r = await api(`/me/grafik?start=${s}&end=${e}`)
+      if (id !== reqId.current) return // starsze zapytanie (zmienił się tydzień) — pomiń
       setStan(r)
       if (r.opublikowany && r.opublikowano_at && onSeen) onSeen(r.opublikowano_at)
     } catch (err) {
-      toast(err.message, 'error')
+      if (id === reqId.current) toast(err.message, 'error')
     } finally {
-      setLoading(false)
+      if (id === reqId.current) setLoading(false)
     }
   }, [s, e, toast, onSeen])
 

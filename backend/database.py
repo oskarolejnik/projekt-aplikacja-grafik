@@ -52,6 +52,11 @@ def _ensure_schema():
         if "rewir" not in kolumny:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN rewir VARCHAR"))
+    if "dyspozycje" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("dyspozycje")}
+        if "godz_do" not in kolumny:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE dyspozycje ADD COLUMN godz_do TIME"))
 
 
 def init_db():

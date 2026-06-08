@@ -3,10 +3,22 @@
 const API = '/api'
 const TOKEN_KEY = 'grafik_token'
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY)
-export const setToken = (t) => {
-  if (t) localStorage.setItem(TOKEN_KEY, t)
-  else localStorage.removeItem(TOKEN_KEY)
+export const getToken = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
+// remember=true → sesja trwała (localStorage, przeżywa zamknięcie przeglądarki);
+// remember=false → tylko bieżąca sesja (sessionStorage, znika po zamknięciu karty/przeglądarki).
+export const setToken = (t, remember = true) => {
+  if (!t) {
+    localStorage.removeItem(TOKEN_KEY)
+    sessionStorage.removeItem(TOKEN_KEY)
+    return
+  }
+  if (remember) {
+    localStorage.setItem(TOKEN_KEY, t)
+    sessionStorage.removeItem(TOKEN_KEY)
+  } else {
+    sessionStorage.setItem(TOKEN_KEY, t)
+    localStorage.removeItem(TOKEN_KEY)
+  }
 }
 
 // AuthContext rejestruje tu reakcję na wygaśnięcie sesji (401).

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Button } from '../ui/Button'
 import { WeekSelect } from '../ui/WeekSelect'
 import { Banner } from '../ui/Banner'
@@ -16,8 +16,13 @@ import { SPRING_PILL } from '../../lib/motion'
 // Prezentacja responsywna: desktop = macierz (tabela), mobile = wybór dnia + lista
 // pracowników. Render pojedynczej komórki wydzielony do komorka(dt, p) — wspólny dla obu.
 export default function Grafik() {
-  const { stanowiska, pracownicy, week, reloadDicts } = useData()
+  const { stanowiska, pracownicy, week, biezacy, setWeek, reloadDicts } = useData()
   const { toast, confirm } = useToast()
+
+  // Na wejściu w interaktywny grafik pokaż tydzień bieżący.
+  useEffect(() => {
+    setWeek(biezacy)
+  }, [biezacy, setWeek])
   const [przydzialy, setPrzydzialy] = useState([])
   const [dyspozycje, setDyspozycje] = useState([])
   const [wymagania, setWymagania] = useState([])
@@ -26,8 +31,10 @@ export default function Grafik() {
   const [publikacja, setPublikacja] = useState({ opublikowany: false, opublikowano_at: null })
   const [publikowanie, setPublikowanie] = useState(false)
   const [selDay, setSelDay] = useState('') // wybrany dzień w widoku mobilnym
+  const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
   const load = useCallback(async () => {
+    const id = ++reqId.current
     const [s, e] = week.split('|')
     setLoading(true)
     try {
@@ -38,14 +45,15 @@ export default function Grafik() {
         api(`/wymagania?start=${s}&end=${e}`),
         api(`/grafik/publikacja?start=${s}&end=${e}`),
       ])
+      if (id !== reqId.current) return // starsze zapytanie (zmienił się tydzień) — pomiń
       setPrzydzialy(pr)
       setDyspozycje(dy)
       setWymagania(wy)
       setPublikacja(pub)
     } catch (err) {
-      toast(err.message, 'error')
+      if (id === reqId.current) toast(err.message, 'error')
     } finally {
-      setLoading(false)
+      if (id === reqId.current) setLoading(false)
     }
   }, [week, reloadDicts, toast])
 

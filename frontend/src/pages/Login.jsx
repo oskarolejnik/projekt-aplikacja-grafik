@@ -24,11 +24,12 @@ export default function Login({ onClose }) {
   const { login, register } = useAuth()
   const { toast } = useToast()
   const [tryb, setTryb] = useState('login') // 'login' | 'register'
-  const [loginName, setLoginName] = useState('')
+  const [loginName, setLoginName] = useState(() => localStorage.getItem('grafik_login') || '')
   const [haslo, setHaslo] = useState('')
   const [imie, setImie] = useState('')
   const [nazwisko, setNazwisko] = useState('')
   const [pokazHaslo, setPokazHaslo] = useState(false)
+  const [zapamietaj, setZapamietaj] = useState(true)
   const [busy, setBusy] = useState(false)
   const formRef = useRef(null)
 
@@ -62,7 +63,9 @@ export default function Login({ onClose }) {
           toast('Podaj login i hasło.', 'error')
           return
         }
-        await login(loginName.trim(), haslo)
+        await login(loginName.trim(), haslo, zapamietaj)
+        if (zapamietaj) localStorage.setItem('grafik_login', loginName.trim())
+        else localStorage.removeItem('grafik_login')
       }
       // sukces — komponent zniknie wraz z przełączeniem widoku w App
     } catch (err) {
@@ -148,6 +151,18 @@ export default function Login({ onClose }) {
             </div>
             {rejestracja && <span className="text-[11px] text-muted/80">min. 8 znaków, w tym cyfra i znak specjalny</span>}
           </label>
+
+          {!rejestracja && (
+            <label className="-mt-1 flex cursor-pointer select-none items-center gap-2.5 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={zapamietaj}
+                onChange={(e) => setZapamietaj(e.target.checked)}
+                className="h-4 w-4 rounded border-line bg-transparent accent-cream"
+              />
+              Zapamiętaj mnie na tym urządzeniu
+            </label>
+          )}
 
           <button
             type="submit"

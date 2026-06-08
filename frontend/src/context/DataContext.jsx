@@ -7,7 +7,7 @@ import { generujOpcjeTygodni } from '../lib/weeks'
 const DataContext = createContext(null)
 
 export function DataProvider({ children }) {
-  const { opcje, domyslny } = useMemo(() => generujOpcjeTygodni(), [])
+  const { opcje, domyslny, biezacy, przyszly } = useMemo(() => generujOpcjeTygodni(), [])
   const [week, setWeek] = useState(domyslny)
   const [stanowiska, setStanowiska] = useState([])
   const [pracownicy, setPracownicy] = useState([])
@@ -23,6 +23,8 @@ export function DataProvider({ children }) {
     weeks: opcje,
     week,
     setWeek,
+    biezacy,
+    przyszly,
     weekRange: () => week.split('|'),
     stanowiska,
     pracownicy,

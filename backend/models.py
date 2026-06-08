@@ -63,6 +63,7 @@ class Dyspozycja(Base):
     data         = Column(Date, nullable=False)
     dostepnosc   = Column(Boolean, nullable=False, default=True)
     godz_od      = Column(Time, nullable=True)
+    godz_do      = Column(Time, nullable=True)
 
     pracownik = relationship("Pracownik", back_populates="dyspozycje")
 
@@ -162,4 +163,12 @@ class StanStolow(Base):
     __tablename__ = "stan_stolow"
     rewir_nr          = Column(Integer, primary_key=True)   # NGastroUzytkownik.Numer
     otwarte           = Column(Integer, nullable=False, default=0)
+    zaktualizowano_at = Column(DateTime, nullable=True)
+
+class StolikiHistoria(Base):
+    """Dzienna historia liczby obsłużonych stolików (rachunków) z Gastro — wypychana przez agenta.
+    Jeden wiersz = jeden dzień (tylko liczba; bez gości i rewirów). NIE dotyka RCP/godzin."""
+    __tablename__ = "stoliki_historia"
+    data              = Column(Date, primary_key=True)      # dzień (data otwarcia rachunku)
+    liczba            = Column(Integer, nullable=False, default=0)
     zaktualizowano_at = Column(DateTime, nullable=True)

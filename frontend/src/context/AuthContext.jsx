@@ -27,9 +27,9 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false))
   }, [])
 
-  const login = useCallback(async (login, haslo) => {
+  const login = useCallback(async (login, haslo, remember = true) => {
     const res = await api('/auth/login', 'POST', { login, haslo })
-    setToken(res.access_token)
+    setToken(res.access_token, remember)
     setUser(res.user)
     return res.user
   }, [])

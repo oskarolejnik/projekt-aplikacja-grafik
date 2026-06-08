@@ -133,6 +133,39 @@ function Send-Stoly($cfg, $stoly) {
         -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
 }
 
+# -- STOLY HISTORIA (liczba stolikow / dzien, 30 dni - OSOBNA sciezka) ----------
+function Get-StolyHistoria($cfg) {
+    $out = New-Object System.Collections.ArrayList
+    $conn = New-Object System.Data.SqlClient.SqlConnection $cfg.RCP_CONNECTION_STRING
+    try {
+        $conn.Open()
+        $c0 = $conn.CreateCommand()
+        $c0.CommandText = 'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED'
+        [void]$c0.ExecuteNonQuery()
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $cfg.STOLY_HISTORIA_SQL
+        $cmd.CommandTimeout = 30
+        $r = $cmd.ExecuteReader()
+        try {
+            while ($r.Read()) {
+                $d = [datetime]$r['data']
+                [void]$out.Add([ordered]@{ data = $d.ToString('yyyy-MM-dd'); liczba = [int]$r['liczba'] })
+            }
+        }
+        finally { $r.Close() }
+    }
+    finally { $conn.Close() }
+    return $out
+}
+
+function Send-StolyHistoria($cfg, $dni) {
+    $payload = @{ dni = @($dni) } | ConvertTo-Json -Depth 5
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    return Invoke-RestMethod -Uri $cfg.VPS_STOLY_HISTORIA_URL -Method Post `
+        -Headers @{ 'X-RCP-Token' = $cfg.RCP_INGEST_TOKEN } `
+        -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
+}
+
 function Invoke-Cykl($cfg, [int]$oknoDni) {
     # 1) RCP / godziny - wlasny try, zeby blad nie zablokowal stolow
     try {
@@ -157,6 +190,16 @@ function Invoke-Cykl($cfg, [int]$oknoDni) {
             Write-Log ('Stoly: wyslano {0} rewirow -> VPS.' -f $stoly.Count)
         }
         catch { Write-Log ('Blad stolow (pomijam): {0}' -f $_.Exception.Message) }
+    }
+
+    # 3) STOLY HISTORIA (30 dni) - tylko jesli skonfigurowane; wlasny try
+    if ($cfg.ContainsKey('STOLY_HISTORIA_SQL') -and $cfg['STOLY_HISTORIA_SQL'] -and $cfg.ContainsKey('VPS_STOLY_HISTORIA_URL') -and $cfg['VPS_STOLY_HISTORIA_URL']) {
+        try {
+            $hist = Get-StolyHistoria $cfg
+            Send-StolyHistoria $cfg $hist | Out-Null
+            Write-Log ('Stoly-historia: wyslano {0} dni -> VPS.' -f $hist.Count)
+        }
+        catch { Write-Log ('Blad historii stolow (pomijam): {0}' -f $_.Exception.Message) }
     }
 }
 

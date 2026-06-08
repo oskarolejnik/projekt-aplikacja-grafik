@@ -26,7 +26,7 @@ class WymaganiaOut(WymaganiaBase):
     id: int; model_config = ConfigDict(from_attributes=True)
 
 class DyspozycjaBase(BaseModel):
-    pracownik_id: int; data: date; dostepnosc: bool = True; godz_od: Optional[time] = None
+    pracownik_id: int; data: date; dostepnosc: bool = True; godz_od: Optional[time] = None; godz_do: Optional[time] = None
 class DyspozycjaCreate(DyspozycjaBase): pass
 class DyspozycjaOut(DyspozycjaBase):
     id: int; model_config = ConfigDict(from_attributes=True)
@@ -110,6 +110,7 @@ class MojaDyspozycjaIn(BaseModel):
     data: date
     dostepnosc: bool = True
     godz_od: Optional[time] = None
+    godz_do: Optional[time] = None
 
 class MojeDyspozycjeBatch(BaseModel):
     dyspozycje: List[MojaDyspozycjaIn]

@@ -17,7 +17,7 @@ const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
 // („Moja dyspozycyjność" / „Mój grafik"), powiadomienia i przycisk push. Mobile-first.
 export default function EmployeeArea() {
   const { user, logout } = useAuth()
-  const { week } = useData()
+  const { biezacy } = useData()
   const { toast } = useToast()
   const [widok, setWidok] = useState('dyspozycyjnosc')
   const [nowyGrafik, setNowyGrafik] = useState(false)
@@ -28,7 +28,7 @@ export default function EmployeeArea() {
   // Wykryj nowo udostępniony grafik -> baner + odznaka na zakładce „Mój grafik".
   useEffect(() => {
     let off = false
-    const [s, e] = week.split('|')
+    const [s, e] = biezacy.split('|')
     api(`/me/grafik?start=${s}&end=${e}`)
       .then((r) => {
         if (off) return
@@ -41,7 +41,7 @@ export default function EmployeeArea() {
     return () => {
       off = true
     }
-  }, [week, toast])
+  }, [biezacy, toast])
 
   const oznaczWidziany = useCallback((ts) => {
     localStorage.setItem(LAST_SEEN_KEY, ts)
