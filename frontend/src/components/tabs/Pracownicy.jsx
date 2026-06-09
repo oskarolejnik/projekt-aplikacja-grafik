@@ -40,10 +40,11 @@ function DzialPicker({ value, onChange }) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="field-label">Dział (osobny grafik)</span>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         {[
           ['obsluga', 'Obsługa'],
           ['kuchnia', 'Kuchnia'],
+          ['techniczny', 'Techniczny'],
         ].map(([v, label]) => (
           <button
             key={v}
@@ -114,11 +115,11 @@ function StawkiEdytor({ stanowiska, kwal, stawki, setStawka }) {
   )
 }
 
-// Pojedyncza stawka pracownika kuchni (bez stanowisk) — różne osoby, różne stawki.
-function StawkaKuchni({ value, onChange }) {
+// Pojedyncza stawka godzinowa (kuchnia/techniczny — bez stanowisk; różne osoby, różne stawki).
+function StawkaJedna({ label, value, onChange }) {
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface-2 p-3">
-      <span className="field-label">Stawka (kuchnia)</span>
+      <span className="field-label">{label}</span>
       <div className="flex items-center gap-1.5">
         <input
           type="number"
@@ -140,7 +141,7 @@ function StawkaKuchni({ value, onChange }) {
 const zbierzStawki = (kwal, stawki) =>
   kwal.map((id) => ({ stanowisko_id: id, stawka: parseFloat(stawki[id]) || 0 }))
 
-function PracownikRow({ p, i, stanowiska, kuchniaId, onChanged, onMove, first, last }) {
+function PracownikRow({ p, i, stanowiska, dzialIds, onChanged, onMove, first, last }) {
   const { toast, confirm } = useToast()
   const [imie, setImie] = useState(p.imie)
   const [nazwisko, setNazwisko] = useState(p.nazwisko)
@@ -151,15 +152,18 @@ function PracownikRow({ p, i, stanowiska, kuchniaId, onChanged, onMove, first, l
   const [stawki, setStawki] = useState(() =>
     Object.fromEntries((p.stawki || []).map((s) => [s.stanowisko_id, String(s.stawka)])),
   )
-  const [stawkaKuchni, setStawkaKuchni] = useState('')
+  const [stawkaJedna, setStawkaJedna] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // Stawkę kuchni odczytujemy, gdy znamy już id ukrytego stanowiska kuchni.
+  const jednaStawka = dzial === 'kuchnia' || dzial === 'techniczny'  // jedna stawka, bez stanowisk
+  const stanId = dzialIds[dzial]  // id ukrytego stanowiska (Kuchnia / Techniczny)
+
+  // Pojedynczą stawkę odczytujemy z ukrytego stanowiska bieżącego działu.
   useEffect(() => {
-    if (!kuchniaId) return
-    const s = (p.stawki || []).find((x) => x.stanowisko_id === kuchniaId)
-    setStawkaKuchni(s ? String(s.stawka) : '')
-  }, [kuchniaId, p.stawki])
+    if (!stanId) return
+    const s = (p.stawki || []).find((x) => x.stanowisko_id === stanId)
+    setStawkaJedna(s ? String(s.stawka) : '')
+  }, [stanId, p.stawki])
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
@@ -167,17 +171,16 @@ function PracownikRow({ p, i, stanowiska, kuchniaId, onChanged, onMove, first, l
   const zapisz = async () => {
     setBusy(true)
     try {
-      const kuchnia = dzial === 'kuchnia'
       await api(`/pracownicy/${p.id}`, 'PUT', {
         imie: imie.trim(),
         nazwisko: nazwisko.trim(),
         aktywny,
         kolor,
         dzial,
-        kwalifikacje_ids: kuchnia ? [] : kwal,
-        stawki: kuchnia
-          ? kuchniaId && parseFloat(stawkaKuchni) > 0
-            ? [{ stanowisko_id: kuchniaId, stawka: parseFloat(stawkaKuchni) }]
+        kwalifikacje_ids: jednaStawka ? [] : kwal,
+        stawki: jednaStawka
+          ? stanId && parseFloat(stawkaJedna) > 0
+            ? [{ stanowisko_id: stanId, stawka: parseFloat(stawkaJedna) }]
             : []
           : zbierzStawki(kwal, stawki),
       })
@@ -232,8 +235,8 @@ function PracownikRow({ p, i, stanowiska, kuchniaId, onChanged, onMove, first, l
 
         <DzialPicker value={dzial} onChange={setDzial} />
 
-        {dzial === 'kuchnia' ? (
-          <StawkaKuchni value={stawkaKuchni} onChange={setStawkaKuchni} />
+        {jednaStawka ? (
+          <StawkaJedna label={dzial === 'kuchnia' ? 'Stawka (kuchnia)' : 'Stawka (techniczny)'} value={stawkaJedna} onChange={setStawkaJedna} />
         ) : (
           <>
             <label className="flex flex-col gap-1.5">
@@ -266,17 +269,22 @@ export default function Pracownicy() {
   const [dzial, setDzial] = useState('obsluga')
   const [kwal, setKwal] = useState([])
   const [stawki, setStawki] = useState({})
-  const [stawkaKuchni, setStawkaKuchni] = useState('')
-  const [kuchniaId, setKuchniaId] = useState(null)
+  const [stawkaJedna, setStawkaJedna] = useState('')
+  const [dzialIds, setDzialIds] = useState({})  // { kuchnia, techniczny } — ukryte stanowiska
 
   useEffect(() => {
     reloadDicts()
-    // Id ukrytego stanowiska kuchni (tworzone leniwie) — do stawki kuchni.
-    api('/grafik/kuchnia-stanowisko').then((r) => setKuchniaId(r.id)).catch(() => {})
+    // Id ukrytych stanowisk (tworzone leniwie) — do stawki kuchni/technicznej.
+    Promise.all([
+      api('/grafik/kuchnia-stanowisko').catch(() => null),
+      api('/grafik/techniczny-stanowisko').catch(() => null),
+    ]).then(([k, t]) => setDzialIds({ kuchnia: k?.id, techniczny: t?.id }))
   }, [reloadDicts])
 
-  // W kwalifikacjach obsługi nie pokazujemy ukrytego stanowiska „Kuchnia".
-  const stanowiskaObslugi = stanowiska.filter((s) => s.id !== kuchniaId)
+  const jednaStawka = dzial === 'kuchnia' || dzial === 'techniczny'
+  const stanId = dzialIds[dzial]
+  // W kwalifikacjach obsługi nie pokazujemy ukrytych stanowisk (Kuchnia / Techniczny).
+  const stanowiskaObslugi = stanowiska.filter((s) => ![dzialIds.kuchnia, dzialIds.techniczny].includes(s.id))
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
@@ -305,17 +313,16 @@ export default function Pracownicy() {
       return
     }
     try {
-      const kuchnia = dzial === 'kuchnia'
       await api('/pracownicy', 'POST', {
         imie: imie.trim(),
         nazwisko: nazwisko.trim(),
         aktywny: true,
         kolor,
         dzial,
-        kwalifikacje_ids: kuchnia ? [] : kwal,
-        stawki: kuchnia
-          ? kuchniaId && parseFloat(stawkaKuchni) > 0
-            ? [{ stanowisko_id: kuchniaId, stawka: parseFloat(stawkaKuchni) }]
+        kwalifikacje_ids: jednaStawka ? [] : kwal,
+        stawki: jednaStawka
+          ? stanId && parseFloat(stawkaJedna) > 0
+            ? [{ stanowisko_id: stanId, stawka: parseFloat(stawkaJedna) }]
             : []
           : zbierzStawki(kwal, stawki),
       })
@@ -325,7 +332,7 @@ export default function Pracownicy() {
       setDzial('obsluga')
       setKwal([])
       setStawki({})
-      setStawkaKuchni('')
+      setStawkaJedna('')
       reloadDicts()
     } catch (e) {
       toast(e.message, 'error')
@@ -346,8 +353,8 @@ export default function Pracownicy() {
           </div>
           <KolorPicker value={kolor} onChange={setKolor} />
           <DzialPicker value={dzial} onChange={setDzial} />
-          {dzial === 'kuchnia' ? (
-            <StawkaKuchni value={stawkaKuchni} onChange={setStawkaKuchni} />
+          {jednaStawka ? (
+            <StawkaJedna label={dzial === 'kuchnia' ? 'Stawka (kuchnia)' : 'Stawka (techniczny)'} value={stawkaJedna} onChange={setStawkaJedna} />
           ) : (
             <>
               <KwalifikacjeDropdown stanowiska={stanowiskaObslugi} selected={kwal} onToggle={toggle} />
@@ -371,7 +378,7 @@ export default function Pracownicy() {
               p={p}
               i={i}
               stanowiska={stanowiskaObslugi}
-              kuchniaId={kuchniaId}
+              dzialIds={dzialIds}
               onChanged={reloadDicts}
               onMove={przesun}
               first={i === 0}

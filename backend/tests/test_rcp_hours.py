@@ -270,7 +270,41 @@ def test_raport_ponizej_10min_pomijane(db):
     assert raport["duze_ciecia"] == [] and raport["male_ciecia"] == []
 
 
-def test_duze_ciecia_widzi_tylko_admin(admin_client, client, db):
+def test_raport_techniczny_pelne_godziny_bez_grafiku(db):
+    """Pracownik techniczny: pełne godziny RCP × stawka, bez grafiku i bez publikacji."""
+    tech = factories.StanowiskoFactory(nazwa="Techniczny")
+    p = factories.PracownikFactory(imie="Tech", nazwisko="Nik", dzial="techniczny")
+    db.add(models.StawkaPracownika(pracownik_id=p.id, stanowisko_id=tech.id, stawka=40.0))
+    db.commit()
+    # BRAK przydziału i BRAK publikacji — techniczny i tak liczy pełne godziny
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 6.0, "wejscie": datetime(2026, 6, 1, 8, 0)}]
+    moj = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)["pracownicy"][0]
+    assert moj["dzial"] == "techniczny"
+    assert moj["stanowiska"] == [{"stanowisko": "Techniczny", "godziny": 6.0, "stawka": 40.0, "kwota": 240.0}]
+    assert moj["do_wyplaty"] == 240.0
+
+
+def test_raport_sortuje_malejaco_wg_wyplaty(db):
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p1 = factories.PracownikFactory(imie="Maly", nazwisko="A")
+    p2 = factories.PracownikFactory(imie="Duzy", nazwisko="B")
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p1, data=factories.dzien(0))
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p2, data=factories.dzien(0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    db.add(models.StawkaPracownika(pracownik_id=p1.id, stanowisko_id=sala.id, stawka=10.0))
+    db.add(models.StawkaPracownika(pracownik_id=p2.id, stanowisko_id=sala.id, stawka=50.0))
+    db.commit()
+    odbicia = [
+        {"pracownik_id": p1.id, "imie_nazwisko": "a", "data": factories.dzien(0), "godziny": 8.0, "wejscie": None},
+        {"pracownik_id": p2.id, "imie_nazwisko": "b", "data": factories.dzien(0), "godziny": 8.0, "wejscie": None},
+    ]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    assert [p["pracownik"] for p in raport["pracownicy"]] == ["Duzy B", "Maly A"]  # 400 zł przed 80 zł
+    assert raport["pracownicy"][0]["do_wyplaty"] == 400.0
+
+
+def test_duze_ciecia_widzi_admin_i_szef(admin_client, client, db):
     from datetime import time
     sala = factories.StanowiskoFactory(nazwa="Sala")
     p = factories.PracownikFactory(imie="Jan", nazwisko="Wcz")
@@ -285,7 +319,7 @@ def test_duze_ciecia_widzi_tylko_admin(admin_client, client, db):
     szef = factories.UserFactory(login="szefciec", rola="szef")
     rszef = client.get("/api/raporty/godziny?rok=2026&miesiac=6",
                        headers={"Authorization": f"Bearer {create_access_token(szef)}"}).json()
-    assert "duze_ciecia" not in rszef and "male_ciecia" not in rszef  # szef nie widzi cięć
+    assert len(rszef.get("duze_ciecia", [])) == 1 and "male_ciecia" in rszef  # szef też widzi cięcia
 
 
 def test_raport_filtruje_po_pracowniku(db):

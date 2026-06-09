@@ -25,6 +25,9 @@ GRANICA_NOCY = time(9, 0)
 # wszystko powyżej 10 minut, z podziałem: „duże" (>1h, zwykle zmiana w grafiku) i „małe" (10 min–1h).
 PROG_MALE_CIECIE = 10 / 60   # od >10 min w ogóle pokazujemy
 PROG_DUZE_CIECIE = 1.0       # >1h = duże; 10 min–1h = małe
+# Pracownik techniczny: nikt nie układa mu grafiku — liczymy pełne godziny RCP × stawka,
+# na to jedno stanowisko (stawka ustawiana per osoba, jak w kuchni).
+TECHNICZNY_NAZWA = "Techniczny"
 
 
 def wczytaj_odbicia(db, start: date, end: date):
@@ -111,6 +114,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     _prac = db.query(models.Pracownik).all()
     prac_nazwa = {p.id: f"{p.imie} {p.nazwisko}" for p in _prac}
     prac_dzial = {p.id: (p.dzial or "obsluga") for p in _prac}
+    techniczny_ids = {pid for pid, dz in prac_dzial.items() if dz == "techniczny"}
     stawki_map = {(r.pracownik_id, r.stanowisko_id): float(r.stawka or 0.0)
                   for r in db.query(models.StawkaPracownika).all()}
 
@@ -145,6 +149,11 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             continue
         if pid is None:
             niedopasowani[(z.get("imie_nazwisko") or "").strip()] += h
+            continue
+
+        # Pracownik techniczny: bez grafiku — pełne godziny RCP na stanowisko „Techniczny".
+        if pid in techniczny_ids:
+            godziny[pid][TECHNICZNY_NAZWA] += h
             continue
 
         # Reguła nocy imprezowej: wejście przed 9:00, a poprzedniego dnia pracownik miał
@@ -216,7 +225,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             "zaoszczedzone_godziny": round(zaosz_godz, 2),
             "zaoszczedzone_kwota": round(zaosz_kwota, 2),
         })
-    pracownicy_out.sort(key=lambda x: x["pracownik"])
+    pracownicy_out.sort(key=lambda x: (-x["do_wyplaty"], x["pracownik"]))  # malejąco wg wypłaty
 
     return {
         "rok": rok,

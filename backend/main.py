@@ -99,6 +99,18 @@ def _kuchnia_stanowisko(db) -> models.Stanowisko:
     return s
 
 
+# Stanowisko dla pracowników technicznych — pełne godziny RCP × stawka (bez grafiku). Jak kuchnia.
+TECHNICZNY_STANOWISKO = "Techniczny"
+
+
+def _techniczny_stanowisko(db) -> models.Stanowisko:
+    s = db.query(models.Stanowisko).filter_by(nazwa=TECHNICZNY_STANOWISKO).first()
+    if not s:
+        s = models.Stanowisko(nazwa=TECHNICZNY_STANOWISKO)
+        db.add(s); db.commit(); db.refresh(s)
+    return s
+
+
 @app.on_event("startup")
 def startup():
     init_db()
@@ -502,6 +514,13 @@ def kuchnia_stanowisko_info(db: Session = Depends(get_db)):
     """Zwraca (tworząc w razie potrzeby) ukryte stanowisko kuchni — front używa jego id do
     grafiku kuchni i stawki kuchni. Tylko admin (wymusza middleware)."""
     s = _kuchnia_stanowisko(db)
+    return {"id": s.id, "nazwa": s.nazwa}
+
+
+@app.get("/api/grafik/techniczny-stanowisko")
+def techniczny_stanowisko_info(db: Session = Depends(get_db)):
+    """Ukryte stanowisko techniczne — front używa jego id do stawki technicznej. Tylko admin."""
+    s = _techniczny_stanowisko(db)
     return {"id": s.id, "nazwa": s.nazwa}
 
 def _ustaw_stawki(db, p, stawki):
@@ -1300,15 +1319,12 @@ def _trwajace_zmiany(db):
 
 
 @app.get("/api/raporty/godziny", status_code=200)
-def raport_godzin(rok: int = Query(...), miesiac: int = Query(...),
-                  user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
     """Raport godzin wszystkich pracowników (admin + szef — wymusza middleware).
-    Dorzuca `na_zmianie` (kto teraz na zmianie). `duze_ciecia` (>1h) widzi TYLKO admin."""
+    Dorzuca `na_zmianie` (kto teraz na zmianie) oraz cięcia godzin (duze/male) — widzą je
+    admin i szef (szef_kuchni ma osobny endpoint /api/szefkuchni/godziny, bez cięć)."""
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
     raport["na_zmianie"] = _trwajace_zmiany(db)
-    if user.rola != "admin":
-        raport.pop("duze_ciecia", None)
-        raport.pop("male_ciecia", None)
     return raport
 
 

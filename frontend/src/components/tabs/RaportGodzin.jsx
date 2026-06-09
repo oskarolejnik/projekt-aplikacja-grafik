@@ -6,14 +6,12 @@ import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
 import { godzinyHM, zl, kolorStanowiska, ddmmyyyy } from '../../lib/format'
-import { useAuth } from '../../context/AuthContext'
 
 // Raport godzin (admin): miesięczne podsumowanie przepracowanych godzin wszystkich
 // pracowników z rozbiciem na stanowiska (RCP × opublikowany grafik). Tylko odczyt.
 // Dane: GET /api/raporty/godziny?rok=&miesiac= (raporty.raport_godzin_miesiac).
 export default function RaportGodzin() {
   const { toast } = useToast()
-  const { isAdmin } = useAuth()
   const dzis = new Date()
   const [rok, setRok] = useState(dzis.getFullYear())
   const [miesiac, setMiesiac] = useState(dzis.getMonth() + 1) // 1-12
@@ -62,8 +60,8 @@ export default function RaportGodzin() {
 
   const pracownicy = dane?.pracownicy || []
   const niedopasowani = dane?.niedopasowani_rcp || []
-  const duzeCiecia = isAdmin ? (dane?.duze_ciecia || []) : []   // >1h — tylko admin
-  const maleCiecia = isAdmin ? (dane?.male_ciecia || []) : []   // 10 min–1h — tylko admin
+  const duzeCiecia = dane?.duze_ciecia || []   // >1h (admin + szef)
+  const maleCiecia = dane?.male_ciecia || []   // 10 min–1h (admin + szef)
   const sumaWszystkich = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.suma_godzin || 0), 0), [pracownicy])
   const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
   const zaoszczedzone = dane?.zaoszczedzone || { godziny: 0, kwota: 0 }
@@ -72,11 +70,12 @@ export default function RaportGodzin() {
   const stanowiskaPodsum = dane?.stanowiska_podsumowanie || []
   const maxStan = Math.max(1, ...stanowiskaPodsum.map((s) => s.godziny))
   const kuchnia = useMemo(() => pracownicy.filter((p) => p.dzial === 'kuchnia'), [pracownicy])
-  const obsluga = useMemo(() => pracownicy.filter((p) => p.dzial !== 'kuchnia'), [pracownicy])
-  const sumaObslugi = useMemo(() => ({
-    godziny: obsluga.reduce((a, p) => a + (p.suma_godzin || 0), 0),
-    kwota: obsluga.reduce((a, p) => a + (p.do_wyplaty || 0), 0),
-  }), [obsluga])
+  const techniczni = useMemo(() => pracownicy.filter((p) => p.dzial === 'techniczny'), [pracownicy])
+  const obsluga = useMemo(() => pracownicy.filter((p) => p.dzial !== 'kuchnia' && p.dzial !== 'techniczny'), [pracownicy])
+  const sumaDzialu = (lista) => ({
+    godziny: lista.reduce((a, p) => a + (p.suma_godzin || 0), 0),
+    kwota: lista.reduce((a, p) => a + (p.do_wyplaty || 0), 0),
+  })
 
   // Karta jednego pracownika (rozbicie na stanowiska — każde w swoim kolorze). Wspólna dla kuchni i obsługi.
   const kartaPracownika = (p) => {
@@ -87,7 +86,7 @@ export default function RaportGodzin() {
           <span className="min-w-0 truncate font-semibold text-ink">{p.pracownik}</span>
           <div className="flex shrink-0 items-baseline gap-3">
             <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
-            {p.do_wyplaty > 0 && <span className="font-display font-bold tabular-nums text-mint">{zl(p.do_wyplaty)}</span>}
+            <span className="font-display font-bold tabular-nums text-mint">{zl(p.do_wyplaty)}</span>
           </div>
         </div>
         <div className="space-y-2">
@@ -112,23 +111,47 @@ export default function RaportGodzin() {
     )
   }
 
-  // Sekcja cięć godzin (lista przypadków) — wspólna dla dużych i małych. Tylko admin.
+  // Dział jako lista rozwijana (nagłówek = osoby · godziny · wypłata). Karty po rozwinięciu.
+  const sekcjaDzialu = (tytul, lista) =>
+    lista.length > 0 && (() => {
+      const s = sumaDzialu(lista)
+      return (
+        <details className="group rounded-xl border border-line bg-white/[0.02]">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 outline-none [&::-webkit-details-marker]:hidden">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted">
+              {tytul} · {lista.length} os. · {godzinyHM(s.godziny)} · {zl(s.kwota)}
+            </span>
+            <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
+          </summary>
+          <div className="space-y-3 border-t border-line p-3">
+            {lista.map(kartaPracownika)}
+          </div>
+        </details>
+      )
+    })()
+
+  // Cięcia godzin jako lista ROZWIJANA — nagłówek z liczbą, szczegóły po rozwinięciu. Admin i szef.
   const bannerCiec = (lista, tytul, podpowiedz, wariant) =>
     lista.length > 0 && (
-      <Banner variant={wariant} className="mb-6">
-        <div className="font-semibold">{tytul} — {lista.length}</div>
-        <p className="mt-1 text-xs">{podpowiedz}</p>
-        <ul className="mt-2 space-y-1.5 text-xs">
-          {lista.map((c, i) => (
-            <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-              <span className="font-semibold text-ink">{c.pracownik}</span>
-              <span className="text-muted">{ddmmyyyy(c.data)}{c.stanowisko ? ` · ${c.stanowisko}` : ''}</span>
-              <span className="font-mono text-muted">wszedł {c.wejscie ?? '—'} / plan {c.planowane ?? '—'}</span>
-              <span className="ml-auto font-mono font-bold text-coral">−{godzinyHM(c.godziny_uciete)}</span>
-            </li>
-          ))}
-        </ul>
-      </Banner>
+      <details className={`group mb-6 rounded-xl border ${wariant === 'warn' ? 'border-lemon/30 bg-lemon/[0.05]' : 'border-line bg-white/[0.02]'}`}>
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 outline-none [&::-webkit-details-marker]:hidden">
+          <span className={`text-sm font-semibold ${wariant === 'warn' ? 'text-lemon' : 'text-ink'}`}>{tytul} — {lista.length}</span>
+          <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
+        </summary>
+        <div className="border-t border-line/60 px-4 py-3">
+          <p className="text-xs text-muted">{podpowiedz}</p>
+          <ul className="mt-2 space-y-1.5 text-xs">
+            {lista.map((c, i) => (
+              <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                <span className="font-semibold text-ink">{c.pracownik}</span>
+                <span className="text-muted">{ddmmyyyy(c.data)}{c.stanowisko ? ` · ${c.stanowisko}` : ''}</span>
+                <span className="font-mono text-muted">wszedł {c.wejscie ?? '—'} / plan {c.planowane ?? '—'}</span>
+                <span className="ml-auto font-mono font-bold text-coral">−{godzinyHM(c.godziny_uciete)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </details>
     )
 
   return (
@@ -247,28 +270,10 @@ export default function RaportGodzin() {
                 </div>
               )}
 
-              {/* Kuchnia — osobno */}
-              {kuchnia.length > 0 && (
-                <div className="space-y-3">
-                  <div className="px-1 text-xs font-semibold uppercase tracking-wider text-muted">Kuchnia ({kuchnia.length})</div>
-                  {kuchnia.map(kartaPracownika)}
-                </div>
-              )}
-
-              {/* Obsługa — lista rozwijana */}
-              {obsluga.length > 0 && (
-                <details className="group rounded-xl border border-line bg-white/[0.02]">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 outline-none [&::-webkit-details-marker]:hidden">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-                      Obsługa · {obsluga.length} os. · {godzinyHM(sumaObslugi.godziny)} · {zl(sumaObslugi.kwota)}
-                    </span>
-                    <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
-                  </summary>
-                  <div className="space-y-3 border-t border-line p-3">
-                    {obsluga.map(kartaPracownika)}
-                  </div>
-                </details>
-              )}
+              {/* Działy jako listy rozwijane (nagłówek = osoby · godziny · wypłata; sort malejąco z backendu) */}
+              {sekcjaDzialu('Kuchnia', kuchnia)}
+              {sekcjaDzialu('Obsługa', obsluga)}
+              {sekcjaDzialu('Techniczni', techniczni)}
             </div>
           )}
 
