@@ -21,9 +21,10 @@ BUCKET_POZA_GRAFIKIEM = "(poza grafikiem)"
 # „Noc imprezowa": odbicie z wejściem przed tą godziną doliczamy do imprezy z DNIA POPRZEDNIEGO
 # (impreza ciągnie się po północy, np. 15:00 → 3:20). Pierwsze wejście po tej godzinie = nowy dzień.
 GRANICA_NOCY = time(9, 0)
-# Próg „dużego cięcia": gdy komuś ucięto WIĘCEJ niż tyle godzin (wszedł dużo przed grafikiem),
-# raport admina to wyróżnia (do sprawdzenia — może realnie pracował, może pomyłka w grafiku).
-PROG_CIECIA = 1.0
+# Cięcia godzin (wejście wcześniej niż grafik) — raport admina je wyróżnia. Pokazujemy
+# wszystko powyżej 10 minut, z podziałem: „duże" (>1h, zwykle zmiana w grafiku) i „małe" (10 min–1h).
+PROG_MALE_CIECIE = 10 / 60   # od >10 min w ogóle pokazujemy
+PROG_DUZE_CIECIE = 1.0       # >1h = duże; 10 min–1h = małe
 
 
 def wczytaj_odbicia(db, start: date, end: date):
@@ -128,7 +129,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     godziny = defaultdict(lambda: defaultdict(float))       # pracownik_id -> stanowisko -> godziny (przycięte)
     oszczednosci = defaultdict(lambda: defaultdict(float))  # pracownik_id -> stanowisko -> zaoszczędzone godz
     niedopasowani = defaultdict(float)
-    duze_ciecia = []  # pojedyncze przypadki ucięcia > PROG_CIECIA (tylko dla admina)
+    duze_ciecia = []  # ucięcia > 1h (tylko dla admina)
+    male_ciecia = []  # ucięcia 10 min – 1h (tylko dla admina)
 
     for z in odbicia:
         d = z["data"]
@@ -172,8 +174,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
                 godziny[pid][bucket] += liczone
                 if saved > 0:
                     oszczednosci[pid][bucket] += saved
-                    if saved > PROG_CIECIA:  # duże cięcie — wyróżnij dla admina
-                        duze_ciecia.append({
+                    if saved > PROG_MALE_CIECIE:  # >10 min — wyróżnij dla admina (duże/małe)
+                        wpis = {
                             "pracownik_id": pid,
                             "pracownik": prac_nazwa.get(pid, "?"),
                             "data": str(d),
@@ -181,7 +183,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
                             "godziny_uciete": round(saved, 2),
                             "wejscie": wej_t.strftime("%H:%M") if wej_t else None,
                             "planowane": wybrany.godz_od.strftime("%H:%M") if wybrany.godz_od else None,
-                        })
+                        }
+                        (duze_ciecia if saved > PROG_DUZE_CIECIE else male_ciecia).append(wpis)
 
     stanowiska_agg = defaultdict(lambda: {"godziny": 0.0, "kwota": 0.0})  # koszt/godziny per stanowisko (wszyscy)
     pracownicy_out = []
@@ -229,8 +232,9 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             {"stanowisko": k, "godziny": round(d["godziny"], 2), "kwota": round(d["kwota"], 2)}
             for k, d in sorted(stanowiska_agg.items(), key=lambda x: -x[1]["godziny"])
         ],
-        # Duże cięcia (>1h) — pojedyncze przypadki do sprawdzenia (widoczne TYLKO dla admina).
+        # Cięcia godzin (wejście wcześniej niż grafik) — pojedyncze przypadki, TYLKO dla admina.
         "duze_ciecia": sorted(duze_ciecia, key=lambda x: -x["godziny_uciete"]),
+        "male_ciecia": sorted(male_ciecia, key=lambda x: -x["godziny_uciete"]),
         "niedopasowani_rcp": [
             {"imie_nazwisko": k, "godziny": round(v, 2)} for k, v in sorted(niedopasowani.items())
         ],

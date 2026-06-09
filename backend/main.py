@@ -1308,6 +1308,7 @@ def raport_godzin(rok: int = Query(...), miesiac: int = Query(...),
     raport["na_zmianie"] = _trwajace_zmiany(db)
     if user.rola != "admin":
         raport.pop("duze_ciecia", None)
+        raport.pop("male_ciecia", None)
     return raport
 
 

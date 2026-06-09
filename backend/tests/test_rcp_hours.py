@@ -242,16 +242,32 @@ def test_raport_wyroznia_duze_ciecie(db):
     assert c["wejscie"] == "12:00" and c["planowane"] == "14:00"
 
 
-def test_raport_male_ciecie_nie_wyroznione(db):
+def test_raport_male_ciecie_w_osobnej_liscie(db):
+    """Cięcie 10 min–1h trafia do `male_ciecia` (nie do `duze_ciecia`)."""
     from datetime import time
     sala = factories.StanowiskoFactory(nazwa="Sala")
     p = factories.PracownikFactory()
     factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
     _opublikuj(db, factories.dzien(0), factories.dzien(6))
     odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
-                "godziny": 8.0, "wejscie": datetime(2026, 6, 1, 13, 15)}]  # 0.75h — poniżej progu
+                "godziny": 8.0, "wejscie": datetime(2026, 6, 1, 13, 30)}]  # 30 min za wcześnie
     raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
     assert raport["duze_ciecia"] == []
+    assert len(raport["male_ciecia"]) == 1
+    assert raport["male_ciecia"][0]["godziny_uciete"] == 0.5
+
+
+def test_raport_ponizej_10min_pomijane(db):
+    """Cięcie ≤10 min nie pojawia się ani w dużych, ani w małych."""
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 8.0, "wejscie": datetime(2026, 6, 1, 13, 53)}]  # 7 min — poniżej progu
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    assert raport["duze_ciecia"] == [] and raport["male_ciecia"] == []
 
 
 def test_duze_ciecia_widzi_tylko_admin(admin_client, client, db):
@@ -269,7 +285,7 @@ def test_duze_ciecia_widzi_tylko_admin(admin_client, client, db):
     szef = factories.UserFactory(login="szefciec", rola="szef")
     rszef = client.get("/api/raporty/godziny?rok=2026&miesiac=6",
                        headers={"Authorization": f"Bearer {create_access_token(szef)}"}).json()
-    assert "duze_ciecia" not in rszef  # szef tego nie widzi
+    assert "duze_ciecia" not in rszef and "male_ciecia" not in rszef  # szef nie widzi cięć
 
 
 def test_raport_filtruje_po_pracowniku(db):

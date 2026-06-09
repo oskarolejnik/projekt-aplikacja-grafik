@@ -62,7 +62,8 @@ export default function RaportGodzin() {
 
   const pracownicy = dane?.pracownicy || []
   const niedopasowani = dane?.niedopasowani_rcp || []
-  const duzeCiecia = isAdmin ? (dane?.duze_ciecia || []) : []  // >1h — tylko admin
+  const duzeCiecia = isAdmin ? (dane?.duze_ciecia || []) : []   // >1h — tylko admin
+  const maleCiecia = isAdmin ? (dane?.male_ciecia || []) : []   // 10 min–1h — tylko admin
   const sumaWszystkich = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.suma_godzin || 0), 0), [pracownicy])
   const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
   const zaoszczedzone = dane?.zaoszczedzone || { godziny: 0, kwota: 0 }
@@ -110,6 +111,25 @@ export default function RaportGodzin() {
       </div>
     )
   }
+
+  // Sekcja cięć godzin (lista przypadków) — wspólna dla dużych i małych. Tylko admin.
+  const bannerCiec = (lista, tytul, podpowiedz, wariant) =>
+    lista.length > 0 && (
+      <Banner variant={wariant} className="mb-6">
+        <div className="font-semibold">{tytul} — {lista.length}</div>
+        <p className="mt-1 text-xs">{podpowiedz}</p>
+        <ul className="mt-2 space-y-1.5 text-xs">
+          {lista.map((c, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+              <span className="font-semibold text-ink">{c.pracownik}</span>
+              <span className="text-muted">{ddmmyyyy(c.data)}{c.stanowisko ? ` · ${c.stanowisko}` : ''}</span>
+              <span className="font-mono text-muted">wszedł {c.wejscie ?? '—'} / plan {c.planowane ?? '—'}</span>
+              <span className="ml-auto font-mono font-bold text-coral">−{godzinyHM(c.godziny_uciete)}</span>
+            </li>
+          ))}
+        </ul>
+      </Banner>
+    )
 
   return (
     <Card className="p-6 md:p-8">
@@ -191,25 +211,11 @@ export default function RaportGodzin() {
             </div>
           </div>
 
-          {/* Duże cięcia (>1h) — ktoś odbił się dużo przed grafikiem. TYLKO admin. */}
-          {duzeCiecia.length > 0 && (
-            <Banner variant="warn" className="mb-6">
-              <div className="font-semibold">Duże cięcia godzin (powyżej 1h) — {duzeCiecia.length}</div>
-              <p className="mt-1 text-xs">
-                Pracownik odbił się dużo wcześniej niż wpisany w grafik — godziny policzono od grafiku. Sprawdź, czy realnie pracował:
-              </p>
-              <ul className="mt-2 space-y-1.5 text-xs">
-                {duzeCiecia.map((c, i) => (
-                  <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                    <span className="font-semibold text-ink">{c.pracownik}</span>
-                    <span className="text-muted">{ddmmyyyy(c.data)}{c.stanowisko ? ` · ${c.stanowisko}` : ''}</span>
-                    <span className="font-mono text-muted">wszedł {c.wejscie ?? '—'} / plan {c.planowane ?? '—'}</span>
-                    <span className="ml-auto font-mono font-bold text-coral">−{godzinyHM(c.godziny_uciete)}</span>
-                  </li>
-                ))}
-              </ul>
-            </Banner>
-          )}
+          {/* Cięcia godzin (>10 min): duże (>1h, zwykle zmiana w grafiku) + małe (10 min–1h). TYLKO admin. */}
+          {bannerCiec(duzeCiecia, 'Duże cięcia godzin (powyżej 1h)',
+            'Zwykle błędny wpis w grafiku (faktyczna zmiana inna niż wpisana) — sprawdź godzinę zmiany:', 'warn')}
+          {bannerCiec(maleCiecia, 'Małe cięcia godzin (10 min – 1h)',
+            'Drobne wejścia przed grafikiem — zwykle normalne:', 'info')}
 
           {pracownicy.length === 0 ? (
             <Card className="p-8 text-center text-sm text-muted">
