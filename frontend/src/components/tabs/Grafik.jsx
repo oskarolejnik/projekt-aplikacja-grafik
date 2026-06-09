@@ -142,12 +142,17 @@ export default function Grafik() {
     }
   }
 
-  const udostepnij = async () => {
+  const udostepnij = async (cisza = false) => {
     setPublikowanie(true)
     try {
-      const r = await api(`/grafik/publikuj?start=${s}&end=${e}`, 'POST')
+      const r = await api(`/grafik/publikuj?start=${s}&end=${e}${cisza ? '&cisza=true' : ''}`, 'POST')
       setPublikacja({ opublikowany: true, opublikowano_at: r.opublikowano_at })
-      toast(`Grafik udostępniony pracownikom${r.push_wyslano ? ` (powiadomienia: ${r.push_wyslano})` : ''}.`, 'success')
+      toast(
+        cisza
+          ? 'Grafik opublikowany po cichu (bez powiadomień).'
+          : `Grafik udostępniony pracownikom${r.push_wyslano ? ` (powiadomienia: ${r.push_wyslano})` : ''}.`,
+        'success',
+      )
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -257,9 +262,17 @@ export default function Grafik() {
           <Button variant="ghost" onClick={wyczysc} className="text-danger hover:bg-danger/10">
             Wyczyść tabelę
           </Button>
-          <Button onClick={udostepnij} disabled={publikowanie}>
+          <Button onClick={() => udostepnij(false)} disabled={publikowanie}>
             {publikowanie ? <Spinner className="h-4 w-4" /> : <Icon name="bell" className="h-4 w-4" />}
             {publikacja.opublikowany ? 'Udostępnij ponownie' : 'Udostępnij pracownikom'}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => udostepnij(true)}
+            disabled={publikowanie}
+            title="Publikuje bez wysyłania powiadomień push (np. dla starych tygodni)"
+          >
+            Po cichu
           </Button>
           {publikacja.opublikowany && (
             <Button variant="ghost" onClick={cofnijPublikacje} disabled={publikowanie} className="text-danger hover:bg-danger/10">

@@ -379,7 +379,8 @@ def status_publikacji(start: date = Query(...), end: date = Query(...), db: Sess
     return {"opublikowany": bool(p), "opublikowano_at": p.opublikowano_at.isoformat() if p else None}
 
 @app.post("/api/grafik/publikuj", status_code=200)
-def publikuj_grafik(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+def publikuj_grafik(start: date = Query(...), end: date = Query(...), cisza: bool = False, db: Session = Depends(get_db)):
+    """Publikuje grafik tygodnia. cisza=true -> bez powiadomien push (np. dla starych tygodni)."""
     teraz = datetime.utcnow()
     p = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
     if p:
@@ -387,12 +388,14 @@ def publikuj_grafik(start: date = Query(...), end: date = Query(...), db: Sessio
     else:
         db.add(models.PublikacjaGrafiku(start=start, koniec=end, opublikowano_at=teraz))
     db.commit()
-    wyslano = wyslij_push(
-        db,
-        "Grafik udostępniony",
-        f"Twój grafik na tydzień {start.strftime('%d.%m')}–{end.strftime('%d.%m')} jest gotowy.",
-        url="/",
-    )
+    wyslano = 0
+    if not cisza:
+        wyslano = wyslij_push(
+            db,
+            "Grafik udostępniony",
+            f"Twój grafik na tydzień {start.strftime('%d.%m')}–{end.strftime('%d.%m')} jest gotowy.",
+            url="/",
+        )
     return {"opublikowano_at": teraz.isoformat(), "push_wyslano": wyslano}
 
 @app.delete("/api/grafik/publikuj", status_code=204)
