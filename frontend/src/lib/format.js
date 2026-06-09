@@ -27,6 +27,14 @@ export const tloKoloru = (hex, alpha = 0.28) => {
   return `rgb(${mix(1)}, ${mix(3)}, ${mix(5)})`
 }
 
+// Stała paleta — każde stanowisko dostaje swój kolor (liczony z nazwy, więc zawsze ten sam).
+const PALETA_STAN = ['#34d399', '#f4e2a0', '#f2b8cb', '#60a5fa', '#a78bfa', '#fb923c', '#22d3ee', '#f87171']
+export const kolorStanowiska = (nazwa) => {
+  let h = 0
+  for (let i = 0; i < (nazwa || '').length; i++) h = (h * 31 + nazwa.charCodeAt(i)) >>> 0
+  return PALETA_STAN[h % PALETA_STAN.length]
+}
+
 // Indeks getDay() -> polska nazwa dnia
 export const NAZWY_DNI = [
   'Niedziela',

@@ -5,7 +5,7 @@ import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
-import { godzinyHM, zl } from '../../lib/format'
+import { godzinyHM, zl, kolorStanowiska } from '../../lib/format'
 
 // Raport godzin (admin): miesięczne podsumowanie przepracowanych godzin wszystkich
 // pracowników z rozbiciem na stanowiska (RCP × opublikowany grafik). Tylko odczyt.
@@ -64,6 +64,49 @@ export default function RaportGodzin() {
   const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
   const zaoszczedzone = dane?.zaoszczedzone || { godziny: 0, kwota: 0 }
   const naPrzyszlosc = rok > dzis.getFullYear() || (rok === dzis.getFullYear() && miesiac >= dzis.getMonth() + 1)
+
+  const stanowiskaPodsum = dane?.stanowiska_podsumowanie || []
+  const maxStan = Math.max(1, ...stanowiskaPodsum.map((s) => s.godziny))
+  const kuchnia = useMemo(() => pracownicy.filter((p) => p.dzial === 'kuchnia'), [pracownicy])
+  const obsluga = useMemo(() => pracownicy.filter((p) => p.dzial !== 'kuchnia'), [pracownicy])
+  const sumaObslugi = useMemo(() => ({
+    godziny: obsluga.reduce((a, p) => a + (p.suma_godzin || 0), 0),
+    kwota: obsluga.reduce((a, p) => a + (p.do_wyplaty || 0), 0),
+  }), [obsluga])
+
+  // Karta jednego pracownika (rozbicie na stanowiska — każde w swoim kolorze). Wspólna dla kuchni i obsługi.
+  const kartaPracownika = (p) => {
+    const maxG = Math.max(1, ...p.stanowiska.map((s) => s.godziny))
+    return (
+      <div key={p.pracownik_id} className="rounded-xl border border-line bg-white/[0.02] p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <span className="min-w-0 truncate font-semibold text-ink">{p.pracownik}</span>
+          <div className="flex shrink-0 items-baseline gap-3">
+            <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
+            {p.do_wyplaty > 0 && <span className="font-display font-bold tabular-nums text-mint">{zl(p.do_wyplaty)}</span>}
+          </div>
+        </div>
+        <div className="space-y-2">
+          {p.stanowiska.map((s) => {
+            const kolor = kolorStanowiska(s.stanowisko)
+            return (
+              <div key={s.stanowisko} className="flex items-center gap-3">
+                <span className="flex w-28 shrink-0 items-center gap-1.5 text-xs text-muted" title={s.stanowisko}>
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: kolor }} />
+                  <span className="truncate">{s.stanowisko}{s.stawka > 0 ? ` · ${zl(s.stawka)}/h` : ''}</span>
+                </span>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div className="h-full rounded-full" style={{ width: `${(s.godziny / maxG) * 100}%`, background: kolor }} />
+                </div>
+                <span className="w-12 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
+                <span className="w-16 shrink-0 text-right text-xs font-semibold tabular-nums text-mint">{s.kwota > 0 ? zl(s.kwota) : ''}</span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <Card className="p-6 md:p-8">
@@ -151,35 +194,52 @@ export default function RaportGodzin() {
               i opublikowaniu grafiku.
             </Card>
           ) : (
-            <div className="space-y-3">
-              {pracownicy.map((p) => {
-                const maxG = Math.max(1, ...p.stanowiska.map((s) => s.godziny))
-                return (
-                  <div key={p.pracownik_id} className="rounded-xl border border-line bg-white/[0.02] p-4">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <span className="min-w-0 truncate font-semibold text-ink">{p.pracownik}</span>
-                      <div className="flex shrink-0 items-baseline gap-3">
-                        <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
-                        {p.do_wyplaty > 0 && <span className="font-display font-bold tabular-nums text-mint">{zl(p.do_wyplaty)}</span>}
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      {p.stanowiska.map((s) => (
-                        <div key={s.stanowisko} className="flex items-center gap-3">
-                          <span className="w-28 shrink-0 truncate text-xs text-muted" title={s.stanowisko}>
-                            {s.stanowisko}{s.stawka > 0 ? ` · ${zl(s.stawka)}/h` : ''}
-                          </span>
+            <div className="space-y-6">
+              {/* Koszt i godziny wg stanowisk (sumarycznie, wszyscy) — każde stanowisko w swoim kolorze */}
+              {stanowiskaPodsum.length > 0 && (
+                <div className="rounded-xl border border-line bg-white/[0.02] p-4">
+                  <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted">Koszt wg stanowisk</div>
+                  <div className="space-y-2.5">
+                    {stanowiskaPodsum.map((s) => {
+                      const kolor = kolorStanowiska(s.stanowisko)
+                      return (
+                        <div key={s.stanowisko} className="flex items-center gap-3 text-sm">
+                          <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: kolor }} />
+                          <span className="w-28 shrink-0 truncate font-semibold text-ink" title={s.stanowisko}>{s.stanowisko}</span>
                           <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-                            <div className="h-full rounded-full bg-accent-gradient" style={{ width: `${(s.godziny / maxG) * 100}%` }} />
+                            <div className="h-full rounded-full" style={{ width: `${(s.godziny / maxStan) * 100}%`, background: kolor }} />
                           </div>
                           <span className="w-12 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
                           <span className="w-16 shrink-0 text-right text-xs font-semibold tabular-nums text-mint">{s.kwota > 0 ? zl(s.kwota) : ''}</span>
                         </div>
-                      ))}
-                    </div>
+                      )
+                    })}
                   </div>
-                )
-              })}
+                </div>
+              )}
+
+              {/* Kuchnia — osobno */}
+              {kuchnia.length > 0 && (
+                <div className="space-y-3">
+                  <div className="px-1 text-xs font-semibold uppercase tracking-wider text-muted">Kuchnia ({kuchnia.length})</div>
+                  {kuchnia.map(kartaPracownika)}
+                </div>
+              )}
+
+              {/* Obsługa — lista rozwijana */}
+              {obsluga.length > 0 && (
+                <details className="group rounded-xl border border-line bg-white/[0.02]">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 outline-none [&::-webkit-details-marker]:hidden">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-muted">
+                      Obsługa · {obsluga.length} os. · {godzinyHM(sumaObslugi.godziny)} · {zl(sumaObslugi.kwota)}
+                    </span>
+                    <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
+                  </summary>
+                  <div className="space-y-3 border-t border-line p-3">
+                    {obsluga.map(kartaPracownika)}
+                  </div>
+                </details>
+              )}
             </div>
           )}
 

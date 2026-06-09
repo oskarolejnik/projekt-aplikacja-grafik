@@ -104,7 +104,9 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     nazwa_to_id = {s.nazwa: s.id for s in _stanowiska}
     # Stanowiska imprezowe (po nazwie zawierającej „imprez") — dla reguły nocy imprezowej.
     imprezy_ids = {s.id for s in _stanowiska if "imprez" in (s.nazwa or "").lower()}
-    prac_nazwa = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    _prac = db.query(models.Pracownik).all()
+    prac_nazwa = {p.id: f"{p.imie} {p.nazwisko}" for p in _prac}
+    prac_dzial = {p.id: (p.dzial or "obsluga") for p in _prac}
     stawki_map = {(r.pracownik_id, r.stanowisko_id): float(r.stawka or 0.0)
                   for r in db.query(models.StawkaPracownika).all()}
 
@@ -167,6 +169,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
                 if saved > 0:
                     oszczednosci[pid][bucket] += saved
 
+    stanowiska_agg = defaultdict(lambda: {"godziny": 0.0, "kwota": 0.0})  # koszt/godziny per stanowisko (wszyscy)
     pracownicy_out = []
     for pid, rozb in godziny.items():
         rozbicie = []
@@ -180,6 +183,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             do_wyplaty += kwota
             rozbicie.append({"stanowisko": k, "godziny": round(v, 2),
                              "stawka": round(stawka, 2), "kwota": kwota})
+            stanowiska_agg[k]["godziny"] += v
+            stanowiska_agg[k]["kwota"] += kwota
             sg = oszczednosci.get(pid, {}).get(k, 0.0)  # zaoszczędzone na tym stanowisku
             if sg > 0:
                 zaosz_godz += sg
@@ -187,6 +192,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
         pracownicy_out.append({
             "pracownik_id": pid,
             "pracownik": prac_nazwa.get(pid, "?"),
+            "dzial": prac_dzial.get(pid, "obsluga"),
             "suma_godzin": round(sum(rozb.values()), 2),
             "stanowiska": rozbicie,
             "do_wyplaty": round(do_wyplaty, 2),
@@ -204,6 +210,11 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             "godziny": round(sum(p["zaoszczedzone_godziny"] for p in pracownicy_out), 2),
             "kwota": round(sum(p["zaoszczedzone_kwota"] for p in pracownicy_out), 2),
         },
+        # Koszt i godziny w rozbiciu na stanowiska (sumarycznie, wszyscy pracownicy).
+        "stanowiska_podsumowanie": [
+            {"stanowisko": k, "godziny": round(d["godziny"], 2), "kwota": round(d["kwota"], 2)}
+            for k, d in sorted(stanowiska_agg.items(), key=lambda x: -x[1]["godziny"])
+        ],
         "niedopasowani_rcp": [
             {"imie_nazwisko": k, "godziny": round(v, 2)} for k, v in sorted(niedopasowani.items())
         ],

@@ -4,7 +4,7 @@ import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { useToast } from '../components/ui/Toast'
-import { godzinyHM, NAZWY_DNI, ddmmyyyy, zl } from '../lib/format'
+import { godzinyHM, NAZWY_DNI, ddmmyyyy, zl, kolorStanowiska } from '../lib/format'
 
 // Zakładka „Godziny": miesięczne podsumowanie przepracowanych godzin pracownika
 // — suma u góry (HH:MM), podział na dni i na stanowiska (dane z RCP × opublikowany grafik).
@@ -145,31 +145,34 @@ export default function EmployeeHours() {
                 </Card>
               )}
 
-              {/* Rozbicie na stanowiska */}
+              {/* Rozbicie na stanowiska — każde w swoim kolorze, prosto „Sala: 12:00" */}
               {stanowiska.length > 0 && (
-                <div className="space-y-3">
-                  <div className="px-1 text-xs font-semibold uppercase tracking-wider text-muted">Według stanowisk</div>
-                  {stanowiska.map((s) => (
-                    <Card key={s.stanowisko} className="p-4">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <span className="font-semibold text-ink">{s.stanowisko}</span>
-                          {s.stawka > 0 && <span className="ml-2 text-xs text-muted">{zl(s.stawka)}/h</span>}
+                <Card className="p-4 sm:p-5">
+                  <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">Według stanowisk</div>
+                  <div className="space-y-3.5">
+                    {stanowiska.map((s) => {
+                      const kolor = kolorStanowiska(s.stanowisko)
+                      return (
+                        <div key={s.stanowisko}>
+                          <div className="mb-1.5 flex items-center justify-between gap-2 text-sm">
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: kolor }} />
+                              <span className="truncate font-semibold text-ink">{s.stanowisko}:</span>
+                              <span className="shrink-0 font-mono font-bold tabular-nums text-ink">{godzinyHM(s.godziny)}</span>
+                            </span>
+                            {s.kwota > 0 && <span className="shrink-0 text-xs font-semibold tabular-nums text-mint">{zl(s.kwota)}</span>}
+                          </div>
+                          <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                            <div
+                              className="h-full rounded-full transition-[width] duration-500"
+                              style={{ width: `${(s.godziny / maxGodziny) * 100}%`, background: kolor }}
+                            />
+                          </div>
                         </div>
-                        <div className="shrink-0 text-right">
-                          <div className="font-display font-bold tabular-nums text-ink">{godzinyHM(s.godziny)}</div>
-                          {s.kwota > 0 && <div className="text-xs font-semibold tabular-nums text-mint">{zl(s.kwota)}</div>}
-                        </div>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
-                        <div
-                          className="h-full rounded-full bg-accent-gradient transition-[width] duration-500"
-                          style={{ width: `${(s.godziny / maxGodziny) * 100}%` }}
-                        />
-                      </div>
-                    </Card>
-                  ))}
-                </div>
+                      )
+                    })}
+                  </div>
+                </Card>
               )}
             </>
           )}

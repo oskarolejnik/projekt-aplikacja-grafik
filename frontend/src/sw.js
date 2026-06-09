@@ -3,7 +3,7 @@
    vite-plugin-pwa (injectManifest) i tu używane jako lista plików do precache. */
 
 const PRECACHE = (self.__WB_MANIFEST || []).map((e) => (typeof e === 'string' ? e : e.url))
-const CACHE = 'rajcula-cache-v1'
+const CACHE = 'rajcula-cache-v2'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -22,12 +22,29 @@ self.addEventListener('activate', (event) => {
   self.clients.claim()
 })
 
-// Cache-first dla powłoki; API zawsze z sieci (nie cache'ujemy danych).
 self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
   const url = new URL(req.url)
   if (url.pathname.startsWith('/api/')) return
+
+  // Shell HTML (nawigacja): NETWORK-FIRST — po deployu od razu świeża wersja frontu
+  // (koniec ze starym, zacache'owanym UI, np. „[object]" we współpracownikach). Offline → cache.
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone()
+          caches.open(CACHE).then((c) => c.put('/', copy)).catch(() => {})
+          return res
+        })
+        .catch(() => caches.match(req).then((c) => c || caches.match('/'))),
+    )
+    return
+  }
+
+  // Reszta (hashowane JS/CSS/fonty): cache-first — szybko i bez ryzyka nieaktualności
+  // (zmiana zawartości = nowa nazwa pliku). API zawsze z sieci (nie cache'ujemy danych).
   event.respondWith(
     caches.match(req).then(
       (cached) =>
