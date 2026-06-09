@@ -83,19 +83,28 @@ export default function EmployeeSchedule({ onSeen }) {
                 </div>
                 <div className="space-y-2">
                   {zmiany.map((z, i) => (
-                    <div key={i} className="rounded-lg border border-line border-l-[3px] border-l-mint bg-surface-2 p-3">
+                    <div key={i} className={`rounded-lg border border-line border-l-[3px] bg-surface-2 p-3 ${z.zamyka ? 'border-l-lemon' : 'border-l-mint'}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         {z.godz_od && (
                           <span className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-sm font-bold text-ink">{z.godz_od}</span>
                         )}
                         <span className="font-bold text-ink">{z.stanowisko}</span>
                         {z.rewir && <span className="text-sm font-semibold text-mint">{z.rewir}</span>}
+                        {z.zamyka && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-lemon/15 px-2 py-0.5 text-xs font-bold text-lemon">
+                            <Icon name="key" className="h-3 w-3" /> Zamykasz
+                          </span>
+                        )}
                       </div>
                       {z.wspolpracownicy.length > 0 && (
                         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted">
                           <Icon name="users" className="h-3.5 w-3.5" />
                           <span className="font-semibold text-ink/80">Z kim:</span>
-                          {z.wspolpracownicy.join(', ')}
+                          {z.wspolpracownicy.map((w, j) => (
+                            <span key={j} className={w.zamyka ? 'font-semibold text-lemon' : ''}>
+                              {w.imie}{w.zamyka ? ' (zamyka)' : ''}{j < z.wspolpracownicy.length - 1 ? ',' : ''}
+                            </span>
+                          ))}
                         </div>
                       )}
                     </div>

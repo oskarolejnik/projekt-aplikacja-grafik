@@ -31,7 +31,8 @@ export default function Grafik() {
   const [publikacja, setPublikacja] = useState({ opublikowany: false, opublikowano_at: null })
   const [publikowanie, setPublikowanie] = useState(false)
   const [selDay, setSelDay] = useState('') // wybrany dzień w widoku mobilnym
-  const [reczny, setReczny] = useState(null) // ręczne przypisanie: { key, stanowisko_id, godz_od }
+  const [reczny, setReczny] = useState(null) // ręczne przypisanie: { key, stanowisko_id, godz_od, rewir, zamyka }
+  const [edycja, setEdycja] = useState(null) // edycja istniejącego przydziału: { id, rewir, zamyka }
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
   const load = useCallback(async () => {
@@ -124,9 +125,28 @@ export default function Grafik() {
         stanowisko_id: +reczny.stanowisko_id,
         pracownik_id: pId,
         godz_od: reczny.godz_od ? `${reczny.godz_od}:00` : null,
-        rewir: null,
+        rewir: (reczny.rewir || '').trim() || null,
+        zamyka: !!reczny.zamyka,
       })
       setReczny(null)
+      load()
+    } catch (err) {
+      toast(err.message, 'error')
+    }
+  }
+
+  // Edycja istniejącego przydziału: rewir + „zamyka" (PUT zachowuje resztę).
+  const zapiszEdycje = async (a) => {
+    try {
+      await api(`/przydzialy/${a.id}`, 'PUT', {
+        data: a.data,
+        stanowisko_id: a.stanowisko_id,
+        pracownik_id: a.pracownik_id,
+        godz_od: a.godz_od,
+        rewir: (edycja.rewir || '').trim() || null,
+        zamyka: !!edycja.zamyka,
+      })
+      setEdycja(null)
       load()
     } catch (err) {
       toast(err.message, 'error')
@@ -229,20 +249,43 @@ export default function Grafik() {
           {pAt.map((a) => {
             const stan = stanMap[a.stanowisko_id]
             const szab = szablony.find((w) => w.stanowisko_id === a.stanowisko_id && w.godz_od === a.godz_od)
+            const edytuje = edycja?.id === a.id
             return (
-              <div key={a.id} className="rounded-lg border border-line border-l-[3px] border-l-mint bg-surface-2 p-2 text-left text-xs">
+              <div key={a.id} className={`rounded-lg border border-line border-l-[3px] bg-surface-2 p-2 text-left text-xs ${a.zamyka ? 'border-l-lemon' : 'border-l-mint'}`}>
                 <div className="flex items-start justify-between gap-1">
                   <span className="font-bold text-ink">
                     {stan?.nazwa}
                     {(a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
                   </span>
-                  <button onClick={() => usunPrzydzial(a.id)} className="shrink-0 text-muted transition hover:text-danger" aria-label="Anuluj zmianę">
-                    <Icon name="close" className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {a.zamyka && <span title="zamyka lokal" className="text-lemon"><Icon name="key" className="h-3 w-3" /></span>}
+                    <button onClick={() => setEdycja(edytuje ? null : { id: a.id, rewir: a.rewir || '', zamyka: !!a.zamyka })} className="text-[10px] font-semibold text-muted transition hover:text-mint">
+                      {edytuje ? 'anuluj' : 'edytuj'}
+                    </button>
+                    <button onClick={() => usunPrzydzial(a.id)} className="text-muted transition hover:text-danger" aria-label="Anuluj zmianę">
+                      <Icon name="close" className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
-                <span className="mt-1 flex items-center gap-1 font-mono text-[10px] text-muted">
+                <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-muted">
                   <Icon name="clock" className="h-3 w-3" /> {a.godz_od ? hhmm(a.godz_od) : 'Dowolnie'}
+                  {a.zamyka && <span className="font-sans font-bold text-lemon">· zamyka</span>}
                 </span>
+                {edytuje && (
+                  <div className="mt-1.5 flex flex-col gap-1.5 border-t border-line pt-1.5">
+                    <input
+                      value={edycja.rewir}
+                      onChange={(ev) => setEdycja((x) => ({ ...x, rewir: ev.target.value }))}
+                      placeholder="rewir (np. Parter)"
+                      className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                    />
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink">
+                      <input type="checkbox" checked={edycja.zamyka} onChange={(ev) => setEdycja((x) => ({ ...x, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" />
+                      Zamyka lokal
+                    </label>
+                    <button onClick={() => zapiszEdycje(a)} className="rounded-md bg-mint/20 py-1 text-xs font-bold text-mint transition hover:bg-mint/30">Zapisz</button>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -290,6 +333,16 @@ export default function Grafik() {
                     onChange={(ev) => setReczny((r) => ({ ...r, godz_od: ev.target.value }))}
                     className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
                   />
+                  <input
+                    value={reczny.rewir}
+                    onChange={(ev) => setReczny((r) => ({ ...r, rewir: ev.target.value }))}
+                    placeholder="rewir (opcjonalnie)"
+                    className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                  />
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink">
+                    <input type="checkbox" checked={reczny.zamyka} onChange={(ev) => setReczny((r) => ({ ...r, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" />
+                    Zamyka lokal
+                  </label>
                   <div className="flex gap-1.5">
                     <button onClick={() => dodajRecznie(dt, p.id)} className="flex-1 rounded-md bg-mint/20 py-1 text-xs font-bold text-mint transition hover:bg-mint/30">Dodaj</button>
                     <button onClick={() => setReczny(null)} className="rounded-md border border-line px-2 py-1 text-xs text-muted transition hover:text-ink">Anuluj</button>
@@ -297,7 +350,7 @@ export default function Grafik() {
                 </div>
               ) : (
                 <button
-                  onClick={() => setReczny({ key, stanowisko_id: '', godz_od: '' })}
+                  onClick={() => setReczny({ key, stanowisko_id: '', godz_od: '', rewir: '', zamyka: false })}
                   className="w-full rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-muted outline-none transition hover:border-mint/50 hover:text-mint"
                 >
                   + ręcznie

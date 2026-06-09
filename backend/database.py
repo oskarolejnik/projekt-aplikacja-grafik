@@ -49,9 +49,11 @@ def _ensure_schema():
     insp = inspect(engine)
     if "przydzialy_zmian" in insp.get_table_names():
         kolumny = {c["name"] for c in insp.get_columns("przydzialy_zmian")}
-        if "rewir" not in kolumny:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "rewir" not in kolumny:
                 conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN rewir VARCHAR"))
+            if "zamyka" not in kolumny:
+                conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN zamyka BOOLEAN NOT NULL DEFAULT FALSE"))
     if "dyspozycje" in insp.get_table_names():
         kolumny = {c["name"] for c in insp.get_columns("dyspozycje")}
         if "godz_do" not in kolumny:

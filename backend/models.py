@@ -88,7 +88,8 @@ class PrzydzialZmiany(Base):
     stanowisko_id = Column(Integer, ForeignKey("stanowiska.id"), nullable=False)
     pracownik_id  = Column(Integer, ForeignKey("pracownicy.id"), nullable=False)
     godz_od       = Column(Time, nullable=True)
-    rewir         = Column(String, nullable=True)   # rewir/strefa zmiany (z wymagań)
+    rewir         = Column(String, nullable=True)   # rewir/strefa zmiany (z wymagań lub ręcznie)
+    zamyka        = Column(Boolean, nullable=False, default=False)  # ten pracownik zamyka lokal
 
     stanowisko = relationship("Stanowisko", back_populates="przydzialy")
     pracownik  = relationship("Pracownik",  back_populates="przydzialy")

@@ -347,7 +347,10 @@ def moj_grafik(
             "godz_od": a.godz_od.strftime("%H:%M") if a.godz_od else None,
             "stanowisko": stan_map.get(a.stanowisko_id, ""),
             "rewir": _rewir_dla_pracownika(a.rewir),
-            "wspolpracownicy": [prac_map.get(w.pracownik_id, "") for w in wspol],
+            "zamyka": bool(a.zamyka),
+            "wspolpracownicy": [
+                {"imie": prac_map.get(w.pracownik_id, ""), "zamyka": bool(w.zamyka)} for w in wspol
+            ],
         })
     return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat(), "zmiany": zmiany}
 
