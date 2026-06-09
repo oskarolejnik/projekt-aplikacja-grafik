@@ -5,13 +5,15 @@ import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
-import { godzinyHM, zl, kolorStanowiska } from '../../lib/format'
+import { godzinyHM, zl, kolorStanowiska, ddmmyyyy } from '../../lib/format'
+import { useAuth } from '../../context/AuthContext'
 
 // Raport godzin (admin): miesięczne podsumowanie przepracowanych godzin wszystkich
 // pracowników z rozbiciem na stanowiska (RCP × opublikowany grafik). Tylko odczyt.
 // Dane: GET /api/raporty/godziny?rok=&miesiac= (raporty.raport_godzin_miesiac).
 export default function RaportGodzin() {
   const { toast } = useToast()
+  const { isAdmin } = useAuth()
   const dzis = new Date()
   const [rok, setRok] = useState(dzis.getFullYear())
   const [miesiac, setMiesiac] = useState(dzis.getMonth() + 1) // 1-12
@@ -60,6 +62,7 @@ export default function RaportGodzin() {
 
   const pracownicy = dane?.pracownicy || []
   const niedopasowani = dane?.niedopasowani_rcp || []
+  const duzeCiecia = isAdmin ? (dane?.duze_ciecia || []) : []  // >1h — tylko admin
   const sumaWszystkich = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.suma_godzin || 0), 0), [pracownicy])
   const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
   const zaoszczedzone = dane?.zaoszczedzone || { godziny: 0, kwota: 0 }
@@ -187,6 +190,26 @@ export default function RaportGodzin() {
               </div>
             </div>
           </div>
+
+          {/* Duże cięcia (>1h) — ktoś odbił się dużo przed grafikiem. TYLKO admin. */}
+          {duzeCiecia.length > 0 && (
+            <Banner variant="warn" className="mb-6">
+              <div className="font-semibold">Duże cięcia godzin (powyżej 1h) — {duzeCiecia.length}</div>
+              <p className="mt-1 text-xs">
+                Pracownik odbił się dużo wcześniej niż wpisany w grafik — godziny policzono od grafiku. Sprawdź, czy realnie pracował:
+              </p>
+              <ul className="mt-2 space-y-1.5 text-xs">
+                {duzeCiecia.map((c, i) => (
+                  <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                    <span className="font-semibold text-ink">{c.pracownik}</span>
+                    <span className="text-muted">{ddmmyyyy(c.data)}{c.stanowisko ? ` · ${c.stanowisko}` : ''}</span>
+                    <span className="font-mono text-muted">wszedł {c.wejscie ?? '—'} / plan {c.planowane ?? '—'}</span>
+                    <span className="ml-auto font-mono font-bold text-coral">−{godzinyHM(c.godziny_uciete)}</span>
+                  </li>
+                ))}
+              </ul>
+            </Banner>
+          )}
 
           {pracownicy.length === 0 ? (
             <Card className="p-8 text-center text-sm text-muted">

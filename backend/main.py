@@ -1300,11 +1300,14 @@ def _trwajace_zmiany(db):
 
 
 @app.get("/api/raporty/godziny", status_code=200)
-def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
-    """Raport godzin wszystkich pracowników (tylko admin — wymusza middleware).
-    Dorzuca `na_zmianie`: kto jest teraz na zmianie (live)."""
+def raport_godzin(rok: int = Query(...), miesiac: int = Query(...),
+                  user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Raport godzin wszystkich pracowników (admin + szef — wymusza middleware).
+    Dorzuca `na_zmianie` (kto teraz na zmianie). `duze_ciecia` (>1h) widzi TYLKO admin."""
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
     raport["na_zmianie"] = _trwajace_zmiany(db)
+    if user.rola != "admin":
+        raport.pop("duze_ciecia", None)
     return raport
 
 

@@ -225,6 +225,53 @@ def test_raport_pozne_wejscie_bez_oszczednosci(db):
     assert moj["zaoszczedzone_godziny"] == 0.0
 
 
+def test_raport_wyroznia_duze_ciecie(db):
+    """Ucięcie > 1h trafia do `duze_ciecia` (kto, kiedy, ile, wejście vs plan)."""
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(imie="Jan", nazwisko="Wczesniak")
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 10.0, "wejscie": datetime(2026, 6, 1, 12, 0)}]  # 2h za wcześnie
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    assert len(raport["duze_ciecia"]) == 1
+    c = raport["duze_ciecia"][0]
+    assert c["pracownik"] == "Jan Wczesniak"
+    assert c["godziny_uciete"] == 2.0
+    assert c["wejscie"] == "12:00" and c["planowane"] == "14:00"
+
+
+def test_raport_male_ciecie_nie_wyroznione(db):
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 8.0, "wejscie": datetime(2026, 6, 1, 13, 15)}]  # 0.75h — poniżej progu
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    assert raport["duze_ciecia"] == []
+
+
+def test_duze_ciecia_widzi_tylko_admin(admin_client, client, db):
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(imie="Jan", nazwisko="Wcz")
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    db.add(models.OdbicieRcp(rcp_id="ciecie-1", imie_nazwisko="Jan Wcz", pracownik_id=p.id,
+                             data=factories.dzien(0), wejscie=datetime(2026, 6, 1, 12, 0),
+                             wyjscie=datetime(2026, 6, 1, 22, 0), godziny=10.0))
+    db.commit()
+    radm = admin_client.get("/api/raporty/godziny?rok=2026&miesiac=6").json()
+    assert len(radm.get("duze_ciecia", [])) == 1
+    szef = factories.UserFactory(login="szefciec", rola="szef")
+    rszef = client.get("/api/raporty/godziny?rok=2026&miesiac=6",
+                       headers={"Authorization": f"Bearer {create_access_token(szef)}"}).json()
+    assert "duze_ciecia" not in rszef  # szef tego nie widzi
+
+
 def test_raport_filtruje_po_pracowniku(db):
     sala = factories.StanowiskoFactory(nazwa="Sala")
     p1 = factories.PracownikFactory()
