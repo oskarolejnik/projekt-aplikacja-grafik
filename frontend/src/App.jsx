@@ -7,6 +7,7 @@ import Landing from './pages/Landing'
 import Dashboard from './Dashboard'
 import EmployeeArea from './pages/EmployeeArea'
 import SzefView from './pages/SzefView'
+import SzefKuchniView from './pages/SzefKuchniView'
 
 // Routing wg stanu zalogowania i roli:
 //   brak użytkownika → ekran startowy (z logowaniem)
@@ -24,7 +25,8 @@ function Routed() {
   if (!user) return <Landing />
   if (user.rola === 'admin') return <Dashboard />
   if (user.rola === 'szef') return <SzefView />
-  return <EmployeeArea />
+  if (user.rola === 'szef_kuchni') return <SzefKuchniView />
+  return <EmployeeArea />   // employee (obsługa) i kuchnia — kuchnia ma ukrytą Dyspozycyjność
 }
 
 export default function App() {

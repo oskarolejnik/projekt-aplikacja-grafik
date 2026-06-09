@@ -19,7 +19,8 @@ export default function EmployeeArea() {
   const { user, logout } = useAuth()
   const { biezacy } = useData()
   const { toast } = useToast()
-  const [widok, setWidok] = useState('dyspozycyjnosc')
+  const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: tylko Grafik + Godziny (bez Dyspozycyjności)
+  const [widok, setWidok] = useState(jestKuchnia ? 'grafik' : 'dyspozycyjnosc')
   const [nowyGrafik, setNowyGrafik] = useState(false)
   const [pushOn, setPushOn] = useState(false)
 
@@ -102,11 +103,18 @@ export default function EmployeeArea() {
           className="mb-6"
           value={widok}
           onChange={zmienWidok}
-          options={[
-            { value: 'dyspozycyjnosc', label: 'Dyspo' },
-            { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
-            { value: 'godziny', label: 'Godziny' },
-          ]}
+          options={
+            jestKuchnia
+              ? [
+                  { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
+                  { value: 'godziny', label: 'Godziny' },
+                ]
+              : [
+                  { value: 'dyspozycyjnosc', label: 'Dyspo' },
+                  { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
+                  { value: 'godziny', label: 'Godziny' },
+                ]
+          }
         />
 
         {/* Treść zakładki: miękki crossfade (Framer). Kierunkowość daje sama wędrująca pigułka. */}

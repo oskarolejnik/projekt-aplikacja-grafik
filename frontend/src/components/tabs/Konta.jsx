@@ -109,7 +109,9 @@ export default function Konta() {
             <input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="Login" className="field" autoComplete="off" />
             <input value={haslo} onChange={(e) => setHaslo(e.target.value)} type="text" placeholder="Hasło" className="field" autoComplete="off" />
             <select value={rola} onChange={(e) => setRola(e.target.value)} className="field">
-              <option value="employee" className="bg-surface">Pracownik</option>
+              <option value="employee" className="bg-surface">Pracownik obsługa</option>
+              <option value="kuchnia" className="bg-surface">Pracownik kuchnia</option>
+              <option value="szef_kuchni" className="bg-surface">Szef kuchni</option>
               <option value="szef" className="bg-surface">Szef (podgląd)</option>
               <option value="admin" className="bg-surface">Administrator</option>
             </select>
@@ -145,7 +147,12 @@ export default function Konta() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-ink">{u.login}</span>
                     {(() => {
-                      const r = { admin: ['bg-lemon/15 text-lemon', 'Administrator'], szef: ['bg-blush/15 text-blush', 'Szef'] }[u.rola] || ['bg-mint/15 text-mint', 'Pracownik']
+                      const r = {
+                        admin: ['bg-lemon/15 text-lemon', 'Administrator'],
+                        szef: ['bg-blush/15 text-blush', 'Szef'],
+                        szef_kuchni: ['bg-coral/15 text-coral', 'Szef kuchni'],
+                        kuchnia: ['bg-mint/15 text-mint', 'Kuchnia'],
+                      }[u.rola] || ['bg-white/10 text-ink', 'Obsługa']
                       return <span className={`rounded-md px-2 py-0.5 text-xs font-bold ${r[0]}`}>{r[1]}</span>
                     })()}
                   </div>

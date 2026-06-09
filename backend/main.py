@@ -37,8 +37,28 @@ app.add_middleware(
 )
 
 
+# Wszystkie dozwolone wartości ról konta. „employee" = Pracownik obsługa (zachowana wartość
+# z istniejących kont — bez migracji), „kuchnia" = Pracownik kuchnia, „szef_kuchni" = Szef kuchni.
+ROLE_VALID = ("admin", "employee", "szef", "kuchnia", "szef_kuchni")
+
+# Role nadzorcze i ich dozwolone ścieżki GET (poza /api/me/* dostępnym dla każdego zalogowanego).
+# Wszystko spoza tych prefiksów = 403. Zapisy (POST/PUT/DELETE) zarezerwowane dla admina.
+OVERSIGHT_GET = {
+    "szef": (
+        "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
+        "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
+        "/api/rezerwacje",
+    ),
+    # Szef kuchni: godziny kuchni (bez wypłat), podgląd stołów na żywo, rezerwacje.
+    "szef_kuchni": (
+        "/api/szefkuchni/", "/api/gastro/stoly", "/api/rezerwacje",
+    ),
+}
+
+
 # Centralna ochrona API: /api/auth/* publiczne, /api/me/* dla każdego zalogowanego,
-# pozostałe /api/* tylko dla administratora. Statyczny frontend jest publiczny.
+# pozostałe /api/* tylko dla administratora (role nadzorcze: wybrane GET — patrz OVERSIGHT_GET).
+# Statyczny frontend jest publiczny.
 @app.middleware("http")
 async def role_guard(request: Request, call_next):
     path = request.url.path
@@ -52,15 +72,9 @@ async def role_guard(request: Request, call_next):
             return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
         rola = payload.get("rola")
         if not path.startswith("/api/me/") and rola != "admin":
-            # Rola "szef" — oversight: tylko ODCZYT (GET) wybranych zasobow.
-            szef_ok = request.method == "GET" and any(
-                path.startswith(p) for p in (
-                    "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
-                    "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
-                    "/api/rezerwacje",
-                )
-            )
-            if not (rola == "szef" and szef_ok):
+            # Role nadzorcze (szef, szef_kuchni) — tylko ODCZYT (GET) wybranych zasobów.
+            dozwolone = OVERSIGHT_GET.get(rola, ())
+            if not (request.method == "GET" and any(path.startswith(p) for p in dozwolone)):
                 return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
     return await call_next(request)
 
@@ -157,7 +171,7 @@ def list_users(db: Session = Depends(get_db)):
 
 @app.post("/api/users", response_model=schemas.UserOut, status_code=201)
 def create_user(dane: schemas.UserCreate, db: Session = Depends(get_db)):
-    if dane.rola not in ("admin", "employee", "szef"):
+    if dane.rola not in ROLE_VALID:
         raise HTTPException(400, "Nieprawidłowa rola.")
     if db.query(models.User).filter(models.User.login == dane.login).first():
         raise HTTPException(400, "Login jest już zajęty.")
@@ -179,7 +193,7 @@ def update_user(uid: int, dane: schemas.UserUpdate, db: Session = Depends(get_db
     if not u:
         raise HTTPException(404, "Nie znaleziono konta.")
     if dane.rola is not None:
-        if dane.rola not in ("admin", "employee", "szef"):
+        if dane.rola not in ROLE_VALID:
             raise HTTPException(400, "Nieprawidłowa rola.")
         u.rola = dane.rola
     if dane.aktywny is not None:
@@ -1226,6 +1240,32 @@ def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session 
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
     raport["na_zmianie"] = _trwajace_zmiany(db)
     return raport
+
+
+@app.get("/api/szefkuchni/godziny", status_code=200)
+def raport_godzin_kuchnia(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
+    """Godziny pracowników KUCHNI (konta z rolą 'kuchnia') — BEZ kwot wypłaty. Dla szefa kuchni.
+    Zwraca te same godziny/stanowiska co raport admina, ale OBCINA pola finansowe
+    (stawka/kwota/do_wyplaty). Dorzuca `na_zmianie`: kto z kuchni jest teraz na zmianie (live)."""
+    kuchnia_pids = {
+        u.pracownik_id
+        for u in db.query(models.User).filter(models.User.rola == "kuchnia").all()
+        if u.pracownik_id
+    }
+    raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
+    pracownicy = [
+        {
+            "pracownik_id": p["pracownik_id"],
+            "pracownik": p["pracownik"],
+            "suma_godzin": p["suma_godzin"],
+            # tylko stanowisko + godziny — bez stawki i kwoty
+            "stanowiska": [{"stanowisko": s["stanowisko"], "godziny": s["godziny"]} for s in p["stanowiska"]],
+        }
+        for p in raport["pracownicy"]
+        if p["pracownik_id"] in kuchnia_pids
+    ]
+    na_zmianie = [z for z in _trwajace_zmiany(db) if z.get("pracownik_id") in kuchnia_pids]
+    return {"rok": rok, "miesiac": miesiac, "pracownicy": pracownicy, "na_zmianie": na_zmianie}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
