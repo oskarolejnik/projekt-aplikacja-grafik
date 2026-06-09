@@ -12,12 +12,15 @@ agenta). Tu następuje złączenie:
 
 from calendar import monthrange
 from collections import defaultdict
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 import models
 
 BUCKET_NIEOPUBLIKOWANY = "(grafik nieopublikowany)"
 BUCKET_POZA_GRAFIKIEM = "(poza grafikiem)"
+# „Noc imprezowa": odbicie z wejściem przed tą godziną doliczamy do imprezy z DNIA POPRZEDNIEGO
+# (impreza ciągnie się po północy, np. 15:00 → 3:20). Pierwsze wejście po tej godzinie = nowy dzień.
+GRANICA_NOCY = time(9, 0)
 
 
 def wczytaj_odbicia(db, start: date, end: date):
@@ -85,13 +88,18 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     _stanowiska = db.query(models.Stanowisko).all()
     stan_nazwa = {s.id: s.nazwa for s in _stanowiska}
     nazwa_to_id = {s.nazwa: s.id for s in _stanowiska}
+    # Stanowiska imprezowe (po nazwie zawierającej „imprez") — dla reguły nocy imprezowej.
+    imprezy_ids = {s.id for s in _stanowiska if "imprez" in (s.nazwa or "").lower()}
     prac_nazwa = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
     stawki_map = {(r.pracownik_id, r.stanowisko_id): float(r.stawka or 0.0)
                   for r in db.query(models.StawkaPracownika).all()}
 
+    # Wczytujemy też przydziały z dnia POPRZEDZAJĄCEGO miesiąc — impreza z 31. może mieć
+    # „ogon" odbity 1. dnia kolejnego miesiąca (regułą nocy imprezowej dolicza się wstecz).
     przydzialy = (
         db.query(models.PrzydzialZmiany)
-        .filter(models.PrzydzialZmiany.data >= start, models.PrzydzialZmiany.data <= end)
+        .filter(models.PrzydzialZmiany.data >= start - timedelta(days=1),
+                models.PrzydzialZmiany.data <= end)
         .all()
     )
     graf = defaultdict(list)
@@ -115,6 +123,19 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
         if pid is None:
             niedopasowani[(z.get("imie_nazwisko") or "").strip()] += h
             continue
+
+        # Reguła nocy imprezowej: wejście przed 9:00, a poprzedniego dnia pracownik miał
+        # przydział na Imprezy (i tamten dzień jest opublikowany) → godziny należą do tamtej
+        # imprezy (impreza 15:00 → 3:20 lub ogon odbity po północy). Liczymy na stanowisko Imprezy.
+        wej_t = _as_time(z.get("wejscie"))
+        if wej_t is not None and wej_t < GRANICA_NOCY:
+            poprzedni = d - timedelta(days=1)
+            if _opublikowany(poprzedni, zakresy_pub):
+                event = next((a for a in graf.get((pid, poprzedni), [])
+                              if a.stanowisko_id in imprezy_ids), None)
+                if event is not None:
+                    godziny[pid][stan_nazwa.get(event.stanowisko_id, "?")] += h
+                    continue
 
         if not _opublikowany(d, zakresy_pub):
             bucket = BUCKET_NIEOPUBLIKOWANY

@@ -147,6 +147,38 @@ def test_raport_zmiana_dzielona_wybiera_wg_wejscia(db):
     assert raport["pracownicy"][0]["stanowiska"][0]["stanowisko"] == "Bar"
 
 
+def test_raport_noc_imprezowa_dolicza_do_poprzedniego_dnia(db):
+    """Impreza ciągnie się po północy: odbicie z wejściem przed 9:00 następnego dnia
+    dolicza się do imprezy z dnia poprzedniego (a nie ląduje „poza grafikiem")."""
+    from datetime import time
+    imprezy = factories.StanowiskoFactory(nazwa="Imprezy")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=imprezy, pracownik=p, data=factories.dzien(0), godz_od=time(15, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+
+    # ogon imprezy odbity po północy: data = następny dzień, wejście 02:00
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(1),
+                "godziny": 3.3, "wejscie": datetime(2026, 6, 2, 2, 0)}]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    moj = raport["pracownicy"][0]
+    assert moj["stanowiska"] == [{"stanowisko": "Imprezy", "godziny": 3.3, "stawka": 0.0, "kwota": 0.0}]
+
+
+def test_raport_wejscie_po_9_rano_to_nowy_dzien(db):
+    """Po 9:00 to już nowa zmiana — nie dolicza się do wczorajszej imprezy."""
+    from datetime import time
+    imprezy = factories.StanowiskoFactory(nazwa="Imprezy")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=imprezy, pracownik=p, data=factories.dzien(0), godz_od=time(15, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+
+    # wejście 12:00 następnego dnia (po 9:00), brak przydziału tego dnia → poza grafikiem
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(1),
+                "godziny": 6.0, "wejscie": datetime(2026, 6, 2, 12, 0)}]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    assert raport["pracownicy"][0]["stanowiska"][0]["stanowisko"] == raporty.BUCKET_POZA_GRAFIKIEM
+
+
 def test_raport_filtruje_po_pracowniku(db):
     sala = factories.StanowiskoFactory(nazwa="Sala")
     p1 = factories.PracownikFactory()
