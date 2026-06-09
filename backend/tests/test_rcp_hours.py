@@ -100,7 +100,25 @@ def test_raport_przypisuje_godziny_do_stanowiska_z_grafiku(db):
     moj = raport["pracownicy"][0]
     assert moj["pracownik_id"] == p.id
     assert moj["suma_godzin"] == 8.0
-    assert moj["stanowiska"] == [{"stanowisko": "Sala", "godziny": 8.0}]
+    assert moj["stanowiska"] == [{"stanowisko": "Sala", "godziny": 8.0, "stawka": 0.0, "kwota": 0.0}]
+    assert moj["do_wyplaty"] == 0.0
+
+
+def test_raport_liczy_wyplate_wg_stawki(db):
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    db.add(models.StawkaPracownika(pracownik_id=p.id, stanowisko_id=sala.id, stawka=30.0))
+    db.commit()
+
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 8.0, "wejscie": None}]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    moj = raport["pracownicy"][0]
+    assert moj["stanowiska"][0]["stawka"] == 30.0
+    assert moj["stanowiska"][0]["kwota"] == 240.0   # 8h * 30 zl
+    assert moj["do_wyplaty"] == 240.0
 
 
 def test_raport_nieopublikowany_grafik_trafia_do_kubelka(db):

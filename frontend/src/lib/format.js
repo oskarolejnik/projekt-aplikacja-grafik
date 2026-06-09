@@ -14,6 +14,10 @@ export const godzinyHM = (h) => {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
 }
 
+// Kwota -> "240,00 zł"
+export const zl = (n) =>
+  new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN', minimumFractionDigits: 2 }).format(Number(n) || 0)
+
 // Indeks getDay() -> polska nazwa dnia
 export const NAZWY_DNI = [
   'Niedziela',

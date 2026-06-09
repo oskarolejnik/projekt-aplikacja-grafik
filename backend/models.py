@@ -15,6 +15,16 @@ pracownik_stanowisko = Table(
     Column("stanowisko_id", Integer, ForeignKey("stanowiska.id"), primary_key=True),
 )
 
+class StawkaPracownika(Base):
+    """Stawka GODZINOWA pracownika na danej kwalifikacji (stanowisku).
+    Ta sama kwalifikacja (np. „sala") może mieć różną stawkę u różnych osób."""
+    __tablename__ = "stawki_pracownikow"
+    __table_args__ = (UniqueConstraint("pracownik_id", "stanowisko_id"),)
+    id            = Column(Integer, primary_key=True, index=True)
+    pracownik_id  = Column(Integer, ForeignKey("pracownicy.id", ondelete="CASCADE"), nullable=False, index=True)
+    stanowisko_id = Column(Integer, ForeignKey("stanowiska.id", ondelete="CASCADE"), nullable=False, index=True)
+    stawka        = Column(Float, nullable=False, default=0.0)
+
 class Pracownik(Base):
     __tablename__ = "pracownicy"
     id         = Column(Integer, primary_key=True, index=True)
@@ -25,6 +35,7 @@ class Pracownik(Base):
     kwalifikacje  = relationship("Stanowisko", secondary=pracownik_stanowisko, back_populates="uprawnieni")
     dyspozycje    = relationship("Dyspozycja", back_populates="pracownik", cascade="all, delete-orphan")
     przydzialy    = relationship("PrzydzialZmiany", back_populates="pracownik", cascade="all, delete-orphan")
+    stawki        = relationship("StawkaPracownika", cascade="all, delete-orphan")
 
 class Stanowisko(Base):
     __tablename__ = "stanowiska"

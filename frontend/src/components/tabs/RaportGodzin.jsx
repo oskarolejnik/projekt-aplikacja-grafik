@@ -5,7 +5,7 @@ import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
-import { godzinyHM } from '../../lib/format'
+import { godzinyHM, zl } from '../../lib/format'
 
 // Raport godzin (admin): miesięczne podsumowanie przepracowanych godzin wszystkich
 // pracowników z rozbiciem na stanowiska (RCP × opublikowany grafik). Tylko odczyt.
@@ -61,6 +61,7 @@ export default function RaportGodzin() {
   const pracownicy = dane?.pracownicy || []
   const niedopasowani = dane?.niedopasowani_rcp || []
   const sumaWszystkich = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.suma_godzin || 0), 0), [pracownicy])
+  const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
   const naPrzyszlosc = rok > dzis.getFullYear() || (rok === dzis.getFullYear() && miesiac >= dzis.getMonth() + 1)
 
   return (
@@ -131,6 +132,10 @@ export default function RaportGodzin() {
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Pracownicy z godzinami</div>
               <div className="font-display text-2xl font-bold text-ink tabular-nums">{pracownicy.length}</div>
             </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Do wypłaty (wszyscy)</div>
+              <div className="font-display text-2xl font-bold tabular-nums text-mint">{zl(sumaWyplat)}</div>
+            </div>
           </div>
 
           {pracownicy.length === 0 ? (
@@ -145,17 +150,23 @@ export default function RaportGodzin() {
                 return (
                   <div key={p.pracownik_id} className="rounded-xl border border-line bg-white/[0.02] p-4">
                     <div className="mb-3 flex items-center justify-between gap-3">
-                      <span className="font-semibold text-ink">{p.pracownik}</span>
-                      <span className="shrink-0 font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
+                      <span className="min-w-0 truncate font-semibold text-ink">{p.pracownik}</span>
+                      <div className="flex shrink-0 items-baseline gap-3">
+                        <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
+                        {p.do_wyplaty > 0 && <span className="font-display font-bold tabular-nums text-mint">{zl(p.do_wyplaty)}</span>}
+                      </div>
                     </div>
                     <div className="space-y-2">
                       {p.stanowiska.map((s) => (
                         <div key={s.stanowisko} className="flex items-center gap-3">
-                          <span className="w-40 shrink-0 truncate text-xs text-muted" title={s.stanowisko}>{s.stanowisko}</span>
+                          <span className="w-28 shrink-0 truncate text-xs text-muted" title={s.stanowisko}>
+                            {s.stanowisko}{s.stawka > 0 ? ` · ${zl(s.stawka)}/h` : ''}
+                          </span>
                           <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
                             <div className="h-full rounded-full bg-accent-gradient" style={{ width: `${(s.godziny / maxG) * 100}%` }} />
                           </div>
-                          <span className="w-14 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
+                          <span className="w-12 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
+                          <span className="w-16 shrink-0 text-right text-xs font-semibold tabular-nums text-mint">{s.kwota > 0 ? zl(s.kwota) : ''}</span>
                         </div>
                       ))}
                     </div>

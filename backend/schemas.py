@@ -40,10 +40,19 @@ class PrzydzialOut(PrzydzialBase):
 
 class PracownikBase(BaseModel):
     imie: str; nazwisko: str; aktywny: bool = True
+class StawkaIn(BaseModel):
+    stanowisko_id: int
+    stawka: float = 0.0
+class StawkaOut(BaseModel):
+    stanowisko_id: int
+    stawka: float
+    model_config = ConfigDict(from_attributes=True)
 class PracownikCreate(PracownikBase):
     kwalifikacje_ids: List[int] = []
+    stawki: List[StawkaIn] = []
 class PracownikOut(PracownikBase):
     id: int; kwalifikacje: List[StanowiskoOut] = []
+    stawki: List[StawkaOut] = []
     model_config = ConfigDict(from_attributes=True)
 
 class AutoAssignResult(BaseModel):

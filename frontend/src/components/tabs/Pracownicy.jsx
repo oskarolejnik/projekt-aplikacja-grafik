@@ -30,20 +30,63 @@ function KwalifikacjeDropdown({ stanowiska, selected, onToggle }) {
   )
 }
 
+// Stawki godzinowe (zł/h) dla zaznaczonych kwalifikacji. Ta sama kwalifikacja może mieć różną stawkę u różnych osób.
+function StawkiEdytor({ stanowiska, kwal, stawki, setStawka }) {
+  if (kwal.length === 0) return null
+  const nazwa = (id) => stanowiska.find((s) => s.id === id)?.nazwa || `#${id}`
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface-2 p-3">
+      <span className="field-label">Stawki godzinowe</span>
+      {kwal.map((id) => (
+        <div key={id} className="flex items-center justify-between gap-3 text-sm">
+          <span className="min-w-0 truncate text-ink">{nazwa(id)}</span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <input
+              type="number"
+              min="0"
+              step="0.50"
+              inputMode="decimal"
+              value={stawki[id] ?? ''}
+              onChange={(e) => setStawka(id, e.target.value)}
+              placeholder="0"
+              className="field w-24 px-2 py-1.5 text-right"
+            />
+            <span className="text-xs text-muted">zł/h</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Zbiera stawki tylko dla zaznaczonych kwalifikacji -> format API: [{stanowisko_id, stawka}].
+const zbierzStawki = (kwal, stawki) =>
+  kwal.map((id) => ({ stanowisko_id: id, stawka: parseFloat(stawki[id]) || 0 }))
+
 function PracownikRow({ p, i, stanowiska, onChanged }) {
   const { toast, confirm } = useToast()
   const [imie, setImie] = useState(p.imie)
   const [nazwisko, setNazwisko] = useState(p.nazwisko)
   const [aktywny, setAktywny] = useState(p.aktywny)
   const [kwal, setKwal] = useState((p.kwalifikacje || []).map((k) => k.id))
+  const [stawki, setStawki] = useState(() =>
+    Object.fromEntries((p.stawki || []).map((s) => [s.stanowisko_id, String(s.stawka)])),
+  )
   const [busy, setBusy] = useState(false)
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
+  const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
 
   const zapisz = async () => {
     setBusy(true)
     try {
-      await api(`/pracownicy/${p.id}`, 'PUT', { imie: imie.trim(), nazwisko: nazwisko.trim(), aktywny, kwalifikacje_ids: kwal })
+      await api(`/pracownicy/${p.id}`, 'PUT', {
+        imie: imie.trim(),
+        nazwisko: nazwisko.trim(),
+        aktywny,
+        kwalifikacje_ids: kwal,
+        stawki: zbierzStawki(kwal, stawki),
+      })
       toast('Zapisano zmiany.', 'success')
       onChanged()
     } catch (e) {
@@ -81,6 +124,8 @@ function PracownikRow({ p, i, stanowiska, onChanged }) {
           <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
         </label>
 
+        <StawkiEdytor stanowiska={stanowiska} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={zapisz} disabled={busy}>
             <Icon name="check" className="h-4 w-4" /> Zapisz
@@ -100,12 +145,14 @@ export default function Pracownicy() {
   const [imie, setImie] = useState('')
   const [nazwisko, setNazwisko] = useState('')
   const [kwal, setKwal] = useState([])
+  const [stawki, setStawki] = useState({})
 
   useEffect(() => {
     reloadDicts()
   }, [reloadDicts])
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
+  const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
 
   const utworz = async () => {
     if (!imie.trim() || !nazwisko.trim()) {
@@ -113,10 +160,17 @@ export default function Pracownicy() {
       return
     }
     try {
-      await api('/pracownicy', 'POST', { imie: imie.trim(), nazwisko: nazwisko.trim(), aktywny: true, kwalifikacje_ids: kwal })
+      await api('/pracownicy', 'POST', {
+        imie: imie.trim(),
+        nazwisko: nazwisko.trim(),
+        aktywny: true,
+        kwalifikacje_ids: kwal,
+        stawki: zbierzStawki(kwal, stawki),
+      })
       setImie('')
       setNazwisko('')
       setKwal([])
+      setStawki({})
       reloadDicts()
     } catch (e) {
       toast(e.message, 'error')
@@ -136,6 +190,7 @@ export default function Pracownicy() {
             <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="field" />
           </div>
           <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
+          <StawkiEdytor stanowiska={stanowiska} kwal={kwal} stawki={stawki} setStawka={setStawka} />
           <Button onClick={utworz} className="w-full">
             <Icon name="plus" className="h-4 w-4" /> Utwórz pracownika
           </Button>

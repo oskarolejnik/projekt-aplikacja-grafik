@@ -82,8 +82,12 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
         odbicia = wczytaj_odbicia(db, start, end)
 
     zakresy_pub = _zakresy_publikacji(db)
-    stan_nazwa = {s.id: s.nazwa for s in db.query(models.Stanowisko).all()}
+    _stanowiska = db.query(models.Stanowisko).all()
+    stan_nazwa = {s.id: s.nazwa for s in _stanowiska}
+    nazwa_to_id = {s.nazwa: s.id for s in _stanowiska}
     prac_nazwa = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    stawki_map = {(r.pracownik_id, r.stanowisko_id): float(r.stawka or 0.0)
+                  for r in db.query(models.StawkaPracownika).all()}
 
     przydzialy = (
         db.query(models.PrzydzialZmiany)
@@ -125,15 +129,21 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
 
     pracownicy_out = []
     for pid, rozb in godziny.items():
-        rozbicie = sorted(
-            ({"stanowisko": k, "godziny": round(v, 2)} for k, v in rozb.items()),
-            key=lambda x: -x["godziny"],
-        )
+        rozbicie = []
+        do_wyplaty = 0.0
+        for k, v in sorted(rozb.items(), key=lambda x: -x[1]):
+            sid = nazwa_to_id.get(k)
+            stawka = stawki_map.get((pid, sid), 0.0) if sid is not None else 0.0
+            kwota = round(v * stawka, 2)
+            do_wyplaty += kwota
+            rozbicie.append({"stanowisko": k, "godziny": round(v, 2),
+                             "stawka": round(stawka, 2), "kwota": kwota})
         pracownicy_out.append({
             "pracownik_id": pid,
             "pracownik": prac_nazwa.get(pid, "?"),
             "suma_godzin": round(sum(rozb.values()), 2),
             "stanowiska": rozbicie,
+            "do_wyplaty": round(do_wyplaty, 2),
         })
     pracownicy_out.sort(key=lambda x: x["pracownik"])
 

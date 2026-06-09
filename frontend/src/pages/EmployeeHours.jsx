@@ -4,7 +4,7 @@ import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { useToast } from '../components/ui/Toast'
-import { godzinyHM, NAZWY_DNI, ddmmyyyy } from '../lib/format'
+import { godzinyHM, NAZWY_DNI, ddmmyyyy, zl } from '../lib/format'
 
 // Zakładka „Godziny": miesięczne podsumowanie przepracowanych godzin pracownika
 // — suma u góry (HH:MM), podział na dni i na stanowiska (dane z RCP × opublikowany grafik).
@@ -105,13 +105,21 @@ export default function EmployeeHours() {
             </Card>
           )}
 
-          {/* Suma godzin (u góry, format HH:MM) */}
-          <Card className="p-6 text-center">
-            <div className="text-xs font-semibold uppercase tracking-wider text-muted">Łącznie w miesiącu</div>
-            <div className="mt-1 font-display text-5xl font-bold text-gradient tabular-nums">
-              {godzinyHM(dane?.suma_godzin)}
-            </div>
-          </Card>
+          {/* Suma godzin + do wypłaty (u góry) */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Card className="p-6 text-center">
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Łącznie w miesiącu</div>
+              <div className="mt-1 font-display text-4xl font-bold text-gradient tabular-nums sm:text-5xl">
+                {godzinyHM(dane?.suma_godzin)}
+              </div>
+            </Card>
+            <Card className="border-mint/30 bg-mint/[0.05] p-6 text-center">
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Do wypłaty (brutto)</div>
+              <div className="mt-1 font-display text-4xl font-bold tabular-nums text-mint sm:text-5xl">
+                {zl(dane?.do_wyplaty)}
+              </div>
+            </Card>
+          </div>
 
           {(dane?.suma_godzin ?? 0) === 0 ? (
             <Card className="p-8 text-center text-sm text-muted">
@@ -143,9 +151,15 @@ export default function EmployeeHours() {
                   <div className="px-1 text-xs font-semibold uppercase tracking-wider text-muted">Według stanowisk</div>
                   {stanowiska.map((s) => (
                     <Card key={s.stanowisko} className="p-4">
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="font-semibold text-ink">{s.stanowisko}</span>
-                        <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(s.godziny)}</span>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <span className="font-semibold text-ink">{s.stanowisko}</span>
+                          {s.stawka > 0 && <span className="ml-2 text-xs text-muted">{zl(s.stawka)}/h</span>}
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <div className="font-display font-bold tabular-nums text-ink">{godzinyHM(s.godziny)}</div>
+                          {s.kwota > 0 && <div className="text-xs font-semibold tabular-nums text-mint">{zl(s.kwota)}</div>}
+                        </div>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
                         <div

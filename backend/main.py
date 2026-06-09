@@ -451,6 +451,16 @@ def delete_podkategoria(pid: int, db: Session = Depends(get_db)):
 def get_pracownicy(db: Session = Depends(get_db)):
     return db.query(models.Pracownik).all()
 
+def _ustaw_stawki(db, p, stawki):
+    """Nadpisuje stawki godzinowe pracownika (per stanowisko). Zapisuje tylko dodatnie."""
+    db.query(models.StawkaPracownika).filter_by(pracownik_id=p.id).delete()
+    for s in (stawki or []):
+        if s.stanowisko_id and s.stawka and s.stawka > 0:
+            db.add(models.StawkaPracownika(
+                pracownik_id=p.id, stanowisko_id=s.stanowisko_id, stawka=float(s.stawka)
+            ))
+
+
 @app.post("/api/pracownicy", response_model=schemas.PracownikOut, status_code=201)
 def create_pracownik(data: schemas.PracownikCreate, db: Session = Depends(get_db)):
     p = models.Pracownik(imie=data.imie, nazwisko=data.nazwisko, aktywny=data.aktywny)
@@ -459,6 +469,7 @@ def create_pracownik(data: schemas.PracownikCreate, db: Session = Depends(get_db
             models.Stanowisko.id.in_(data.kwalifikacje_ids)
         ).all()
     db.add(p); db.commit(); db.refresh(p)
+    _ustaw_stawki(db, p, data.stawki); db.commit(); db.refresh(p)
     _przypisz_odbicia_do_pracownika(db, p)  # podlinkuj zalegle odbicia RCP od razu
     return p
 
@@ -473,6 +484,7 @@ def update_pracownik(pid: int, data: schemas.PracownikCreate, db: Session = Depe
     p.kwalifikacje = db.query(models.Stanowisko).filter(
         models.Stanowisko.id.in_(data.kwalifikacje_ids)
     ).all()
+    _ustaw_stawki(db, p, data.stawki)
     db.commit(); db.refresh(p)
     _przypisz_odbicia_do_pracownika(db, p)  # nazwisko moglo sie zmienic -> sprobuj podlinkowac
     return p
@@ -1158,6 +1170,7 @@ def moje_godziny(
         "rok": rok, "miesiac": miesiac,
         "suma_godzin": moj["suma_godzin"] if moj else 0.0,
         "stanowiska": moj["stanowiska"] if moj else [],
+        "do_wyplaty": moj["do_wyplaty"] if moj else 0.0,
         "dni": dni_out,
         "aktywna_zmiana": aktywna_out,
     }
