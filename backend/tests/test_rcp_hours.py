@@ -179,6 +179,52 @@ def test_raport_wejscie_po_9_rano_to_nowy_dzien(db):
     assert raport["pracownicy"][0]["stanowiska"][0]["stanowisko"] == raporty.BUCKET_POZA_GRAFIKIEM
 
 
+def test_raport_przycina_godziny_do_grafiku(db):
+    """Pracownik odbija się wcześniej niż wpisany w grafiku → liczymy od zaplanowanej godziny."""
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    # odbił się 13:00, RCP liczy 9h — ale wpisany od 14:00 → liczymy 8h, 1h zaoszczędzone
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 9.0, "wejscie": datetime(2026, 6, 1, 13, 0)}]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    moj = raport["pracownicy"][0]
+    assert moj["suma_godzin"] == 8.0
+    assert moj["zaoszczedzone_godziny"] == 1.0
+    assert raport["zaoszczedzone"]["godziny"] == 1.0
+
+
+def test_raport_zaoszczedzone_przelicza_kwote(db):
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    db.add(models.StawkaPracownika(pracownik_id=p.id, stanowisko_id=sala.id, stawka=30.0))
+    db.commit()
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 9.0, "wejscie": datetime(2026, 6, 1, 13, 30)}]  # 0.5h za wcześnie
+    moj = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)["pracownicy"][0]
+    assert moj["suma_godzin"] == 8.5
+    assert moj["zaoszczedzone_godziny"] == 0.5
+    assert moj["zaoszczedzone_kwota"] == 15.0   # 0.5h * 30 zł
+
+
+def test_raport_pozne_wejscie_bez_oszczednosci(db):
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 7.0, "wejscie": datetime(2026, 6, 1, 14, 10)}]  # po grafiku
+    moj = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)["pracownicy"][0]
+    assert moj["suma_godzin"] == 7.0
+    assert moj["zaoszczedzone_godziny"] == 0.0
+
+
 def test_raport_filtruje_po_pracowniku(db):
     sala = factories.StanowiskoFactory(nazwa="Sala")
     p1 = factories.PracownikFactory()

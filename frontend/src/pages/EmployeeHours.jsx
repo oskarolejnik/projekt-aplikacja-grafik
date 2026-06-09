@@ -114,7 +114,7 @@ export default function EmployeeHours() {
               </div>
             </Card>
             <Card className="border-mint/30 bg-mint/[0.05] p-6 text-center">
-              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Do wypłaty (brutto)</div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Do wypłaty</div>
               <div className="mt-1 font-display text-4xl font-bold tabular-nums text-mint sm:text-5xl">
                 {zl(dane?.do_wyplaty)}
               </div>

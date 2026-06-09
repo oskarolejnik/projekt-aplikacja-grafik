@@ -35,6 +35,32 @@ function KolorPicker({ value, onChange }) {
   )
 }
 
+// Wybór działu: obsługa (stanowiska + stawki per stanowisko) lub kuchnia (bez stanowisk, jedna stawka).
+function DzialPicker({ value, onChange }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="field-label">Dział (osobny grafik)</span>
+      <div className="grid grid-cols-2 gap-2">
+        {[
+          ['obsluga', 'Obsługa'],
+          ['kuchnia', 'Kuchnia'],
+        ].map(([v, label]) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onChange(v)}
+            className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${
+              value === v ? 'border-mint bg-mint/15 text-mint' : 'border-line bg-surface-2 text-muted hover:text-ink'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </label>
+  )
+}
+
 // Rozwijana lista kwalifikacji (checkboxy stanowisk). Pełna szerokość = czytelne nazwy.
 function KwalifikacjeDropdown({ stanowiska, selected, onToggle }) {
   return (
@@ -88,21 +114,52 @@ function StawkiEdytor({ stanowiska, kwal, stawki, setStawka }) {
   )
 }
 
+// Pojedyncza stawka pracownika kuchni (bez stanowisk) — różne osoby, różne stawki.
+function StawkaKuchni({ value, onChange }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface-2 p-3">
+      <span className="field-label">Stawka (kuchnia)</span>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="number"
+          min="0"
+          step="0.50"
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="0"
+          className="field w-28 px-2 py-1.5 text-right"
+        />
+        <span className="text-xs text-muted">zł/h</span>
+      </div>
+    </div>
+  )
+}
+
 // Zbiera stawki tylko dla zaznaczonych kwalifikacji -> format API: [{stanowisko_id, stawka}].
 const zbierzStawki = (kwal, stawki) =>
   kwal.map((id) => ({ stanowisko_id: id, stawka: parseFloat(stawki[id]) || 0 }))
 
-function PracownikRow({ p, i, stanowiska, onChanged, onMove, first, last }) {
+function PracownikRow({ p, i, stanowiska, kuchniaId, onChanged, onMove, first, last }) {
   const { toast, confirm } = useToast()
   const [imie, setImie] = useState(p.imie)
   const [nazwisko, setNazwisko] = useState(p.nazwisko)
   const [aktywny, setAktywny] = useState(p.aktywny)
   const [kolor, setKolor] = useState(p.kolor || null)
+  const [dzial, setDzial] = useState(p.dzial || 'obsluga')
   const [kwal, setKwal] = useState((p.kwalifikacje || []).map((k) => k.id))
   const [stawki, setStawki] = useState(() =>
     Object.fromEntries((p.stawki || []).map((s) => [s.stanowisko_id, String(s.stawka)])),
   )
+  const [stawkaKuchni, setStawkaKuchni] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // Stawkę kuchni odczytujemy, gdy znamy już id ukrytego stanowiska kuchni.
+  useEffect(() => {
+    if (!kuchniaId) return
+    const s = (p.stawki || []).find((x) => x.stanowisko_id === kuchniaId)
+    setStawkaKuchni(s ? String(s.stawka) : '')
+  }, [kuchniaId, p.stawki])
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
@@ -110,13 +167,19 @@ function PracownikRow({ p, i, stanowiska, onChanged, onMove, first, last }) {
   const zapisz = async () => {
     setBusy(true)
     try {
+      const kuchnia = dzial === 'kuchnia'
       await api(`/pracownicy/${p.id}`, 'PUT', {
         imie: imie.trim(),
         nazwisko: nazwisko.trim(),
         aktywny,
         kolor,
-        kwalifikacje_ids: kwal,
-        stawki: zbierzStawki(kwal, stawki),
+        dzial,
+        kwalifikacje_ids: kuchnia ? [] : kwal,
+        stawki: kuchnia
+          ? kuchniaId && parseFloat(stawkaKuchni) > 0
+            ? [{ stanowisko_id: kuchniaId, stawka: parseFloat(stawkaKuchni) }]
+            : []
+          : zbierzStawki(kwal, stawki),
       })
       toast('Zapisano zmiany.', 'success')
       onChanged()
@@ -167,12 +230,19 @@ function PracownikRow({ p, i, stanowiska, onChanged, onMove, first, last }) {
           <KolorPicker value={kolor} onChange={setKolor} />
         </label>
 
-        <label className="flex flex-col gap-1.5">
-          <span className="field-label">Kwalifikacje</span>
-          <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
-        </label>
+        <DzialPicker value={dzial} onChange={setDzial} />
 
-        <StawkiEdytor stanowiska={stanowiska} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+        {dzial === 'kuchnia' ? (
+          <StawkaKuchni value={stawkaKuchni} onChange={setStawkaKuchni} />
+        ) : (
+          <>
+            <label className="flex flex-col gap-1.5">
+              <span className="field-label">Kwalifikacje</span>
+              <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
+            </label>
+            <StawkiEdytor stanowiska={stanowiska} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+          </>
+        )}
 
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={zapisz} disabled={busy}>
@@ -193,12 +263,20 @@ export default function Pracownicy() {
   const [imie, setImie] = useState('')
   const [nazwisko, setNazwisko] = useState('')
   const [kolor, setKolor] = useState(null)
+  const [dzial, setDzial] = useState('obsluga')
   const [kwal, setKwal] = useState([])
   const [stawki, setStawki] = useState({})
+  const [stawkaKuchni, setStawkaKuchni] = useState('')
+  const [kuchniaId, setKuchniaId] = useState(null)
 
   useEffect(() => {
     reloadDicts()
+    // Id ukrytego stanowiska kuchni (tworzone leniwie) — do stawki kuchni.
+    api('/grafik/kuchnia-stanowisko').then((r) => setKuchniaId(r.id)).catch(() => {})
   }, [reloadDicts])
+
+  // W kwalifikacjach obsługi nie pokazujemy ukrytego stanowiska „Kuchnia".
+  const stanowiskaObslugi = stanowiska.filter((s) => s.id !== kuchniaId)
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
@@ -227,19 +305,27 @@ export default function Pracownicy() {
       return
     }
     try {
+      const kuchnia = dzial === 'kuchnia'
       await api('/pracownicy', 'POST', {
         imie: imie.trim(),
         nazwisko: nazwisko.trim(),
         aktywny: true,
         kolor,
-        kwalifikacje_ids: kwal,
-        stawki: zbierzStawki(kwal, stawki),
+        dzial,
+        kwalifikacje_ids: kuchnia ? [] : kwal,
+        stawki: kuchnia
+          ? kuchniaId && parseFloat(stawkaKuchni) > 0
+            ? [{ stanowisko_id: kuchniaId, stawka: parseFloat(stawkaKuchni) }]
+            : []
+          : zbierzStawki(kwal, stawki),
       })
       setImie('')
       setNazwisko('')
       setKolor(null)
+      setDzial('obsluga')
       setKwal([])
       setStawki({})
+      setStawkaKuchni('')
       reloadDicts()
     } catch (e) {
       toast(e.message, 'error')
@@ -259,8 +345,15 @@ export default function Pracownicy() {
             <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="field" />
           </div>
           <KolorPicker value={kolor} onChange={setKolor} />
-          <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
-          <StawkiEdytor stanowiska={stanowiska} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+          <DzialPicker value={dzial} onChange={setDzial} />
+          {dzial === 'kuchnia' ? (
+            <StawkaKuchni value={stawkaKuchni} onChange={setStawkaKuchni} />
+          ) : (
+            <>
+              <KwalifikacjeDropdown stanowiska={stanowiskaObslugi} selected={kwal} onToggle={toggle} />
+              <StawkiEdytor stanowiska={stanowiskaObslugi} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+            </>
+          )}
           <Button onClick={utworz} className="w-full">
             <Icon name="plus" className="h-4 w-4" /> Utwórz pracownika
           </Button>
@@ -277,7 +370,8 @@ export default function Pracownicy() {
               key={p.id}
               p={p}
               i={i}
-              stanowiska={stanowiska}
+              stanowiska={stanowiskaObslugi}
+              kuchniaId={kuchniaId}
               onChanged={reloadDicts}
               onMove={przesun}
               first={i === 0}

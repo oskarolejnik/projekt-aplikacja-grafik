@@ -66,6 +66,8 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE pracownicy ADD COLUMN kolejnosc INTEGER NOT NULL DEFAULT 0"))
             if "kolor" not in kolumny:
                 conn.execute(text("ALTER TABLE pracownicy ADD COLUMN kolor VARCHAR"))
+            if "dzial" not in kolumny:
+                conn.execute(text("ALTER TABLE pracownicy ADD COLUMN dzial VARCHAR NOT NULL DEFAULT 'obsluga'"))
 
 
 def init_db():

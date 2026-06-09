@@ -33,6 +33,8 @@ export default function Grafik() {
   const [selDay, setSelDay] = useState('') // wybrany dzień w widoku mobilnym
   const [reczny, setReczny] = useState(null) // ręczne przypisanie: { key, stanowisko_id, godz_od, rewir, zamyka }
   const [edycja, setEdycja] = useState(null) // edycja istniejącego przydziału: { id, rewir, zamyka }
+  const [dzial, setDzial] = useState('obsluga')    // który grafik: 'obsluga' | 'kuchnia'
+  const [kuchniaId, setKuchniaId] = useState(null) // id ukrytego stanowiska kuchni
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
   const load = useCallback(async () => {
@@ -62,6 +64,11 @@ export default function Grafik() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Id ukrytego stanowiska kuchni (tworzone leniwie) — dla grafiku kuchni.
+  useEffect(() => {
+    api('/grafik/kuchnia-stanowisko').then((r) => setKuchniaId(r.id)).catch(() => {})
+  }, [])
 
   const [s, e] = week.split('|')
   const dates = useMemo(() => zakresDni(s, e), [s, e])
@@ -115,14 +122,17 @@ export default function Grafik() {
   }
   // Wolne przypisanie: dowolne stanowisko + własna godzina, niezależnie od dyspozycyjności/wymagań.
   const dodajRecznie = async (dt, pId) => {
-    if (!reczny?.stanowisko_id) {
-      toast('Wybierz stanowisko.', 'error')
+    // W grafiku kuchni stanowisko jest ukryte i stałe (jedno stanowisko „Kuchnia").
+    const kuchnia = dzial === 'kuchnia'
+    const stanowisko_id = kuchnia ? kuchniaId : +reczny.stanowisko_id
+    if (!stanowisko_id) {
+      toast(kuchnia ? 'Brak stanowiska kuchni — odśwież stronę.' : 'Wybierz stanowisko.', 'error')
       return
     }
     try {
       await api('/przydzialy', 'POST', {
         data: dt,
-        stanowisko_id: +reczny.stanowisko_id,
+        stanowisko_id,
         pracownik_id: pId,
         godz_od: reczny.godz_od ? `${reczny.godz_od}:00` : null,
         rewir: (reczny.rewir || '').trim() || null,
@@ -216,7 +226,9 @@ export default function Grafik() {
     }
   }
 
-  const aktywni = pracownicy.filter((p) => p.aktywny)
+  // Osobne grafiki: pokazujemy tylko pracowników wybranego działu.
+  const aktywni = pracownicy.filter((p) => p.aktywny && (p.dzial || 'obsluga') === dzial)
+  const jestKuchnia = dzial === 'kuchnia'
   const selectedDay = dates.includes(selDay) ? selDay : dates[0]
 
   const dayLabel = (dt) => {
@@ -244,7 +256,7 @@ export default function Grafik() {
 
     return (
       <>
-        <div className={`mb-2 w-fit rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusColor}`}>{status}</div>
+        {!jestKuchnia && <div className={`mb-2 w-fit rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusColor}`}>{status}</div>}
         <div className="flex flex-col gap-2">
           {pAt.map((a) => {
             const stan = stanMap[a.stanowisko_id]
@@ -316,17 +328,19 @@ export default function Grafik() {
 
               {reczny?.key === key ? (
                 <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-mint/40 bg-surface-2 p-2">
-                  {!dys?.dostepnosc && <span className="text-[10px] font-bold text-lemon">⚠ Pracownik nie zgłosił dostępności</span>}
-                  <select
-                    value={reczny.stanowisko_id}
-                    onChange={(ev) => setReczny((r) => ({ ...r, stanowisko_id: ev.target.value }))}
-                    className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                  >
-                    <option value="">— stanowisko —</option>
-                    {stanowiska.map((st) => (
-                      <option key={st.id} value={st.id}>{st.nazwa}</option>
-                    ))}
-                  </select>
+                  {!jestKuchnia && !dys?.dostepnosc && <span className="text-[10px] font-bold text-lemon">⚠ Pracownik nie zgłosił dostępności</span>}
+                  {!jestKuchnia && (
+                    <select
+                      value={reczny.stanowisko_id}
+                      onChange={(ev) => setReczny((r) => ({ ...r, stanowisko_id: ev.target.value }))}
+                      className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                    >
+                      <option value="">— stanowisko —</option>
+                      {stanowiska.filter((st) => st.id !== kuchniaId).map((st) => (
+                        <option key={st.id} value={st.id}>{st.nazwa}</option>
+                      ))}
+                    </select>
+                  )}
                   <input
                     type="time"
                     value={reczny.godz_od}
@@ -365,13 +379,30 @@ export default function Grafik() {
 
   return (
     <div className="space-y-6">
+      {/* Osobne grafiki: obsługa / kuchnia (filtr widoku — publikacja i tak obejmuje cały tydzień) */}
+      <div className="flex gap-2">
+        {[['obsluga', 'Grafik obsługa'], ['kuchnia', 'Grafik kuchnia']].map(([v, label]) => (
+          <button
+            key={v}
+            onClick={() => { setDzial(v); setReczny(null); setEdycja(null) }}
+            className={`rounded-xl px-4 py-2 text-sm font-bold transition active:scale-[0.97] ${
+              dzial === v ? 'bg-accent-gradient text-bg shadow-glow' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <WeekSelect />
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="success" onClick={autoAssign} disabled={processing}>
-            {processing ? <Spinner className="h-4 w-4" /> : <Icon name="robot" className="h-5 w-5" />}
-            Auto-przydział AI
-          </Button>
+          {!jestKuchnia && (
+            <Button variant="success" onClick={autoAssign} disabled={processing}>
+              {processing ? <Spinner className="h-4 w-4" /> : <Icon name="robot" className="h-5 w-5" />}
+              Auto-przydział AI
+            </Button>
+          )}
           <Button variant="ghost" onClick={wyczysc} className="text-danger hover:bg-danger/10">
             Wyczyść tabelę
           </Button>
@@ -407,7 +438,9 @@ export default function Grafik() {
           <Spinner className="h-6 w-6 text-muted" />
         </div>
       ) : aktywni.length === 0 ? (
-        <Banner variant="info">Brak aktywnych pracowników.</Banner>
+        <Banner variant="info">
+          {jestKuchnia ? 'Brak pracowników w dziale kuchnia — ustaw dział w zakładce „Pracownicy".' : 'Brak aktywnych pracowników.'}
+        </Banner>
       ) : (
         <>
           {/* MOBILE / wąskie ekrany: wybór dnia + lista pracowników na ten dzień */}

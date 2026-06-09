@@ -39,7 +39,7 @@ class PrzydzialOut(PrzydzialBase):
     id: int; model_config = ConfigDict(from_attributes=True)
 
 class PracownikBase(BaseModel):
-    imie: str; nazwisko: str; aktywny: bool = True; kolor: Optional[str] = None
+    imie: str; nazwisko: str; aktywny: bool = True; kolor: Optional[str] = None; dzial: str = "obsluga"
 class StawkaIn(BaseModel):
     stanowisko_id: int
     stawka: float = 0.0

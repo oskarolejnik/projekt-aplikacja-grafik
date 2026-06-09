@@ -33,6 +33,7 @@ class Pracownik(Base):
     aktywny    = Column(Boolean, default=True)
     kolejnosc  = Column(Integer, nullable=False, default=0)   # ręczna kolejność wyświetlania
     kolor      = Column(String(16), nullable=True)            # tło za imieniem (#rrggbb) — ręczna paleta
+    dzial      = Column(String(16), nullable=False, default="obsluga")  # 'obsluga' | 'kuchnia' — osobne grafiki
 
     kwalifikacje  = relationship("Stanowisko", secondary=pracownik_stanowisko, back_populates="uprawnieni")
     dyspozycje    = relationship("Dyspozycja", back_populates="pracownik", cascade="all, delete-orphan")

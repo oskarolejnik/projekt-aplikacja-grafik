@@ -62,6 +62,7 @@ export default function RaportGodzin() {
   const niedopasowani = dane?.niedopasowani_rcp || []
   const sumaWszystkich = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.suma_godzin || 0), 0), [pracownicy])
   const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
+  const zaoszczedzone = dane?.zaoszczedzone || { godziny: 0, kwota: 0 }
   const naPrzyszlosc = rok > dzis.getFullYear() || (rok === dzis.getFullYear() && miesiac >= dzis.getMonth() + 1)
 
   return (
@@ -135,6 +136,12 @@ export default function RaportGodzin() {
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Do wypłaty (wszyscy)</div>
               <div className="font-display text-2xl font-bold tabular-nums text-mint">{zl(sumaWyplat)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Zaoszczędzone (wg grafiku)</div>
+              <div className="font-display text-2xl font-bold tabular-nums text-coral">
+                {godzinyHM(zaoszczedzone.godziny)} · {zl(zaoszczedzone.kwota)}
+              </div>
             </div>
           </div>
 

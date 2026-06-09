@@ -61,6 +61,20 @@ def _as_time(v):
     return None
 
 
+def _minuty(t: time) -> float:
+    return t.hour * 60 + t.minute + t.second / 60.0
+
+
+def efektywne_i_oszczednosc(wej_t, godz_od, h):
+    """Przytnij START zmiany do grafiku: godziny liczone dopiero od zaplanowanej godziny (godz_od).
+    Kto odbije się wcześniej, nie dostaje tych minut. Zwraca (godziny_liczone, zaoszczedzone_godziny).
+    Bez godz_od albo bez czasu wejścia → bez przycinania (pełne godziny, 0 zaoszczędzone)."""
+    if godz_od and wej_t is not None:
+        saved = min(h, max(0.0, (_minuty(godz_od) - _minuty(wej_t)) / 60.0))
+        return h - saved, saved
+    return h, 0.0
+
+
 def _wybierz_przydzial(przydzialy, wejscie_time):
     """Przy zmianie dzielonej (>1 przydział) wybiera tę, którą pracownik realnie rozpoczął
     (najpóźniejsze godz_od ≤ czas wejścia). Fallback: pierwszy."""
@@ -106,7 +120,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     for a in przydzialy:
         graf[(a.pracownik_id, a.data)].append(a)
 
-    godziny = defaultdict(lambda: defaultdict(float))  # pracownik_id -> stanowisko -> godziny
+    godziny = defaultdict(lambda: defaultdict(float))       # pracownik_id -> stanowisko -> godziny (przycięte)
+    oszczednosci = defaultdict(lambda: defaultdict(float))  # pracownik_id -> stanowisko -> zaoszczędzone godz
     niedopasowani = defaultdict(float)
 
     for z in odbicia:
@@ -138,20 +153,26 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
                     continue
 
         if not _opublikowany(d, zakresy_pub):
-            bucket = BUCKET_NIEOPUBLIKOWANY
+            godziny[pid][BUCKET_NIEOPUBLIKOWANY] += h     # bez przycinania (brak grafiku)
         else:
             przy = graf.get((pid, d), [])
             if not przy:
-                bucket = BUCKET_POZA_GRAFIKIEM
+                godziny[pid][BUCKET_POZA_GRAFIKIEM] += h  # poza grafikiem — pełne, osobny kubełek
             else:
-                wybrany = _wybierz_przydzial(przy, _as_time(z.get("wejscie")))
+                wybrany = _wybierz_przydzial(przy, wej_t)
                 bucket = stan_nazwa.get(wybrany.stanowisko_id, "?")
-        godziny[pid][bucket] += h
+                # Przytnij start do grafiku: licz dopiero od zaplanowanej godziny (godz_od).
+                liczone, saved = efektywne_i_oszczednosc(wej_t, wybrany.godz_od, h)
+                godziny[pid][bucket] += liczone
+                if saved > 0:
+                    oszczednosci[pid][bucket] += saved
 
     pracownicy_out = []
     for pid, rozb in godziny.items():
         rozbicie = []
         do_wyplaty = 0.0
+        zaosz_godz = 0.0
+        zaosz_kwota = 0.0
         for k, v in sorted(rozb.items(), key=lambda x: -x[1]):
             sid = nazwa_to_id.get(k)
             stawka = stawki_map.get((pid, sid), 0.0) if sid is not None else 0.0
@@ -159,12 +180,18 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             do_wyplaty += kwota
             rozbicie.append({"stanowisko": k, "godziny": round(v, 2),
                              "stawka": round(stawka, 2), "kwota": kwota})
+            sg = oszczednosci.get(pid, {}).get(k, 0.0)  # zaoszczędzone na tym stanowisku
+            if sg > 0:
+                zaosz_godz += sg
+                zaosz_kwota += sg * stawka
         pracownicy_out.append({
             "pracownik_id": pid,
             "pracownik": prac_nazwa.get(pid, "?"),
             "suma_godzin": round(sum(rozb.values()), 2),
             "stanowiska": rozbicie,
             "do_wyplaty": round(do_wyplaty, 2),
+            "zaoszczedzone_godziny": round(zaosz_godz, 2),
+            "zaoszczedzone_kwota": round(zaosz_kwota, 2),
         })
     pracownicy_out.sort(key=lambda x: x["pracownik"])
 
@@ -172,6 +199,11 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
         "rok": rok,
         "miesiac": miesiac,
         "pracownicy": pracownicy_out,
+        # Ile zaoszczędziliśmy przez liczenie wg grafiku (kto odbija się wcześniej niż wpisany).
+        "zaoszczedzone": {
+            "godziny": round(sum(p["zaoszczedzone_godziny"] for p in pracownicy_out), 2),
+            "kwota": round(sum(p["zaoszczedzone_kwota"] for p in pracownicy_out), 2),
+        },
         "niedopasowani_rcp": [
             {"imie_nazwisko": k, "godziny": round(v, 2)} for k, v in sorted(niedopasowani.items())
         ],

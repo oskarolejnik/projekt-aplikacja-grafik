@@ -105,3 +105,22 @@ def test_admin_zaklada_konta_kuchnia_i_szefkuchni(admin_client, db):
     assert admin_client.post(
         "/api/users", json={"login": "zle", "haslo": "Haslo123!", "rola": "ktokolwiek"}
     ).status_code == 400
+
+
+# ── Dział pracownika (osobne grafiki) + stanowisko kuchni ─────────────────────
+def test_pracownik_dzial_domyslnie_obsluga_i_zapis(admin_client, db):
+    r = admin_client.post("/api/pracownicy", json={
+        "imie": "Kuch", "nazwisko": "Arz", "aktywny": True, "kwalifikacje_ids": [], "dzial": "kuchnia"})
+    assert r.status_code == 201 and r.json()["dzial"] == "kuchnia"
+    # brak działu → domyślnie obsługa
+    r2 = admin_client.post("/api/pracownicy", json={
+        "imie": "Obs", "nazwisko": "Luga", "aktywny": True, "kwalifikacje_ids": []})
+    assert r2.json()["dzial"] == "obsluga"
+
+
+def test_kuchnia_stanowisko_endpoint_idempotentny(admin_client, db):
+    r1 = admin_client.get("/api/grafik/kuchnia-stanowisko")
+    assert r1.status_code == 200 and r1.json()["nazwa"] == "Kuchnia"
+    id1 = r1.json()["id"]
+    assert admin_client.get("/api/grafik/kuchnia-stanowisko").json()["id"] == id1  # bez duplikatu
+    assert db.query(models.Stanowisko).filter_by(nazwa="Kuchnia").count() == 1

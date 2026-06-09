@@ -79,9 +79,26 @@ async def role_guard(request: Request, call_next):
     return await call_next(request)
 
 
+# Nazwa „ukrytego" stanowiska, na które trafiają zmiany z grafiku KUCHNI. Pracownik kuchni
+# nie wybiera stanowiska — wszystkie jego zmiany idą na to jedno stanowisko, a stawkę ustawia
+# się per osoba (StawkaPracownika na tym stanowisku). Dzięki temu reszta logiki (RCP×grafik,
+# wypłaty) działa bez zmian i bez ryzykownej migracji „stanowisko_id NULL".
+KUCHNIA_STANOWISKO = "Kuchnia"
+
+
+def _kuchnia_stanowisko(db) -> models.Stanowisko:
+    s = db.query(models.Stanowisko).filter_by(nazwa=KUCHNIA_STANOWISKO).first()
+    if not s:
+        s = models.Stanowisko(nazwa=KUCHNIA_STANOWISKO)
+        db.add(s); db.commit(); db.refresh(s)
+    return s
+
+
 @app.on_event("startup")
 def startup():
     init_db()
+    # Stanowisko kuchni tworzymy LENIWIE (endpoint /api/grafik/kuchnia-stanowisko), nie na starcie —
+    # żeby nie zaśmiecać bazy/testów dodatkowym stanowiskiem, gdy grafik kuchni nie jest używany.
     # Uwaga: konto administratora NIE jest już tworzone z pliku konfiguracyjnego (.env).
     # Admina zakłada się wyłącznie w bazie skryptem: python create_admin.py
 
@@ -471,6 +488,14 @@ def delete_podkategoria(pid: int, db: Session = Depends(get_db)):
 def get_pracownicy(db: Session = Depends(get_db)):
     return db.query(models.Pracownik).order_by(models.Pracownik.kolejnosc, models.Pracownik.id).all()
 
+
+@app.get("/api/grafik/kuchnia-stanowisko")
+def kuchnia_stanowisko_info(db: Session = Depends(get_db)):
+    """Zwraca (tworząc w razie potrzeby) ukryte stanowisko kuchni — front używa jego id do
+    grafiku kuchni i stawki kuchni. Tylko admin (wymusza middleware)."""
+    s = _kuchnia_stanowisko(db)
+    return {"id": s.id, "nazwa": s.nazwa}
+
 def _ustaw_stawki(db, p, stawki):
     """Nadpisuje stawki godzinowe pracownika (per stanowisko). Zapisuje tylko dodatnie."""
     db.query(models.StawkaPracownika).filter_by(pracownik_id=p.id).delete()
@@ -485,7 +510,8 @@ def _ustaw_stawki(db, p, stawki):
 def create_pracownik(data: schemas.PracownikCreate, db: Session = Depends(get_db)):
     ostatni = db.query(models.Pracownik).order_by(models.Pracownik.kolejnosc.desc()).first()
     p = models.Pracownik(imie=data.imie, nazwisko=data.nazwisko, aktywny=data.aktywny,
-                         kolor=data.kolor, kolejnosc=(ostatni.kolejnosc + 1 if ostatni else 0))
+                         kolor=data.kolor, dzial=(data.dzial or "obsluga"),
+                         kolejnosc=(ostatni.kolejnosc + 1 if ostatni else 0))
     if data.kwalifikacje_ids:
         p.kwalifikacje = db.query(models.Stanowisko).filter(
             models.Stanowisko.id.in_(data.kwalifikacje_ids)
@@ -515,6 +541,7 @@ def update_pracownik(pid: int, data: schemas.PracownikCreate, db: Session = Depe
     p.nazwisko = data.nazwisko
     p.aktywny = data.aktywny
     p.kolor = data.kolor
+    p.dzial = data.dzial or "obsluga"
     p.kwalifikacje = db.query(models.Stanowisko).filter(
         models.Stanowisko.id.in_(data.kwalifikacje_ids)
     ).all()
@@ -1186,10 +1213,19 @@ def moje_godziny(
         if teraz is None or aktywna.wejscie >= teraz - timedelta(hours=18):
             aktywna_out = {"data": aktywna.data.isoformat(), "wejscie": aktywna.wejscie.isoformat()}
 
-    # Podzial na DNI: ile godzin pracownik przepracowal kazdego dnia (zakonczone zmiany).
+    # Podzial na DNI: ile godzin pracownik przepracowal kazdego dnia (zakonczone zmiany),
+    # PRZYCIETE do grafiku tak jak w raporcie (od zaplanowanej godziny), by suma dni == suma_godzin.
     from calendar import monthrange
     start = date(rok, miesiac, 1)
     end = date(rok, miesiac, monthrange(rok, miesiac)[1])
+    zakresy_pub = raporty._zakresy_publikacji(db)
+    przydz = defaultdict(list)
+    for a in db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.pracownik_id == user.pracownik_id,
+        models.PrzydzialZmiany.data >= start,
+        models.PrzydzialZmiany.data <= end,
+    ).all():
+        przydz[a.data].append(a)
     per_dzien = {}
     for o in db.query(models.OdbicieRcp).filter(
         models.OdbicieRcp.pracownik_id == user.pracownik_id,
@@ -1197,7 +1233,13 @@ def moje_godziny(
         models.OdbicieRcp.data <= end,
         models.OdbicieRcp.wyjscie.isnot(None),
     ).all():
-        per_dzien[o.data] = per_dzien.get(o.data, 0.0) + float(o.godziny or 0.0)
+        h = float(o.godziny or 0.0)
+        przy = przydz.get(o.data, [])
+        if przy and raporty._opublikowany(o.data, zakresy_pub):
+            wt = o.wejscie.time() if o.wejscie else None
+            wybrany = raporty._wybierz_przydzial(przy, wt)
+            h, _ = raporty.efektywne_i_oszczednosc(wt, wybrany.godz_od, h)
+        per_dzien[o.data] = per_dzien.get(o.data, 0.0) + h
     dni_out = [{"data": d.isoformat(), "godziny": round(g, 2)} for d, g in sorted(per_dzien.items())]
 
     return {
