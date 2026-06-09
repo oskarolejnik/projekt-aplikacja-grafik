@@ -124,3 +124,71 @@ def test_kuchnia_stanowisko_endpoint_idempotentny(admin_client, db):
     id1 = r1.json()["id"]
     assert admin_client.get("/api/grafik/kuchnia-stanowisko").json()["id"] == id1  # bez duplikatu
     assert db.query(models.Stanowisko).filter_by(nazwa="Kuchnia").count() == 1
+
+
+# ── Szef kuchni: KOREKTY grafiku kuchni (tylko kuchnia) ──────────────────────
+def _przydzial_json(pracownik_id, godz="14:00"):
+    return {"data": str(factories.dzien(0)), "stanowisko_id": 1, "pracownik_id": pracownik_id, "godz_od": godz}
+
+
+def test_szef_kuchni_edytuje_grafik_kuchni(client, db):
+    kucharz = factories.PracownikFactory(imie="Kucharz", nazwisko="Edyt", dzial="kuchnia")
+    szef_k = factories.UserFactory(login="szefke", rola="szef_kuchni")
+    h = _h(szef_k)
+    r = client.post("/api/szefkuchni/przydzialy", headers=h, json=_przydzial_json(kucharz.id))
+    assert r.status_code == 201, r.text
+    aid = r.json()["id"]
+    # stanowisko wymuszone na „Kuchnia" (niezależnie od przesłanego stanowisko_id)
+    assert db.get(models.PrzydzialZmiany, aid).stanowisko.nazwa == "Kuchnia"
+    assert client.put(f"/api/szefkuchni/przydzialy/{aid}", headers=h, json=_przydzial_json(kucharz.id, "15:00")).status_code == 200
+    assert client.delete(f"/api/szefkuchni/przydzialy/{aid}", headers=h).status_code == 204
+
+
+def test_szef_kuchni_nie_edytuje_obslugi(client, db):
+    obs = factories.PracownikFactory(imie="Kelner", nazwisko="Obs", dzial="obsluga")
+    szef_k = factories.UserFactory(login="szefko", rola="szef_kuchni")
+    r = client.post("/api/szefkuchni/przydzialy", headers=_h(szef_k), json=_przydzial_json(obs.id))
+    assert r.status_code == 403  # tylko kuchnia
+
+
+def test_szef_kuchni_nie_uzywa_endpointu_admina(client, db):
+    kucharz = factories.PracownikFactory(dzial="kuchnia")
+    szef_k = factories.UserFactory(login="szefka2", rola="szef_kuchni")
+    r = client.post("/api/przydzialy", headers=_h(szef_k), json={"data": str(factories.dzien(0)),
+                    "stanowisko_id": 1, "pracownik_id": kucharz.id})
+    assert r.status_code == 403  # endpoint admina nadal zablokowany
+
+
+def test_zmiana_grafiku_kuchni_wysyla_push(client, db, monkeypatch):
+    import main
+    wyslane = []
+    monkeypatch.setattr(main, "wyslij_push_do_pracownika",
+                        lambda db, pid, tytul, tresc, url="/": (wyslane.append((pid, tytul)) or 1))
+    kucharz = factories.PracownikFactory(dzial="kuchnia")
+    szef_k = factories.UserFactory(login="szefkpush", rola="szef_kuchni")
+    r = client.post("/api/szefkuchni/przydzialy", headers=_h(szef_k), json=_przydzial_json(kucharz.id))
+    assert r.status_code == 201
+    assert wyslane and wyslane[0][0] == kucharz.id  # push poszedł do tego kucharza
+
+
+# ── Grafik kuchni „żywy" — kucharz widzi zmiany bez publikacji ────────────────
+def test_kuchnia_grafik_zywy_bez_publikacji(client, db):
+    kuchnia_stan = factories.StanowiskoFactory(nazwa="Kuchnia")
+    kucharz = factories.PracownikFactory(imie="Kucharz", nazwisko="Live", dzial="kuchnia")
+    emp = factories.UserFactory(login="kuchlive", rola="kuchnia", pracownik=kucharz)
+    factories.PrzydzialFactory(stanowisko=kuchnia_stan, pracownik=kucharz, data=factories.dzien(0))
+    # BRAK publikacji
+    r = client.get(f"/api/me/grafik?start={factories.dzien(0)}&end={factories.dzien(6)}", headers=_h(emp))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["opublikowany"] is True       # kuchnia: żywy mimo braku publikacji
+    assert len(body["zmiany"]) == 1
+
+
+def test_obsluga_grafik_wymaga_publikacji(client, db):
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    kelner = factories.PracownikFactory(dzial="obsluga")
+    emp = factories.UserFactory(login="obslive", rola="employee", pracownik=kelner)
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=kelner, data=factories.dzien(0))
+    body = client.get(f"/api/me/grafik?start={factories.dzien(0)}&end={factories.dzien(6)}", headers=_h(emp)).json()
+    assert body["opublikowany"] is False      # obsługa: bez publikacji nic nie widzi

@@ -5,7 +5,7 @@ import { useToast } from '../components/ui/Toast'
 import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
-import { pushWspierany, wlaczPowiadomienia } from '../lib/push'
+import { pushWspierany, wlaczPowiadomienia, odswiezSubskrypcje } from '../lib/push'
 import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
 import EmployeeHours from './EmployeeHours'
@@ -47,6 +47,12 @@ export default function EmployeeArea() {
   const oznaczWidziany = useCallback((ts) => {
     localStorage.setItem(LAST_SEEN_KEY, ts)
     setNowyGrafik(false)
+  }, [])
+
+  // Naprawa „znikających" powiadomień: przy każdym wejściu odśwież subskrypcję push
+  // (subskrypcje potrafią cicho wygasać). Jeśli zgoda już jest — ustaw stan na włączone.
+  useEffect(() => {
+    odswiezSubskrypcje().then((ok) => { if (ok) setPushOn(true) })
   }, [])
 
   const enablePush = async () => {

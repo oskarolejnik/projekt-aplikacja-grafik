@@ -2,7 +2,7 @@ import csv
 import io
 import re
 import os
-from datetime import date, time, timedelta, datetime
+from datetime import date, time, timedelta, datetime, timezone
 from typing import Optional, List
 from collections import defaultdict
 
@@ -72,10 +72,15 @@ async def role_guard(request: Request, call_next):
             return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
         rola = payload.get("rola")
         if not path.startswith("/api/me/") and rola != "admin":
-            # Role nadzorcze (szef, szef_kuchni) — tylko ODCZYT (GET) wybranych zasobów.
-            dozwolone = OVERSIGHT_GET.get(rola, ())
-            if not (request.method == "GET" and any(path.startswith(p) for p in dozwolone)):
-                return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
+            # Szef kuchni ma PEŁNY dostęp do swojej przestrzeni /api/szefkuchni/ (też zapisy:
+            # korekty grafiku kuchni). Każdy taki endpoint sam pilnuje, że dotyczy tylko kuchni.
+            if rola == "szef_kuchni" and path.startswith("/api/szefkuchni/"):
+                pass
+            else:
+                # Pozostałe role nadzorcze (szef, szef_kuchni poza swoją przestrzenią) — tylko GET z whitelisty.
+                dozwolone = OVERSIGHT_GET.get(rola, ())
+                if not (request.method == "GET" and any(path.startswith(p) for p in dozwolone)):
+                    return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
     return await call_next(request)
 
 
@@ -342,8 +347,11 @@ def moj_grafik(
     admina. Zwraca zmiany z rewirem oraz współpracownikami dzielącymi ten rewir."""
     if not user.pracownik_id:
         raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    prac = db.get(models.Pracownik, user.pracownik_id)
+    jest_kuchnia = bool(prac and prac.dzial == "kuchnia")
     pub = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
-    if not pub:
+    # Kuchnia: grafik „żywy" — kucharz widzi swoje zmiany od razu (bez czekania na publikację).
+    if not pub and not jest_kuchnia:
         return {"opublikowany": False, "opublikowano_at": None, "zmiany": []}
 
     moje = (
@@ -383,7 +391,7 @@ def moj_grafik(
                 {"imie": prac_map.get(w.pracownik_id, ""), "zamyka": bool(w.zamyka)} for w in wspol
             ],
         })
-    return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat(), "zmiany": zmiany}
+    return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat() if pub else None, "zmiany": zmiany}
 
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
@@ -730,6 +738,18 @@ def get_przydzialy(
     if end:   q = q.filter(models.PrzydzialZmiany.data <= end)
     return q.all()
 
+
+def _powiadom_kuchnie_o_zmianie(db, pracownik_id, tytul, tresc):
+    """Push do pracownika KUCHNI o KAŻDEJ zmianie w jego grafiku (dodanie/zmiana/wykreślenie).
+    Dla obsługi nic nie robi (ci dostają push przy publikacji). Best-effort — błędy łykamy."""
+    p = db.get(models.Pracownik, pracownik_id)
+    if p and p.dzial == "kuchnia":
+        try:
+            wyslij_push_do_pracownika(db, pracownik_id, tytul, tresc, url="/")
+        except Exception:
+            pass
+
+
 @app.post("/api/przydzialy", response_model=schemas.PrzydzialOut, status_code=201)
 def create_przydział(data: schemas.PrzydzialCreate, db: Session = Depends(get_db)):
     stan = db.get(models.Stanowisko, data.stanowisko_id)
@@ -747,6 +767,7 @@ def create_przydział(data: schemas.PrzydzialCreate, db: Session = Depends(get_d
 
     a = models.PrzydzialZmiany(**data.model_dump())
     db.add(a); db.commit(); db.refresh(a)
+    _powiadom_kuchnie_o_zmianie(db, a.pracownik_id, "Nowa zmiana w grafiku", "Dodano Ci zmianę w grafiku kuchni.")
     return a
 
 @app.put("/api/przydzialy/{aid}", response_model=schemas.PrzydzialOut)
@@ -770,6 +791,7 @@ def update_przydział(aid: int, data: schemas.PrzydzialCreate, db: Session = Dep
     for k, v in data.model_dump().items():
         setattr(a, k, v)
     db.commit(); db.refresh(a)
+    _powiadom_kuchnie_o_zmianie(db, a.pracownik_id, "Zmiana w grafiku", "Zaktualizowano Twoją zmianę w grafiku kuchni.")
     return a
 
 @app.delete("/api/przydzialy/{aid}", status_code=204)
@@ -777,7 +799,9 @@ def delete_przydział(aid: int, db: Session = Depends(get_db)):
     a = db.get(models.PrzydzialZmiany, aid)
     if not a:
         raise HTTPException(404, "Nie znaleziono.")
+    pid = a.pracownik_id
     db.delete(a); db.commit()
+    _powiadom_kuchnie_o_zmianie(db, pid, "Zmiana w grafiku", "Wykreślono Cię ze zmiany w grafiku kuchni.")
 
 @app.delete("/api/przydzialy", status_code=204)
 def clear_przydzialy(
@@ -1310,6 +1334,86 @@ def raport_godzin_kuchnia(rok: int = Query(...), miesiac: int = Query(...), db: 
     return {"rok": rok, "miesiac": miesiac, "pracownicy": pracownicy, "na_zmianie": na_zmianie}
 
 
+# --- Szef kuchni: KOREKTY grafiku kuchni (tylko pracownicy działu kuchnia) ---
+# Grafik publikuje admin, ale szef kuchni może na bieżąco poprawiać zmiany kuchni.
+# Każda zmiana jest natychmiast widoczna kucharzowi (grafik kuchni jest „żywy") i wysyła push.
+
+def _kuchnia_pracownik_lub_403(db, pracownik_id):
+    p = db.get(models.Pracownik, pracownik_id)
+    if not p:
+        raise HTTPException(404, "Nie znaleziono pracownika.")
+    if p.dzial != "kuchnia":
+        raise HTTPException(403, "Szef kuchni może edytować tylko pracowników kuchni.")
+    return p
+
+
+@app.post("/api/szefkuchni/przydzialy", response_model=schemas.PrzydzialOut, status_code=201)
+def szefkuchni_dodaj_przydzial(data: schemas.PrzydzialCreate,
+                               user: models.User = Depends(get_current_user),
+                               db: Session = Depends(get_db)):
+    """Szef kuchni dodaje zmianę pracownikowi kuchni (stanowisko zawsze = Kuchnia)."""
+    _kuchnia_pracownik_lub_403(db, data.pracownik_id)
+    a = models.PrzydzialZmiany(
+        data=data.data, stanowisko_id=_kuchnia_stanowisko(db).id, pracownik_id=data.pracownik_id,
+        godz_od=data.godz_od, rewir=data.rewir, zamyka=data.zamyka,
+    )
+    db.add(a); db.commit(); db.refresh(a)
+    _powiadom_kuchnie_o_zmianie(db, a.pracownik_id, "Nowa zmiana w grafiku", "Dodano Ci zmianę w grafiku kuchni.")
+    return a
+
+
+@app.put("/api/szefkuchni/przydzialy/{aid}", response_model=schemas.PrzydzialOut)
+def szefkuchni_edytuj_przydzial(aid: int, data: schemas.PrzydzialCreate,
+                                user: models.User = Depends(get_current_user),
+                                db: Session = Depends(get_db)):
+    """Szef kuchni zmienia istniejącą zmianę kuchni (godzina / rewir / kto zamyka)."""
+    a = db.get(models.PrzydzialZmiany, aid)
+    if not a:
+        raise HTTPException(404, "Nie znaleziono.")
+    _kuchnia_pracownik_lub_403(db, a.pracownik_id)
+    a.godz_od = data.godz_od
+    a.rewir = data.rewir
+    a.zamyka = data.zamyka
+    db.commit(); db.refresh(a)
+    _powiadom_kuchnie_o_zmianie(db, a.pracownik_id, "Zmiana w grafiku", "Zaktualizowano Twoją zmianę w grafiku kuchni.")
+    return a
+
+
+@app.delete("/api/szefkuchni/przydzialy/{aid}", status_code=204)
+def szefkuchni_usun_przydzial(aid: int,
+                              user: models.User = Depends(get_current_user),
+                              db: Session = Depends(get_db)):
+    """Szef kuchni wykreśla kucharza ze zmiany."""
+    a = db.get(models.PrzydzialZmiany, aid)
+    if not a:
+        raise HTTPException(404, "Nie znaleziono.")
+    pid = a.pracownik_id
+    _kuchnia_pracownik_lub_403(db, pid)
+    db.delete(a); db.commit()
+    _powiadom_kuchnie_o_zmianie(db, pid, "Zmiana w grafiku", "Wykreślono Cię ze zmiany w grafiku kuchni.")
+
+
+@app.get("/api/szefkuchni/grafik", status_code=200)
+def szefkuchni_grafik(start: date = Query(...), end: date = Query(...),
+                      user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Dane edytowalnego grafiku kuchni dla szefa kuchni: pracownicy kuchni + ich przydziały."""
+    kucharze = (db.query(models.Pracownik)
+                .filter(models.Pracownik.dzial == "kuchnia")
+                .order_by(models.Pracownik.kolejnosc, models.Pracownik.id).all())
+    pracownicy = [{"id": p.id, "imie": p.imie, "nazwisko": p.nazwisko,
+                   "kolor": p.kolor, "aktywny": bool(p.aktywny)} for p in kucharze]
+    kuchnia_pids = [p.id for p in kucharze]
+    przydzialy = []
+    if kuchnia_pids:
+        rows = (db.query(models.PrzydzialZmiany)
+                .filter(models.PrzydzialZmiany.data >= start, models.PrzydzialZmiany.data <= end,
+                        models.PrzydzialZmiany.pracownik_id.in_(kuchnia_pids)).all())
+        przydzialy = [{"id": a.id, "data": str(a.data), "pracownik_id": a.pracownik_id,
+                       "godz_od": a.godz_od.strftime("%H:%M") if a.godz_od else None,
+                       "rewir": a.rewir, "zamyka": bool(a.zamyka)} for a in rows]
+    return {"pracownicy": pracownicy, "przydzialy": przydzialy}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # STOŁY (live z Gastro) — osobna, addytywna ścieżka. NIE dotyka RCP/godzin.
 # Mapowanie rewirów (NGastroUzytkownik.Numer) na widok:
@@ -1355,7 +1459,10 @@ def gastro_stoly(db: Session = Depends(get_db)):
         "wynos": stan.get(STOLY_WYNOS, 0),
         "kuchnia": stan.get(STOLY_KUCHNIA, 0),
         "kuchnia_pozycje": stan.get(STOLY_KUCHNIA_POZYCJE, 0),
-        "zaktualizowano_at": last.zaktualizowano_at.isoformat() if last and last.zaktualizowano_at else None,
+        # Znacznik UTC (zapis przez datetime.utcnow()) — z offsetem, żeby przeglądarka
+        # przeliczyła na czas lokalny (bez tego pokazywało −2h: UTC czytane jako lokalny).
+        "zaktualizowano_at": (last.zaktualizowano_at.replace(tzinfo=timezone.utc).isoformat()
+                              if last and last.zaktualizowano_at else None),
     }
 
 

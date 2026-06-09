@@ -9,9 +9,11 @@ import { api } from '../lib/api'
 import { godzinyHM } from '../lib/format'
 import StolyLive from '../components/tabs/StolyLive'
 import Rezerwacje from '../components/tabs/Rezerwacje'
+import SzefKuchniGrafik from './SzefKuchniGrafik'
 
 const TABY = [
-  { value: 'kuchnia', label: 'Kuchnia' },
+  { value: 'grafik', label: 'Grafik' },
+  { value: 'kuchnia', label: 'Godziny' },
   { value: 'stoly', label: 'Stoły' },
   { value: 'rezerwacje', label: 'Rezerwacje' },
 ]
@@ -169,7 +171,7 @@ function KuchniaGodziny() {
 // podgląd stołów na żywo, rezerwacje. Bez grafiku i bez żadnej edycji.
 export default function SzefKuchniView() {
   const { user, logout } = useAuth()
-  const [widok, setWidok] = useState('kuchnia')
+  const [widok, setWidok] = useState('grafik')
   const imie = user?.imie || user?.login
 
   return (
@@ -211,6 +213,7 @@ export default function SzefKuchniView() {
         </div>
 
         <div key={widok} className="animate-tab-in">
+          {widok === 'grafik' && <SzefKuchniGrafik />}
           {widok === 'kuchnia' && <KuchniaGodziny />}
           {widok === 'stoly' && <StolyLive />}
           {widok === 'rezerwacje' && <Rezerwacje />}

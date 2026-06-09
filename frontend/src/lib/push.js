@@ -32,3 +32,28 @@ export async function wlaczPowiadomienia() {
   await api('/me/push/subscribe', 'POST', sub.toJSON())
   return true
 }
+
+// „Heal" subskrypcji: wołane przy starcie aplikacji (gdy zgoda już udzielona).
+// Subskrypcje push potrafią CICHO wygasać/być unieważniane przez przeglądarkę —
+// wtedy backend ma martwy wpis i powiadomienia przestają dochodzić. Tu, przy każdym
+// wejściu, upewniamy się że istnieje aktywna subskrypcja i odświeżamy ją w backendzie.
+// Best-effort: błędy łykamy (brak zgody/SW = po prostu nic nie robimy).
+export async function odswiezSubskrypcje() {
+  if (!pushWspierany() || Notification.permission !== 'granted') return false
+  try {
+    const { publicKey } = await api('/me/push/public-key')
+    if (!publicKey) return false
+    const reg = await navigator.serviceWorker.ready
+    let sub = await reg.pushManager.getSubscription()
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: base64ToUint8Array(publicKey),
+      })
+    }
+    await api('/me/push/subscribe', 'POST', sub.toJSON())
+    return true
+  } catch (_) {
+    return false
+  }
+}
