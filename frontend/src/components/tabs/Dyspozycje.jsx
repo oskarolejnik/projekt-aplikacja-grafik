@@ -8,7 +8,7 @@ import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
-import { hhmm, ddmmyyyy, NAZWY_DNI, zakresDni } from '../../lib/format'
+import { hhmm, ddmmyyyy, NAZWY_DNI, zakresDni, tloKoloru } from '../../lib/format'
 import { motion, AnimatePresence } from 'framer-motion'
 
 // Dyspozycyjność pracowników. Pracownicy zgłaszają się sami w swoim panelu, ale
@@ -161,7 +161,7 @@ export default function Dyspozycje() {
               ) : (
                 aktywni.map((p) => (
                   <tr key={p.id}>
-                    <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-3 font-semibold text-ink">
+                    <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-3 font-semibold text-ink" style={{ background: tloKoloru(p.kolor) }}>
                       {p.imie} {p.nazwisko}
                     </td>
                     {daty.map((dt) => {

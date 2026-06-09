@@ -1,10 +1,39 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Icon } from '../../lib/icons'
+import { tloKoloru } from '../../lib/format'
 import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
+
+// Paleta tła pracownika (ręcznie, bez algorytmów) — przyjazne dla ciemnego motywu.
+const PALETA = ['#f472b6', '#fb923c', '#fbbf24', '#34d399', '#60a5fa', '#a78bfa', '#f87171', '#22d3ee']
+
+function KolorPicker({ value, onChange }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onChange(null)}
+        title="brak koloru"
+        className={`grid h-7 w-7 place-items-center rounded-full border-2 text-muted transition ${!value ? 'border-ink' : 'border-line'}`}
+      >
+        <Icon name="close" className="h-3 w-3" />
+      </button>
+      {PALETA.map((c) => (
+        <button
+          key={c}
+          type="button"
+          onClick={() => onChange(c)}
+          title={c}
+          className={`h-7 w-7 rounded-full border-2 transition ${value === c ? 'scale-110 border-ink' : 'border-line'}`}
+          style={{ background: c + '66' }}
+        />
+      ))}
+    </div>
+  )
+}
 
 // Rozwijana lista kwalifikacji (checkboxy stanowisk). Pełna szerokość = czytelne nazwy.
 function KwalifikacjeDropdown({ stanowiska, selected, onToggle }) {
@@ -63,11 +92,12 @@ function StawkiEdytor({ stanowiska, kwal, stawki, setStawka }) {
 const zbierzStawki = (kwal, stawki) =>
   kwal.map((id) => ({ stanowisko_id: id, stawka: parseFloat(stawki[id]) || 0 }))
 
-function PracownikRow({ p, i, stanowiska, onChanged }) {
+function PracownikRow({ p, i, stanowiska, onChanged, onMove, first, last }) {
   const { toast, confirm } = useToast()
   const [imie, setImie] = useState(p.imie)
   const [nazwisko, setNazwisko] = useState(p.nazwisko)
   const [aktywny, setAktywny] = useState(p.aktywny)
+  const [kolor, setKolor] = useState(p.kolor || null)
   const [kwal, setKwal] = useState((p.kwalifikacje || []).map((k) => k.id))
   const [stawki, setStawki] = useState(() =>
     Object.fromEntries((p.stawki || []).map((s) => [s.stanowisko_id, String(s.stawka)])),
@@ -84,6 +114,7 @@ function PracownikRow({ p, i, stanowiska, onChanged }) {
         imie: imie.trim(),
         nazwisko: nazwisko.trim(),
         aktywny,
+        kolor,
         kwalifikacje_ids: kwal,
         stawki: zbierzStawki(kwal, stawki),
       })
@@ -106,10 +137,22 @@ function PracownikRow({ p, i, stanowiska, onChanged }) {
   }
 
   return (
-    <div className="animate-fade-up rounded-2xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
+    <div
+      className="animate-fade-up overflow-hidden rounded-2xl border border-line bg-white/[0.02] p-4"
+      style={{ animationDelay: `${Math.min(i, 8) * 45}ms`, borderLeft: kolor ? `4px solid ${kolor}` : undefined }}
+    >
       <div className="flex flex-col gap-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex flex-1 flex-col gap-1">
+        <div className="flex items-start gap-3">
+          {/* Strzałki kolejności */}
+          <div className="flex shrink-0 flex-col gap-1">
+            <button onClick={() => onMove(p.id, -1)} disabled={first} className="rounded-md border border-line p-1 text-muted transition hover:text-ink disabled:opacity-30" aria-label="W górę">
+              <Icon name="chevronDown" className="h-3.5 w-3.5 rotate-180" />
+            </button>
+            <button onClick={() => onMove(p.id, 1)} disabled={last} className="rounded-md border border-line p-1 text-muted transition hover:text-ink disabled:opacity-30" aria-label="W dół">
+              <Icon name="chevronDown" className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex flex-1 flex-col gap-1 rounded-lg px-2 py-1" style={{ background: tloKoloru(kolor) }}>
             <input value={imie} onChange={(e) => setImie(e.target.value)} placeholder="Imię" className="w-full border-b border-transparent bg-transparent text-base font-bold text-ink outline-none focus:border-mint/60" />
             <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="w-full border-b border-transparent bg-transparent text-xs font-medium text-muted outline-none focus:border-mint/60" />
           </div>
@@ -118,6 +161,11 @@ function PracownikRow({ p, i, stanowiska, onChanged }) {
             Aktywny
           </label>
         </div>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="field-label">Kolor tła (ręcznie)</span>
+          <KolorPicker value={kolor} onChange={setKolor} />
+        </label>
 
         <label className="flex flex-col gap-1.5">
           <span className="field-label">Kwalifikacje</span>
@@ -144,6 +192,7 @@ export default function Pracownicy() {
   const { toast } = useToast()
   const [imie, setImie] = useState('')
   const [nazwisko, setNazwisko] = useState('')
+  const [kolor, setKolor] = useState(null)
   const [kwal, setKwal] = useState([])
   const [stawki, setStawki] = useState({})
 
@@ -153,6 +202,24 @@ export default function Pracownicy() {
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
+
+  // Zmiana kolejności: zamień sąsiadów i zapisz całą listę id.
+  const przesun = useCallback(
+    async (pid, kierunek) => {
+      const lista = [...pracownicy]
+      const i = lista.findIndex((p) => p.id === pid)
+      const j = i + kierunek
+      if (i < 0 || j < 0 || j >= lista.length) return
+      ;[lista[i], lista[j]] = [lista[j], lista[i]]
+      try {
+        await api('/pracownicy/kolejnosc', 'PUT', { ids: lista.map((p) => p.id) })
+        reloadDicts()
+      } catch (e) {
+        toast(e.message, 'error')
+      }
+    },
+    [pracownicy, reloadDicts, toast],
+  )
 
   const utworz = async () => {
     if (!imie.trim() || !nazwisko.trim()) {
@@ -164,11 +231,13 @@ export default function Pracownicy() {
         imie: imie.trim(),
         nazwisko: nazwisko.trim(),
         aktywny: true,
+        kolor,
         kwalifikacje_ids: kwal,
         stawki: zbierzStawki(kwal, stawki),
       })
       setImie('')
       setNazwisko('')
+      setKolor(null)
       setKwal([])
       setStawki({})
       reloadDicts()
@@ -189,6 +258,7 @@ export default function Pracownicy() {
             <input value={imie} onChange={(e) => setImie(e.target.value)} placeholder="Imię" className="field" />
             <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="field" />
           </div>
+          <KolorPicker value={kolor} onChange={setKolor} />
           <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
           <StawkiEdytor stanowiska={stanowiska} kwal={kwal} stawki={stawki} setStawka={setStawka} />
           <Button onClick={utworz} className="w-full">
@@ -197,12 +267,23 @@ export default function Pracownicy() {
         </div>
       </Card>
 
-      {/* Lista pracowników — karty (czytelne na mobile, kwalifikacje pełnej szerokości) */}
+      {/* Lista pracowników — karty. Kolejność strzałkami ↑/↓, kolor tła za imieniem. */}
       <div className="space-y-3">
         {pracownicy.length === 0 ? (
           <Card className="p-8 text-center text-sm text-muted">Brak pracowników. Dodaj pierwszego powyżej.</Card>
         ) : (
-          pracownicy.map((p, i) => <PracownikRow key={p.id} p={p} i={i} stanowiska={stanowiska} onChanged={reloadDicts} />)
+          pracownicy.map((p, i) => (
+            <PracownikRow
+              key={p.id}
+              p={p}
+              i={i}
+              stanowiska={stanowiska}
+              onChanged={reloadDicts}
+              onMove={przesun}
+              first={i === 0}
+              last={i === pracownicy.length - 1}
+            />
+          ))
         )}
       </div>
     </div>

@@ -18,6 +18,15 @@ export const godzinyHM = (h) => {
 export const zl = (n) =>
   new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN', minimumFractionDigits: 2 }).format(Number(n) || 0)
 
+// hex (#rrggbb) -> NIEPRZEZROCZYSTE tło komórki: kolor zmieszany z ciemną bazą.
+// Dzięki temu działa też na „przyklejonych" kolumnach (nic nie prześwituje).
+export const tloKoloru = (hex, alpha = 0.28) => {
+  if (!hex || hex[0] !== '#' || hex.length < 7) return undefined
+  const base = 18 // ciemna baza (~#121212)
+  const mix = (i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * alpha + base * (1 - alpha))
+  return `rgb(${mix(1)}, ${mix(3)}, ${mix(5)})`
+}
+
 // Indeks getDay() -> polska nazwa dnia
 export const NAZWY_DNI = [
   'Niedziela',

@@ -7,7 +7,7 @@ import { Spinner } from '../ui/Spinner'
 import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
-import { hhmm, zakresDni } from '../../lib/format'
+import { hhmm, zakresDni, tloKoloru } from '../../lib/format'
 import { motion } from 'framer-motion'
 import { SPRING_PILL } from '../../lib/motion'
 
@@ -31,6 +31,7 @@ export default function Grafik() {
   const [publikacja, setPublikacja] = useState({ opublikowany: false, opublikowano_at: null })
   const [publikowanie, setPublikowanie] = useState(false)
   const [selDay, setSelDay] = useState('') // wybrany dzień w widoku mobilnym
+  const [reczny, setReczny] = useState(null) // ręczne przypisanie: { key, stanowisko_id, godz_od }
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
   const load = useCallback(async () => {
@@ -111,6 +112,27 @@ export default function Grafik() {
       toast(err.message, 'error')
     }
   }
+  // Wolne przypisanie: dowolne stanowisko + własna godzina, niezależnie od dyspozycyjności/wymagań.
+  const dodajRecznie = async (dt, pId) => {
+    if (!reczny?.stanowisko_id) {
+      toast('Wybierz stanowisko.', 'error')
+      return
+    }
+    try {
+      await api('/przydzialy', 'POST', {
+        data: dt,
+        stanowisko_id: +reczny.stanowisko_id,
+        pracownik_id: pId,
+        godz_od: reczny.godz_od ? `${reczny.godz_od}:00` : null,
+        rewir: null,
+      })
+      setReczny(null)
+      load()
+    } catch (err) {
+      toast(err.message, 'error')
+    }
+  }
+
   const usunPrzydzial = async (aid) => {
     try {
       await api(`/przydzialy/${aid}`, 'DELETE')
@@ -189,8 +211,9 @@ export default function Grafik() {
   // Render zawartości jednej komórki (status + przydziały + dodawanie). Wspólny dla
   // tabeli (desktop) i kart dnia (mobile).
   const komorka = (dt, p) => {
-    const dys = dysMap[`${dt}_${p.id}`]
-    const pAt = przyMap[`${dt}_${p.id}`] || []
+    const key = `${dt}_${p.id}`
+    const dys = dysMap[key]
+    const pAt = przyMap[key] || []
     const szablony = szablonyDla(dt, p)
     const status = dys ? (dys.dostepnosc ? (dys.godz_od ? `Od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny') : 'brak'
     const statusColor = !dys
@@ -224,26 +247,63 @@ export default function Grafik() {
             )
           })}
 
-          {/* Maks. 1 zmiana/dzień — „+ Dodaj" znika, gdy pracownik ma już przydział tego dnia. */}
-          {dys?.dostepnosc && pAt.length === 0 && szablony.length > 0 && (
-            <select
-              value=""
-              onChange={(ev) => {
-                const idx = ev.target.value
-                if (idx === '') return
-                dodajPrzydzial(dt, p.id, szablony[+idx])
-              }}
-              className="w-full cursor-pointer rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-mint outline-none transition hover:border-mint/50"
-            >
-              <option value="" className="bg-surface text-muted">+ Dodaj</option>
-              {szablony.map((w, i) => (
-                <option key={i} value={i} className="bg-surface text-ink">
-                  {stanMap[w.stanowisko_id].nazwa}
-                  {w.rewir ? ` (${w.rewir})` : ''}
-                  {w.godz_od ? ` [${hhmm(w.godz_od)}]` : ''}
-                </option>
-              ))}
-            </select>
+          {/* Maks. 1 zmiana/dzień — opcje dodawania znikają, gdy pracownik ma już przydział. */}
+          {pAt.length === 0 && (
+            <>
+              {dys?.dostepnosc && szablony.length > 0 && (
+                <select
+                  value=""
+                  onChange={(ev) => {
+                    const idx = ev.target.value
+                    if (idx === '') return
+                    dodajPrzydzial(dt, p.id, szablony[+idx])
+                  }}
+                  className="w-full cursor-pointer rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-mint outline-none transition hover:border-mint/50"
+                >
+                  <option value="" className="bg-surface text-muted">+ Dodaj (wg planu)</option>
+                  {szablony.map((w, i) => (
+                    <option key={i} value={i} className="bg-surface text-ink">
+                      {stanMap[w.stanowisko_id].nazwa}
+                      {w.rewir ? ` (${w.rewir})` : ''}
+                      {w.godz_od ? ` [${hhmm(w.godz_od)}]` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {reczny?.key === key ? (
+                <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-mint/40 bg-surface-2 p-2">
+                  {!dys?.dostepnosc && <span className="text-[10px] font-bold text-lemon">⚠ Pracownik nie zgłosił dostępności</span>}
+                  <select
+                    value={reczny.stanowisko_id}
+                    onChange={(ev) => setReczny((r) => ({ ...r, stanowisko_id: ev.target.value }))}
+                    className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                  >
+                    <option value="">— stanowisko —</option>
+                    {stanowiska.map((st) => (
+                      <option key={st.id} value={st.id}>{st.nazwa}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="time"
+                    value={reczny.godz_od}
+                    onChange={(ev) => setReczny((r) => ({ ...r, godz_od: ev.target.value }))}
+                    className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                  />
+                  <div className="flex gap-1.5">
+                    <button onClick={() => dodajRecznie(dt, p.id)} className="flex-1 rounded-md bg-mint/20 py-1 text-xs font-bold text-mint transition hover:bg-mint/30">Dodaj</button>
+                    <button onClick={() => setReczny(null)} className="rounded-md border border-line px-2 py-1 text-xs text-muted transition hover:text-ink">Anuluj</button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setReczny({ key, stanowisko_id: '', godz_od: '' })}
+                  className="w-full rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-muted outline-none transition hover:border-mint/50 hover:text-mint"
+                >
+                  + ręcznie
+                </button>
+              )}
+            </>
           )}
         </div>
       </>
@@ -327,7 +387,7 @@ export default function Grafik() {
                   className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4"
                   style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
                 >
-                  <div className="mb-2.5 text-sm font-semibold text-ink">
+                  <div className="mb-2.5 rounded-lg px-2 py-1 text-sm font-semibold text-ink" style={{ background: tloKoloru(p.kolor) }}>
                     {p.imie} {p.nazwisko}
                   </div>
                   {komorka(selectedDay, p)}
@@ -362,7 +422,7 @@ export default function Grafik() {
                 <tbody>
                   {aktywni.map((p) => (
                     <tr key={p.id}>
-                      <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-3 text-xs font-semibold text-ink shadow-[2px_0_8px_rgba(0,0,0,0.25)]">
+                      <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-3 text-xs font-semibold text-ink shadow-[2px_0_8px_rgba(0,0,0,0.25)]" style={{ background: tloKoloru(p.kolor) }}>
                         {p.imie} {p.nazwisko}
                       </td>
                       {dates.map((dt) => (

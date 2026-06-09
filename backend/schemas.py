@@ -39,7 +39,7 @@ class PrzydzialOut(PrzydzialBase):
     id: int; model_config = ConfigDict(from_attributes=True)
 
 class PracownikBase(BaseModel):
-    imie: str; nazwisko: str; aktywny: bool = True
+    imie: str; nazwisko: str; aktywny: bool = True; kolor: Optional[str] = None
 class StawkaIn(BaseModel):
     stanowisko_id: int
     stawka: float = 0.0
@@ -53,7 +53,11 @@ class PracownikCreate(PracownikBase):
 class PracownikOut(PracownikBase):
     id: int; kwalifikacje: List[StanowiskoOut] = []
     stawki: List[StawkaOut] = []
+    kolejnosc: int = 0
     model_config = ConfigDict(from_attributes=True)
+
+class KolejnoscIn(BaseModel):
+    ids: List[int] = []
 
 class AutoAssignResult(BaseModel):
     przydzielone: int; niedobory: List[dict]

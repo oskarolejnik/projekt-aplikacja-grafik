@@ -57,6 +57,13 @@ def _ensure_schema():
         if "godz_do" not in kolumny:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE dyspozycje ADD COLUMN godz_do TIME"))
+    if "pracownicy" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("pracownicy")}
+        with engine.begin() as conn:
+            if "kolejnosc" not in kolumny:
+                conn.execute(text("ALTER TABLE pracownicy ADD COLUMN kolejnosc INTEGER NOT NULL DEFAULT 0"))
+            if "kolor" not in kolumny:
+                conn.execute(text("ALTER TABLE pracownicy ADD COLUMN kolor VARCHAR"))
 
 
 def init_db():

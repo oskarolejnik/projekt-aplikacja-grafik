@@ -452,7 +452,7 @@ def delete_podkategoria(pid: int, db: Session = Depends(get_db)):
 
 @app.get("/api/pracownicy", response_model=List[schemas.PracownikOut])
 def get_pracownicy(db: Session = Depends(get_db)):
-    return db.query(models.Pracownik).all()
+    return db.query(models.Pracownik).order_by(models.Pracownik.kolejnosc, models.Pracownik.id).all()
 
 def _ustaw_stawki(db, p, stawki):
     """Nadpisuje stawki godzinowe pracownika (per stanowisko). Zapisuje tylko dodatnie."""
@@ -466,7 +466,9 @@ def _ustaw_stawki(db, p, stawki):
 
 @app.post("/api/pracownicy", response_model=schemas.PracownikOut, status_code=201)
 def create_pracownik(data: schemas.PracownikCreate, db: Session = Depends(get_db)):
-    p = models.Pracownik(imie=data.imie, nazwisko=data.nazwisko, aktywny=data.aktywny)
+    ostatni = db.query(models.Pracownik).order_by(models.Pracownik.kolejnosc.desc()).first()
+    p = models.Pracownik(imie=data.imie, nazwisko=data.nazwisko, aktywny=data.aktywny,
+                         kolor=data.kolor, kolejnosc=(ostatni.kolejnosc + 1 if ostatni else 0))
     if data.kwalifikacje_ids:
         p.kwalifikacje = db.query(models.Stanowisko).filter(
             models.Stanowisko.id.in_(data.kwalifikacje_ids)
@@ -476,6 +478,17 @@ def create_pracownik(data: schemas.PracownikCreate, db: Session = Depends(get_db
     _przypisz_odbicia_do_pracownika(db, p)  # podlinkuj zalegle odbicia RCP od razu
     return p
 
+@app.put("/api/pracownicy/kolejnosc", status_code=200)
+def ustaw_kolejnosc(data: schemas.KolejnoscIn, db: Session = Depends(get_db)):
+    """Ręczna kolejność wyświetlania pracowników: kolejnosc = pozycja na liście ids."""
+    for idx, pid in enumerate(data.ids):
+        p = db.get(models.Pracownik, pid)
+        if p:
+            p.kolejnosc = idx
+    db.commit()
+    return {"ok": True}
+
+
 @app.put("/api/pracownicy/{pid}", response_model=schemas.PracownikOut)
 def update_pracownik(pid: int, data: schemas.PracownikCreate, db: Session = Depends(get_db)):
     p = db.get(models.Pracownik, pid)
@@ -484,6 +497,7 @@ def update_pracownik(pid: int, data: schemas.PracownikCreate, db: Session = Depe
     p.imie = data.imie
     p.nazwisko = data.nazwisko
     p.aktywny = data.aktywny
+    p.kolor = data.kolor
     p.kwalifikacje = db.query(models.Stanowisko).filter(
         models.Stanowisko.id.in_(data.kwalifikacje_ids)
     ).all()
