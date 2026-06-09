@@ -77,6 +77,16 @@ export default function Konta() {
       toast(e.message, 'error')
     }
   }
+  const zmienRole = async (u, rola) => {
+    if (rola === u.rola) return
+    try {
+      await api(`/users/${u.id}`, 'PUT', { rola })
+      toast(`Zmieniono rolę konta „${u.login}”.`, 'success')
+      load()
+    } catch (e) {
+      toast(e.message, 'error')
+    }
+  }
   const resetHaslo = async (u) => {
     const nowe = Math.random().toString(36).slice(2, 10)
     try {
@@ -146,15 +156,19 @@ export default function Konta() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-ink">{u.login}</span>
-                    {(() => {
-                      const r = {
-                        admin: ['bg-lemon/15 text-lemon', 'Administrator'],
-                        szef: ['bg-blush/15 text-blush', 'Szef'],
-                        szef_kuchni: ['bg-coral/15 text-coral', 'Szef kuchni'],
-                        kuchnia: ['bg-mint/15 text-mint', 'Kuchnia'],
-                      }[u.rola] || ['bg-white/10 text-ink', 'Obsługa']
-                      return <span className={`rounded-md px-2 py-0.5 text-xs font-bold ${r[0]}`}>{r[1]}</span>
-                    })()}
+                    {/* Rola edytowalna — zmiana zapisuje się od razu (PUT /users). */}
+                    <select
+                      value={u.rola}
+                      onChange={(e) => zmienRole(u, e.target.value)}
+                      title="Zmień rolę konta"
+                      className="cursor-pointer rounded-md border border-line bg-surface-2 px-2 py-1 text-xs font-semibold text-ink outline-none transition hover:border-mint/50"
+                    >
+                      <option value="employee" className="bg-surface">Pracownik obsługa</option>
+                      <option value="kuchnia" className="bg-surface">Pracownik kuchnia</option>
+                      <option value="szef_kuchni" className="bg-surface">Szef kuchni</option>
+                      <option value="szef" className="bg-surface">Szef (podgląd)</option>
+                      <option value="admin" className="bg-surface">Administrator</option>
+                    </select>
                   </div>
                   <label className="flex items-center gap-2 text-xs text-muted">
                     Aktywne
