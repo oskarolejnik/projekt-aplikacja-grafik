@@ -287,20 +287,20 @@ export default function Grafik() {
         </Banner>
       ) : (
         <>
-          <p className="mb-2 text-xs text-muted">Cały tydzień na raz. Kliknij pole, aby dodać lub zmienić zmianę. Tło: <span className="font-bold text-success">zielone</span> = dostępny (✓), <span className="font-bold text-danger">czerwone</span> = nie (✗). 🔑 = zamyka lokal.</p>
+          <p className="mb-2 text-xs text-muted">Cały tydzień na raz. Kliknij pole, aby dodać lub zmienić zmianę. Tło: <span className="font-bold text-success">zielone</span> = dostępny (✓), <span className="font-bold text-danger">czerwone</span> = nie (✗). 🔑 = zamyka lokal. <span className="font-bold text-mint">Miętowo</span> = rewir (Sala/Bar).</p>
           <div className="card overflow-auto p-0" style={{ maxHeight: '74vh' }}>
-            <table className="w-full border-separate border-spacing-0">
+            <table className="w-full table-fixed border-separate border-spacing-0">
               <thead>
                 <tr>
-                  <th className="sticky left-0 top-0 z-30 min-w-[104px] border-b border-r border-line bg-surface-2 p-2 text-left text-[10px] font-bold uppercase tracking-wider text-muted">
-                    Pracownik
+                  <th className="sticky left-0 top-0 z-30 w-14 border-b border-r border-line bg-surface-2 p-1 text-center text-muted">
+                    <Icon name="users" className="mx-auto h-3.5 w-3.5" />
                   </th>
                   {dates.map((dt) => {
                     const { wd, dm } = dayLabel(dt)
                     const isW = [0, 6].includes(new Date(dt).getDay())
                     return (
-                      <th key={dt} className={`sticky top-0 z-20 min-w-[60px] border-b border-r border-line bg-surface-2 p-1.5 text-center text-xs font-bold ${isW ? 'text-blush' : 'text-ink'}`}>
-                        <div className="text-[9px] uppercase tracking-wide opacity-60">{wd}</div>
+                      <th key={dt} className={`sticky top-0 z-20 border-b border-r border-line bg-surface-2 p-1 text-center text-[11px] font-bold ${isW ? 'text-blush' : 'text-ink'}`}>
+                        <div className="text-[8px] uppercase tracking-wide opacity-60">{wd}</div>
                         {dm}
                       </th>
                     )
@@ -310,18 +310,20 @@ export default function Grafik() {
               <tbody>
                 {aktywni.map((p) => (
                   <tr key={p.id}>
-                    <td className="sticky left-0 z-10 min-w-[104px] border-b border-r border-line p-2 text-[11px] font-semibold leading-tight text-ink shadow-[2px_0_8px_rgba(0,0,0,0.3)]" style={{ background: tloKoloru(p.kolor) }}>
-                      {p.imie} {p.nazwisko}
+                    <td className="sticky left-0 z-10 w-14 border-b border-r border-line p-1 text-[10px] font-semibold leading-tight text-ink" style={{ background: tloKoloru(p.kolor) }} title={`${p.imie} ${p.nazwisko}`}>
+                      <div className="truncate">{p.imie} {p.nazwisko ? p.nazwisko[0] + '.' : ''}</div>
                     </td>
                     {dates.map((dt) => {
                       const a = (przyMap[`${dt}_${p.id}`] || [])[0]
                       const dys = dysMap[`${dt}_${p.id}`]
+                      const sn = a ? (stanMap[a.stanowisko_id]?.nazwa || '?') : ''
+                      const pokazRewir = a && a.rewir && /^(sala|bar)/i.test(sn)   // rewir tylko ze stanowisk Sala*/Bar*
                       return (
                         <td
                           key={dt}
                           onClick={() => otworzKomorke(dt, p)}
                           title="Kliknij, aby dodać / zmienić"
-                          className={`relative cursor-pointer border-b border-r border-line p-0.5 text-center align-middle transition hover:brightness-150 ${cellBgFor(dt, p)}`}
+                          className={`relative cursor-pointer overflow-hidden border-b border-r border-line p-0.5 text-center align-middle transition hover:brightness-150 ${cellBgFor(dt, p)}`}
                         >
                           {dys && (
                             <span
@@ -332,12 +334,15 @@ export default function Grafik() {
                             </span>
                           )}
                           {a ? (
-                            <div className="px-0.5 py-1.5">
-                              <div className="text-[10px] font-bold leading-tight text-ink">{stanMap[a.stanowisko_id]?.nazwa || '?'}</div>
-                              <div className="font-mono text-[10px] leading-tight text-muted">{a.godz_od ? hhmm(a.godz_od) : '—'}</div>
-                              {!jestKuchnia && a.zamyka && (
-                                <span title={`zamyka lokal${a.zamyka_reczny ? ' (ręcznie)' : ''}`} className="mt-0.5 inline-flex text-lemon"><Icon name="key" className="h-2.5 w-2.5" /></span>
-                              )}
+                            <div className="px-0.5 py-1 leading-tight">
+                              <div className="flex flex-wrap items-baseline justify-center gap-x-1">
+                                <span className="text-[10px] font-bold text-ink">{sn}</span>
+                                {a.godz_od && <span className="font-mono text-[10px] text-muted">{hhmm(a.godz_od)}</span>}
+                                {!jestKuchnia && a.zamyka && (
+                                  <span title={`zamyka lokal${a.zamyka_reczny ? ' (ręcznie)' : ''}`} className="inline-flex text-lemon"><Icon name="key" className="h-2.5 w-2.5" /></span>
+                                )}
+                              </div>
+                              {pokazRewir && <div className="truncate text-[9px] font-semibold text-mint" title={a.rewir}>{a.rewir}</div>}
                             </div>
                           ) : (
                             <span className="text-base font-bold text-muted/25">+</span>
