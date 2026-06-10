@@ -8,13 +8,10 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 import { hhmm, zakresDni, tloKoloru } from '../../lib/format'
-import { motion } from 'framer-motion'
-import { SPRING_PILL } from '../../lib/motion'
 
 // Interaktywny grafik: pracownicy × dni. Status dyspozycji, przydziały zmian,
 // dodawanie z szablonów wymagań, auto-przydział i czyszczenie. Logika map 1:1.
-// Prezentacja responsywna: desktop = macierz (tabela), mobile = wybór dnia + lista
-// pracowników. Render pojedynczej komórki wydzielony do komorka(dt, p) — wspólny dla obu.
+// Gęsta tabela (cały tydzień naraz); klik w komórkę otwiera modal edycji (otworzKomorke).
 export default function Grafik() {
   const { stanowiska, pracownicy, week, biezacy, setWeek, reloadDicts } = useData()
   const { toast, confirm } = useToast()
@@ -30,11 +27,10 @@ export default function Grafik() {
   const [processing, setProcessing] = useState(false)
   const [publikacja, setPublikacja] = useState({ opublikowany: false, opublikowano_at: null })
   const [publikowanie, setPublikowanie] = useState(false)
-  const [selDay, setSelDay] = useState('') // wybrany dzień w widoku mobilnym
-  const [reczny, setReczny] = useState(null) // ręczne przypisanie: { key, stanowisko_id, godz_od, rewir, zamyka }
-  const [edycja, setEdycja] = useState(null) // edycja istniejącego przydziału: { id, rewir, zamyka }
   const [dzial, setDzial] = useState('obsluga')    // który grafik: 'obsluga' | 'kuchnia'
   const [kuchniaId, setKuchniaId] = useState(null) // id ukrytego stanowiska kuchni
+  const [modal, setModal] = useState(null)         // edytor komórki gęstej tabeli: { dt, p }
+  const [mForm, setMForm] = useState({ stanowisko_id: '', godz_od: '', rewir: '', zamyka: false })
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
   const load = useCallback(async () => {
@@ -112,88 +108,6 @@ export default function Grafik() {
     [wymMap, stanMap],
   )
 
-  const dodajPrzydzial = async (dt, pId, w) => {
-    try {
-      await api('/przydzialy', 'POST', { data: dt, stanowisko_id: w.stanowisko_id, pracownik_id: pId, godz_od: w.godz_od, rewir: w.rewir })
-      load()
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  }
-  // Wolne przypisanie: dowolne stanowisko + własna godzina, niezależnie od dyspozycyjności/wymagań.
-  const dodajRecznie = async (dt, pId) => {
-    // W grafiku kuchni domyślne stanowisko = Kuchnia, ale można wybrać inne (np. Techniczny) na tę zmianę.
-    const kuchnia = dzial === 'kuchnia'
-    const stanowisko_id = kuchnia ? (+reczny.stanowisko_id || kuchniaId) : +reczny.stanowisko_id
-    if (!stanowisko_id) {
-      toast(kuchnia ? 'Brak stanowiska kuchni — odśwież stronę.' : 'Wybierz stanowisko.', 'error')
-      return
-    }
-    try {
-      await api('/przydzialy', 'POST', {
-        data: dt,
-        stanowisko_id,
-        pracownik_id: pId,
-        godz_od: reczny.godz_od ? `${reczny.godz_od}:00` : null,
-        rewir: (reczny.rewir || '').trim() || null,
-        zamyka: !!reczny.zamyka,
-      })
-      setReczny(null)
-      load()
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  }
-
-  // Otwórz dodawanie dla pustej komórki — JEDEN klik, formularz wypełniony podpowiedzią z planu
-  // (pierwszy szablon: stanowisko + godzina + rewir), żeby nie było osobnego przycisku „+ ręcznie".
-  const otworzDodaj = (dt, p, szablony) => {
-    const szab = szablony[0]
-    setReczny({
-      key: `${dt}_${p.id}`,
-      stanowisko_id: jestKuchnia ? String(kuchniaId ?? '') : (szab ? String(szab.stanowisko_id) : ''),
-      godz_od: szab?.godz_od ? hhmm(szab.godz_od) : '',
-      rewir: szab?.rewir || '',
-      zamyka: false,
-    })
-  }
-
-  // Pełna edycja przydziału: stanowisko + godzina + rewir. „zamyka" jest osobno (automat/ręcznie).
-  const zapiszEdycje = async (a) => {
-    try {
-      await api(`/przydzialy/${a.id}`, 'PUT', {
-        data: a.data,
-        stanowisko_id: +edycja.stanowisko_id || a.stanowisko_id,
-        pracownik_id: a.pracownik_id,
-        godz_od: edycja.godz_od ? `${edycja.godz_od}:00` : null,
-        rewir: (edycja.rewir || '').trim() || null,
-      })
-      setEdycja(null)
-      load()
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  }
-
-  // „Zamyka lokal" — ręczne nadpisanie (reczny=true) lub powrót do automatu (reczny=false).
-  const setZamyka = async (a, reczny) => {
-    try {
-      await api(`/przydzialy/${a.id}/zamyka`, 'PUT', { reczny })
-      load()
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  }
-
-  const usunPrzydzial = async (aid) => {
-    try {
-      await api(`/przydzialy/${aid}`, 'DELETE')
-      load()
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  }
-
   const autoAssign = async () => {
     setProcessing(true)
     try {
@@ -254,7 +168,6 @@ export default function Grafik() {
   // Osobne grafiki: pokazujemy tylko pracowników wybranego działu.
   const aktywni = pracownicy.filter((p) => p.aktywny && (p.dzial || 'obsluga') === dzial)
   const jestKuchnia = dzial === 'kuchnia'
-  const selectedDay = dates.includes(selDay) ? selDay : dates[0]
 
   const dayLabel = (dt) => {
     const [, mm, dd] = dt.split('-')
@@ -266,155 +179,46 @@ export default function Grafik() {
     return !dys ? 'bg-white/[0.01]' : dys.dostepnosc ? 'bg-success/[0.14]' : 'bg-danger/[0.14]'
   }
 
-  // Render zawartości jednej komórki (status + przydziały + dodawanie). Wspólny dla
-  // tabeli (desktop) i kart dnia (mobile).
-  const komorka = (dt, p) => {
-    const key = `${dt}_${p.id}`
-    const dys = dysMap[key]
-    const pAt = przyMap[key] || []
-    const szablony = szablonyDla(dt, p)
-    return (
-      <>
-        {/* Dostępność = MOCNY kolor + IKONA (✓/✗), bez tekstu „dostępny/niedostępny". Kształt
-            ikony rozróżnia stany niezależnie od koloru — czytelne też przy daltonizmie. */}
-        {!jestKuchnia && (
-          <div
-            title={dys ? (dys.dostepnosc ? (dys.godz_od ? `Dostępny od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny') : 'Nie zgłosił dostępności'}
-            className={`mb-2 flex w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] font-extrabold ${
-              !dys ? 'bg-white/[0.06] text-muted' : dys.dostepnosc ? 'bg-success text-bg' : 'bg-danger text-white'
-            }`}
-          >
-            {!dys ? (
-              <span>? brak</span>
-            ) : dys.dostepnosc ? (
-              <>
-                <Icon name="check" className="h-3.5 w-3.5" strokeWidth={3} />
-                {dys.godz_od && <span className="font-mono">{hhmm(dys.godz_od)}</span>}
-              </>
-            ) : (
-              <Icon name="close" className="h-3.5 w-3.5" strokeWidth={3} />
-            )}
-          </div>
-        )}
-        <div className="flex flex-col gap-2">
-          {pAt.map((a) => {
-            const stan = stanMap[a.stanowisko_id]
-            const szab = szablony.find((w) => w.stanowisko_id === a.stanowisko_id && w.godz_od === a.godz_od)
-            const edytuje = edycja?.id === a.id
-            return (
-              <div key={a.id} className={`rounded-lg border border-line border-l-[3px] bg-surface-2 p-2 text-left text-xs ${(!jestKuchnia && a.zamyka) ? 'border-l-lemon' : 'border-l-mint'}`}>
-                <div className="flex items-start justify-between gap-1">
-                  <span className="font-bold text-ink">
-                    {stan?.nazwa}
-                    {!jestKuchnia && (a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
-                  </span>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    {!jestKuchnia && (
-                      <button
-                        onClick={() => setZamyka(a, !(a.zamyka && a.zamyka_reczny))}
-                        title={a.zamyka ? (a.zamyka_reczny ? 'Zamyka ręcznie — kliknij, by wrócić do automatu' : 'Zamyka (auto) — kliknij, by przypiąć ręcznie') : 'Ustaw jako zamykającego'}
-                        className={`transition ${a.zamyka ? 'text-lemon' : 'text-muted/40 hover:text-lemon'}`}
-                        aria-label="Zamyka lokal"
-                      >
-                        <Icon name="key" className="h-3 w-3" />
-                      </button>
-                    )}
-                    {!jestKuchnia && (
-                      <button onClick={() => setEdycja(edytuje ? null : { id: a.id, stanowisko_id: String(a.stanowisko_id), godz_od: a.godz_od ? hhmm(a.godz_od) : '', rewir: a.rewir || '' })} className="text-[10px] font-semibold text-muted transition hover:text-mint">
-                        {edytuje ? 'anuluj' : 'edytuj'}
-                      </button>
-                    )}
-                    <button onClick={() => usunPrzydzial(a.id)} className="text-muted transition hover:text-danger" aria-label="Anuluj zmianę">
-                      <Icon name="close" className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-                <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-muted">
-                  <Icon name="clock" className="h-3 w-3" /> {a.godz_od ? hhmm(a.godz_od) : 'Dowolnie'}
-                  {!jestKuchnia && a.zamyka && <span className="font-sans font-bold text-lemon">· zamyka{a.zamyka_reczny ? ' (ręcznie)' : ''}</span>}
-                </span>
-                {edytuje && (
-                  <div className="mt-1.5 flex flex-col gap-1.5 border-t border-line pt-1.5">
-                    <select
-                      value={edycja.stanowisko_id}
-                      onChange={(ev) => setEdycja((x) => ({ ...x, stanowisko_id: ev.target.value }))}
-                      className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                    >
-                      {stanowiska.filter((st) => st.id !== kuchniaId).map((st) => (
-                        <option key={st.id} value={st.id}>{st.nazwa}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="time"
-                      value={edycja.godz_od}
-                      onChange={(ev) => setEdycja((x) => ({ ...x, godz_od: ev.target.value }))}
-                      className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                    />
-                    <input
-                      value={edycja.rewir}
-                      onChange={(ev) => setEdycja((x) => ({ ...x, rewir: ev.target.value }))}
-                      placeholder="rewir (np. Parter)"
-                      className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                    />
-                    <button onClick={() => zapiszEdycje(a)} className="rounded-md bg-mint/20 py-1 text-xs font-bold text-mint transition hover:bg-mint/30">Zapisz</button>
-                  </div>
-                )}
-              </div>
-            )
-          })}
+  // ── Edytor komórki (gęsta tabela): klik w pole otwiera modal (dodawanie lub edycja) ──
+  const otworzKomorke = (dt, p) => {
+    const a = (przyMap[`${dt}_${p.id}`] || [])[0]
+    if (a) {
+      setMForm({ stanowisko_id: String(a.stanowisko_id), godz_od: a.godz_od ? hhmm(a.godz_od) : '', rewir: a.rewir || '', zamyka: !!a.zamyka })
+    } else {
+      const szab = szablonyDla(dt, p)[0]   // podpowiedź z planu (wymagania)
+      setMForm({
+        stanowisko_id: jestKuchnia ? String(kuchniaId ?? '') : (szab ? String(szab.stanowisko_id) : ''),
+        godz_od: szab?.godz_od ? hhmm(szab.godz_od) : '',
+        rewir: szab?.rewir || '',
+        zamyka: false,
+      })
+    }
+    setModal({ dt, p })
+  }
 
-          {/* Maks. 1 zmiana/dzień — pusta komórka: JEDEN klik otwiera dodawanie (bez osobnych
-              przycisków „+ wg planu"/„+ ręcznie"). Klik wypełnia formularz podpowiedzią z planu;
-              dostępność widać w plakietce u góry komórki. */}
-          {pAt.length === 0 && (
-            reczny?.key === key ? (
-              <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-mint/40 bg-surface-2 p-2">
-                {!jestKuchnia && (!dys || !dys.dostepnosc) && (
-                  <span className="text-[10px] font-bold text-lemon">
-                    ⚠ {dys ? 'Pracownik niedostępny tego dnia' : 'Brak zgłoszonej dostępności'}
-                  </span>
-                )}
-                <select
-                  value={reczny.stanowisko_id}
-                  onChange={(ev) => setReczny((r) => ({ ...r, stanowisko_id: ev.target.value }))}
-                  className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                >
-                  {!jestKuchnia && <option value="">— stanowisko —</option>}
-                  {(jestKuchnia ? stanowiska : stanowiska.filter((st) => st.id !== kuchniaId)).map((st) => (
-                    <option key={st.id} value={st.id}>{st.nazwa}</option>
-                  ))}
-                </select>
-                <input
-                  type="time"
-                  value={reczny.godz_od}
-                  onChange={(ev) => setReczny((r) => ({ ...r, godz_od: ev.target.value }))}
-                  className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                />
-                {!jestKuchnia && (
-                  <input
-                    value={reczny.rewir}
-                    onChange={(ev) => setReczny((r) => ({ ...r, rewir: ev.target.value }))}
-                    placeholder="rewir (opcjonalnie)"
-                    className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                  />
-                )}
-                <div className="flex gap-1.5">
-                  <button onClick={() => dodajRecznie(dt, p.id)} className="flex-1 rounded-md bg-mint/20 py-1 text-xs font-bold text-mint transition hover:bg-mint/30">Dodaj</button>
-                  <button onClick={() => setReczny(null)} className="rounded-md border border-line px-2 py-1 text-xs text-muted transition hover:text-ink">Anuluj</button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => otworzDodaj(dt, p, szablony)}
-                className="w-full rounded-lg border border-dashed border-line bg-surface-2/40 p-1.5 text-center text-xs font-medium text-muted/70 outline-none transition hover:border-mint/50 hover:bg-surface-2 hover:text-mint"
-              >
-                + dodaj{szablony[0] && stanMap[szablony[0].stanowisko_id] ? ` · ${stanMap[szablony[0].stanowisko_id].nazwa}` : ''}
-              </button>
-            )
-          )}
-        </div>
-      </>
-    )
+  const zapiszModal = async () => {
+    const { dt, p } = modal
+    const a = (przyMap[`${dt}_${p.id}`] || [])[0]
+    const sid = +mForm.stanowisko_id || (jestKuchnia ? kuchniaId : 0)
+    if (!sid) { toast('Wybierz stanowisko.', 'error'); return }
+    const body = { data: dt, stanowisko_id: sid, pracownik_id: p.id, godz_od: mForm.godz_od ? `${mForm.godz_od}:00` : null, rewir: (mForm.rewir || '').trim() || null }
+    try {
+      let aid = a?.id
+      if (a) await api(`/przydzialy/${a.id}`, 'PUT', body)
+      else { const nowy = await api('/przydzialy', 'POST', body); aid = nowy.id }
+      // „Zamyka lokal" ręcznie — wysyłamy tylko gdy zmienione względem stanu (obsługa).
+      if (!jestKuchnia && aid != null && !!mForm.zamyka !== !!(a && a.zamyka)) {
+        await api(`/przydzialy/${aid}/zamyka`, 'PUT', { reczny: !!mForm.zamyka })
+      }
+      setModal(null); load()
+    } catch (err) { toast(err.message, 'error') }
+  }
+
+  const usunModal = async () => {
+    const { dt, p } = modal
+    const a = (przyMap[`${dt}_${p.id}`] || [])[0]
+    if (!a) { setModal(null); return }
+    try { await api(`/przydzialy/${a.id}`, 'DELETE'); setModal(null); load() } catch (err) { toast(err.message, 'error') }
   }
 
   return (
@@ -424,7 +228,7 @@ export default function Grafik() {
         {[['obsluga', 'Grafik obsługa'], ['kuchnia', 'Grafik kuchnia']].map(([v, label]) => (
           <button
             key={v}
-            onClick={() => { setDzial(v); setReczny(null); setEdycja(null) }}
+            onClick={() => { setDzial(v); setModal(null) }}
             className={`rounded-xl px-4 py-2 text-sm font-bold transition active:scale-[0.97] ${
               dzial === v ? 'bg-accent-gradient text-bg shadow-glow' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
             }`}
@@ -483,87 +287,113 @@ export default function Grafik() {
         </Banner>
       ) : (
         <>
-          {/* MOBILE / wąskie ekrany: wybór dnia + lista pracowników na ten dzień */}
-          <div className="lg:hidden">
-            <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-              {dates.map((dt) => {
-                const { wd, dm } = dayLabel(dt)
-                const isW = [0, 6].includes(new Date(dt).getDay())
-                const sel = dt === selectedDay
-                return (
-                  <button
-                    key={dt}
-                    onClick={() => setSelDay(dt)}
-                    className="relative flex shrink-0 flex-col items-center rounded-xl border border-line bg-white/[0.03] px-3.5 py-2 transition-transform active:scale-[0.95]"
-                    style={{ WebkitTapHighlightColor: 'transparent' }}
-                  >
-                    {sel && (
-                      <motion.span layoutId="grafikDay" transition={SPRING_PILL} className="absolute inset-0 rounded-xl bg-accent-gradient shadow-glow" />
-                    )}
-                    <span className={`relative z-10 text-[10px] font-bold uppercase tracking-wide ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-muted'}`}>{wd}</span>
-                    <span className={`relative z-10 text-sm font-bold ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-ink'}`}>{dm}</span>
-                  </button>
-                )
-              })}
-            </div>
-            <div className="space-y-3">
-              {aktywni.map((p, i) => (
-                <div
-                  key={p.id}
-                  className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4"
-                  style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
-                >
-                  <div className="mb-2.5 rounded-lg px-2 py-1 text-sm font-semibold text-ink" style={{ background: tloKoloru(p.kolor) }}>
-                    {p.imie} {p.nazwisko}
-                  </div>
-                  {komorka(selectedDay, p)}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* DESKTOP: pełna macierz pracownicy × dni (mniejsze nazwy) */}
-          <div className="hidden lg:block">
-            <div className="card overflow-x-auto p-0">
-              <table className="w-full border-separate border-spacing-0">
-                <thead>
-                  <tr>
-                    <th className="sticky left-0 z-20 min-w-[120px] border-b border-r border-line bg-surface-2 p-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted">
-                      Pracownik
-                    </th>
+          <p className="mb-2 text-xs text-muted">Cały tydzień na raz. Kliknij pole, aby dodać lub zmienić zmianę. Tło: <span className="font-bold text-success">zielone</span> = dostępny (✓), <span className="font-bold text-danger">czerwone</span> = nie (✗). 🔑 = zamyka lokal.</p>
+          <div className="card overflow-auto p-0" style={{ maxHeight: '74vh' }}>
+            <table className="w-full border-separate border-spacing-0">
+              <thead>
+                <tr>
+                  <th className="sticky left-0 top-0 z-30 min-w-[104px] border-b border-r border-line bg-surface-2 p-2 text-left text-[10px] font-bold uppercase tracking-wider text-muted">
+                    Pracownik
+                  </th>
+                  {dates.map((dt) => {
+                    const { wd, dm } = dayLabel(dt)
+                    const isW = [0, 6].includes(new Date(dt).getDay())
+                    return (
+                      <th key={dt} className={`sticky top-0 z-20 min-w-[60px] border-b border-r border-line bg-surface-2 p-1.5 text-center text-xs font-bold ${isW ? 'text-blush' : 'text-ink'}`}>
+                        <div className="text-[9px] uppercase tracking-wide opacity-60">{wd}</div>
+                        {dm}
+                      </th>
+                    )
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {aktywni.map((p) => (
+                  <tr key={p.id}>
+                    <td className="sticky left-0 z-10 min-w-[104px] border-b border-r border-line p-2 text-[11px] font-semibold leading-tight text-ink shadow-[2px_0_8px_rgba(0,0,0,0.3)]" style={{ background: tloKoloru(p.kolor) }}>
+                      {p.imie} {p.nazwisko}
+                    </td>
                     {dates.map((dt) => {
-                      const [, mm, dd] = dt.split('-')
-                      const isW = [0, 6].includes(new Date(dt).getDay())
+                      const a = (przyMap[`${dt}_${p.id}`] || [])[0]
+                      const dys = dysMap[`${dt}_${p.id}`]
                       return (
-                        <th
+                        <td
                           key={dt}
-                          className={`min-w-[140px] border-b border-r border-line p-3 text-center text-sm font-bold ${isW ? 'text-blush' : 'text-ink'}`}
+                          onClick={() => otworzKomorke(dt, p)}
+                          title="Kliknij, aby dodać / zmienić"
+                          className={`relative cursor-pointer border-b border-r border-line p-0.5 text-center align-middle transition hover:brightness-150 ${cellBgFor(dt, p)}`}
                         >
-                          {dd}.{mm}
-                        </th>
+                          {dys && (
+                            <span
+                              className={`absolute left-0.5 top-0.5 ${dys.dostepnosc ? 'text-success' : 'text-danger'}`}
+                              title={dys.dostepnosc ? (dys.godz_od ? `Dostępny od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny'}
+                            >
+                              <Icon name={dys.dostepnosc ? 'check' : 'close'} className="h-2.5 w-2.5" strokeWidth={3} />
+                            </span>
+                          )}
+                          {a ? (
+                            <div className="px-0.5 py-1.5">
+                              <div className="text-[10px] font-bold leading-tight text-ink">{stanMap[a.stanowisko_id]?.nazwa || '?'}</div>
+                              <div className="font-mono text-[10px] leading-tight text-muted">{a.godz_od ? hhmm(a.godz_od) : '—'}</div>
+                              {!jestKuchnia && a.zamyka && (
+                                <span title={`zamyka lokal${a.zamyka_reczny ? ' (ręcznie)' : ''}`} className="mt-0.5 inline-flex text-lemon"><Icon name="key" className="h-2.5 w-2.5" /></span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-base font-bold text-muted/25">+</span>
+                          )}
+                        </td>
                       )
                     })}
                   </tr>
-                </thead>
-                <tbody>
-                  {aktywni.map((p) => (
-                    <tr key={p.id}>
-                      <td className="sticky left-0 z-10 border-b border-r border-line bg-bg-2 p-3 text-xs font-semibold text-ink shadow-[2px_0_8px_rgba(0,0,0,0.25)]" style={{ background: tloKoloru(p.kolor) }}>
-                        {p.imie} {p.nazwisko}
-                      </td>
-                      {dates.map((dt) => (
-                        <td key={dt} className={`border-b border-r border-line p-2.5 align-top ${cellBgFor(dt, p)}`}>
-                          {komorka(dt, p)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         </>
       )}
+
+      {modal && (() => {
+        const a = (przyMap[`${modal.dt}_${modal.p.id}`] || [])[0]
+        const dys = dysMap[`${modal.dt}_${modal.p.id}`]
+        const { wd, dm } = dayLabel(modal.dt)
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setModal(null)}>
+            <div className="w-full max-w-sm rounded-2xl border border-line bg-bg-2 p-5 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
+              <div className="mb-3 flex items-start justify-between">
+                <div>
+                  <div className="font-display text-lg font-bold text-ink">{modal.p.imie} {modal.p.nazwisko}</div>
+                  <div className="text-xs capitalize text-muted">{wd} {dm}</div>
+                </div>
+                <button onClick={() => setModal(null)} className="text-muted transition hover:text-ink" aria-label="Zamknij"><Icon name="close" className="h-5 w-5" /></button>
+              </div>
+              {!jestKuchnia && (
+                <div className={`mb-3 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-bold ${!dys ? 'bg-white/[0.06] text-muted' : dys.dostepnosc ? 'bg-success text-bg' : 'bg-danger text-white'}`}>
+                  {!dys ? '? brak zgłoszonej dostępności' : dys.dostepnosc ? <><Icon name="check" className="h-3.5 w-3.5" strokeWidth={3} /> Dostępny{dys.godz_od ? ` od ${hhmm(dys.godz_od)}` : ''}</> : <><Icon name="close" className="h-3.5 w-3.5" strokeWidth={3} /> Niedostępny</>}
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                <select value={mForm.stanowisko_id} onChange={(ev) => setMForm((f) => ({ ...f, stanowisko_id: ev.target.value }))} className="w-full cursor-pointer rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none">
+                  {!jestKuchnia && <option value="">— stanowisko —</option>}
+                  {(jestKuchnia ? stanowiska : stanowiska.filter((st) => st.id !== kuchniaId)).map((st) => <option key={st.id} value={st.id}>{st.nazwa}</option>)}
+                </select>
+                <input type="time" value={mForm.godz_od} onChange={(ev) => setMForm((f) => ({ ...f, godz_od: ev.target.value }))} className="w-full rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none" />
+                {!jestKuchnia && <input value={mForm.rewir} onChange={(ev) => setMForm((f) => ({ ...f, rewir: ev.target.value }))} placeholder="rewir (opcjonalnie)" className="w-full rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none" />}
+                {!jestKuchnia && (
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+                    <input type="checkbox" checked={mForm.zamyka} onChange={(ev) => setMForm((f) => ({ ...f, zamyka: ev.target.checked }))} className="h-4 w-4 accent-lemon" />
+                    Zamyka lokal <span className="text-[11px] text-muted">(domyślnie automat — najpóźniejszy z Sali)</span>
+                  </label>
+                )}
+              </div>
+              <div className="mt-4 flex items-center gap-2">
+                <button onClick={zapiszModal} className="flex-1 rounded-xl bg-cream py-2.5 text-sm font-bold uppercase tracking-[0.15em] text-bg transition hover:brightness-[1.03] active:scale-[0.98]">Zapisz</button>
+                {a && <button onClick={usunModal} className="rounded-xl border border-danger/40 px-4 py-2.5 text-sm font-bold text-danger transition hover:bg-danger/10">Usuń</button>}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
