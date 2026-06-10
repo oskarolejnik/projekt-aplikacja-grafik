@@ -28,6 +28,11 @@ PROG_DUZE_CIECIE = 1.0       # >1h = duże; 10 min–1h = małe
 # Pracownik techniczny: nikt nie układa mu grafiku — liczymy pełne godziny RCP × stawka,
 # na to jedno stanowisko (stawka ustawiana per osoba, jak w kuchni).
 TECHNICZNY_NAZWA = "Techniczny"
+# Stanowisko kuchni. Pracownik działu „kuchnia" dostaje stawkę za WSZYSTKIE godziny RCP —
+# także te BEZ wpisu w grafiku (np. obieranie warzyw: pracuje, choć nikt go nie wpisał).
+# Gdy JEST wpisany w opublikowany grafik → start przycinamy normalnie (Zaoszczędzone);
+# gdy go nie ma → pełne godziny na to stanowisko (stawka per osoba).
+KUCHNIA_NAZWA = "Kuchnia"
 
 
 def wczytaj_odbicia(db, start: date, end: date):
@@ -122,6 +127,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     prac_nazwa = {p.id: f"{p.imie} {p.nazwisko}" for p in _prac}
     prac_dzial = {p.id: (p.dzial or "obsluga") for p in _prac}
     techniczny_ids = {pid for pid, dz in prac_dzial.items() if dz == "techniczny"}
+    kuchnia_ids = {pid for pid, dz in prac_dzial.items() if dz == "kuchnia"}
     stawki_map = {(r.pracownik_id, r.stanowisko_id): float(r.stawka or 0.0)
                   for r in db.query(models.StawkaPracownika).all()}
 
@@ -177,35 +183,38 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
                     godziny[pid][stan_nazwa.get(event.stanowisko_id, "?")] += h
                     continue
 
-        if not _opublikowany(d, zakresy_pub):
-            godziny[pid][BUCKET_NIEOPUBLIKOWANY] += h     # bez przycinania (brak grafiku)
-            poza_szczegoly[pid].append({"data": str(d), "od": _hhmm(z.get("wejscie")),
-                                        "do": _hhmm(z.get("wyjscie")), "godziny": round(h, 2)})
-        else:
-            przy = graf.get((pid, d), [])
-            if not przy:
-                godziny[pid][BUCKET_POZA_GRAFIKIEM] += h  # poza grafikiem — pełne, osobny kubełek
+        opub = _opublikowany(d, zakresy_pub)
+        przy = graf.get((pid, d), []) if opub else []   # przydziały liczymy tylko z OPUBLIKOWANEGO grafiku
+        if not przy:
+            # Brak przydziału w grafiku (tydzień nieopublikowany albo po prostu brak wpisu).
+            if pid in kuchnia_ids:
+                # KUCHNIA: płacimy za WSZYSTKIE godziny RCP, także bez wpisu w grafiku
+                # (np. obieranie warzyw). Pełne godziny na stanowisko „Kuchnia" (stawka per osoba).
+                godziny[pid][KUCHNIA_NAZWA] += h
+            else:
+                bucket = BUCKET_NIEOPUBLIKOWANY if not opub else BUCKET_POZA_GRAFIKIEM
+                godziny[pid][bucket] += h     # bez przycinania (brak grafiku) — osobny kubełek, 0 zł
                 poza_szczegoly[pid].append({"data": str(d), "od": _hhmm(z.get("wejscie")),
                                             "do": _hhmm(z.get("wyjscie")), "godziny": round(h, 2)})
-            else:
-                wybrany = _wybierz_przydzial(przy, wej_t)
-                bucket = stan_nazwa.get(wybrany.stanowisko_id, "?")
-                # Przytnij start do grafiku: licz dopiero od zaplanowanej godziny (godz_od).
-                liczone, saved = efektywne_i_oszczednosc(wej_t, wybrany.godz_od, h)
-                godziny[pid][bucket] += liczone
-                if saved > 0:
-                    oszczednosci[pid][bucket] += saved
-                    if saved > PROG_MALE_CIECIE:  # >10 min — wyróżnij dla admina (duże/małe)
-                        wpis = {
-                            "pracownik_id": pid,
-                            "pracownik": prac_nazwa.get(pid, "?"),
-                            "data": str(d),
-                            "stanowisko": bucket,
-                            "godziny_uciete": round(saved, 2),
-                            "wejscie": wej_t.strftime("%H:%M") if wej_t else None,
-                            "planowane": wybrany.godz_od.strftime("%H:%M") if wybrany.godz_od else None,
-                        }
-                        (duze_ciecia if saved > PROG_DUZE_CIECIE else male_ciecia).append(wpis)
+        else:
+            wybrany = _wybierz_przydzial(przy, wej_t)
+            bucket = stan_nazwa.get(wybrany.stanowisko_id, "?")
+            # Przytnij start do grafiku: licz dopiero od zaplanowanej godziny (godz_od).
+            liczone, saved = efektywne_i_oszczednosc(wej_t, wybrany.godz_od, h)
+            godziny[pid][bucket] += liczone
+            if saved > 0:
+                oszczednosci[pid][bucket] += saved
+                if saved > PROG_MALE_CIECIE:  # >10 min — wyróżnij dla admina (duże/małe)
+                    wpis = {
+                        "pracownik_id": pid,
+                        "pracownik": prac_nazwa.get(pid, "?"),
+                        "data": str(d),
+                        "stanowisko": bucket,
+                        "godziny_uciete": round(saved, 2),
+                        "wejscie": wej_t.strftime("%H:%M") if wej_t else None,
+                        "planowane": wybrany.godz_od.strftime("%H:%M") if wybrany.godz_od else None,
+                    }
+                    (duze_ciecia if saved > PROG_DUZE_CIECIE else male_ciecia).append(wpis)
 
     stanowiska_agg = defaultdict(lambda: {"godziny": 0.0, "kwota": 0.0})  # koszt/godziny per stanowisko (wszyscy)
     poza_grafikiem = []  # pracownicy z godzinami NIEPRZYPISANYMI do grafiku (poza grafikiem / nieopublikowany)

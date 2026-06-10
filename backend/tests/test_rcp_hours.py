@@ -285,6 +285,43 @@ def test_raport_techniczny_pelne_godziny_bez_grafiku(db):
     assert moj["do_wyplaty"] == 240.0
 
 
+def test_raport_kuchnia_pelne_godziny_bez_grafiku(db):
+    """Pracownik kuchni BEZ wpisu w grafiku (np. obieranie warzyw) — pełne godziny RCP ×
+    stawka kuchni, a NIE 0 zł w kubełku „poza grafikiem"."""
+    kuchnia = factories.StanowiskoFactory(nazwa="Kuchnia")
+    p = factories.PracownikFactory(imie="Obieracz", nazwisko="Warzyw", dzial="kuchnia")
+    db.add(models.StawkaPracownika(pracownik_id=p.id, stanowisko_id=kuchnia.id, stawka=28.0))
+    db.commit()
+    # BRAK przydziału i BRAK publikacji — kuchnia i tak dostaje pełne godziny
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 5.0, "wejscie": datetime(2026, 6, 1, 10, 0)}]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    moj = raport["pracownicy"][0]
+    assert moj["dzial"] == "kuchnia"
+    assert moj["stanowiska"] == [{"stanowisko": "Kuchnia", "godziny": 5.0, "stawka": 28.0, "kwota": 140.0}]
+    assert moj["do_wyplaty"] == 140.0
+    # opłacony normalnie → nie pojawia się w „Godziny poza grafikiem"
+    assert raport["poza_grafikiem"] == []
+
+
+def test_raport_kuchnia_wpisana_w_grafik_nadal_przycina(db):
+    """Pracownik kuchni WPISANY w opublikowany grafik — start nadal przycinany
+    (wcześniejsze wejście = Zaoszczędzone), nie pełne godziny."""
+    from datetime import time
+    kuchnia = factories.StanowiskoFactory(nazwa="Kuchnia")
+    p = factories.PracownikFactory(imie="Kucharz", nazwisko="Wpisany", dzial="kuchnia")
+    factories.PrzydzialFactory(stanowisko=kuchnia, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))
+    db.add(models.StawkaPracownika(pracownik_id=p.id, stanowisko_id=kuchnia.id, stawka=28.0))
+    db.commit()
+    # wejście 12:00, grafik od 14:00, 8h odbite → liczone 6h (2h przycięte)
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 8.0, "wejscie": datetime(2026, 6, 1, 12, 0)}]
+    moj = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)["pracownicy"][0]
+    assert moj["stanowiska"] == [{"stanowisko": "Kuchnia", "godziny": 6.0, "stawka": 28.0, "kwota": 168.0}]
+    assert moj["zaoszczedzone_godziny"] == 2.0
+
+
 def test_raport_sortuje_malejaco_wg_wyplaty(db):
     sala = factories.StanowiskoFactory(nazwa="Sala")
     p1 = factories.PracownikFactory(imie="Maly", nazwisko="A")
