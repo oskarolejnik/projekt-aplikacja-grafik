@@ -196,6 +196,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
                         (duze_ciecia if saved > PROG_DUZE_CIECIE else male_ciecia).append(wpis)
 
     stanowiska_agg = defaultdict(lambda: {"godziny": 0.0, "kwota": 0.0})  # koszt/godziny per stanowisko (wszyscy)
+    poza_grafikiem = []  # pracownicy z godzinami NIEPRZYPISANYMI do grafiku (poza grafikiem / nieopublikowany)
     pracownicy_out = []
     for pid, rozb in godziny.items():
         rozbicie = []
@@ -225,6 +226,11 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             "zaoszczedzone_godziny": round(zaosz_godz, 2),
             "zaoszczedzone_kwota": round(zaosz_kwota, 2),
         })
+        # Godziny nieprzypisane do grafiku (odbił się, ale nie ma go w grafiku / tydzień nieopublikowany).
+        poza = sum(v for k, v in rozb.items() if k in (BUCKET_POZA_GRAFIKIEM, BUCKET_NIEOPUBLIKOWANY))
+        if poza > 0:
+            poza_grafikiem.append({"pracownik_id": pid, "pracownik": prac_nazwa.get(pid, "?"),
+                                   "godziny": round(poza, 2)})
     pracownicy_out.sort(key=lambda x: (-x["do_wyplaty"], x["pracownik"]))  # malejąco wg wypłaty
 
     return {
@@ -241,6 +247,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             {"stanowisko": k, "godziny": round(d["godziny"], 2), "kwota": round(d["kwota"], 2)}
             for k, d in sorted(stanowiska_agg.items(), key=lambda x: -x[1]["godziny"])
         ],
+        # Godziny NIEPRZYPISANE do grafiku (kto, ile) — sumarycznie, malejąco.
+        "poza_grafikiem": sorted(poza_grafikiem, key=lambda x: -x["godziny"]),
         # Cięcia godzin (wejście wcześniej niż grafik) — pojedyncze przypadki, TYLKO dla admina.
         "duze_ciecia": sorted(duze_ciecia, key=lambda x: -x["godziny_uciete"]),
         "male_ciecia": sorted(male_ciecia, key=lambda x: -x["godziny_uciete"]),

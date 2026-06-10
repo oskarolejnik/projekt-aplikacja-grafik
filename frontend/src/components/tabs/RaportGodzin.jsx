@@ -6,12 +6,14 @@ import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
 import { godzinyHM, zl, kolorStanowiska, ddmmyyyy } from '../../lib/format'
+import { useAuth } from '../../context/AuthContext'
 
 // Raport godzin (admin): miesięczne podsumowanie przepracowanych godzin wszystkich
 // pracowników z rozbiciem na stanowiska (RCP × opublikowany grafik). Tylko odczyt.
 // Dane: GET /api/raporty/godziny?rok=&miesiac= (raporty.raport_godzin_miesiac).
 export default function RaportGodzin() {
   const { toast } = useToast()
+  const { isAdmin } = useAuth()
   const dzis = new Date()
   const [rok, setRok] = useState(dzis.getFullYear())
   const [miesiac, setMiesiac] = useState(dzis.getMonth() + 1) // 1-12
@@ -62,6 +64,7 @@ export default function RaportGodzin() {
   const niedopasowani = dane?.niedopasowani_rcp || []
   const duzeCiecia = dane?.duze_ciecia || []   // >1h (admin + szef)
   const maleCiecia = dane?.male_ciecia || []   // 10 min–1h (admin + szef)
+  const pozaGrafikiem = isAdmin ? (dane?.poza_grafikiem || []) : []  // godziny nieprzypisane — tylko admin
   const sumaWszystkich = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.suma_godzin || 0), 0), [pracownicy])
   const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
   const zaoszczedzone = dane?.zaoszczedzone || { godziny: 0, kwota: 0 }
@@ -239,6 +242,27 @@ export default function RaportGodzin() {
             'Zwykle błędny wpis w grafiku (faktyczna zmiana inna niż wpisana) — sprawdź godzinę zmiany:', 'warn')}
           {bannerCiec(maleCiecia, 'Małe cięcia godzin (10 min – 1h)',
             'Drobne wejścia przed grafikiem — zwykle normalne:', 'info')}
+
+          {/* Godziny nieprzypisane do grafiku — lista rozwijana, TYLKO admin */}
+          {pozaGrafikiem.length > 0 && (
+            <details className="group mb-6 rounded-xl border border-line bg-white/[0.02]">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 outline-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-semibold text-ink">Godziny poza grafikiem — {pozaGrafikiem.length}</span>
+                <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
+              </summary>
+              <div className="border-t border-line/60 px-4 py-3">
+                <p className="text-xs text-muted">Godziny z RCP nieprzypisane do grafiku — pracownik odbił się, ale nie ma go w grafiku tego dnia (lub tydzień nieopublikowany):</p>
+                <ul className="mt-2 space-y-1.5 text-xs">
+                  {pozaGrafikiem.map((p, i) => (
+                    <li key={i} className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-ink">{p.pracownik}</span>
+                      <span className="font-mono font-bold tabular-nums text-ink">{godzinyHM(p.godziny)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
+          )}
 
           {pracownicy.length === 0 ? (
             <Card className="p-8 text-center text-sm text-muted">

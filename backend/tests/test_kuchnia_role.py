@@ -18,7 +18,7 @@ def _h(u):
 def _kuchnia_z_godzinami(db, login_konta="kuch1", godziny=8.0):
     """Tworzy pracownika kuchni (konto rola='kuchnia') z 8h w opublikowanym grafiku."""
     kuchnia_stan = factories.StanowiskoFactory(nazwa="Kuchnia")
-    p = factories.PracownikFactory(imie="Kucharz", nazwisko="Pierwszy")
+    p = factories.PracownikFactory(imie="Kucharz", nazwisko="Pierwszy", dzial="kuchnia")
     factories.UserFactory(login=login_konta, rola="kuchnia", pracownik=p)
     factories.PrzydzialFactory(stanowisko=kuchnia_stan, pracownik=p, data=factories.dzien(0))
     db.add(models.PublikacjaGrafiku(start=factories.dzien(0), koniec=factories.dzien(6),
@@ -64,6 +64,23 @@ def test_szef_kuchni_widzi_tylko_kuchnie(client, db):
     body = client.get("/api/szefkuchni/godziny?rok=2026&miesiac=6", headers=_h(szef_k)).json()
     imiona = [p["pracownik"] for p in body["pracownicy"]]
     assert imiona == ["Kucharz Pierwszy"]  # bez „Kelner Drugi"
+
+
+def test_szef_kuchni_na_zmianie_po_dziale(client, db):
+    """Kucharz dział=kuchnia z kontem 'employee' i otwartym odbiciem → na_zmianie u szefa kuchni
+    (filtr po dziale, nie po roli konta) — i w grafiku, i w godzinach."""
+    import main
+    teraz = main._teraz_lokalnie() or datetime.now()
+    p = factories.PracownikFactory(imie="Janek", nazwisko="Kuchta", dzial="kuchnia")
+    factories.UserFactory(login="janek_k", rola="employee", pracownik=p)  # konto NIE 'kuchnia'
+    db.add(models.OdbicieRcp(rcp_id="open-kuch", imie_nazwisko="Janek Kuchta", pracownik_id=p.id,
+                             data=teraz.date(), wejscie=teraz.replace(microsecond=0), wyjscie=None))
+    db.commit()
+    h = _h(factories.UserFactory(login="szefk_nz", rola="szef_kuchni"))
+    g = client.get(f"/api/szefkuchni/grafik?start={factories.dzien(0)}&end={factories.dzien(6)}", headers=h).json()
+    assert any(z["pracownik"] == "Janek Kuchta" for z in g["na_zmianie"])
+    gg = client.get("/api/szefkuchni/godziny?rok=2026&miesiac=6", headers=h).json()
+    assert any(z["pracownik"] == "Janek Kuchta" for z in gg["na_zmianie"])
 
 
 # ── Szef kuchni: granice dostępu ──────────────────────────────────────────────

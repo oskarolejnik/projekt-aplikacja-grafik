@@ -1328,16 +1328,18 @@ def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session 
     return raport
 
 
+def _kuchnia_pids(db):
+    """Id pracowników KUCHNI — po DZIALE (tak jak grafik kuchni), niezależnie od roli konta.
+    Dzięki temu kucharz dział=kuchnia z kontem 'employee' też jest widziany przez szefa kuchni."""
+    return {p.id for p in db.query(models.Pracownik).filter(models.Pracownik.dzial == "kuchnia").all()}
+
+
 @app.get("/api/szefkuchni/godziny", status_code=200)
 def raport_godzin_kuchnia(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
-    """Godziny pracowników KUCHNI (konta z rolą 'kuchnia') — BEZ kwot wypłaty. Dla szefa kuchni.
+    """Godziny pracowników KUCHNI (dział „kuchnia") — BEZ kwot wypłaty. Dla szefa kuchni.
     Zwraca te same godziny/stanowiska co raport admina, ale OBCINA pola finansowe
     (stawka/kwota/do_wyplaty). Dorzuca `na_zmianie`: kto z kuchni jest teraz na zmianie (live)."""
-    kuchnia_pids = {
-        u.pracownik_id
-        for u in db.query(models.User).filter(models.User.rola == "kuchnia").all()
-        if u.pracownik_id
-    }
+    kuchnia_pids = _kuchnia_pids(db)
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
     pracownicy = [
         {
@@ -1431,7 +1433,9 @@ def szefkuchni_grafik(start: date = Query(...), end: date = Query(...),
         przydzialy = [{"id": a.id, "data": str(a.data), "pracownik_id": a.pracownik_id,
                        "godz_od": a.godz_od.strftime("%H:%M") if a.godz_od else None,
                        "rewir": a.rewir, "zamyka": bool(a.zamyka)} for a in rows]
-    return {"pracownicy": pracownicy, "przydzialy": przydzialy}
+    # Kto z kuchni jest teraz na zmianie (live) — szef kuchni widzi to na głównej zakładce „Grafik".
+    na_zmianie = [z for z in _trwajace_zmiany(db) if z.get("pracownik_id") in set(kuchnia_pids)]
+    return {"pracownicy": pracownicy, "przydzialy": przydzialy, "na_zmianie": na_zmianie}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

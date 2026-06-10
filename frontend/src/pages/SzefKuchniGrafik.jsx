@@ -17,6 +17,7 @@ export default function SzefKuchniGrafik() {
   const { toast, confirm } = useToast()
   const [pracownicy, setPracownicy] = useState([])
   const [przydzialy, setPrzydzialy] = useState([])
+  const [naZmianie, setNaZmianie] = useState([])
   const [loading, setLoading] = useState(true)
   const [selDay, setSelDay] = useState('')
   const [dodaj, setDodaj] = useState(null)   // { pracownik_id, godz_od, rewir, zamyka }
@@ -34,6 +35,7 @@ export default function SzefKuchniGrafik() {
       if (id !== reqId.current) return
       setPracownicy(r.pracownicy || [])
       setPrzydzialy(r.przydzialy || [])
+      setNaZmianie(r.na_zmianie || [])
     } catch (err) {
       if (id === reqId.current) toast(err.message, 'error')
     } finally {
@@ -94,6 +96,27 @@ export default function SzefKuchniGrafik() {
         </div>
         <WeekSelect />
       </div>
+
+      {/* Kto z kuchni jest teraz na zmianie (live z RCP) — od razu na głównej zakładce */}
+      {naZmianie.length > 0 && (
+        <div className="mb-4 rounded-xl border border-mint/30 bg-mint/[0.05] p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-mint" />
+            </span>
+            <span className="text-sm font-bold text-ink">Kuchnia na zmianie teraz ({naZmianie.length})</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {naZmianie.map((z, i) => (
+              <span key={i} className="inline-flex items-center gap-2 rounded-lg border border-line bg-white/[0.03] px-2.5 py-1 text-xs">
+                <span className="font-semibold text-ink">{z.pracownik}</span>
+                <span className="font-mono text-muted">od {z.wejscie.slice(11, 16)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="grid place-items-center py-16"><Spinner className="h-6 w-6 text-muted" /></div>

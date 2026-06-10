@@ -304,6 +304,17 @@ def test_raport_sortuje_malejaco_wg_wyplaty(db):
     assert raport["pracownicy"][0]["do_wyplaty"] == 400.0
 
 
+def test_raport_poza_grafikiem_lista(db):
+    """Pracownik odbił się, ale nie ma go w grafiku tego dnia → na liście poza_grafikiem."""
+    factories.PracownikFactory(imie="Bez", nazwisko="Grafiku")
+    p = db.query(models.Pracownik).filter_by(nazwisko="Grafiku").first()
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))  # publikacja jest, ale BRAK przydziału
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 5.0, "wejscie": datetime(2026, 6, 1, 10, 0)}]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    assert raport["poza_grafikiem"] == [{"pracownik_id": p.id, "pracownik": "Bez Grafiku", "godziny": 5.0}]
+
+
 def test_duze_ciecia_widzi_admin_i_szef(admin_client, client, db):
     from datetime import time
     sala = factories.StanowiskoFactory(nazwa="Sala")
