@@ -105,6 +105,8 @@ export default function Imprezy() {
         `Wysłano ${imprezy.length} imprez — dodano ${data.dodano}, zaktualizowano ${data.zaktualizowano}, błędy ${data.bledy + bledyParsowania}.`,
         'success',
       )
+      // Auto-przydział obsadzi imprezy tylko, gdy istnieje stanowisko „Imprezy" i ktoś ma tę kwalifikację.
+      if (data.ostrzezenie) toast(data.ostrzezenie, 'info')
       await pobierz()
     } catch (err) {
       toast(`Błąd synchronizacji: ${err.message}`, 'error')

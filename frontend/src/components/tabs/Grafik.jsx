@@ -145,18 +145,27 @@ export default function Grafik() {
     }
   }
 
-  // Edycja istniejącego przydziału: rewir + „zamyka" (PUT zachowuje resztę).
+  // Pełna edycja przydziału: stanowisko + godzina + rewir. „zamyka" jest osobno (automat/ręcznie).
   const zapiszEdycje = async (a) => {
     try {
       await api(`/przydzialy/${a.id}`, 'PUT', {
         data: a.data,
-        stanowisko_id: a.stanowisko_id,
+        stanowisko_id: +edycja.stanowisko_id || a.stanowisko_id,
         pracownik_id: a.pracownik_id,
-        godz_od: a.godz_od,
+        godz_od: edycja.godz_od ? `${edycja.godz_od}:00` : null,
         rewir: (edycja.rewir || '').trim() || null,
-        zamyka: !!edycja.zamyka,
       })
       setEdycja(null)
+      load()
+    } catch (err) {
+      toast(err.message, 'error')
+    }
+  }
+
+  // „Zamyka lokal" — ręczne nadpisanie (reczny=true) lub powrót do automatu (reczny=false).
+  const setZamyka = async (a, reczny) => {
+    try {
+      await api(`/przydzialy/${a.id}/zamyka`, 'PUT', { reczny })
       load()
     } catch (err) {
       toast(err.message, 'error')
@@ -177,7 +186,9 @@ export default function Grafik() {
     try {
       await api(`/auto-assign?start=${s}&end=${e}`, 'POST')
       await load()
-      toast('Auto-przydział zakończony.', 'success')
+      // Auto-przydział TYLKO szkicuje: backend cofa publikację, więc obsługa nie widzi zmian,
+      // dopóki nie klikniesz „Udostępnij pracownikom".
+      toast('Auto-przydział gotowy — grafik jest szkicem. Sprawdź i opublikuj.', 'success')
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -185,9 +196,10 @@ export default function Grafik() {
     }
   }
   const wyczysc = async () => {
-    if (!(await confirm('Wyczyścić cały grafik dla tego tygodnia?'))) return
+    const ktory = jestKuchnia ? 'kuchni' : 'obsługi'
+    if (!(await confirm(`Wyczyścić grafik ${ktory} na ten tydzień? Drugi grafik (${jestKuchnia ? 'obsługi' : 'kuchni'}) zostaje nietknięty.`, { title: 'Wyczyść tabelę', confirmText: 'Wyczyść' }))) return
     try {
-      await api(`/przydzialy?start=${s}&end=${e}`, 'DELETE')
+      await api(`/przydzialy?start=${s}&end=${e}&dzial=${jestKuchnia ? 'kuchnia' : 'obsluga'}`, 'DELETE')
       load()
     } catch (err) {
       toast(err.message, 'error')
@@ -270,9 +282,18 @@ export default function Grafik() {
                     {!jestKuchnia && (a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
                   </span>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    {!jestKuchnia && a.zamyka && <span title="zamyka lokal" className="text-lemon"><Icon name="key" className="h-3 w-3" /></span>}
                     {!jestKuchnia && (
-                      <button onClick={() => setEdycja(edytuje ? null : { id: a.id, rewir: a.rewir || '', zamyka: !!a.zamyka })} className="text-[10px] font-semibold text-muted transition hover:text-mint">
+                      <button
+                        onClick={() => setZamyka(a, !(a.zamyka && a.zamyka_reczny))}
+                        title={a.zamyka ? (a.zamyka_reczny ? 'Zamyka ręcznie — kliknij, by wrócić do automatu' : 'Zamyka (auto) — kliknij, by przypiąć ręcznie') : 'Ustaw jako zamykającego'}
+                        className={`transition ${a.zamyka ? 'text-lemon' : 'text-muted/40 hover:text-lemon'}`}
+                        aria-label="Zamyka lokal"
+                      >
+                        <Icon name="key" className="h-3 w-3" />
+                      </button>
+                    )}
+                    {!jestKuchnia && (
+                      <button onClick={() => setEdycja(edytuje ? null : { id: a.id, stanowisko_id: String(a.stanowisko_id), godz_od: a.godz_od ? hhmm(a.godz_od) : '', rewir: a.rewir || '' })} className="text-[10px] font-semibold text-muted transition hover:text-mint">
                         {edytuje ? 'anuluj' : 'edytuj'}
                       </button>
                     )}
@@ -283,20 +304,31 @@ export default function Grafik() {
                 </div>
                 <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-muted">
                   <Icon name="clock" className="h-3 w-3" /> {a.godz_od ? hhmm(a.godz_od) : 'Dowolnie'}
-                  {!jestKuchnia && a.zamyka && <span className="font-sans font-bold text-lemon">· zamyka</span>}
+                  {!jestKuchnia && a.zamyka && <span className="font-sans font-bold text-lemon">· zamyka{a.zamyka_reczny ? ' (ręcznie)' : ''}</span>}
                 </span>
                 {edytuje && (
                   <div className="mt-1.5 flex flex-col gap-1.5 border-t border-line pt-1.5">
+                    <select
+                      value={edycja.stanowisko_id}
+                      onChange={(ev) => setEdycja((x) => ({ ...x, stanowisko_id: ev.target.value }))}
+                      className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                    >
+                      {stanowiska.filter((st) => st.id !== kuchniaId).map((st) => (
+                        <option key={st.id} value={st.id}>{st.nazwa}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="time"
+                      value={edycja.godz_od}
+                      onChange={(ev) => setEdycja((x) => ({ ...x, godz_od: ev.target.value }))}
+                      className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                    />
                     <input
                       value={edycja.rewir}
                       onChange={(ev) => setEdycja((x) => ({ ...x, rewir: ev.target.value }))}
                       placeholder="rewir (np. Parter)"
                       className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
                     />
-                    <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink">
-                      <input type="checkbox" checked={edycja.zamyka} onChange={(ev) => setEdycja((x) => ({ ...x, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" />
-                      Zamyka lokal
-                    </label>
                     <button onClick={() => zapiszEdycje(a)} className="rounded-md bg-mint/20 py-1 text-xs font-bold text-mint transition hover:bg-mint/30">Zapisz</button>
                   </div>
                 )}
@@ -355,10 +387,6 @@ export default function Grafik() {
                         placeholder="rewir (opcjonalnie)"
                         className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
                       />
-                      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink">
-                        <input type="checkbox" checked={reczny.zamyka} onChange={(ev) => setReczny((r) => ({ ...r, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" />
-                        Zamyka lokal
-                      </label>
                     </>
                   )}
                   <div className="flex gap-1.5">

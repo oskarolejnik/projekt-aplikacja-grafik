@@ -91,6 +91,7 @@ class PrzydzialZmiany(Base):
     godz_od       = Column(Time, nullable=True)
     rewir         = Column(String, nullable=True)   # rewir/strefa zmiany (z wymagań lub ręcznie)
     zamyka        = Column(Boolean, nullable=False, default=False)  # ten pracownik zamyka lokal
+    zamyka_reczny = Column(Boolean, nullable=False, default=False)  # zamyka ustawione RĘCZNIE (automat nie nadpisuje)
 
     stanowisko = relationship("Stanowisko", back_populates="przydzialy")
     pracownik  = relationship("Pracownik",  back_populates="przydzialy")

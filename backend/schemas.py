@@ -36,7 +36,7 @@ class PrzydzialBase(BaseModel):
     rewir: Optional[str] = None; zamyka: bool = False
 class PrzydzialCreate(PrzydzialBase): pass
 class PrzydzialOut(PrzydzialBase):
-    id: int; model_config = ConfigDict(from_attributes=True)
+    id: int; zamyka_reczny: bool = False; model_config = ConfigDict(from_attributes=True)
 
 class PracownikBase(BaseModel):
     imie: str; nazwisko: str; aktywny: bool = True; kolor: Optional[str] = None; dzial: str = "obsluga"

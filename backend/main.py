@@ -117,6 +117,40 @@ def _techniczny_stanowisko(db) -> models.Stanowisko:
     return s
 
 
+# „Parkiet": stanowiska, których nazwa zaczyna się od „Sala" (Sala, Sala-ABC, Sala-RZP,
+# Sala-Bar...). Spośród nich wybieramy osobę ZAMYKAJĄCĄ lokal — patrz _przelicz_zamykajacego.
+SALA_PREFIX = "sala"
+
+
+def _sala_stanowisko_ids(db) -> set:
+    return {s.id for s in db.query(models.Stanowisko).all()
+            if (s.nazwa or "").strip().lower().startswith(SALA_PREFIX)}
+
+
+def _przelicz_zamykajacego(db, dzien: date):
+    """„zamyka lokal" dla danego dnia. RĘCZNE NADPISANIE ma pierwszeństwo: jeśli ktoś tego dnia
+    ma zamyka_reczny=True, to ON zamyka i automat go nie zmienia. W innym wypadku AUTO wybiera
+    osobę z NAJPÓŹNIEJSZYM godz_od na parkiecie (Sala*) — kandydaci muszą mieć godz_od. Reszta
+    dnia ma zamyka=False. Commit tylko gdy coś realnie się zmienia. Zwraca zamykającego/None."""
+    rows = db.query(models.PrzydzialZmiany).filter(models.PrzydzialZmiany.data == dzien).all()
+    reczny = next((a for a in rows if a.zamyka_reczny), None)
+    if reczny is not None:
+        zamykajacy = reczny                      # ręczne nadpisanie — automat nie rusza
+    else:
+        sala_ids = _sala_stanowisko_ids(db)
+        kandydaci = [a for a in rows if a.stanowisko_id in sala_ids and a.godz_od is not None]
+        zamykajacy = max(kandydaci, key=lambda a: (a.godz_od, a.id)) if kandydaci else None
+    zmienione = False
+    for a in rows:
+        powinien = zamykajacy is not None and a.id == zamykajacy.id
+        if bool(a.zamyka) != powinien:
+            a.zamyka = powinien
+            zmienione = True
+    if zmienione:
+        db.commit()
+    return zamykajacy
+
+
 @app.on_event("startup")
 def startup():
     init_db()
@@ -448,6 +482,12 @@ def publikuj_grafik(start: date = Query(...), end: date = Query(...), cisza: boo
     else:
         db.add(models.PublikacjaGrafiku(start=start, koniec=end, opublikowano_at=teraz))
     db.commit()
+    # AUTO „zamyka lokal": ustaw zamykającego dla każdego dnia tygodnia (też backfill
+    # wcześniej wprowadzonych dni, zanim automat działał).
+    dzien = start
+    while dzien <= end:
+        _przelicz_zamykajacego(db, dzien)
+        dzien += timedelta(days=1)
     wyslano = 0
     if not cisza:
         wyslano = wyslij_push(
@@ -792,6 +832,8 @@ def create_przydział(data: schemas.PrzydzialCreate, db: Session = Depends(get_d
 
     a = models.PrzydzialZmiany(**data.model_dump())
     db.add(a); db.commit(); db.refresh(a)
+    _przelicz_zamykajacego(db, a.data)   # AUTO „zamyka lokal": najpóźniejszy na parkiecie tego dnia
+    db.refresh(a)
     _powiadom_kuchnie_o_zmianie(db, a.pracownik_id, "Nowa zmiana w grafiku", "Dodano Ci zmianę w grafiku kuchni.")
     return a
 
@@ -813,9 +855,14 @@ def update_przydział(aid: int, data: schemas.PrzydzialCreate, db: Session = Dep
     if kolizja:
         raise HTTPException(400, "Pracownik ma już przydzieloną zmianę w tym dniu (maks. 1 zmiana dziennie).")
 
+    stara_data = a.data
     for k, v in data.model_dump().items():
         setattr(a, k, v)
     db.commit(); db.refresh(a)
+    _przelicz_zamykajacego(db, a.data)              # AUTO „zamyka lokal" dla (nowego) dnia
+    if stara_data != a.data:
+        _przelicz_zamykajacego(db, stara_data)      # i dla dnia, z którego zmiana zniknęła
+    db.refresh(a)
     _powiadom_kuchnie_o_zmianie(db, a.pracownik_id, "Zmiana w grafiku", "Zaktualizowano Twoją zmianę w grafiku kuchni.")
     return a
 
@@ -825,20 +872,55 @@ def delete_przydział(aid: int, db: Session = Depends(get_db)):
     if not a:
         raise HTTPException(404, "Nie znaleziono.")
     pid = a.pracownik_id
+    dzien = a.data
     db.delete(a); db.commit()
+    _przelicz_zamykajacego(db, dzien)   # AUTO „zamyka lokal": po usunięciu zmiany przelicz dzień
     _powiadom_kuchnie_o_zmianie(db, pid, "Zmiana w grafiku", "Wykreślono Cię ze zmiany w grafiku kuchni.")
+
+@app.put("/api/przydzialy/{aid}/zamyka", status_code=200)
+def ustaw_zamykajacego(aid: int, payload: dict, db: Session = Depends(get_db)):
+    """Ręczne nadpisanie zamykającego (domyślnie automat wybiera najpóźniejszego z parkietu).
+      • {"reczny": true}  → TEN przydział zamyka lokal ręcznie; automat go nie zmienia,
+        reszta dnia ma zamyka=False.
+      • {"reczny": false} → zdejmij ręczne ustawienie i wróć do automatu dla tego dnia."""
+    a = db.get(models.PrzydzialZmiany, aid)
+    if not a:
+        raise HTTPException(404, "Nie znaleziono.")
+    if bool(payload.get("reczny")):
+        for r in db.query(models.PrzydzialZmiany).filter(models.PrzydzialZmiany.data == a.data).all():
+            r.zamyka = r.id == aid
+            r.zamyka_reczny = r.id == aid
+        db.commit()
+    else:
+        a.zamyka_reczny = False
+        db.commit()
+        _przelicz_zamykajacego(db, a.data)   # powrót do automatu
+    db.refresh(a)
+    return {"id": a.id, "zamyka": bool(a.zamyka), "zamyka_reczny": bool(a.zamyka_reczny)}
 
 @app.delete("/api/przydzialy", status_code=204)
 def clear_przydzialy(
     start: date = Query(...),
     end: date = Query(...),
+    dzial: Optional[str] = Query(None),   # 'obsluga' | 'kuchnia' — czyść TYLKO grafik tego działu
     db: Session = Depends(get_db)
 ):
-    db.query(models.PrzydzialZmiany).filter(
+    q = db.query(models.PrzydzialZmiany).filter(
         models.PrzydzialZmiany.data >= start,
         models.PrzydzialZmiany.data <= end,
-    ).delete()
+    )
+    if dzial:
+        # Czyść tylko grafik wskazanego działu (np. obsługa) — drugi grafik (kuchnia) zostaje.
+        prac_ids = [pid for (pid,) in db.query(models.Pracownik.id)
+                    .filter(models.Pracownik.dzial == dzial).all()]
+        q = q.filter(models.PrzydzialZmiany.pracownik_id.in_(prac_ids))
+    q.delete(synchronize_session=False)
     db.commit()
+    # Po wyczyszczeniu przelicz zamykającego dla każdego dnia zakresu (zniknęli kandydaci).
+    dzien = start
+    while dzien <= end:
+        _przelicz_zamykajacego(db, dzien)
+        dzien += timedelta(days=1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -852,6 +934,18 @@ def auto_assign_endpoint(
     db: Session = Depends(get_db)
 ):
     result = _auto_assign(db, start, end)
+    # Auto-przydział TYLKO SZKICUJE: cofamy publikację tygodnia, żeby zmiany NIE trafiły od razu
+    # do obsługi. Admin sprawdza grafik i publikuje ręcznie („Udostępnij pracownikom").
+    db.query(models.PublikacjaGrafiku).filter(
+        models.PublikacjaGrafiku.start <= end,
+        models.PublikacjaGrafiku.koniec >= start,
+    ).delete(synchronize_session=False)
+    db.commit()
+    # AUTO „zamyka lokal": po automatycznym ułożeniu grafiku przelicz zamykającego per dzień.
+    dzien = start
+    while dzien <= end:
+        _przelicz_zamykajacego(db, dzien)
+        dzien += timedelta(days=1)
     return result
 
 
@@ -950,6 +1044,22 @@ NAS_BASE_PATH = os.environ.get("IMPREZY_PATH", "/Volumes/RAJCULA/MENU - IMPREZY/
 def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     return db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).order_by(models.Impreza.data.asc()).all()
 
+
+def _imprezy_wymagania_warning(db):
+    """Ostrzeżenie dla obsadzania imprez przez auto-przydział: brak stanowiska „Imprezy"
+    albo brak AKTYWNEGO pracownika z tą kwalifikacją (wtedy auto-przydział nie obsadzi imprez)."""
+    stan = db.query(models.Stanowisko).filter_by(nazwa="Imprezy").first()
+    if not stan:
+        return 'Brak stanowiska „Imprezy" — utwórz je w zakładce Stanowiska, inaczej imprezy nie zostaną obsadzone przez auto-przydział.'
+    ma_ktos = db.query(models.Pracownik).filter(
+        models.Pracownik.aktywny == True,
+        models.Pracownik.kwalifikacje.any(models.Stanowisko.id == stan.id),
+    ).first()
+    if not ma_ktos:
+        return 'Żaden aktywny pracownik nie ma kwalifikacji „Imprezy" — nadaj ją w zakładce Pracownicy, inaczej auto-przydział nie obsadzi imprez.'
+    return None
+
+
 @app.post("/api/imprezy/sync")
 def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     if not os.path.exists(NAS_BASE_PATH):
@@ -987,28 +1097,24 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
                 dodano += 1
     db.commit()
 
-    # --- POBIERAMY ID STANOWISKA "IMPREZY" ---
+    # --- STANOWISKO „IMPREZY" (BEZ fallbacku na Bar — to był błąd: wymagania imprez lądowały
+    #     na stanowisku Bar id=1, gdy „Imprezy" nie znaleziono). Liczymy tylko gdy istnieje. ---
     stan = db.query(models.Stanowisko).filter(models.Stanowisko.nazwa == "Imprezy").first()
-    stan_id = stan.id if stan else 1 
+    if stan:
+        imprezy = db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).all()
+        nowe_wymagania = przelicz_imprezy_na_wymagania(imprezy)
+        # Usuwamy stare automatyczne wymagania dla tego zakresu
+        db.query(models.WymaganiaDnia).filter(
+            models.WymaganiaDnia.data >= start,
+            models.WymaganiaDnia.data <= end,
+            models.WymaganiaDnia.jest_impreza == True
+        ).delete()
+        for w in nowe_wymagania:
+            db.add(models.WymaganiaDnia(**w, stanowisko_id=stan.id))
+        db.commit()
 
-    # AUTOMATYCZNE PRZELICZENIE WYMAGAŃ
-    imprezy = db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).all()
-    nowe_wymagania = przelicz_imprezy_na_wymagania(imprezy)
-    
-    # Usuwamy stare automatyczne wymagania dla tego zakresu
-    db.query(models.WymaganiaDnia).filter(
-        models.WymaganiaDnia.data >= start, 
-        models.WymaganiaDnia.data <= end, 
-        models.WymaganiaDnia.jest_impreza == True
-    ).delete()
-    
-    for w in nowe_wymagania:
-        # Dodajemy stanowisko_id tutaj, a nie w słowniku w
-        db.add(models.WymaganiaDnia(**w, stanowisko_id=stan_id))
-        
-    db.commit()
-
-    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy}
+    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy,
+            "ostrzezenie": _imprezy_wymagania_warning(db)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1085,7 +1191,8 @@ def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(..
             db.add(models.WymaganiaDnia(**w, stanowisko_id=stan.id))
         db.commit()
 
-    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy}
+    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy,
+            "ostrzezenie": _imprezy_wymagania_warning(db)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
