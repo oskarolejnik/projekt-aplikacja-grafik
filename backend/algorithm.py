@@ -11,6 +11,8 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
     """
     pracownicy = db.query(models.Pracownik).filter(models.Pracownik.aktywny == True).all()
     stanowiska = {s.id: s for s in db.query(models.Stanowisko).all()}
+    # Parkiet (stanowiska „Sala*") ma PRIORYTET przy obsadzaniu — jego sloty idą przed resztą.
+    sala_ids = {sid for sid, st in stanowiska.items() if (st.nazwa or "").strip().lower().startswith("sala")}
     wymagania  = db.query(models.WymaganiaDnia).filter(
         models.WymaganiaDnia.data >= start, models.WymaganiaDnia.data <= end
     ).all()
@@ -78,7 +80,8 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
                       and is_time_compatible(p.id, current, req.godz_od))
             return cnt
 
-        slots.sort(key=lambda s: evaluate_slot_difficulty(s))
+        # Najpierw PARKIET (Sala*), potem reszta; w obrębie grupy — najtrudniej obsadzić najpierw.
+        slots.sort(key=lambda s: (0 if s.stanowisko_id in sala_ids else 1, evaluate_slot_difficulty(s)))
 
         # Przydzielanie kandydatów
         for req in slots:

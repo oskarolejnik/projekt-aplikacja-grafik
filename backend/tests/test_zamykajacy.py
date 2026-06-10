@@ -144,6 +144,19 @@ def test_powrot_do_automatu(admin_client):
     assert z[wczesny.id] is False
 
 
+def test_zamyka_gdy_brak_godzin_wybiera_ostatniego(admin_client):
+    """Gdy NIKT na Sali nie ma godziny startu (np. po auto-przydziale, ktory daje Sale bez
+    godzin), i tak ktos jest zamykajacym (ostatnio dodany) — wczesniej nie pokazywalo nikogo."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p1 = factories.PracownikFactory(imie="Pierwszy", nazwisko="A")
+    p2 = factories.PracownikFactory(imie="Drugi", nazwisko="B")
+    admin_client.post("/api/przydzialy", json=_body(sala, p1, None))   # bez godziny
+    admin_client.post("/api/przydzialy", json=_body(sala, p2, None))   # bez godziny
+    z = _zamyka_map(admin_client)
+    assert z[p2.id] is True     # ostatnio dodany zamyka
+    assert z[p1.id] is False
+
+
 def test_pelna_edycja_godziny_i_stanowiska(admin_client):
     """PUT /api/przydzialy/{id} zmienia godzinę, stanowisko i rewir istniejącego przydziału."""
     sala = factories.StanowiskoFactory(nazwa="Sala")

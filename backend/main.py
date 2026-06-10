@@ -138,8 +138,11 @@ def _przelicz_zamykajacego(db, dzien: date):
         zamykajacy = reczny                      # ręczne nadpisanie — automat nie rusza
     else:
         sala_ids = _sala_stanowisko_ids(db)
-        kandydaci = [a for a in rows if a.stanowisko_id in sala_ids and a.godz_od is not None]
-        zamykajacy = max(kandydaci, key=lambda a: (a.godz_od, a.id)) if kandydaci else None
+        kandydaci = [a for a in rows if a.stanowisko_id in sala_ids]
+        # Najpóźniejszy start zamyka. Brak godziny = traktujemy jak najwcześniejszą (00:00),
+        # więc osoba z wpisaną godziną wygrywa; gdy NIKT na Sali nie ma godziny — i tak wybieramy
+        # ostatnio dodanego (najwyższe id), żeby ZAWSZE ktoś był oznaczony jako zamykający.
+        zamykajacy = max(kandydaci, key=lambda a: (a.godz_od or time.min, a.id)) if kandydaci else None
     zmienione = False
     for a in rows:
         powinien = zamykajacy is not None and a.id == zamykajacy.id
@@ -1045,18 +1048,28 @@ def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = 
     return db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).order_by(models.Impreza.data.asc()).all()
 
 
+def _imprezy_stanowisko(db):
+    """Stanowisko imprez — dopasowanie ELASTYCZNE po nazwie (zaczyna się od „imprez"):
+    łapie „Impreza" (l. poj.) i „Imprezy" (l. mn.), bo admin mógł je nazwać dowolnie.
+    Zwraca pierwsze pasujące stanowisko albo None."""
+    for s in db.query(models.Stanowisko).all():
+        if (s.nazwa or "").strip().lower().startswith("imprez"):
+            return s
+    return None
+
+
 def _imprezy_wymagania_warning(db):
-    """Ostrzeżenie dla obsadzania imprez przez auto-przydział: brak stanowiska „Imprezy"
+    """Ostrzeżenie dla obsadzania imprez przez auto-przydział: brak stanowiska imprez
     albo brak AKTYWNEGO pracownika z tą kwalifikacją (wtedy auto-przydział nie obsadzi imprez)."""
-    stan = db.query(models.Stanowisko).filter_by(nazwa="Imprezy").first()
+    stan = _imprezy_stanowisko(db)
     if not stan:
-        return 'Brak stanowiska „Imprezy" — utwórz je w zakładce Stanowiska, inaczej imprezy nie zostaną obsadzone przez auto-przydział.'
+        return 'Brak stanowiska imprez (np. „Impreza"/„Imprezy") — utwórz je w zakładce Stanowiska, inaczej imprezy nie zostaną obsadzone.'
     ma_ktos = db.query(models.Pracownik).filter(
         models.Pracownik.aktywny == True,
         models.Pracownik.kwalifikacje.any(models.Stanowisko.id == stan.id),
     ).first()
     if not ma_ktos:
-        return 'Żaden aktywny pracownik nie ma kwalifikacji „Imprezy" — nadaj ją w zakładce Pracownicy, inaczej auto-przydział nie obsadzi imprez.'
+        return f'Żaden aktywny pracownik nie ma kwalifikacji „{stan.nazwa}" — nadaj ją w zakładce Pracownicy, inaczej auto-przydział nie obsadzi imprez.'
     return None
 
 
@@ -1099,7 +1112,7 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
 
     # --- STANOWISKO „IMPREZY" (BEZ fallbacku na Bar — to był błąd: wymagania imprez lądowały
     #     na stanowisku Bar id=1, gdy „Imprezy" nie znaleziono). Liczymy tylko gdy istnieje. ---
-    stan = db.query(models.Stanowisko).filter(models.Stanowisko.nazwa == "Imprezy").first()
+    stan = _imprezy_stanowisko(db)   # „Impreza"/„Imprezy" — elastyczne dopasowanie nazwy
     if stan:
         imprezy = db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).all()
         nowe_wymagania = przelicz_imprezy_na_wymagania(imprezy)
@@ -1177,7 +1190,7 @@ def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(..
     db.commit()
 
     # Przeliczenie automatycznych wymagań dla zakresu (jak w sync_imprezy).
-    stan = db.query(models.Stanowisko).filter(models.Stanowisko.nazwa == "Imprezy").first()
+    stan = _imprezy_stanowisko(db)   # „Impreza"/„Imprezy" — elastyczne dopasowanie nazwy
     if stan:
         imprezy = db.query(models.Impreza).filter(
             models.Impreza.data >= start, models.Impreza.data <= end

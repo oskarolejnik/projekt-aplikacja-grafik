@@ -56,3 +56,21 @@ def test_auto_przydzial_cofa_publikacje(admin_client, db):
     r = admin_client.post(f"/api/auto-assign?start={DZIEN}&end={KONIEC}")
     assert r.status_code == 200
     assert db.query(models.PublikacjaGrafiku).count() == 0   # publikacja cofnięta
+
+
+def test_auto_przydzial_priorytet_sali(admin_client, db):
+    """Sala ma PRIORYTET: pracownik moze isc na Sale ALBO Bar (1 zmiana/dzien) — auto-przydzial
+    wstawia go na Sale, nie na Bar."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    bar = factories.StanowiskoFactory(nazwa="Bar")
+    p = factories.PracownikFactory(dzial="obsluga")
+    pp = db.get(models.Pracownik, p.id)
+    pp.kwalifikacje = [db.get(models.Stanowisko, sala.id), db.get(models.Stanowisko, bar.id)]
+    db.add(models.Dyspozycja(pracownik_id=p.id, data=DZIEN, dostepnosc=True))      # caly dzien
+    db.add(models.WymaganiaDnia(data=DZIEN, stanowisko_id=sala.id, liczba_osob=1))
+    db.add(models.WymaganiaDnia(data=DZIEN, stanowisko_id=bar.id, liczba_osob=1))
+    db.commit()
+    admin_client.post(f"/api/auto-assign?start={DZIEN}&end={DZIEN}")
+    przy = db.query(models.PrzydzialZmiany).filter_by(pracownik_id=p.id).all()
+    assert len(przy) == 1
+    assert przy[0].stanowisko_id == sala.id   # priorytet Sali

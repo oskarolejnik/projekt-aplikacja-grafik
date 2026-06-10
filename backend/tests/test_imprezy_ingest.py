@@ -121,3 +121,13 @@ def test_ingest_brak_ostrzezenia_gdy_ktos_ma_kwalifikacje(admin_client, db):
     })
     r = admin_client.post("/api/imprezy/ingest", params=ZAKRES, json={"imprezy": [_impreza()]})
     assert r.json().get("ostrzezenie") is None
+
+
+def test_ingest_stanowisko_impreza_liczba_pojedyncza(admin_client, db):
+    """Stanowisko nazwane „Impreza" (l. POJEDYNCZA) tez jest rozpoznawane — elastyczne
+    dopasowanie po prefiksie „imprez" (wczesniej kod szukal tylko „Imprezy")."""
+    impreza = factories.StanowiskoFactory(nazwa="Impreza")   # l. pojedyncza!
+    admin_client.post("/api/imprezy/ingest", params=ZAKRES, json={"imprezy": [_impreza(liczba_osob=30)]})
+    wym = db.query(models.WymaganiaDnia).filter_by(jest_impreza=True).all()
+    assert len(wym) == 1
+    assert wym[0].stanowisko_id == impreza.id
