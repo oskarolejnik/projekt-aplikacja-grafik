@@ -5,7 +5,7 @@ import { useToast } from '../components/ui/Toast'
 import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
-import { pushWspierany, wlaczPowiadomienia, odswiezSubskrypcje } from '../lib/push'
+import { PushButton } from '../components/PushButton'
 import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
 import EmployeeHours from './EmployeeHours'
@@ -24,7 +24,6 @@ export default function EmployeeArea() {
   const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: tylko Grafik + Godziny (bez Dyspozycyjności)
   const [widok, setWidok] = useState(jestKuchnia ? 'grafik' : 'dyspozycyjnosc')
   const [nowyGrafik, setNowyGrafik] = useState(false)
-  const [pushOn, setPushOn] = useState(false)
 
   const imie = user?.imie || user?.login
 
@@ -51,22 +50,6 @@ export default function EmployeeArea() {
     setNowyGrafik(false)
   }, [])
 
-  // Naprawa „znikających" powiadomień: przy każdym wejściu odśwież subskrypcję push
-  // (subskrypcje potrafią cicho wygasać). Jeśli zgoda już jest — ustaw stan na włączone.
-  useEffect(() => {
-    odswiezSubskrypcje().then((ok) => { if (ok) setPushOn(true) })
-  }, [])
-
-  const enablePush = async () => {
-    try {
-      await wlaczPowiadomienia()
-      setPushOn(true)
-      toast('Powiadomienia włączone.', 'success')
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  }
-
   const zmienWidok = (v) => {
     setWidok(v)
     if (v === 'grafik') setNowyGrafik(false)
@@ -85,16 +68,7 @@ export default function EmployeeArea() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {pushWspierany() && !pushOn && (
-            <button
-              onClick={enablePush}
-              title="Włącz powiadomienia"
-              className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
-            >
-              <Icon name="bell" className="h-4 w-4" />
-              <span className="hidden md:inline">Powiadomienia</span>
-            </button>
-          )}
+          <PushButton />
           <button
             onClick={logout}
             className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"

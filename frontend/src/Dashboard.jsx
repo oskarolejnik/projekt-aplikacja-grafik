@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Icon } from './lib/icons'
 import { Logo } from './components/Logo'
+import { PushButton } from './components/PushButton'
 import { useAuth } from './context/AuthContext'
 import Pracownicy from './components/tabs/Pracownicy'
 import Stanowiska from './components/tabs/Stanowiska'
@@ -116,6 +117,7 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-2">
             <span className="hidden text-sm font-medium text-muted sm:inline">{user?.login} · administrator</span>
+            <PushButton />
             <button
               onClick={logout}
               className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { Logo } from '../components/Logo'
+import { PushButton } from '../components/PushButton'
 import { Icon } from '../lib/icons'
 import { Card } from '../components/ui/Card'
 import { Spinner } from '../components/ui/Spinner'
@@ -186,13 +187,16 @@ export default function SzefKuchniView() {
             <p className="text-xs text-muted">Panel szefa kuchni{imie ? ` · ${imie}` : ''}</p>
           </div>
         </div>
-        <button
-          onClick={logout}
-          className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
-        >
-          <Icon name="logout" className="h-4 w-4" />
-          <span className="hidden sm:inline">Wyloguj</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <PushButton />
+          <button
+            onClick={logout}
+            className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
+          >
+            <Icon name="logout" className="h-4 w-4" />
+            <span className="hidden sm:inline">Wyloguj</span>
+          </button>
+        </div>
       </header>
 
       <main className="relative z-10 mx-auto w-full max-w-5xl px-4 py-6 pb-safe md:py-10">
