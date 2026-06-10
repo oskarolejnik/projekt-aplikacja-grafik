@@ -53,6 +53,12 @@ OVERSIGHT_GET = {
     "szef_kuchni": (
         "/api/szefkuchni/", "/api/gastro/stoly", "/api/rezerwacje",
     ),
+    # Pracownik kuchni: podgląd rezerwacji (zagregowane liczby + rozbicie godzinowe,
+    # bez danych klienta) do planowania pracy kuchni. Imprezy widzi przez
+    # /api/me/imprezy (bez nazwy klienta — patrz preferencja prywatności).
+    "kuchnia": (
+        "/api/rezerwacje",
+    ),
 }
 
 

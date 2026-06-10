@@ -112,6 +112,21 @@ def test_kuchnia_nie_ma_dostepu_oversight(client, db):
     assert client.get("/api/me/godziny?rok=2026&miesiac=6", headers=h).status_code == 200
 
 
+def test_kuchnia_widzi_rezerwacje_i_anonimowe_imprezy(client, db):
+    """Pracownik kuchni: podgląd rezerwacji (agregat, bez danych klienta) + imprez
+    przez /api/me/imprezy (sala/godzina/osoby, BEZ nazwy klienta). Pełnego
+    /api/imprezy (z nazwą klienta) NIE widzi — zgodnie z preferencją prywatności."""
+    p = factories.PracownikFactory()
+    kuch = factories.UserFactory(login="kuchrez", rola="kuchnia", pracownik=p)
+    h = _h(kuch)
+    # rezerwacje: middleware przepuszcza (nie 403); treść zależy od konfiguracji Google
+    assert client.get("/api/rezerwacje", headers=h).status_code != 403
+    # imprezy anonimowo przez /api/me/* — działa
+    assert client.get("/api/me/imprezy?start=2026-06-08&end=2026-06-14", headers=h).status_code == 200
+    # pełne /api/imprezy (z nazwą klienta) — zablokowane dla kuchni
+    assert client.get("/api/imprezy?start=2026-06-08&end=2026-06-14", headers=h).status_code == 403
+
+
 # ── Zakładanie kont z nowymi rolami ───────────────────────────────────────────
 def test_admin_zaklada_konta_kuchnia_i_szefkuchni(admin_client, db):
     for rola in ("kuchnia", "szef_kuchni"):

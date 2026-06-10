@@ -9,6 +9,8 @@ import { pushWspierany, wlaczPowiadomienia, odswiezSubskrypcje } from '../lib/pu
 import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
 import EmployeeHours from './EmployeeHours'
+import Rezerwacje from '../components/tabs/Rezerwacje'
+import KuchniaImprezy from '../components/tabs/KuchniaImprezy'
 import { PillSwitch } from '../components/ui/PillSwitch'
 
 const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
@@ -104,31 +106,50 @@ export default function EmployeeArea() {
       </header>
 
       <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 pb-safe md:py-10">
-        {/* Pill Switcher: gradientowa pigułka „podróżuje" pod aktywną zakładką (layoutId + sprężyna). */}
-        <PillSwitch
-          className="mb-6"
-          value={widok}
-          onChange={zmienWidok}
-          options={
-            jestKuchnia
-              ? [
-                  { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
-                  { value: 'godziny', label: 'Godziny' },
-                ]
-              : [
-                  { value: 'dyspozycyjnosc', label: 'Dyspo' },
-                  { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
-                  { value: 'godziny', label: 'Godziny' },
-                ]
-          }
-        />
+        {/* Nawigacja zakładek. Kuchnia ma 4 zakładki (Grafik, Godziny, Rezerwacje, Imprezy) —
+            przewijany pasek (jak panel szefa kuchni), bo nie zmieszczą się w równej pigułce.
+            Obsługa ma 3 — zostaje animowany PillSwitch. */}
+        {jestKuchnia ? (
+          <div className="mb-6 flex gap-2 overflow-x-auto pb-1">
+            {[
+              { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
+              { value: 'godziny', label: 'Godziny' },
+              { value: 'rezerwacje', label: 'Rezerwacje' },
+              { value: 'imprezy', label: 'Imprezy' },
+            ].map((t) => (
+              <button
+                key={t.value}
+                onClick={() => zmienWidok(t.value)}
+                className={`relative shrink-0 rounded-xl px-4 py-2 text-sm font-bold transition active:scale-[0.97] ${
+                  widok === t.value ? 'bg-accent-gradient text-bg shadow-glow' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
+                }`}
+                style={{ WebkitTapHighlightColor: 'transparent' }}
+              >
+                {t.label}
+                {t.badge && <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <PillSwitch
+            className="mb-6"
+            value={widok}
+            onChange={zmienWidok}
+            options={[
+              { value: 'dyspozycyjnosc', label: 'Dyspo' },
+              { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
+              { value: 'godziny', label: 'Godziny' },
+            ]}
+          />
+        )}
 
-        {/* Treść zakładki: miękki crossfade (Framer). Kierunkowość daje sama wędrująca pigułka. */}
-        {/* Reveal treści na czystym CSS (kompozytor; brak rAF-stuttera Framer AnimatePresence). */}
+        {/* Treść zakładki: reveal na czystym CSS (kompozytor; brak rAF-stuttera). */}
         <div key={widok} className="animate-tab-in">
           {widok === 'dyspozycyjnosc' && <EmployeeAvailability />}
           {widok === 'grafik' && <EmployeeSchedule onSeen={oznaczWidziany} />}
           {widok === 'godziny' && <EmployeeHours />}
+          {widok === 'rezerwacje' && <Rezerwacje />}
+          {widok === 'imprezy' && <KuchniaImprezy />}
         </div>
       </main>
     </div>
