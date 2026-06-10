@@ -155,15 +155,21 @@ function PracownikRow({ p, i, stanowiska, dzialIds, onChanged, onMove, first, la
   const [stawkaJedna, setStawkaJedna] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const jednaStawka = dzial === 'kuchnia' || dzial === 'techniczny'  // jedna stawka, bez stanowisk
+  const jednaStawka = dzial === 'kuchnia' || dzial === 'techniczny'  // główna stawka bez stanowisk
   const stanId = dzialIds[dzial]  // id ukrytego stanowiska (Kuchnia / Techniczny)
+  const ukryte = [dzialIds.kuchnia, dzialIds.techniczny].filter(Boolean)
+  const stanowiskaObslugi = stanowiska.filter((s) => !ukryte.includes(s.id))   // kwalifikacje obsługi
+  const stanowiskaDodatkowe = stanowiska.filter((s) => s.id !== stanId)        // dodatkowe stawki (też drugi ukryty)
 
-  // Pojedynczą stawkę odczytujemy z ukrytego stanowiska bieżącego działu.
+  // Główna stawka (z ukrytego stanowiska działu) + dodatkowe (inne stanowiska) z zapisanych stawek.
   useEffect(() => {
     if (!stanId) return
-    const s = (p.stawki || []).find((x) => x.stanowisko_id === stanId)
-    setStawkaJedna(s ? String(s.stawka) : '')
-  }, [stanId, p.stawki])
+    const prim = (p.stawki || []).find((x) => x.stanowisko_id === stanId)
+    setStawkaJedna(prim ? String(prim.stawka) : '')
+    if (jednaStawka) {
+      setKwal((p.stawki || []).map((x) => x.stanowisko_id).filter((id) => id !== stanId))
+    }
+  }, [stanId, jednaStawka, p.stawki])
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
@@ -179,9 +185,10 @@ function PracownikRow({ p, i, stanowiska, dzialIds, onChanged, onMove, first, la
         dzial,
         kwalifikacje_ids: jednaStawka ? [] : kwal,
         stawki: jednaStawka
-          ? stanId && parseFloat(stawkaJedna) > 0
-            ? [{ stanowisko_id: stanId, stawka: parseFloat(stawkaJedna) }]
-            : []
+          ? [
+              ...(stanId && parseFloat(stawkaJedna) > 0 ? [{ stanowisko_id: stanId, stawka: parseFloat(stawkaJedna) }] : []),
+              ...zbierzStawki(kwal, stawki),  // dodatkowe stawki (inne stanowiska)
+            ]
           : zbierzStawki(kwal, stawki),
       })
       toast('Zapisano zmiany.', 'success')
@@ -236,14 +243,21 @@ function PracownikRow({ p, i, stanowiska, dzialIds, onChanged, onMove, first, la
         <DzialPicker value={dzial} onChange={setDzial} />
 
         {jednaStawka ? (
-          <StawkaJedna label={dzial === 'kuchnia' ? 'Stawka (kuchnia)' : 'Stawka (techniczny)'} value={stawkaJedna} onChange={setStawkaJedna} />
+          <>
+            <StawkaJedna label={dzial === 'kuchnia' ? 'Stawka (kuchnia)' : 'Stawka (techniczny)'} value={stawkaJedna} onChange={setStawkaJedna} />
+            <label className="flex flex-col gap-1.5">
+              <span className="field-label">Dodatkowe stawki (gdy pracuje na innym stanowisku)</span>
+              <KwalifikacjeDropdown stanowiska={stanowiskaDodatkowe} selected={kwal} onToggle={toggle} />
+            </label>
+            <StawkiEdytor stanowiska={stanowiskaDodatkowe} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+          </>
         ) : (
           <>
             <label className="flex flex-col gap-1.5">
               <span className="field-label">Kwalifikacje</span>
-              <KwalifikacjeDropdown stanowiska={stanowiska} selected={kwal} onToggle={toggle} />
+              <KwalifikacjeDropdown stanowiska={stanowiskaObslugi} selected={kwal} onToggle={toggle} />
             </label>
-            <StawkiEdytor stanowiska={stanowiska} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+            <StawkiEdytor stanowiska={stanowiskaObslugi} kwal={kwal} stawki={stawki} setStawka={setStawka} />
           </>
         )}
 
@@ -285,6 +299,7 @@ export default function Pracownicy() {
   const stanId = dzialIds[dzial]
   // W kwalifikacjach obsługi nie pokazujemy ukrytych stanowisk (Kuchnia / Techniczny).
   const stanowiskaObslugi = stanowiska.filter((s) => ![dzialIds.kuchnia, dzialIds.techniczny].includes(s.id))
+  const stanowiskaDodatkowe = stanowiska.filter((s) => s.id !== stanId)  // dodatkowe stawki (też drugi ukryty)
 
   const toggle = (id) => setKwal((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setStawka = (id, val) => setStawki((cur) => ({ ...cur, [id]: val }))
@@ -321,9 +336,10 @@ export default function Pracownicy() {
         dzial,
         kwalifikacje_ids: jednaStawka ? [] : kwal,
         stawki: jednaStawka
-          ? stanId && parseFloat(stawkaJedna) > 0
-            ? [{ stanowisko_id: stanId, stawka: parseFloat(stawkaJedna) }]
-            : []
+          ? [
+              ...(stanId && parseFloat(stawkaJedna) > 0 ? [{ stanowisko_id: stanId, stawka: parseFloat(stawkaJedna) }] : []),
+              ...zbierzStawki(kwal, stawki),
+            ]
           : zbierzStawki(kwal, stawki),
       })
       setImie('')
@@ -354,7 +370,12 @@ export default function Pracownicy() {
           <KolorPicker value={kolor} onChange={setKolor} />
           <DzialPicker value={dzial} onChange={setDzial} />
           {jednaStawka ? (
-            <StawkaJedna label={dzial === 'kuchnia' ? 'Stawka (kuchnia)' : 'Stawka (techniczny)'} value={stawkaJedna} onChange={setStawkaJedna} />
+            <>
+              <StawkaJedna label={dzial === 'kuchnia' ? 'Stawka (kuchnia)' : 'Stawka (techniczny)'} value={stawkaJedna} onChange={setStawkaJedna} />
+              <span className="field-label -mb-2">Dodatkowe stawki (inne stanowiska)</span>
+              <KwalifikacjeDropdown stanowiska={stanowiskaDodatkowe} selected={kwal} onToggle={toggle} />
+              <StawkiEdytor stanowiska={stanowiskaDodatkowe} kwal={kwal} stawki={stawki} setStawka={setStawka} />
+            </>
           ) : (
             <>
               <KwalifikacjeDropdown stanowiska={stanowiskaObslugi} selected={kwal} onToggle={toggle} />
@@ -377,7 +398,7 @@ export default function Pracownicy() {
               key={p.id}
               p={p}
               i={i}
-              stanowiska={stanowiskaObslugi}
+              stanowiska={stanowiska}
               dzialIds={dzialIds}
               onChanged={reloadDicts}
               onMove={przesun}

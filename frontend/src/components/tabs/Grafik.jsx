@@ -122,9 +122,9 @@ export default function Grafik() {
   }
   // Wolne przypisanie: dowolne stanowisko + własna godzina, niezależnie od dyspozycyjności/wymagań.
   const dodajRecznie = async (dt, pId) => {
-    // W grafiku kuchni stanowisko jest ukryte i stałe (jedno stanowisko „Kuchnia").
+    // W grafiku kuchni domyślne stanowisko = Kuchnia, ale można wybrać inne (np. Techniczny) na tę zmianę.
     const kuchnia = dzial === 'kuchnia'
-    const stanowisko_id = kuchnia ? kuchniaId : +reczny.stanowisko_id
+    const stanowisko_id = kuchnia ? (+reczny.stanowisko_id || kuchniaId) : +reczny.stanowisko_id
     if (!stanowisko_id) {
       toast(kuchnia ? 'Brak stanowiska kuchni — odśwież stronę.' : 'Wybierz stanowisko.', 'error')
       return
@@ -263,17 +263,19 @@ export default function Grafik() {
             const szab = szablony.find((w) => w.stanowisko_id === a.stanowisko_id && w.godz_od === a.godz_od)
             const edytuje = edycja?.id === a.id
             return (
-              <div key={a.id} className={`rounded-lg border border-line border-l-[3px] bg-surface-2 p-2 text-left text-xs ${a.zamyka ? 'border-l-lemon' : 'border-l-mint'}`}>
+              <div key={a.id} className={`rounded-lg border border-line border-l-[3px] bg-surface-2 p-2 text-left text-xs ${(!jestKuchnia && a.zamyka) ? 'border-l-lemon' : 'border-l-mint'}`}>
                 <div className="flex items-start justify-between gap-1">
                   <span className="font-bold text-ink">
                     {stan?.nazwa}
-                    {(a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
+                    {!jestKuchnia && (a.rewir || szab?.rewir) && <span className="text-mint"> ({a.rewir || szab?.rewir})</span>}
                   </span>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    {a.zamyka && <span title="zamyka lokal" className="text-lemon"><Icon name="key" className="h-3 w-3" /></span>}
-                    <button onClick={() => setEdycja(edytuje ? null : { id: a.id, rewir: a.rewir || '', zamyka: !!a.zamyka })} className="text-[10px] font-semibold text-muted transition hover:text-mint">
-                      {edytuje ? 'anuluj' : 'edytuj'}
-                    </button>
+                    {!jestKuchnia && a.zamyka && <span title="zamyka lokal" className="text-lemon"><Icon name="key" className="h-3 w-3" /></span>}
+                    {!jestKuchnia && (
+                      <button onClick={() => setEdycja(edytuje ? null : { id: a.id, rewir: a.rewir || '', zamyka: !!a.zamyka })} className="text-[10px] font-semibold text-muted transition hover:text-mint">
+                        {edytuje ? 'anuluj' : 'edytuj'}
+                      </button>
+                    )}
                     <button onClick={() => usunPrzydzial(a.id)} className="text-muted transition hover:text-danger" aria-label="Anuluj zmianę">
                       <Icon name="close" className="h-3.5 w-3.5" />
                     </button>
@@ -281,7 +283,7 @@ export default function Grafik() {
                 </div>
                 <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-muted">
                   <Icon name="clock" className="h-3 w-3" /> {a.godz_od ? hhmm(a.godz_od) : 'Dowolnie'}
-                  {a.zamyka && <span className="font-sans font-bold text-lemon">· zamyka</span>}
+                  {!jestKuchnia && a.zamyka && <span className="font-sans font-bold text-lemon">· zamyka</span>}
                 </span>
                 {edytuje && (
                   <div className="mt-1.5 flex flex-col gap-1.5 border-t border-line pt-1.5">
@@ -329,34 +331,36 @@ export default function Grafik() {
               {reczny?.key === key ? (
                 <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-mint/40 bg-surface-2 p-2">
                   {!jestKuchnia && !dys?.dostepnosc && <span className="text-[10px] font-bold text-lemon">⚠ Pracownik nie zgłosił dostępności</span>}
-                  {!jestKuchnia && (
-                    <select
-                      value={reczny.stanowisko_id}
-                      onChange={(ev) => setReczny((r) => ({ ...r, stanowisko_id: ev.target.value }))}
-                      className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                    >
-                      <option value="">— stanowisko —</option>
-                      {stanowiska.filter((st) => st.id !== kuchniaId).map((st) => (
-                        <option key={st.id} value={st.id}>{st.nazwa}</option>
-                      ))}
-                    </select>
-                  )}
+                  <select
+                    value={reczny.stanowisko_id}
+                    onChange={(ev) => setReczny((r) => ({ ...r, stanowisko_id: ev.target.value }))}
+                    className="w-full cursor-pointer rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                  >
+                    {!jestKuchnia && <option value="">— stanowisko —</option>}
+                    {(jestKuchnia ? stanowiska : stanowiska.filter((st) => st.id !== kuchniaId)).map((st) => (
+                      <option key={st.id} value={st.id}>{st.nazwa}</option>
+                    ))}
+                  </select>
                   <input
                     type="time"
                     value={reczny.godz_od}
                     onChange={(ev) => setReczny((r) => ({ ...r, godz_od: ev.target.value }))}
                     className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
                   />
-                  <input
-                    value={reczny.rewir}
-                    onChange={(ev) => setReczny((r) => ({ ...r, rewir: ev.target.value }))}
-                    placeholder="rewir (opcjonalnie)"
-                    className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
-                  />
-                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink">
-                    <input type="checkbox" checked={reczny.zamyka} onChange={(ev) => setReczny((r) => ({ ...r, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" />
-                    Zamyka lokal
-                  </label>
+                  {!jestKuchnia && (
+                    <>
+                      <input
+                        value={reczny.rewir}
+                        onChange={(ev) => setReczny((r) => ({ ...r, rewir: ev.target.value }))}
+                        placeholder="rewir (opcjonalnie)"
+                        className="w-full rounded-md border border-line bg-surface p-1.5 text-xs text-ink outline-none"
+                      />
+                      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink">
+                        <input type="checkbox" checked={reczny.zamyka} onChange={(ev) => setReczny((r) => ({ ...r, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" />
+                        Zamyka lokal
+                      </label>
+                    </>
+                  )}
                   <div className="flex gap-1.5">
                     <button onClick={() => dodajRecznie(dt, p.id)} className="flex-1 rounded-md bg-mint/20 py-1 text-xs font-bold text-mint transition hover:bg-mint/30">Dodaj</button>
                     <button onClick={() => setReczny(null)} className="rounded-md border border-line px-2 py-1 text-xs text-muted transition hover:text-ink">Anuluj</button>
@@ -364,7 +368,7 @@ export default function Grafik() {
                 </div>
               ) : (
                 <button
-                  onClick={() => setReczny({ key, stanowisko_id: '', godz_od: '', rewir: '', zamyka: false })}
+                  onClick={() => setReczny({ key, stanowisko_id: jestKuchnia ? String(kuchniaId ?? '') : '', godz_od: '', rewir: '', zamyka: false })}
                   className="w-full rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-muted outline-none transition hover:border-mint/50 hover:text-mint"
                 >
                   + ręcznie

@@ -62,7 +62,7 @@ export default function SzefKuchniGrafik() {
       await api('/szefkuchni/przydzialy', 'POST', {
         data: selectedDay, stanowisko_id: 0, pracownik_id: pid,
         godz_od: dodaj.godz_od ? `${dodaj.godz_od}:00` : null,
-        rewir: (dodaj.rewir || '').trim() || null, zamyka: !!dodaj.zamyka,
+        rewir: null, zamyka: false,  // kuchnia: bez rewiru i bez „zamyka lokal"
       })
       setDodaj(null); load()
     } catch (err) { toast(err.message, 'error') }
@@ -72,7 +72,7 @@ export default function SzefKuchniGrafik() {
       await api(`/szefkuchni/przydzialy/${a.id}`, 'PUT', {
         data: a.data, stanowisko_id: 0, pracownik_id: a.pracownik_id,
         godz_od: edycja.godz_od ? `${edycja.godz_od}:00` : null,
-        rewir: (edycja.rewir || '').trim() || null, zamyka: !!edycja.zamyka,
+        rewir: null, zamyka: false,  // kuchnia: bez rewiru i bez „zamyka lokal"
       })
       setEdycja(null); load()
     } catch (err) { toast(err.message, 'error') }
@@ -157,23 +157,19 @@ export default function SzefKuchniGrafik() {
                     {pAt.map((a) => {
                       const edytuje = edycja?.id === a.id
                       return (
-                        <div key={a.id} className={`rounded-lg border border-line border-l-[3px] bg-surface-2 p-2 text-xs ${a.zamyka ? 'border-l-lemon' : 'border-l-mint'}`}>
+                        <div key={a.id} className="rounded-lg border border-line border-l-[3px] border-l-mint bg-surface-2 p-2 text-xs">
                           <div className="flex items-center justify-between gap-2">
                             <span className="flex flex-wrap items-center gap-1.5 font-mono text-ink">
                               <Icon name="clock" className="h-3 w-3" /> {a.godz_od ? hhmm(a.godz_od) : 'Dowolnie'}
-                              {a.rewir && <span className="font-sans font-semibold text-mint">{a.rewir}</span>}
-                              {a.zamyka && <span className="font-sans font-bold text-lemon">· zamyka</span>}
                             </span>
                             <div className="flex shrink-0 items-center gap-2">
-                              <button onClick={() => setEdycja(edytuje ? null : { id: a.id, godz_od: a.godz_od || '', rewir: a.rewir || '', zamyka: !!a.zamyka })} className="font-semibold text-muted transition hover:text-mint">{edytuje ? 'anuluj' : 'edytuj'}</button>
+                              <button onClick={() => setEdycja(edytuje ? null : { id: a.id, godz_od: a.godz_od || '' })} className="font-semibold text-muted transition hover:text-mint">{edytuje ? 'anuluj' : 'edytuj'}</button>
                               <button onClick={() => usun(a)} className="text-muted transition hover:text-danger" aria-label="Wykreśl ze zmiany"><Icon name="close" className="h-3.5 w-3.5" /></button>
                             </div>
                           </div>
                           {edytuje && (
                             <div className="mt-2 flex flex-col gap-1.5 border-t border-line pt-2">
                               <input type="time" value={edycja.godz_od} onChange={(ev) => setEdycja((x) => ({ ...x, godz_od: ev.target.value }))} className="rounded-md border border-line bg-surface p-1.5 text-ink outline-none" />
-                              <input value={edycja.rewir} onChange={(ev) => setEdycja((x) => ({ ...x, rewir: ev.target.value }))} placeholder="rewir (opcjonalnie)" className="rounded-md border border-line bg-surface p-1.5 text-ink outline-none" />
-                              <label className="flex cursor-pointer items-center gap-1.5 text-ink"><input type="checkbox" checked={edycja.zamyka} onChange={(ev) => setEdycja((x) => ({ ...x, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" /> Zamyka lokal</label>
                               <button onClick={() => zapiszEdycje(a)} className="rounded-md bg-mint/20 py-1 font-bold text-mint transition hover:bg-mint/30">Zapisz</button>
                             </div>
                           )}
@@ -184,15 +180,13 @@ export default function SzefKuchniGrafik() {
                     {dodawanie ? (
                       <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-mint/40 bg-surface-2 p-2 text-xs">
                         <input type="time" value={dodaj.godz_od} onChange={(ev) => setDodaj((d) => ({ ...d, godz_od: ev.target.value }))} className="rounded-md border border-line bg-surface p-1.5 text-ink outline-none" />
-                        <input value={dodaj.rewir} onChange={(ev) => setDodaj((d) => ({ ...d, rewir: ev.target.value }))} placeholder="rewir (opcjonalnie)" className="rounded-md border border-line bg-surface p-1.5 text-ink outline-none" />
-                        <label className="flex cursor-pointer items-center gap-1.5 text-ink"><input type="checkbox" checked={dodaj.zamyka} onChange={(ev) => setDodaj((d) => ({ ...d, zamyka: ev.target.checked }))} className="h-3.5 w-3.5 accent-lemon" /> Zamyka lokal</label>
                         <div className="flex gap-1.5">
                           <button onClick={() => dodajZmiane(p.id)} className="flex-1 rounded-md bg-mint/20 py-1 font-bold text-mint transition hover:bg-mint/30">Dodaj</button>
                           <button onClick={() => setDodaj(null)} className="rounded-md border border-line px-2 py-1 text-muted transition hover:text-ink">Anuluj</button>
                         </div>
                       </div>
                     ) : (
-                      <button onClick={() => setDodaj({ pracownik_id: p.id, godz_od: '', rewir: '', zamyka: false })} className="rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-muted transition hover:border-mint/50 hover:text-mint">+ dodaj zmianę</button>
+                      <button onClick={() => setDodaj({ pracownik_id: p.id, godz_od: '' })} className="rounded-lg border border-dashed border-line bg-surface-2 p-1.5 text-center text-xs font-medium text-muted transition hover:border-mint/50 hover:text-mint">+ dodaj zmianę</button>
                     )}
                   </div>
                 </div>
