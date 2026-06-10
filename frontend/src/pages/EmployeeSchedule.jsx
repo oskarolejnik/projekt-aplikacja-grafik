@@ -100,13 +100,17 @@ export default function EmployeeSchedule({ onSeen }) {
                         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted">
                           <Icon name="users" className="h-3.5 w-3.5" />
                           <span className="font-semibold text-ink/80">Z kim:</span>
-                          {z.wspolpracownicy.map((w, j) => (
-                            <span key={j} className={w.zamyka ? 'font-semibold text-lemon' : ''}>
-                              {w.imie}
-                              {(w.godz_od || w.zamyka) && ` (${[w.godz_od, w.zamyka ? 'zamyka' : ''].filter(Boolean).join(', ')})`}
-                              {j < z.wspolpracownicy.length - 1 ? ',' : ''}
-                            </span>
-                          ))}
+                          {z.wspolpracownicy.map((w, j) => {
+                            const innaStan = w.stanowisko && w.stanowisko !== z.stanowisko
+                            return (
+                              <span key={j} className={w.zamyka ? 'font-semibold text-lemon' : ''}>
+                                {innaStan && <span className="text-ink/50">{w.stanowisko}: </span>}
+                                {w.imie}
+                                {(w.godz_od || w.zamyka) && ` (${[w.godz_od, w.zamyka ? 'zamyka' : ''].filter(Boolean).join(', ')})`}
+                                {j < z.wspolpracownicy.length - 1 ? ',' : ''}
+                              </span>
+                            )
+                          })}
                         </div>
                       )}
                     </div>

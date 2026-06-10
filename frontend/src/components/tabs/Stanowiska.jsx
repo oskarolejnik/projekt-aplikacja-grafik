@@ -14,12 +14,17 @@ function StanowiskoRow({ s, i = 0, onChanged }) {
   const { toast, confirm } = useToast()
   const [nazwa, setNazwa] = useState(s.nazwa)
   const [weekend, setWeekend] = useState(s.tylko_weekend)
+  const [wszyscy, setWszyscy] = useState(!!s.widoczny_dla_wszystkich)
+  const [grupa, setGrupa] = useState(s.grupa_widocznosci || '')
   const [busy, setBusy] = useState(false)
 
   const zapisz = async () => {
     setBusy(true)
     try {
-      await api(`/stanowiska/${s.id}`, 'PUT', { nazwa: nazwa.trim(), tylko_weekend: weekend })
+      await api(`/stanowiska/${s.id}`, 'PUT', {
+        nazwa: nazwa.trim(), tylko_weekend: weekend,
+        widoczny_dla_wszystkich: wszyscy, grupa_widocznosci: grupa.trim() || null,
+      })
       toast('Zapisano zmiany.', 'success')
       onChanged()
     } catch (e) {
@@ -58,6 +63,21 @@ function StanowiskoRow({ s, i = 0, onChanged }) {
           </Button>
         </div>
       </div>
+      {/* Powiązania widoczności w „Moim grafiku" pracownika */}
+      <div className="mt-3 flex flex-col gap-3 border-t border-line/60 pt-3 sm:flex-row sm:items-end">
+        <label className="flex items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
+          <input type="checkbox" checked={wszyscy} onChange={(e) => setWszyscy(e.target.checked)} className="h-4 w-4 accent-mint" />
+          Widoczny dla wszystkich
+        </label>
+        <label className="flex flex-1 flex-col gap-1.5">
+          <span className="field-label">Grupa widoczności</span>
+          <input value={grupa} onChange={(e) => setGrupa(e.target.value)} placeholder="np. komp-wydawka" className="field" />
+        </label>
+      </div>
+      <p className="mt-2 text-[11px] leading-snug text-muted/70">
+        „Widoczny dla wszystkich" — każdy pracownik widzi, kto z tego stanowiska pracuje (np. Menadżer).
+        „Grupa widoczności" — stanowiska z tą samą nazwą grupy widzą się wzajemnie (np. KOMP i Wydawka).
+      </p>
     </div>
   )
 }
@@ -67,6 +87,8 @@ export default function Stanowiska() {
   const { toast } = useToast()
   const [nowa, setNowa] = useState('')
   const [nowaWeekend, setNowaWeekend] = useState(false)
+  const [nowaWszyscy, setNowaWszyscy] = useState(false)
+  const [nowaGrupa, setNowaGrupa] = useState('')
   const [pkStan, setPkStan] = useState('')
   const [pkNazwa, setPkNazwa] = useState('')
   const [pkOd, setPkOd] = useState('')
@@ -78,9 +100,14 @@ export default function Stanowiska() {
   const dodajStanowisko = async () => {
     if (!nowa.trim()) return
     try {
-      await api('/stanowiska', 'POST', { nazwa: nowa.trim(), tylko_weekend: nowaWeekend })
+      await api('/stanowiska', 'POST', {
+        nazwa: nowa.trim(), tylko_weekend: nowaWeekend,
+        widoczny_dla_wszystkich: nowaWszyscy, grupa_widocznosci: nowaGrupa.trim() || null,
+      })
       setNowa('')
       setNowaWeekend(false)
+      setNowaWszyscy(false)
+      setNowaGrupa('')
       reloadDicts()
     } catch (e) {
       toast(e.message, 'error')
@@ -133,6 +160,14 @@ export default function Stanowiska() {
           <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
             <input type="checkbox" checked={nowaWeekend} onChange={(e) => setNowaWeekend(e.target.checked)} className="h-4 w-4 accent-mint" />
             Tylko weekend
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
+            <input type="checkbox" checked={nowaWszyscy} onChange={(e) => setNowaWszyscy(e.target.checked)} className="h-4 w-4 accent-mint" />
+            Widoczny dla wszystkich (np. Menadżer)
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="field-label">Grupa widoczności (opcjonalnie)</span>
+            <input value={nowaGrupa} onChange={(e) => setNowaGrupa(e.target.value)} placeholder="np. komp-wydawka — te same grupy widzą się wzajemnie" className="field" />
           </label>
           <Button onClick={dodajStanowisko} className="w-full">
             <Icon name="plus" className="h-4 w-4" /> Dodaj stanowisko

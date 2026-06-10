@@ -70,6 +70,13 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE pracownicy ADD COLUMN kolor VARCHAR"))
             if "dzial" not in kolumny:
                 conn.execute(text("ALTER TABLE pracownicy ADD COLUMN dzial VARCHAR NOT NULL DEFAULT 'obsluga'"))
+    if "stanowiska" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("stanowiska")}
+        with engine.begin() as conn:
+            if "widoczny_dla_wszystkich" not in kolumny:
+                conn.execute(text("ALTER TABLE stanowiska ADD COLUMN widoczny_dla_wszystkich BOOLEAN NOT NULL DEFAULT FALSE"))
+            if "grupa_widocznosci" not in kolumny:
+                conn.execute(text("ALTER TABLE stanowiska ADD COLUMN grupa_widocznosci VARCHAR"))
 
 
 def init_db():

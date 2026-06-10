@@ -4,6 +4,8 @@ from typing import Optional, List
 
 class StanowiskoBase(BaseModel):
     nazwa: str; tylko_weekend: bool = False
+    widoczny_dla_wszystkich: bool = False
+    grupa_widocznosci: Optional[str] = None
 class StanowiskoCreate(StanowiskoBase): pass
 
 class PodkategoriaCreate(BaseModel):

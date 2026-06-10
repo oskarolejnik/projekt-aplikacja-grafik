@@ -45,6 +45,11 @@ class Stanowisko(Base):
     id            = Column(Integer, primary_key=True, index=True)
     nazwa         = Column(String(64), nullable=False, unique=True)
     tylko_weekend = Column(Boolean, default=False)
+    # Powiązania widoczności w „Moim grafiku":
+    #  • widoczny_dla_wszystkich — holderzy tego stanowiska są widoczni dla KAŻDEGO pracownika (np. Menadżer),
+    #  • grupa_widocznosci — stanowiska z tą samą (niepustą) grupą widzą się WZAJEMNIE (np. KOMP+Wydawka).
+    widoczny_dla_wszystkich = Column(Boolean, nullable=False, default=False)
+    grupa_widocznosci       = Column(String(64), nullable=True)
 
     uprawnieni = relationship("Pracownik", secondary=pracownik_stanowisko, back_populates="kwalifikacje")
     przydzialy = relationship("PrzydzialZmiany", back_populates="stanowisko", cascade="all, delete-orphan")

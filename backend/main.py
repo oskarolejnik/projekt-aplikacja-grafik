@@ -419,23 +419,39 @@ def moj_grafik(
         .order_by(models.PrzydzialZmiany.data.asc(), models.PrzydzialZmiany.godz_od.asc())
         .all()
     )
-    stan_map = {s.id: s.nazwa for s in db.query(models.Stanowisko).all()}
+    stan_objs = db.query(models.Stanowisko).all()
+    stan_map = {s.id: s.nazwa for s in stan_objs}
+    stan_grupa = {s.id: (s.grupa_widocznosci or "").strip().lower() for s in stan_objs}
+    stan_wszyscy = {s.id: bool(s.widoczny_dla_wszystkich) for s in stan_objs}
     prac_map = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+
+    def _norm_rewir(r):
+        return (r or "").strip()
 
     zmiany = []
     for a in moje:
-        # Współpracownicy = WSZYSCY na tym samym STANOWISKU danego dnia — niezależnie od godziny
-        # przyjścia i rewiru. Pracownik widzi, z kim dzieli stanowisko (sortujemy wg godz_od).
-        wspol = (
+        # Z kim pracuję danego dnia — niezależnie od godziny przyjścia. Widzę:
+        #  • ten sam REWIR na MOIM stanowisku (np. Sala/Parter — nie całą Salę),
+        #  • stanowiska „widoczne dla wszystkich" (np. Menadżer),
+        #  • stanowiska z mojej „grupy widoczności" (np. KOMP↔Wydawka).
+        sv, rv = a.stanowisko_id, _norm_rewir(a.rewir)
+        grupa_v = stan_grupa.get(sv, "")
+        kandydaci = (
             db.query(models.PrzydzialZmiany)
             .filter(
                 models.PrzydzialZmiany.data == a.data,
-                models.PrzydzialZmiany.stanowisko_id == a.stanowisko_id,
                 models.PrzydzialZmiany.pracownik_id != user.pracownik_id,
             )
-            .order_by(models.PrzydzialZmiany.godz_od.asc())
             .all()
         )
+        wspol = []
+        for w in kandydaci:
+            ten_sam_rewir = w.stanowisko_id == sv and _norm_rewir(w.rewir) == rv
+            dla_wszystkich = stan_wszyscy.get(w.stanowisko_id, False)
+            ta_sama_grupa = bool(grupa_v) and stan_grupa.get(w.stanowisko_id, "") == grupa_v and w.stanowisko_id != sv
+            if ten_sam_rewir or dla_wszystkich or ta_sama_grupa:
+                wspol.append(w)
+        wspol.sort(key=lambda w: (w.godz_od or time.min, w.id))
         zmiany.append({
             "data": str(a.data),
             "godz_od": a.godz_od.strftime("%H:%M") if a.godz_od else None,
@@ -444,6 +460,7 @@ def moj_grafik(
             "zamyka": bool(a.zamyka),
             "wspolpracownicy": [
                 {"imie": prac_map.get(w.pracownik_id, ""),
+                 "stanowisko": stan_map.get(w.stanowisko_id, ""),
                  "godz_od": w.godz_od.strftime("%H:%M") if w.godz_od else None,
                  "zamyka": bool(w.zamyka)}
                 for w in wspol
@@ -519,6 +536,7 @@ def create_stanowisko(data: schemas.StanowiskoCreate, db: Session = Depends(get_
     if db.query(models.Stanowisko).filter_by(nazwa=data.nazwa).first():
         raise HTTPException(400, "Stanowisko o tej nazwie już istnieje.")
     s = models.Stanowisko(**data.model_dump())
+    s.grupa_widocznosci = (s.grupa_widocznosci or "").strip() or None  # pusty string -> brak grupy
     db.add(s); db.commit(); db.refresh(s)
     return s
 
@@ -529,6 +547,8 @@ def update_stanowisko(sid: int, data: schemas.StanowiskoCreate, db: Session = De
         raise HTTPException(404, "Nie znaleziono.")
     s.nazwa = data.nazwa
     s.tylko_weekend = data.tylko_weekend
+    s.widoczny_dla_wszystkich = data.widoczny_dla_wszystkich
+    s.grupa_widocznosci = (data.grupa_widocznosci or "").strip() or None
     db.commit(); db.refresh(s)
     return s
 

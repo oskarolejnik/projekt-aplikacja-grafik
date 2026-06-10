@@ -5,7 +5,7 @@ Dotyczy dwóch miejsc:
   • /api/me/grafik   — rewir imprezy „IMPREZA: {klient} ({sala})" -> „Impreza ({sala})".
 """
 
-from datetime import datetime
+from datetime import datetime, time
 
 import main
 import models
@@ -60,26 +60,71 @@ def test_me_grafik_rewir_imprezy_bez_klienta(client, db):
     assert z["rewir"] == "Impreza (R1)"
 
 
-def test_me_grafik_wspolpracownicy_po_stanowisku_niezaleznie_od_godziny(client, db):
-    """Współpracownicy = WSZYSCY na tym samym STANOWISKU danego dnia, niezależnie od godziny
-    przyjścia (wcześniej tylko ci z identyczną godziną i rewirem). Inne stanowisko = niewidoczny."""
-    from datetime import time
+def test_me_grafik_wspolpracownicy_po_rewirze(client, db):
+    """Na tym samym stanowisku współpracownik = TEN SAM rewir (niezależnie od godziny).
+    Inny rewir na tej samej Sali → niewidoczny. Inne stanowisko (bez powiązania) → niewidoczny."""
     sala = factories.StanowiskoFactory(nazwa="Sala")
     bar = factories.StanowiskoFactory(nazwa="Bar")
-    ja = factories.PracownikFactory(imie="Ja", nazwisko="Sam")
-    kolega = factories.PracownikFactory(imie="Kolega", nazwisko="Salowy")
+    ja = factories.PracownikFactory(imie="Ja", nazwisko="Parter")
+    ten_sam = factories.PracownikFactory(imie="Kolega", nazwisko="Parter")
+    inny = factories.PracownikFactory(imie="Ktos", nazwisko="Pietro")
     barman = factories.PracownikFactory(imie="Barman", nazwisko="X")
-    emp = factories.UserFactory(login="empws", rola="employee", pracownik=ja)
+    emp = factories.UserFactory(login="emprew", rola="employee", pracownik=ja)
     d = factories.dzien(0)
-    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=ja.id, godz_od=time(10, 0)))
-    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=kolega.id, godz_od=time(16, 0)))  # ta sama Sala, INNA godzina
-    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=bar.id, pracownik_id=barman.id, godz_od=time(10, 0)))   # ta sama godzina, INNE stanowisko
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=ja.id, godz_od=time(10, 0), rewir="Parter"))
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=ten_sam.id, godz_od=time(16, 0), rewir="Parter"))  # ten sam rewir, INNA godzina
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=inny.id, godz_od=time(10, 0), rewir="Pietro"))     # INNY rewir
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=bar.id, pracownik_id=barman.id, godz_od=time(10, 0), rewir="Parter"))    # inne stanowisko
     db.add(models.PublikacjaGrafiku(start=d, koniec=factories.dzien(6), opublikowano_at=datetime.utcnow()))
     db.commit()
     r = client.get("/api/me/grafik", headers=_h(emp), params={"start": str(d), "end": str(factories.dzien(6))})
     wsp = r.json()["zmiany"][0]["wspolpracownicy"]
     imiona = {w["imie"] for w in wsp}
-    assert "Kolega Salowy" in imiona       # ta sama Sala, inna godzina → widoczny
+    assert "Kolega Parter" in imiona       # ten sam rewir, inna godzina → widoczny
+    assert "Ktos Pietro" not in imiona     # inny rewir → niewidoczny
     assert "Barman X" not in imiona        # inne stanowisko → niewidoczny
-    kolega_w = next(w for w in wsp if w["imie"] == "Kolega Salowy")
+    kolega_w = next(w for w in wsp if w["imie"] == "Kolega Parter")
     assert kolega_w["godz_od"] == "16:00"  # godzina współpracownika dołączona
+
+
+def test_me_grafik_stanowisko_widoczne_dla_wszystkich(client, db):
+    """Stanowisko z flagą `widoczny_dla_wszystkich` (np. Menadżer) jest widoczne dla KAŻDEGO
+    pracownika danego dnia — z nazwą stanowiska."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    menadzer = factories.StanowiskoFactory(nazwa="Menadżer", widoczny_dla_wszystkich=True)
+    ja = factories.PracownikFactory(imie="Kelner", nazwisko="X")
+    szef = factories.PracownikFactory(imie="Pan", nazwisko="Szef")
+    emp = factories.UserFactory(login="empmen", rola="employee", pracownik=ja)
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=ja.id, godz_od=time(10, 0), rewir="Parter"))
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=menadzer.id, pracownik_id=szef.id, godz_od=time(8, 0)))
+    db.add(models.PublikacjaGrafiku(start=d, koniec=factories.dzien(6), opublikowano_at=datetime.utcnow()))
+    db.commit()
+    r = client.get("/api/me/grafik", headers=_h(emp), params={"start": str(d), "end": str(factories.dzien(6))})
+    wsp = r.json()["zmiany"][0]["wspolpracownicy"]
+    men = [w for w in wsp if w["imie"] == "Pan Szef"]
+    assert men and men[0]["stanowisko"] == "Menadżer"   # menadżer widoczny + z nazwą stanowiska
+
+
+def test_me_grafik_grupa_widocznosci_wzajemnie(client, db):
+    """KOMP i Wydawka w tej samej grupie widzą się WZAJEMNIE; ktoś spoza grupy (Sala) — nie."""
+    komp = factories.StanowiskoFactory(nazwa="KOMP", grupa_widocznosci="kuchnia-komp")
+    wydawka = factories.StanowiskoFactory(nazwa="Wydawka", grupa_widocznosci="kuchnia-komp")
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p_komp = factories.PracownikFactory(imie="Komp", nazwisko="Owy")
+    p_wyd = factories.PracownikFactory(imie="Wyda", nazwisko="Wka")
+    p_sala = factories.PracownikFactory(imie="Sal", nazwisko="Owy")
+    emp_komp = factories.UserFactory(login="empkomp", rola="employee", pracownik=p_komp)
+    emp_wyd = factories.UserFactory(login="empwyd", rola="employee", pracownik=p_wyd)
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=komp.id, pracownik_id=p_komp.id, godz_od=time(10, 0)))
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=wydawka.id, pracownik_id=p_wyd.id, godz_od=time(12, 0)))
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=p_sala.id, godz_od=time(10, 0)))
+    db.add(models.PublikacjaGrafiku(start=d, koniec=factories.dzien(6), opublikowano_at=datetime.utcnow()))
+    db.commit()
+    r1 = client.get("/api/me/grafik", headers=_h(emp_komp), params={"start": str(d), "end": str(factories.dzien(6))})
+    im1 = {w["imie"] for w in r1.json()["zmiany"][0]["wspolpracownicy"]}
+    assert "Wyda Wka" in im1 and "Sal Owy" not in im1   # KOMP widzi Wydawkę, nie Salę
+    r2 = client.get("/api/me/grafik", headers=_h(emp_wyd), params={"start": str(d), "end": str(factories.dzien(6))})
+    im2 = {w["imie"] for w in r2.json()["zmiany"][0]["wspolpracownicy"]}
+    assert "Komp Owy" in im2                              # Wydawka widzi KOMP (wzajemnie)
