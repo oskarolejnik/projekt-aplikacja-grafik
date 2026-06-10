@@ -102,7 +102,9 @@ export default function EmployeeSchedule({ onSeen }) {
                           <span className="font-semibold text-ink/80">Z kim:</span>
                           {z.wspolpracownicy.map((w, j) => (
                             <span key={j} className={w.zamyka ? 'font-semibold text-lemon' : ''}>
-                              {w.imie}{w.zamyka ? ' (zamyka)' : ''}{j < z.wspolpracownicy.length - 1 ? ',' : ''}
+                              {w.imie}
+                              {(w.godz_od || w.zamyka) && ` (${[w.godz_od, w.zamyka ? 'zamyka' : ''].filter(Boolean).join(', ')})`}
+                              {j < z.wspolpracownicy.length - 1 ? ',' : ''}
                             </span>
                           ))}
                         </div>

@@ -424,16 +424,16 @@ def moj_grafik(
 
     zmiany = []
     for a in moje:
-        # Współpracownicy = inne przydziały tego samego slotu (data, stanowisko, godzina, rewir).
+        # Współpracownicy = WSZYSCY na tym samym STANOWISKU danego dnia — niezależnie od godziny
+        # przyjścia i rewiru. Pracownik widzi, z kim dzieli stanowisko (sortujemy wg godz_od).
         wspol = (
             db.query(models.PrzydzialZmiany)
             .filter(
                 models.PrzydzialZmiany.data == a.data,
                 models.PrzydzialZmiany.stanowisko_id == a.stanowisko_id,
-                models.PrzydzialZmiany.godz_od == a.godz_od,
-                models.PrzydzialZmiany.rewir == a.rewir,
                 models.PrzydzialZmiany.pracownik_id != user.pracownik_id,
             )
+            .order_by(models.PrzydzialZmiany.godz_od.asc())
             .all()
         )
         zmiany.append({
@@ -443,7 +443,10 @@ def moj_grafik(
             "rewir": _rewir_dla_pracownika(a.rewir),
             "zamyka": bool(a.zamyka),
             "wspolpracownicy": [
-                {"imie": prac_map.get(w.pracownik_id, ""), "zamyka": bool(w.zamyka)} for w in wspol
+                {"imie": prac_map.get(w.pracownik_id, ""),
+                 "godz_od": w.godz_od.strftime("%H:%M") if w.godz_od else None,
+                 "zamyka": bool(w.zamyka)}
+                for w in wspol
             ],
         })
     return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat() if pub else None, "zmiany": zmiany}

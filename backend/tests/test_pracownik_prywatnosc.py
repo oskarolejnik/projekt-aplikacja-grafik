@@ -58,3 +58,28 @@ def test_me_grafik_rewir_imprezy_bez_klienta(client, db):
     z = r.json()["zmiany"][0]
     assert "Kowalski" not in z["rewir"]
     assert z["rewir"] == "Impreza (R1)"
+
+
+def test_me_grafik_wspolpracownicy_po_stanowisku_niezaleznie_od_godziny(client, db):
+    """Współpracownicy = WSZYSCY na tym samym STANOWISKU danego dnia, niezależnie od godziny
+    przyjścia (wcześniej tylko ci z identyczną godziną i rewirem). Inne stanowisko = niewidoczny."""
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    bar = factories.StanowiskoFactory(nazwa="Bar")
+    ja = factories.PracownikFactory(imie="Ja", nazwisko="Sam")
+    kolega = factories.PracownikFactory(imie="Kolega", nazwisko="Salowy")
+    barman = factories.PracownikFactory(imie="Barman", nazwisko="X")
+    emp = factories.UserFactory(login="empws", rola="employee", pracownik=ja)
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=ja.id, godz_od=time(10, 0)))
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=kolega.id, godz_od=time(16, 0)))  # ta sama Sala, INNA godzina
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=bar.id, pracownik_id=barman.id, godz_od=time(10, 0)))   # ta sama godzina, INNE stanowisko
+    db.add(models.PublikacjaGrafiku(start=d, koniec=factories.dzien(6), opublikowano_at=datetime.utcnow()))
+    db.commit()
+    r = client.get("/api/me/grafik", headers=_h(emp), params={"start": str(d), "end": str(factories.dzien(6))})
+    wsp = r.json()["zmiany"][0]["wspolpracownicy"]
+    imiona = {w["imie"] for w in wsp}
+    assert "Kolega Salowy" in imiona       # ta sama Sala, inna godzina → widoczny
+    assert "Barman X" not in imiona        # inne stanowisko → niewidoczny
+    kolega_w = next(w for w in wsp if w["imie"] == "Kolega Salowy")
+    assert kolega_w["godz_od"] == "16:00"  # godzina współpracownika dołączona
