@@ -48,6 +48,7 @@ def wczytaj_odbicia(db, start: date, end: date):
             "data": o.data,
             "godziny": float(o.godziny or 0.0),
             "wejscie": o.wejscie,
+            "wyjscie": o.wyjscie,
         }
         for o in rows
     ]
@@ -66,6 +67,12 @@ def _as_time(v):
         except ValueError:
             continue
     return None
+
+
+def _hhmm(v):
+    """Czas (datetime/time/str) → 'HH:MM' albo None."""
+    t = _as_time(v)
+    return t.strftime("%H:%M") if t else None
 
 
 def _minuty(t: time) -> float:
@@ -135,6 +142,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     niedopasowani = defaultdict(float)
     duze_ciecia = []  # ucięcia > 1h (tylko dla admina)
     male_ciecia = []  # ucięcia 10 min – 1h (tylko dla admina)
+    poza_szczegoly = defaultdict(list)  # pid -> [ {data, od, do, godziny} ] — konkretne zmiany poza grafikiem
 
     for z in odbicia:
         d = z["data"]
@@ -171,10 +179,14 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
 
         if not _opublikowany(d, zakresy_pub):
             godziny[pid][BUCKET_NIEOPUBLIKOWANY] += h     # bez przycinania (brak grafiku)
+            poza_szczegoly[pid].append({"data": str(d), "od": _hhmm(z.get("wejscie")),
+                                        "do": _hhmm(z.get("wyjscie")), "godziny": round(h, 2)})
         else:
             przy = graf.get((pid, d), [])
             if not przy:
                 godziny[pid][BUCKET_POZA_GRAFIKIEM] += h  # poza grafikiem — pełne, osobny kubełek
+                poza_szczegoly[pid].append({"data": str(d), "od": _hhmm(z.get("wejscie")),
+                                            "do": _hhmm(z.get("wyjscie")), "godziny": round(h, 2)})
             else:
                 wybrany = _wybierz_przydzial(przy, wej_t)
                 bucket = stan_nazwa.get(wybrany.stanowisko_id, "?")
@@ -197,6 +209,7 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
 
     stanowiska_agg = defaultdict(lambda: {"godziny": 0.0, "kwota": 0.0})  # koszt/godziny per stanowisko (wszyscy)
     poza_grafikiem = []  # pracownicy z godzinami NIEPRZYPISANYMI do grafiku (poza grafikiem / nieopublikowany)
+    bez_stawki = []      # godziny na stanowisku BEZ ustawionej stawki (liczą się jako 0 zł)
     pracownicy_out = []
     for pid, rozb in godziny.items():
         rozbicie = []
@@ -212,6 +225,9 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
                              "stawka": round(stawka, 2), "kwota": kwota})
             stanowiska_agg[k]["godziny"] += v
             stanowiska_agg[k]["kwota"] += kwota
+            if sid is not None and stawka == 0 and v > 0:  # godziny na stanowisku, ale BRAK stawki → 0 zł
+                bez_stawki.append({"pracownik_id": pid, "pracownik": prac_nazwa.get(pid, "?"),
+                                   "stanowisko": k, "godziny": round(v, 2)})
             sg = oszczednosci.get(pid, {}).get(k, 0.0)  # zaoszczędzone na tym stanowisku
             if sg > 0:
                 zaosz_godz += sg
@@ -226,11 +242,16 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             "zaoszczedzone_godziny": round(zaosz_godz, 2),
             "zaoszczedzone_kwota": round(zaosz_kwota, 2),
         })
-        # Godziny nieprzypisane do grafiku (odbił się, ale nie ma go w grafiku / tydzień nieopublikowany).
-        poza = sum(v for k, v in rozb.items() if k in (BUCKET_POZA_GRAFIKIEM, BUCKET_NIEOPUBLIKOWANY))
-        if poza > 0:
-            poza_grafikiem.append({"pracownik_id": pid, "pracownik": prac_nazwa.get(pid, "?"),
-                                   "godziny": round(poza, 2)})
+        # Godziny nieprzypisane do grafiku (odbił się, ale nie ma go w grafiku / tydzień nieopublikowany)
+        # — z rozbiciem na konkretne dni.
+        poza_p = poza_szczegoly.get(pid, [])
+        if poza_p:
+            poza_grafikiem.append({
+                "pracownik_id": pid,
+                "pracownik": prac_nazwa.get(pid, "?"),
+                "godziny": round(sum(x["godziny"] for x in poza_p), 2),
+                "zmiany": sorted(poza_p, key=lambda x: (x["data"], x["od"] or "")),
+            })
     pracownicy_out.sort(key=lambda x: (-x["do_wyplaty"], x["pracownik"]))  # malejąco wg wypłaty
 
     return {
@@ -249,6 +270,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
         ],
         # Godziny NIEPRZYPISANE do grafiku (kto, ile) — sumarycznie, malejąco.
         "poza_grafikiem": sorted(poza_grafikiem, key=lambda x: -x["godziny"]),
+        # Godziny na stanowisku BEZ ustawionej stawki (kto, stanowisko, ile) — liczą się jako 0 zł.
+        "bez_stawki": sorted(bez_stawki, key=lambda x: -x["godziny"]),
         # Cięcia godzin (wejście wcześniej niż grafik) — pojedyncze przypadki, TYLKO dla admina.
         "duze_ciecia": sorted(duze_ciecia, key=lambda x: -x["godziny_uciete"]),
         "male_ciecia": sorted(male_ciecia, key=lambda x: -x["godziny_uciete"]),

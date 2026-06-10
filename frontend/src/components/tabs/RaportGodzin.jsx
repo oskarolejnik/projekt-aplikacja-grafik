@@ -65,6 +65,7 @@ export default function RaportGodzin() {
   const duzeCiecia = dane?.duze_ciecia || []   // >1h (admin + szef)
   const maleCiecia = dane?.male_ciecia || []   // 10 min–1h (admin + szef)
   const pozaGrafikiem = isAdmin ? (dane?.poza_grafikiem || []) : []  // godziny nieprzypisane — tylko admin
+  const bezStawki = isAdmin ? (dane?.bez_stawki || []) : []          // godziny bez stawki — tylko admin
   const sumaWszystkich = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.suma_godzin || 0), 0), [pracownicy])
   const sumaWyplat = useMemo(() => pracownicy.reduce((acc, p) => acc + (p.do_wyplaty || 0), 0), [pracownicy])
   const zaoszczedzone = dane?.zaoszczedzone || { godziny: 0, kwota: 0 }
@@ -252,11 +253,43 @@ export default function RaportGodzin() {
               </summary>
               <div className="border-t border-line/60 px-4 py-3">
                 <p className="text-xs text-muted">Godziny z RCP nieprzypisane do grafiku — pracownik odbił się, ale nie ma go w grafiku tego dnia (lub tydzień nieopublikowany):</p>
-                <ul className="mt-2 space-y-1.5 text-xs">
+                <ul className="mt-2 space-y-2 text-xs">
                   {pozaGrafikiem.map((p, i) => (
+                    <li key={i} className="border-b border-line/40 pb-2 last:border-0 last:pb-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-semibold text-ink">{p.pracownik}</span>
+                        <span className="font-mono font-bold tabular-nums text-ink">{godzinyHM(p.godziny)}</span>
+                      </div>
+                      {p.zmiany?.length > 0 && (
+                        <div className="mt-1 space-y-0.5 text-[11px] text-muted">
+                          {p.zmiany.map((z, j) => (
+                            <div key={j} className="font-mono">
+                              {ddmmyyyy(z.data)}: {z.od ?? '—'}–{z.do ?? '—'} <span className="text-ink/70">({godzinyHM(z.godziny)})</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
+          )}
+
+          {/* Godziny na stanowisku BEZ ustawionej stawki (0 zł) — lista rozwijana, TYLKO admin */}
+          {bezStawki.length > 0 && (
+            <details className="group mb-6 rounded-xl border border-coral/30 bg-coral/[0.05]">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 outline-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-semibold text-coral">Godziny bez stawki — {bezStawki.length}</span>
+                <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
+              </summary>
+              <div className="border-t border-line/60 px-4 py-3">
+                <p className="text-xs text-muted">Pracownik ma godziny na stanowisku, ale nie ma dodanej stawki — liczą się jako 0 zł. Dodaj stawkę w zakładce „Pracownicy":</p>
+                <ul className="mt-2 space-y-1.5 text-xs">
+                  {bezStawki.map((b, i) => (
                     <li key={i} className="flex items-center justify-between gap-3">
-                      <span className="font-semibold text-ink">{p.pracownik}</span>
-                      <span className="font-mono font-bold tabular-nums text-ink">{godzinyHM(p.godziny)}</span>
+                      <span className="min-w-0 truncate font-semibold text-ink">{b.pracownik} <span className="font-normal text-muted">· {b.stanowisko}</span></span>
+                      <span className="shrink-0 font-mono font-bold tabular-nums text-coral">{godzinyHM(b.godziny)}</span>
                     </li>
                   ))}
                 </ul>

@@ -312,7 +312,24 @@ def test_raport_poza_grafikiem_lista(db):
     odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
                 "godziny": 5.0, "wejscie": datetime(2026, 6, 1, 10, 0)}]
     raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
-    assert raport["poza_grafikiem"] == [{"pracownik_id": p.id, "pracownik": "Bez Grafiku", "godziny": 5.0}]
+    assert raport["poza_grafikiem"] == [{
+        "pracownik_id": p.id, "pracownik": "Bez Grafiku", "godziny": 5.0,
+        "zmiany": [{"data": str(factories.dzien(0)), "od": "10:00", "do": None, "godziny": 5.0}],
+    }]
+
+
+def test_raport_godziny_bez_stawki(db):
+    """Pracownik ma godziny na stanowisku, ale nie ma dodanej stawki → lista bez_stawki (0 zł)."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(imie="Bez", nazwisko="Stawki")
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0))
+    _opublikuj(db, factories.dzien(0), factories.dzien(6))  # ma przydział, ale BRAK stawki dla (p, Sala)
+    odbicia = [{"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),
+                "godziny": 8.0, "wejscie": None}]
+    raport = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia)
+    assert raport["bez_stawki"] == [{"pracownik_id": p.id, "pracownik": "Bez Stawki",
+                                     "stanowisko": "Sala", "godziny": 8.0}]
+    assert raport["pracownicy"][0]["do_wyplaty"] == 0.0
 
 
 def test_duze_ciecia_widzi_admin_i_szef(admin_client, client, db):
