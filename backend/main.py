@@ -644,6 +644,8 @@ def get_wymagania(
     end: Optional[date] = None,
     db: Session = Depends(get_db)
 ):
+    if start and end:
+        _odswiez_wymagania_imprez(db, start, end)   # świeże wymagania imprez przed odczytem widoku
     q = db.query(models.WymaganiaDnia)
     if start: q = q.filter(models.WymaganiaDnia.data >= start)
     if end:   q = q.filter(models.WymaganiaDnia.data <= end)
@@ -936,6 +938,8 @@ def auto_assign_endpoint(
     end: date = Query(...),
     db: Session = Depends(get_db)
 ):
+    # Świeże wymagania pod imprezy z aktualnej tabeli — żeby auto-przydział miał co obsadzać.
+    _odswiez_wymagania_imprez(db, start, end)
     result = _auto_assign(db, start, end)
     # Auto-przydział TYLKO SZKICUJE: cofamy publikację tygodnia, żeby zmiany NIE trafiły od razu
     # do obsługi. Admin sprawdza grafik i publikuje ręcznie („Udostępnij pracownikom").
@@ -1073,6 +1077,28 @@ def _imprezy_wymagania_warning(db):
     return None
 
 
+def _odswiez_wymagania_imprez(db, start, end):
+    """Przelicza wymagania imprez dla [start, end] z AKTUALNEJ tabeli imprez: kasuje stare
+    auto-wymagania imprez (jest_impreza=True) i tworzy świeże na stanowisku imprez. Dzięki temu
+    auto-przydział i widok „Wymagania" ZAWSZE mają aktualne wymagania pod imprezy — bez ręcznego
+    re-syncu. Bez stanowiska imprez („Impreza"/„Imprezy") nic nie robi."""
+    stan = _imprezy_stanowisko(db)
+    if not stan:
+        return
+    imprezy = db.query(models.Impreza).filter(
+        models.Impreza.data >= start, models.Impreza.data <= end
+    ).all()
+    nowe = przelicz_imprezy_na_wymagania(imprezy)
+    db.query(models.WymaganiaDnia).filter(
+        models.WymaganiaDnia.data >= start,
+        models.WymaganiaDnia.data <= end,
+        models.WymaganiaDnia.jest_impreza == True,
+    ).delete(synchronize_session=False)
+    for w in nowe:
+        db.add(models.WymaganiaDnia(**w, stanowisko_id=stan.id))
+    db.commit()
+
+
 @app.post("/api/imprezy/sync")
 def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     if not os.path.exists(NAS_BASE_PATH):
@@ -1110,21 +1136,8 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
                 dodano += 1
     db.commit()
 
-    # --- STANOWISKO „IMPREZY" (BEZ fallbacku na Bar — to był błąd: wymagania imprez lądowały
-    #     na stanowisku Bar id=1, gdy „Imprezy" nie znaleziono). Liczymy tylko gdy istnieje. ---
-    stan = _imprezy_stanowisko(db)   # „Impreza"/„Imprezy" — elastyczne dopasowanie nazwy
-    if stan:
-        imprezy = db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).all()
-        nowe_wymagania = przelicz_imprezy_na_wymagania(imprezy)
-        # Usuwamy stare automatyczne wymagania dla tego zakresu
-        db.query(models.WymaganiaDnia).filter(
-            models.WymaganiaDnia.data >= start,
-            models.WymaganiaDnia.data <= end,
-            models.WymaganiaDnia.jest_impreza == True
-        ).delete()
-        for w in nowe_wymagania:
-            db.add(models.WymaganiaDnia(**w, stanowisko_id=stan.id))
-        db.commit()
+    # Auto-wymagania pod imprezy (świeże z aktualnej tabeli imprez; bez fallbacku na Bar).
+    _odswiez_wymagania_imprez(db, start, end)
 
     return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy,
             "ostrzezenie": _imprezy_wymagania_warning(db)}
@@ -1189,20 +1202,8 @@ def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(..
             dodano += 1
     db.commit()
 
-    # Przeliczenie automatycznych wymagań dla zakresu (jak w sync_imprezy).
-    stan = _imprezy_stanowisko(db)   # „Impreza"/„Imprezy" — elastyczne dopasowanie nazwy
-    if stan:
-        imprezy = db.query(models.Impreza).filter(
-            models.Impreza.data >= start, models.Impreza.data <= end
-        ).all()
-        nowe_wymagania = przelicz_imprezy_na_wymagania(imprezy)
-        db.query(models.WymaganiaDnia).filter(
-            models.WymaganiaDnia.data >= start, models.WymaganiaDnia.data <= end,
-            models.WymaganiaDnia.jest_impreza == True,
-        ).delete()
-        for w in nowe_wymagania:
-            db.add(models.WymaganiaDnia(**w, stanowisko_id=stan.id))
-        db.commit()
+    # Auto-wymagania pod imprezy (świeże z aktualnej tabeli imprez).
+    _odswiez_wymagania_imprez(db, start, end)
 
     return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy,
             "ostrzezenie": _imprezy_wymagania_warning(db)}

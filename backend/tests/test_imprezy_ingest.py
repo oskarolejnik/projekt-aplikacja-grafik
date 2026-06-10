@@ -2,7 +2,7 @@
 VPS nie czyta NAS-a ani nie parsuje Excela — dostaje gotowe pola od przeglądarki.
 """
 
-from datetime import time
+from datetime import date, time
 
 import models
 import factories
@@ -131,3 +131,16 @@ def test_ingest_stanowisko_impreza_liczba_pojedyncza(admin_client, db):
     wym = db.query(models.WymaganiaDnia).filter_by(jest_impreza=True).all()
     assert len(wym) == 1
     assert wym[0].stanowisko_id == impreza.id
+
+
+def test_wymagania_imprez_regeneruja_sie_w_widoku(admin_client, db):
+    """GET /api/wymagania regeneruje wymagania imprez z AKTUALNEJ tabeli imprez — pojawiaja sie
+    automatycznie, bez recznego re-syncu (np. impreza dodana, a stanowisko utworzone pozniej)."""
+    db.add(models.Impreza(data=date(2026, 6, 3), klient="Wesele", liczba_osob=30,
+                          godzina="18:00", sala="R1", sciezka_pliku="x"))
+    impreza_stan = factories.StanowiskoFactory(nazwa="Impreza")   # l. pojedyncza
+    db.commit()
+    r = admin_client.get("/api/wymagania?start=2026-06-01&end=2026-06-07")
+    wym = [w for w in r.json() if w["jest_impreza"]]
+    assert len(wym) == 1
+    assert wym[0]["stanowisko_id"] == impreza_stan.id
