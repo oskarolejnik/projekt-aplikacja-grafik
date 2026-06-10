@@ -1,3 +1,4 @@
+/* global __BUILD_TIME__ */
 import { useState } from 'react'
 import { Icon } from './lib/icons'
 import { Logo } from './components/Logo'
@@ -30,6 +31,9 @@ const TABS = [
 ]
 
 const GROUPS = ['Zarządzanie', 'Operacje']
+// Znacznik wersji = czas builda (wstrzykiwany przez Vite define). Fallback „dev" w trybie
+// deweloperskim — żeby brak define nie wywalał komponentu.
+const BUILD = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'dev'
 
 export default function Dashboard() {
   const { user, logout } = useAuth()
@@ -97,7 +101,7 @@ export default function Dashboard() {
         <div className="border-t border-line p-4">
           <div className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.03] px-4 py-3">
             <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
-            <span className="text-xs font-medium text-muted">Wersja Premium</span>
+            <span className="text-xs font-medium text-muted">Wersja: {BUILD}{BUILD !== 'dev' ? ' UTC' : ''}</span>
           </div>
         </div>
       </aside>

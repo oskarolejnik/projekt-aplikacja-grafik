@@ -262,7 +262,8 @@ export default function Grafik() {
   }
   const cellBgFor = (dt, p) => {
     const dys = dysMap[`${dt}_${p.id}`]
-    return !dys ? 'bg-white/[0.01]' : dys.dostepnosc ? 'bg-success/[0.04]' : 'bg-danger/[0.04]'
+    // Mocniejsze tło zielone/czerwone — żeby pole „od razu" pokazywało dostępność.
+    return !dys ? 'bg-white/[0.01]' : dys.dostepnosc ? 'bg-success/[0.14]' : 'bg-danger/[0.14]'
   }
 
   // Render zawartości jednej komórki (status + przydziały + dodawanie). Wspólny dla
@@ -272,16 +273,29 @@ export default function Grafik() {
     const dys = dysMap[key]
     const pAt = przyMap[key] || []
     const szablony = szablonyDla(dt, p)
-    const status = dys ? (dys.dostepnosc ? (dys.godz_od ? `Od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny') : 'brak'
-    const statusColor = !dys
-      ? 'text-muted border-line'
-      : dys.dostepnosc
-        ? 'text-success border-success/30 bg-success/10'
-        : 'text-danger border-danger/30 bg-danger/10'
-
     return (
       <>
-        {!jestKuchnia && <div className={`mb-2 w-fit rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusColor}`}>{status}</div>}
+        {/* Dostępność = MOCNY kolor + IKONA (✓/✗), bez tekstu „dostępny/niedostępny". Kształt
+            ikony rozróżnia stany niezależnie od koloru — czytelne też przy daltonizmie. */}
+        {!jestKuchnia && (
+          <div
+            title={dys ? (dys.dostepnosc ? (dys.godz_od ? `Dostępny od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny') : 'Nie zgłosił dostępności'}
+            className={`mb-2 flex w-fit items-center gap-1 rounded-md px-2 py-1 text-[11px] font-extrabold ${
+              !dys ? 'bg-white/[0.06] text-muted' : dys.dostepnosc ? 'bg-success text-bg' : 'bg-danger text-white'
+            }`}
+          >
+            {!dys ? (
+              <span>? brak</span>
+            ) : dys.dostepnosc ? (
+              <>
+                <Icon name="check" className="h-3.5 w-3.5" strokeWidth={3} />
+                {dys.godz_od && <span className="font-mono">{hhmm(dys.godz_od)}</span>}
+              </>
+            ) : (
+              <Icon name="close" className="h-3.5 w-3.5" strokeWidth={3} />
+            )}
+          </div>
+        )}
         <div className="flex flex-col gap-2">
           {pAt.map((a) => {
             const stan = stanMap[a.stanowisko_id]

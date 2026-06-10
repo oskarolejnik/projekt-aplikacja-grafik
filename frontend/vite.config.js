@@ -6,6 +6,11 @@ import { VitePWA } from 'vite-plugin-pwa'
 // pod tym samym originem co API (dzięki czemu względne /api dalej działa).
 // W trybie dev Vite serwuje na :5173 i proxuje /api -> uvicorn (127.0.0.1:8000).
 export default defineConfig({
+  // Znacznik wersji = czas builda (UTC). Pokazywany w panelu admina, żeby od razu wiedzieć,
+  // czy wdrożenie (npm run build) faktycznie weszło — czy widać starą wersję z cache.
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString().slice(0, 16).replace('T', ' ')),
+  },
   plugins: [
     react(),
     VitePWA({
