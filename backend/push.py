@@ -74,3 +74,12 @@ def wyslij_push_do_pracownika(db, pracownik_id: int, tytul: str, tresc: str, url
         return 0
     subs = db.query(models.PushSubscription).filter(models.PushSubscription.user_id == user.id).all()
     return _wyslij_do_subskrypcji(db, subs, tytul, tresc, url)
+
+
+def wyslij_push_do_adminow(db, tytul: str, tresc: str, url: str = "/") -> int:
+    """Powiadomienie do urządzeń wszystkich administratorów (np. nowe zamówienie sprzątaczki)."""
+    ids = [u.id for u in db.query(models.User).filter(models.User.rola == "admin").all()]
+    if not ids:
+        return 0
+    subs = db.query(models.PushSubscription).filter(models.PushSubscription.user_id.in_(ids)).all()
+    return _wyslij_do_subskrypcji(db, subs, tytul, tresc, url)

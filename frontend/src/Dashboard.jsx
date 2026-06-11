@@ -12,6 +12,7 @@ import Imprezy from './components/tabs/Imprezy'
 import Dyspozycje from './components/tabs/Dyspozycje'
 import Grafik from './components/tabs/Grafik'
 import Sprzatanie from './components/tabs/Sprzatanie'
+import Zamowienia from './components/tabs/Zamowienia'
 import RaportGodzin from './components/tabs/RaportGodzin'
 import RozliczeniaPodglad from './components/tabs/RozliczeniaPodglad'
 import StolyLive from './components/tabs/StolyLive'
@@ -27,6 +28,7 @@ const TABS = [
   { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', group: 'Operacje', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },
   { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', group: 'Operacje', title: 'Interaktywny grafik pracy', Comp: Grafik },
   { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', group: 'Operacje', title: 'Grafik sprzątania sal', Comp: Sprzatanie },
+  { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', group: 'Operacje', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },
   { id: 'godziny', label: 'Raport godzin', icon: 'clock', group: 'Operacje', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive },

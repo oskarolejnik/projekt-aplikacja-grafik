@@ -12,6 +12,7 @@ import EmployeeHours from './EmployeeHours'
 import Rezerwacje from '../components/tabs/Rezerwacje'
 import KuchniaImprezy from '../components/tabs/KuchniaImprezy'
 import TechSprzatanie from '../components/tabs/TechSprzatanie'
+import TechZamowienia from '../components/tabs/TechZamowienia'
 
 const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
 
@@ -23,6 +24,7 @@ export default function EmployeeArea() {
   const { toast } = useToast()
   const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: bez Dyspozycyjności
   const jestTechniczny = user?.dzial === 'techniczny'  // techniczni: Sprzątanie + Godziny (bez grafiku/dyspo)
+  const jestSprzataczka = !!user?.sprzataczka          // sprzątaczka: dodatkowo zakładka Zamówienia
   const [widok, setWidok] = useState(jestTechniczny ? 'sprzatanie' : jestKuchnia ? 'grafik' : 'dyspozycyjnosc')
   const [nowyGrafik, setNowyGrafik] = useState(false)
 
@@ -90,6 +92,7 @@ export default function EmployeeArea() {
           {(jestTechniczny
             ? [
                 { value: 'sprzatanie', label: 'Sprzątanie' },
+                ...(jestSprzataczka ? [{ value: 'zamowienia', label: 'Zamówienia' }] : []),
                 { value: 'godziny', label: 'Godziny' },
               ]
             : jestKuchnia
@@ -129,6 +132,7 @@ export default function EmployeeArea() {
           {widok === 'rezerwacje' && <Rezerwacje />}
           {widok === 'imprezy' && <KuchniaImprezy />}
           {widok === 'sprzatanie' && <TechSprzatanie />}
+          {widok === 'zamowienia' && <TechZamowienia />}
         </div>
       </main>
     </div>

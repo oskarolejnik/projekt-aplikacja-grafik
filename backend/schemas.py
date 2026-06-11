@@ -99,6 +99,7 @@ class UserOut(BaseModel):
     aktywny: bool = True
     pracownik_id: Optional[int] = None
     dzial: Optional[str] = None       # dział powiązanego Pracownika (obsluga/kuchnia/techniczny)
+    sprzataczka: bool = False         # techniczny z kwalifikacją „Sprzątaczka" (dostęp do zamówień)
     imie: Optional[str] = None        # uzupełniane z powiązanego Pracownika
     nazwisko: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
@@ -142,3 +143,14 @@ class SprzatanieKorektaIn(BaseModel):
     data: date
     sala: str
     akcja: str  # 'dodaj' | 'usun' (przeciwna akcja kasuje istniejącą korektę = powrót do automatu)
+
+# --- ZAMÓWIENIA SPRZĄTACZKI ---
+
+class ZamowienieIn(BaseModel):
+    nazwa: str
+    ilosc: Optional[str] = None
+    notatka: Optional[str] = None
+    zdjecie: Optional[str] = None   # data URL (base64), opcjonalne — zmniejszone na froncie
+
+class ZamowienieStatusIn(BaseModel):
+    status: str   # 'odczytane' | 'zamowione'

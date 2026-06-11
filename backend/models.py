@@ -216,6 +216,23 @@ class RozliczenieGastro(Base):
     zaktualizowano_at = Column(DateTime, nullable=True)
 
 
+class ZamowienieSprzataczki(Base):
+    """Zamówienie produktu zgłoszone przez sprzątaczkę (dział techniczny, kwalifikacja Sprzątaczka).
+    Obieg statusów: nowe -> odczytane -> zamowione. Push: nowe->admini, odczytane/zamowione->autorka.
+    `zdjecie` to opcjonalny data URL (base64, zmniejszone na froncie)."""
+    __tablename__ = "zamowienia_sprzataczki"
+    id           = Column(Integer, primary_key=True, index=True)
+    pracownik_id = Column(Integer, ForeignKey("pracownicy.id"), nullable=False)   # autorka
+    utworzono_at = Column(DateTime, nullable=False)
+    nazwa        = Column(String(128), nullable=False)
+    ilosc        = Column(String(64), nullable=True)      # wolny tekst, np. „2 szt", „5 l"
+    notatka      = Column(String, nullable=True)
+    zdjecie      = Column(String, nullable=True)          # data URL (base64) — opcjonalne
+    status       = Column(String(16), nullable=False, default="nowe")  # nowe | odczytane | zamowione
+    odczytano_at = Column(DateTime, nullable=True)
+    zamowiono_at = Column(DateTime, nullable=True)
+
+
 class SprzatanieKorekta(Base):
     """Ręczna korekta grafiku sprzątania (admin): 'dodaj' pozycję spoza reguł albo 'usun'
     wygenerowaną. Przesunięcie = 'usun' na starym dniu + 'dodaj' na nowym. Jedna korekta

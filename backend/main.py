@@ -22,7 +22,7 @@ from auth import (
     create_access_token, SECRET_KEY, ALGORITHM,
 )
 from validators import sprawdz_login, sprawdz_haslo
-from push import wyslij_push, wyslij_push_do_pracownika, VAPID_PUBLIC_KEY
+from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow, VAPID_PUBLIC_KEY
 
 import openpyxl
 
@@ -123,6 +123,27 @@ def _techniczny_stanowisko(db) -> models.Stanowisko:
     return s
 
 
+# Kwalifikacje działu technicznego (nadawane w Pracownikach jak zwykłe kwalifikacje = Stanowiska).
+# „Sprzątaczka" daje dostęp do formularza zamówień; „Stróż" na razie tylko jako oznaczenie.
+SPRZATACZKA_NAZWA = "Sprzątaczka"
+STROZ_NAZWA = "Stróż"
+
+
+def _ensure_kwalifikacje_techniczne(db):
+    """Dba, by stanowiska-kwalifikacje Sprzątaczka/Stróż istniały (admin może je nadać w Pracownikach)."""
+    zmiana = False
+    for nazwa in (SPRZATACZKA_NAZWA, STROZ_NAZWA):
+        if not db.query(models.Stanowisko).filter_by(nazwa=nazwa).first():
+            db.add(models.Stanowisko(nazwa=nazwa)); zmiana = True
+    if zmiana:
+        db.commit()
+
+
+def _jest_sprzataczka(prac: models.Pracownik) -> bool:
+    return bool(prac and prac.dzial == "techniczny"
+                and any((s.nazwa or "") == SPRZATACZKA_NAZWA for s in prac.kwalifikacje))
+
+
 # „Parkiet": stanowiska, których nazwa zaczyna się od „Sala" (Sala, Sala-ABC, Sala-RZP,
 # Sala-Bar...). Spośród nich wybieramy osobę ZAMYKAJĄCĄ lokal — patrz _przelicz_zamykajacego.
 SALA_PREFIX = "sala"
@@ -194,6 +215,7 @@ def _user_out(u: models.User) -> schemas.UserOut:
         id=u.id, login=u.login, rola=u.rola, aktywny=bool(u.aktywny),
         pracownik_id=u.pracownik_id,
         dzial=u.pracownik.dzial if u.pracownik else None,
+        sprzataczka=_jest_sprzataczka(u.pracownik) if u.pracownik else False,
         imie=u.pracownik.imie if u.pracownik else None,
         nazwisko=u.pracownik.nazwisko if u.pracownik else None,
     )
@@ -536,6 +558,99 @@ def korekta_sprzatania(dane: schemas.SprzatanieKorektaIn, db: Session = Depends(
     db.commit()
 
 
+# --- ZAMÓWIENIA SPRZĄTACZKI (dział techniczny) ---
+
+ZDJECIE_MAX = 2_000_000   # ~2 MB data URL (front i tak zmniejsza zdjęcie przed wysyłką)
+
+
+def _zamowienie_out(z, prac_map):
+    # Lista NIE zawiera samego zdjęcia (może być ciężkie) — tylko flagę; obrazek pobiera się osobno.
+    return {
+        "id": z.id, "pracownik": prac_map.get(z.pracownik_id),
+        "nazwa": z.nazwa, "ilosc": z.ilosc, "notatka": z.notatka,
+        "ma_zdjecie": bool(z.zdjecie), "status": z.status,
+        "utworzono_at": z.utworzono_at.isoformat() if z.utworzono_at else None,
+    }
+
+
+@app.post("/api/me/zamowienia", status_code=201)
+def utworz_zamowienie(dane: schemas.ZamowienieIn,
+                      user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sprzątaczka zgłasza zamówienie produktu → push do administratorów."""
+    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
+    if not _jest_sprzataczka(prac):
+        raise HTTPException(403, 'Formularz zamówień jest dla sprzątaczki (dział techniczny z kwalifikacją „Sprzątaczka").')
+    nazwa = (dane.nazwa or "").strip()
+    if not nazwa:
+        raise HTTPException(400, "Podaj nazwę produktu.")
+    if dane.zdjecie and len(dane.zdjecie) > ZDJECIE_MAX:
+        raise HTTPException(400, "Zdjęcie jest za duże — zrób mniejsze lub pomiń.")
+    z = models.ZamowienieSprzataczki(
+        pracownik_id=prac.id, utworzono_at=datetime.utcnow(), nazwa=nazwa,
+        ilosc=(dane.ilosc or "").strip() or None, notatka=(dane.notatka or "").strip() or None,
+        zdjecie=dane.zdjecie or None, status="nowe",
+    )
+    db.add(z); db.commit(); db.refresh(z)
+    wyslij_push_do_adminow(db, "Nowe zamówienie", f"{prac.imie} {prac.nazwisko}: {nazwa}", url="/")
+    return {"id": z.id}
+
+
+@app.get("/api/me/zamowienia")
+def moje_zamowienia(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
+    if not _jest_sprzataczka(prac):
+        raise HTTPException(403, "Tylko dla sprzątaczki.")
+    rows = (db.query(models.ZamowienieSprzataczki).filter_by(pracownik_id=prac.id)
+            .order_by(models.ZamowienieSprzataczki.utworzono_at.desc()).all())
+    prac_map = {prac.id: f"{prac.imie} {prac.nazwisko}"}
+    return {"zamowienia": [_zamowienie_out(z, prac_map) for z in rows]}
+
+
+@app.get("/api/me/zamowienia/{zid}/zdjecie")
+def moje_zamowienie_zdjecie(zid: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    z = db.get(models.ZamowienieSprzataczki, zid)
+    if not z or z.pracownik_id != user.pracownik_id:
+        raise HTTPException(404, "Nie znaleziono.")
+    return {"zdjecie": z.zdjecie}
+
+
+@app.get("/api/zamowienia")
+def lista_zamowien(db: Session = Depends(get_db)):
+    """Wszystkie zamówienia (admin) — od najnowszych."""
+    rows = (db.query(models.ZamowienieSprzataczki)
+            .order_by(models.ZamowienieSprzataczki.utworzono_at.desc()).all())
+    prac_map = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    return {"zamowienia": [_zamowienie_out(z, prac_map) for z in rows]}
+
+
+@app.get("/api/zamowienia/{zid}/zdjecie")
+def zamowienie_zdjecie(zid: int, db: Session = Depends(get_db)):
+    z = db.get(models.ZamowienieSprzataczki, zid)
+    if not z:
+        raise HTTPException(404, "Nie znaleziono.")
+    return {"zdjecie": z.zdjecie}
+
+
+@app.put("/api/zamowienia/{zid}/status", status_code=204)
+def zmien_status_zamowienia(zid: int, dane: schemas.ZamowienieStatusIn, db: Session = Depends(get_db)):
+    """Admin: 'odczytane' albo 'zamowione' → push do autorki."""
+    z = db.get(models.ZamowienieSprzataczki, zid)
+    if not z:
+        raise HTTPException(404, "Nie znaleziono zamówienia.")
+    if dane.status not in ("odczytane", "zamowione"):
+        raise HTTPException(400, "Status musi być 'odczytane' albo 'zamowione'.")
+    teraz = datetime.utcnow()
+    z.status = dane.status
+    if dane.status == "odczytane" and not z.odczytano_at:
+        z.odczytano_at = teraz
+    if dane.status == "zamowione" and not z.zamowiono_at:
+        z.zamowiono_at = teraz
+    db.commit()
+    tresc = ("Twoje zamówienie zostało odczytane." if dane.status == "odczytane"
+             else f"Zamówiono: {z.nazwa}.")
+    wyslij_push_do_pracownika(db, z.pracownik_id, "Zamówienie", tresc, url="/")
+
+
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
 @app.get("/api/me/push/public-key", status_code=200)
@@ -597,6 +712,7 @@ def cofnij_publikacje(start: date = Query(...), end: date = Query(...), db: Sess
 
 @app.get("/api/stanowiska", response_model=List[schemas.StanowiskoOut])
 def get_stanowiska(db: Session = Depends(get_db)):
+    _ensure_kwalifikacje_techniczne(db)  # Sprzątaczka/Stróż dostępne do nadania w Pracownikach
     return db.query(models.Stanowisko).all()
 
 @app.post("/api/stanowiska", response_model=schemas.StanowiskoOut, status_code=201)
