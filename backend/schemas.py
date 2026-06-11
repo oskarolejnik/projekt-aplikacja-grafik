@@ -177,3 +177,54 @@ class RozliczenieImprezyIn(BaseModel):
     data: date
     opis: Optional[str] = None
     pozycje: List[ImprezaPozycjaIn] = []
+
+# --- ROZLICZENIE DNIA (sala) ---
+
+class RozliczenieKelnerIn(BaseModel):
+    pracownik_id: int
+    gotowka: float = 0.0
+    karta: float = 0.0
+    fv: float = 0.0
+    kw: float = 0.0
+
+class PozycjaKasaIn(BaseModel):
+    etykieta: Optional[str] = None
+    kwota: float = 0.0
+    rewir: Optional[str] = None
+
+class RozliczenieDniaIn(BaseModel):
+    zadatek_gotowka: float = 0.0
+    zadatek_karta: float = 0.0
+    imp_reczny: bool = False
+    imp_gotowka: float = 0.0
+    imp_karta: float = 0.0
+    kelnerzy: List[RozliczenieKelnerIn] = []
+    terminale: List[PozycjaKasaIn] = []
+    kasy: List[PozycjaKasaIn] = []
+
+class MojRozliczenieIn(BaseModel):
+    gotowka: float = 0.0
+    karta: float = 0.0
+    kw: float = 0.0
+    terminale: List[PozycjaKasaIn] = []   # tylko gdy zamyka rewir (terminale jego rewiru)
+    kasy: List[PozycjaKasaIn] = []        # tylko gdy zamyka zmianę (raporty dobowe kas)
+
+# --- ZESZYT KASOWY ---
+
+class ZeszytPozycjaIn(BaseModel):
+    data: date
+    kolumna: str            # 'towar' | 'koszty' | 'wyplaty' | 'inne'
+    opis: Optional[str] = None
+    kwota: float = 0.0
+
+class ZeszytPrzychodIn(BaseModel):
+    data: date
+    zrodlo: Optional[str] = None
+    gotowka: float = 0.0
+    terminal: float = 0.0
+    przelew: float = 0.0
+    impreza: float = 0.0
+
+class ZeszytConfigIn(BaseModel):
+    stan_poczatkowy: float = 0.0
+    stan_poczatkowy_data: Optional[date] = None

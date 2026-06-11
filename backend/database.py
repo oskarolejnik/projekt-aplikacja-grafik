@@ -81,6 +81,28 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE stanowiska ADD COLUMN widoczny_dla_wszystkich BOOLEAN NOT NULL DEFAULT FALSE"))
             if "grupa_widocznosci" not in kolumny:
                 conn.execute(text("ALTER TABLE stanowiska ADD COLUMN grupa_widocznosci VARCHAR"))
+    if "rozliczenia_dnia" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("rozliczenia_dnia")}
+        with engine.begin() as conn:
+            if "zadatek_gotowka" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN zadatek_gotowka FLOAT NOT NULL DEFAULT 0"))
+            if "zadatek_karta" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN zadatek_karta FLOAT NOT NULL DEFAULT 0"))
+            if "imp_reczny" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN imp_reczny BOOLEAN NOT NULL DEFAULT FALSE"))
+            if "imp_gotowka" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN imp_gotowka FLOAT NOT NULL DEFAULT 0"))
+            if "imp_karta" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN imp_karta FLOAT NOT NULL DEFAULT 0"))
+            if "push_admin_at" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN push_admin_at TIMESTAMP"))
+    if "rozliczenia_dnia_kelnerzy" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("rozliczenia_dnia_kelnerzy")}
+        with engine.begin() as conn:
+            if "potwierdzone" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia_kelnerzy ADD COLUMN potwierdzone BOOLEAN NOT NULL DEFAULT FALSE"))
+            if "push_oczekuje_at" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia_kelnerzy ADD COLUMN push_oczekuje_at TIMESTAMP"))
 
 
 def init_db():

@@ -9,6 +9,7 @@ import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, NAZWY_DNI } from '../lib/format'
 import RozliczImpreze from '../components/RozliczImpreze'
+import RozliczSale from '../components/RozliczSale'
 
 // „Mój grafik" — pracownik widzi swoje zmiany TYLKO po udostępnieniu przez admina:
 // dzień, godzina, stanowisko + rewir oraz z kim dzieli rewir.
@@ -18,6 +19,7 @@ export default function EmployeeSchedule({ onSeen }) {
   const [stan, setStan] = useState({ opublikowany: false, zmiany: [] })
   const [loading, setLoading] = useState(true)
   const [rozliczImp, setRozliczImp] = useState(null)   // { data, rewir } — modal rozliczenia imprezy
+  const [rozliczSala, setRozliczSala] = useState(null) // { data } — modal „Rozlicz się" (sala)
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
   const [s, e] = week.split('|')
 
@@ -77,7 +79,9 @@ export default function EmployeeSchedule({ onSeen }) {
           </Banner>
         ) : (
           <div className="space-y-3">
-            {dni.map(({ data, zmiany }, i) => (
+            {dni.map(({ data, zmiany }, i) => {
+              const oczekuje = zmiany.some((z) => z.rozlicz_sala === 'oczekuje')
+              return (
               <div key={data} className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
                 <div className="mb-3 flex items-baseline gap-2">
                   <span className="font-semibold capitalize text-ink">{NAZWY_DNI[new Date(data).getDay()]}</span>
@@ -131,8 +135,14 @@ export default function EmployeeSchedule({ onSeen }) {
                     </div>
                   ))}
                 </div>
+                {oczekuje && (
+                  <button onClick={() => setRozliczSala({ data })} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-coral/15 py-2.5 text-sm font-bold text-coral transition hover:bg-coral/25">
+                    <Icon name="clipboard" className="h-4 w-4" /> Rozlicz się
+                  </button>
+                )}
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </Card>
@@ -142,6 +152,13 @@ export default function EmployeeSchedule({ onSeen }) {
           data={rozliczImp.data}
           rewir={rozliczImp.rewir}
           onClose={(zmiana) => { setRozliczImp(null); if (zmiana) load() }}
+        />
+      )}
+
+      {rozliczSala && (
+        <RozliczSale
+          data={rozliczSala.data}
+          onClose={(zmiana) => { setRozliczSala(null); if (zmiana) load() }}
         />
       )}
     </>

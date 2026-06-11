@@ -1,7 +1,7 @@
 """Etap D — rozliczenia. D1: flagi przydziału „zamyka rewir" i „rozlicza imprezę"
 (ustawiane w grafiku, widoczne w „Moim grafiku")."""
 
-from datetime import datetime
+from datetime import datetime, time
 
 import models
 import factories
@@ -100,6 +100,184 @@ def test_rejestr_imprez_admin(client, admin_client, db):
     assert rozl[0]["pracownik"] == f"{p.imie} {p.nazwisko}"
     assert r.json()["razem"]["suma_karta"] == 2000
     assert client.get(f"/api/imprezy/rozliczenia?start={d}&end={d}", headers=_h(u)).status_code == 403  # nie-admin
+
+
+def _gastro(db, pid, d, forma, dekl=0.0, sprz=0.0):
+    import uuid
+    db.add(models.RozliczenieGastro(poz_id=str(uuid.uuid4()), rozliczenie_id="z", imie_nazwisko="x",
+           pracownik_id=pid, data=d, zamkniete=True, forma=forma, sprzedaz=sprz, deklarowane=dekl))
+
+
+def test_rozliczenie_dnia_prefill_oblicz_i_obieg(admin_client, db):
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k1 = factories.PracownikFactory(dzial="obsluga")
+    k2 = factories.PracownikFactory(dzial="obsluga")
+    d = factories.dzien(0)
+    for k in (k1, k2):
+        db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id))
+    _gastro(db, k1.id, d, "GOTÓWKA", dekl=2300)
+    _gastro(db, k1.id, d, "KARTA", dekl=4999)
+    _gastro(db, k1.id, d, "KARTA_FV", sprz=186)
+    # impreza tego dnia: gotówka sfiskalizowana 100 -> IMP(kasy)=100 (jak w arkuszu)
+    imp = models.RozliczenieImprezy(data=d, pracownik_id=k1.id, utworzono_at=datetime.utcnow())
+    imp.pozycje.append(models.RozliczenieImprezyPozycja(forma="gotowka", kwota=100, sfiskalizowane=True))
+    db.add(imp)
+    db.commit()
+    # GET -> auto-create + prefill z Gastro
+    body = admin_client.get(f"/api/rozliczenie?data={d}").json()
+    assert len(body["kelnerzy"]) == 2
+    seb = next(k for k in body["kelnerzy"] if k["pracownik_id"] == k1.id)
+    assert seb["gotowka"] == 2300 and seb["karta"] == 4999 and seb["fv"] == 186
+    # PUT: kwoty 1:1 z arkusza (sigma_G 6541, sigma_T 16382), zadatek 500 (gotówką), terminale 16354, kasy 23000
+    payload = {"zadatek_gotowka": 500, "zadatek_karta": 0, "terminale": [{"kwota": 16354}], "kasy": [{"kwota": 23000}], "kelnerzy": [
+        {"pracownik_id": k1.id, "gotowka": 2300, "karta": 4999, "fv": 0, "kw": 0},
+        {"pracownik_id": k2.id, "gotowka": 4241, "karta": 11383, "fv": 0, "kw": 0},
+    ]}
+    w = admin_client.put(f"/api/rozliczenie?data={d}", json=payload).json()["wynik"]
+    assert w["suma_szef"]["razem"] == 22423.0
+    assert w["kasy"]["roznica"] == 23.0 and w["terminale"]["roznica_karty"] == -28.0
+    # obieg
+    assert admin_client.post(f"/api/rozliczenie/przekaz-szef?data={d}").status_code == 204
+    db.expire_all()
+    assert db.query(models.RozliczenieDnia).filter_by(data=d).first().status == "u_szefa"
+    # szef widzi utarg sali (bez FV)
+    szef = factories.UserFactory(login="szefr", rola="szef")
+    s = admin_client.get  # admin też; sprawdźmy endpoint szefa osobnym klientem
+    from auth import create_access_token
+    import main
+    from fastapi.testclient import TestClient
+    c = TestClient(main.app); c.headers.update({"Authorization": f"Bearer {create_access_token(szef)}"})
+    rs = c.get(f"/api/szef/rozliczenie?data={d}").json()
+    assert rs["utarg"]["razem"] == 22423.0 and "fv" in rs["utarg"]   # szef widzi utarg Z FV
+
+
+def test_kelner_zapisuje_wiersz(client, admin_client, db):
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    u = factories.UserFactory(login="kel1", rola="employee", pracownik=k)
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id)); db.commit()
+    assert client.get(f"/api/me/rozliczenie?data={d}", headers=_h(u)).json()["moze"] is True
+    assert client.put(f"/api/me/rozliczenie?data={d}", headers=_h(u),
+                      json={"gotowka": 1000, "karta": 200, "kw": 0}).status_code == 204
+    w = admin_client.get(f"/api/rozliczenie?data={d}").json()["wynik"]
+    assert w["suma_zeszyt"]["gotowka"] == 1000.0 and w["suma_zeszyt"]["karta"] == 200.0
+
+
+def test_kp_globalny_i_zadatek_rozbity(admin_client, db):
+    """KP (zadatek) czytany GLOBALNIE z Gastro — łapie też zadatek przyjęty przez menadżera,
+    który nie jest kelnerem Sali. Admin rozbija go na gotówkę/kartę (zdejmuje z utargu szefa)."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    menadzer = factories.PracownikFactory(dzial="obsluga")
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id))
+    _gastro(db, k.id, d, "GOTÓWKA", dekl=1000)
+    _gastro(db, menadzer.id, d, "KP", dekl=500)   # menadżer poza grafikiem Sali
+    db.commit()
+    body = admin_client.get(f"/api/rozliczenie?data={d}").json()
+    assert body["kp_baza"] == 500.0               # globalnie, mimo że menadżer nie jest na Sali
+    payload = {"zadatek_gotowka": 500, "zadatek_karta": 0, "terminale": [], "kasy": [],
+               "kelnerzy": [{"pracownik_id": k.id, "gotowka": 1000, "karta": 0, "fv": 0, "kw": 0}]}
+    w = admin_client.put(f"/api/rozliczenie?data={d}", json=payload).json()["wynik"]
+    assert w["suma_szef"]["gotowka"] == 500.0     # 1000 − 500 (zadatek zdjęty z gotówki)
+    assert w["suma_zeszyt"]["gotowka"] == 1000.0  # zafiskalizowane bez zdejmowania zadatku
+
+
+def test_zeszyt_stan_narastajaco(admin_client, db):
+    """Zeszyt: SALA z rozliczenia (gotówka liczona do salda, terminal poza), rozchód minus,
+    STAN narastająco od stanu początkowego."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id))
+    _gastro(db, k.id, d, "GOTÓWKA", dekl=1000)
+    _gastro(db, k.id, d, "KARTA", dekl=500)
+    db.commit()
+    admin_client.get(f"/api/rozliczenie?data={d}")  # auto-create rozliczenia (wersja robocza też wchodzi do zeszytu)
+    admin_client.put("/api/zeszyt/config", json={"stan_poczatkowy": 200, "stan_poczatkowy_data": str(d)})
+    admin_client.post("/api/zeszyt/pozycja", json={"data": str(d), "kolumna": "towar", "opis": "Dostawa", "kwota": 150})
+    day = admin_client.get(f"/api/zeszyt?start={d}&end={d}").json()["dni"][0]
+    assert day["wiersze"][0]["zrodlo"] == "SALA"
+    assert day["wiersze"][0]["gotowka"] == 1000.0 and day["wiersze"][0]["terminal"] == 500.0
+    assert day["przychod_gotowka"] == 1000.0      # tylko gotówka wchodzi do salda
+    assert day["rozchod_suma"] == 150.0
+    assert day["stan"] == 1050.0                  # 200 + 1000 − 150
+
+
+def test_szef_widzi_zeszyt_nie_edytuje(db):
+    from auth import create_access_token
+    from fastapi.testclient import TestClient
+    import main
+    szef = factories.UserFactory(login="szefz", rola="szef")
+    c = TestClient(main.app); c.headers.update({"Authorization": f"Bearer {create_access_token(szef)}"})
+    d = factories.dzien(0)
+    assert c.get(f"/api/szef/zeszyt?start={d}&end={d}").status_code == 200
+    assert c.post("/api/zeszyt/pozycja", json={"data": str(d), "kolumna": "towar", "kwota": 10}).status_code == 403
+
+
+def test_rozlicz_sala_dopiero_po_pushu(client, db, monkeypatch):
+    """Przycisk „Rozlicz się" pojawia się DOPIERO po wysłaniu pusha (ingest agenta ustawia
+    push_oczekuje_at). Samo zamknięte Gastro w bazie (bez ingestu) nie pokazuje przycisku."""
+    import main
+    monkeypatch.setattr(main, "RCP_INGEST_TOKEN", "tok123")
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    u = factories.UserFactory(login="kelpush", rola="employee", pracownik=k)
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id, godz_od=time(16, 0)))
+    db.add(models.PublikacjaGrafiku(start=d, koniec=factories.dzien(6), opublikowano_at=datetime.utcnow()))
+    db.commit()
+
+    def status():
+        z = client.get("/api/me/grafik", headers=_h(u),
+                       params={"start": str(d), "end": str(factories.dzien(6))}).json()["zmiany"]
+        return z[0]["rozlicz_sala"]
+
+    # zamknięte Gastro w bazie, ale push jeszcze nie poszedł → brak przycisku
+    _gastro(db, k.id, d, "GOTÓWKA", dekl=900); db.commit()
+    assert status() is None
+    # ingest agenta (zamknięte) → push + push_oczekuje_at → 'oczekuje'
+    payload = {"pozycje": [{"poz_id": "p1", "rozliczenie_id": "r1", "data": str(d),
+                            "imie_nazwisko": f"{k.imie} {k.nazwisko}", "zamkniete": 1,
+                            "forma": "GOTÓWKA", "sprzedaz": 0, "deklarowane": 900}]}
+    assert client.post("/api/gastro/rozliczenia", json=payload, headers={"X-RCP-Token": "tok123"}).status_code == 200
+    assert status() == "oczekuje"
+    # kelner przesyła raport → 'wyslane'
+    assert client.put(f"/api/me/rozliczenie?data={d}", headers=_h(u),
+                      json={"gotowka": 900, "karta": 0, "kw": 0}).status_code == 204
+    assert status() == "wyslane"
+
+
+def test_zamykajacy_dosyla_terminale_kasy_i_push_admina(client, admin_client, db):
+    """Zamykający rewir dosyła terminale (swój rewir), zamykający zmianę — kasy. Gdy wszyscy
+    kelnerzy sali się rozliczą → push do admina (push_admin_at ustawione raz)."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    u = factories.UserFactory(login="zamyk", rola="employee", pracownik=k)
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id,
+                                  godz_od=time(16, 0), rewir="Parter", zamyka=True, zamyka_rewir=True))
+    db.commit()
+    g = client.get(f"/api/me/rozliczenie?data={d}", headers=_h(u)).json()
+    assert g["zamyka_rewir"] is True and g["zamyka"] is True and g["rewir"] == "Parter"
+    assert client.put(f"/api/me/rozliczenie?data={d}", headers=_h(u), json={
+        "gotowka": 500, "karta": 800, "kw": 0,
+        "terminale": [{"kwota": 800}], "kasy": [{"kwota": 1300}]}).status_code == 204
+    body = admin_client.get(f"/api/rozliczenie?data={d}").json()
+    assert any((t.get("kwota") == 800 and t.get("rewir") == "Parter") for t in body["terminale"])
+    assert any(t.get("kwota") == 1300 for t in body["kasy"])
+    db.expire_all()
+    roz = db.query(models.RozliczenieDnia).filter_by(data=d).first()
+    assert roz.push_admin_at is not None          # jedyny kelner sali → komplet → push do admina
+
+
+def test_me_rozliczenie_tylko_kelner_sali(client, db):
+    k = factories.PracownikFactory(dzial="obsluga")
+    u = factories.UserFactory(login="bezsali", rola="employee", pracownik=k)
+    d = factories.dzien(0)
+    assert client.get(f"/api/me/rozliczenie?data={d}", headers=_h(u)).json()["moze"] is False
+    assert client.put(f"/api/me/rozliczenie?data={d}", headers=_h(u), json={"gotowka": 100}).status_code == 403
 
 
 def test_prefill_rozliczenia_imprezy(client, db):

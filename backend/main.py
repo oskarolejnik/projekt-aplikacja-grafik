@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -47,7 +47,7 @@ OVERSIGHT_GET = {
     "szef": (
         "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
         "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
-        "/api/rezerwacje",
+        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt",
     ),
     # Szef kuchni: godziny kuchni (bez wypłat), podgląd stołów na żywo, rezerwacje.
     "szef_kuchni": (
@@ -457,6 +457,13 @@ def moj_grafik(
     def _norm_rewir(r):
         return (r or "").strip()
 
+    sala_ids = _sala_stanowisko_ids(db)
+    _status_cache = {}
+    def _status_sala(d):
+        if d not in _status_cache:
+            _status_cache[d] = _rozlicz_sala_status(db, user.pracownik_id, d, sala_ids)
+        return _status_cache[d]
+
     zmiany = []
     for a in moje:
         # Z kim pracuję danego dnia — niezależnie od godziny przyjścia. Widzę:
@@ -489,6 +496,7 @@ def moj_grafik(
             "zamyka": bool(a.zamyka),
             "zamyka_rewir": bool(a.zamyka_rewir),
             "rozlicza_imprize": bool(a.rozlicza_imprize),
+            "rozlicz_sala": _status_sala(a.data),   # None | 'oczekuje' | 'wyslane' (sala + zamknięte Gastro)
             "wspolpracownicy": [
                 {"imie": prac_map.get(w.pracownik_id, ""),
                  "stanowisko": stan_map.get(w.stanowisko_id, ""),
@@ -815,6 +823,321 @@ def rejestr_imprez(start: date = Query(...), end: date = Query(...), db: Session
             "suma_przelew": round(sum(p["kwota"] for p in poz if p["forma"] == "przelew"), 2),
         })
     return {"rozliczenia": out, "razem": {k: round(sum(o[k] for o in out), 2) for k in ("suma_gotowka", "suma_karta", "suma_przelew")}}
+
+
+# --- ROZLICZENIE DNIA (sala) ---
+
+def _gastro_dla_kelnera(db, pid: int, data: date) -> dict:
+    """Prefill kelnera z Gastro: G/T = zadeklarowane gotówka/karta, FV = sprzedaż KARTA_FV+GOTÓWKA_FV.
+    (BON pomijamy — nie przechodzi przez kasę i nie wchodzi do utargu.)"""
+    rows = db.query(models.RozliczenieGastro).filter_by(pracownik_id=pid, data=data).all()
+    g = sum(r.deklarowane for r in rows if r.forma == "GOTÓWKA")
+    t = sum(r.deklarowane for r in rows if r.forma == "KARTA")
+    fv = sum(r.sprzedaz for r in rows if r.forma in ("KARTA_FV", "GOTÓWKA_FV"))
+    return {"gotowka": round(g, 2), "karta": round(t, 2), "fv": round(fv, 2)}
+
+
+def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
+    """Get-or-create rozliczenia dnia + dołożenie wierszy kelnerów z grafiku Sali (prefill z Gastro)."""
+    roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
+    if roz is None:
+        roz = models.RozliczenieDnia(data=data, status="robocze", utworzono_at=datetime.utcnow(),
+                                     terminale=[], kasy=[])
+        db.add(roz); db.flush()
+    sala_ids = _sala_stanowisko_ids(db)
+    istn = {k.pracownik_id for k in roz.kelnerzy}
+    przy = (db.query(models.PrzydzialZmiany)
+            .filter(models.PrzydzialZmiany.data == data,
+                    models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()) if sala_ids else []
+    for a in przy:
+        if a.pracownik_id in istn:
+            continue
+        g = _gastro_dla_kelnera(db, a.pracownik_id, data)
+        roz.kelnerzy.append(models.RozliczenieKelner(
+            pracownik_id=a.pracownik_id, gotowka=g["gotowka"], karta=g["karta"], fv=g["fv"]))
+        istn.add(a.pracownik_id)
+    db.commit(); db.refresh(roz)
+    return roz
+
+
+def _kp_dla_dnia(db, data: date) -> float:
+    """Σ zadatków (KP) z Gastro — GLOBALNIE po wszystkich osobach dnia (zadatki przyjmuje zwykle
+    menadżer, który nie drukuje własnego rozliczenia). Forma „KP", kwota zadeklarowana."""
+    rows = db.query(models.RozliczenieGastro).filter(models.RozliczenieGastro.data == data).all()
+    s = sum(r.deklarowane for r in rows if (r.forma or "").strip().upper() in ("KP", "KASA PRZYJMIE"))
+    return round(s, 2)
+
+
+def _imp_wynikowe(db, roz: models.RozliczenieDnia) -> dict:
+    """IMP do liczenia: ręczne nadpisanie (gdy imp_reczny) albo automat z rozliczeń imprez."""
+    if roz.imp_reczny:
+        return {"gotowka_sfiskalizowana": roz.imp_gotowka or 0, "karta": roz.imp_karta or 0}
+    return imp_dla_dnia(db, roz.data)
+
+
+def _wynik_rozliczenia(db, roz: models.RozliczenieDnia) -> dict:
+    kelnerzy = [{"gotowka": k.gotowka, "karta": k.karta} for k in roz.kelnerzy]
+    fv = sum(k.fv for k in roz.kelnerzy)
+    kw = sum(k.kw for k in roz.kelnerzy)
+    terminale = [p.get("kwota", 0) for p in (roz.terminale or [])]
+    kasy = [p.get("kwota", 0) for p in (roz.kasy or [])]
+    return rozliczenia.policz_dzien(kelnerzy=kelnerzy, fv=fv, terminale=terminale, kasy=kasy,
+                                    zadatek_gotowka=roz.zadatek_gotowka or 0,
+                                    zadatek_karta=roz.zadatek_karta or 0,
+                                    kw=kw, imp=_imp_wynikowe(db, roz))
+
+
+def _rozliczenie_out(db, roz: models.RozliczenieDnia) -> dict:
+    pm = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    return {
+        "data": str(roz.data), "status": roz.status,
+        "zadatek_gotowka": roz.zadatek_gotowka or 0, "zadatek_karta": roz.zadatek_karta or 0,
+        "kp_baza": _kp_dla_dnia(db, roz.data),    # Σ KP z Gastro (podpowiedź do rozbicia)
+        "imp_reczny": roz.imp_reczny, "imp_gotowka": roz.imp_gotowka or 0, "imp_karta": roz.imp_karta or 0,
+        "kelnerzy": [{"pracownik_id": k.pracownik_id, "pracownik": pm.get(k.pracownik_id),
+                      "gotowka": k.gotowka, "karta": k.karta, "fv": k.fv, "kw": k.kw} for k in roz.kelnerzy],
+        "terminale": roz.terminale or [], "kasy": roz.kasy or [],
+        "wynik": _wynik_rozliczenia(db, roz),
+    }
+
+
+@app.get("/api/rozliczenie")
+def get_rozliczenie(data: date = Query(...), db: Session = Depends(get_db)):
+    return _rozliczenie_out(db, _zbuduj_rozliczenie(db, data))
+
+
+@app.put("/api/rozliczenie")
+def zapisz_rozliczenie(dane: schemas.RozliczenieDniaIn, data: date = Query(...), db: Session = Depends(get_db)):
+    roz = _zbuduj_rozliczenie(db, data)
+    roz.zadatek_gotowka = float(dane.zadatek_gotowka or 0)
+    roz.zadatek_karta = float(dane.zadatek_karta or 0)
+    roz.imp_reczny = bool(dane.imp_reczny)
+    roz.imp_gotowka = float(dane.imp_gotowka or 0)
+    roz.imp_karta = float(dane.imp_karta or 0)
+    roz.terminale = [p.model_dump() for p in dane.terminale]
+    roz.kasy = [p.model_dump() for p in dane.kasy]
+    by_pid = {k.pracownik_id: k for k in roz.kelnerzy}
+    for kin in dane.kelnerzy:
+        k = by_pid.get(kin.pracownik_id)
+        if k is None:
+            k = models.RozliczenieKelner(pracownik_id=kin.pracownik_id); roz.kelnerzy.append(k)
+        k.gotowka = kin.gotowka; k.karta = kin.karta; k.fv = kin.fv; k.kw = kin.kw
+    db.commit(); db.refresh(roz)
+    return _rozliczenie_out(db, roz)
+
+
+@app.post("/api/rozliczenie/przekaz-szef", status_code=204)
+def przekaz_szef(data: date = Query(...), db: Session = Depends(get_db)):
+    roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
+    if not roz:
+        raise HTTPException(404, "Brak rozliczenia tego dnia.")
+    roz.status = "u_szefa"; roz.przekazano_szef_at = datetime.utcnow(); db.commit()
+
+
+@app.get("/api/szef/rozliczenie")
+def szef_rozliczenie(data: date = Query(...), db: Session = Depends(get_db)):
+    """Szef — tylko utarg SALI (G+T), zadatki osobno, braki/nadwyżki. Bez imprez i bez FV."""
+    roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
+    if not roz:
+        return {"data": str(data), "status": "brak", "utarg": None}
+    w = _wynik_rozliczenia(db, roz)
+    return {"data": str(data), "status": roz.status,
+            "utarg": {"gotowka": w["suma_szef"]["gotowka"], "karta": w["suma_szef"]["karta"],
+                      "fv": w["fv"], "razem": round(w["suma_szef"]["razem"] + w["fv"], 2)},   # utarg sali Z FV
+            "zadatek": w["zadatek"],
+            "roznica_karty": w["terminale"]["roznica_karty"], "roznica_calosc": w["kasy"]["roznica"]}
+
+
+def _kelner_sala_dnia(db, pid: int, data: date) -> bool:
+    sala_ids = _sala_stanowisko_ids(db)
+    return bool(pid and sala_ids and db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.pracownik_id == pid,
+        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first())
+
+
+def _rozlicz_sala_status(db, pid: int, data: date, sala_ids=None):
+    """Status przycisku „Rozlicz się": None (push jeszcze nie wyszedł), 'oczekuje' (wysłano push
+    „raport oczekuje", kelner ma się rozliczyć), 'wyslane' (kelner przesłał raport).
+    Bramka = push_oczekuje_at — przycisk pojawia się DOPIERO gdy push faktycznie poszedł (ingest)."""
+    roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
+    k = next((x for x in roz.kelnerzy if x.pracownik_id == pid), None) if roz else None
+    if not k or k.push_oczekuje_at is None:
+        return None
+    return "wyslane" if k.potwierdzone else "oczekuje"
+
+
+def _kelner_sala_przydzial(db, pid: int, data: date):
+    """Flagi zamykania z przydziałów sali kelnera danego dnia: (zamyka, zamyka_rewir, rewir)."""
+    sala_ids = _sala_stanowisko_ids(db)
+    przy = (db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.pracownik_id == pid,
+        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()) if sala_ids else []
+    zamyka = any(p.zamyka for p in przy)
+    zamyka_rewir = any(p.zamyka_rewir for p in przy)
+    rewir = next((p.rewir for p in przy if p.zamyka_rewir and p.rewir), None) \
+        or next((p.rewir for p in przy if p.rewir), None)
+    return zamyka, zamyka_rewir, rewir
+
+
+@app.get("/api/me/rozliczenie")
+def moje_rozliczenie(data: date = Query(...), user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not _kelner_sala_dnia(db, user.pracownik_id, data):
+        return {"moze": False}
+    roz = _zbuduj_rozliczenie(db, data)
+    k = next((x for x in roz.kelnerzy if x.pracownik_id == user.pracownik_id), None)
+    zamyka, zamyka_rewir, rewir = _kelner_sala_przydzial(db, user.pracownik_id, data)
+    term = [p for p in (roz.terminale or []) if (p.get("rewir") or "") == (rewir or "")] if zamyka_rewir else []
+    return {"moze": True, "status": _rozlicz_sala_status(db, user.pracownik_id, data),
+            "potwierdzone": bool(k and k.potwierdzone),
+            "wiersz": ({"gotowka": k.gotowka, "karta": k.karta, "fv": k.fv, "kw": k.kw} if k else None),
+            "zamyka": zamyka, "zamyka_rewir": zamyka_rewir, "rewir": rewir,
+            "terminale": term, "kasy": (roz.kasy or []) if zamyka else []}
+
+
+@app.put("/api/me/rozliczenie", status_code=204)
+def zapisz_moje_rozliczenie(dane: schemas.MojRozliczenieIn, data: date = Query(...),
+                            user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not _kelner_sala_dnia(db, user.pracownik_id, data):
+        raise HTTPException(403, "Rozliczenie wypełnia kelner sali w dniu swojej zmiany.")
+    roz = _zbuduj_rozliczenie(db, data)
+    k = next((x for x in roz.kelnerzy if x.pracownik_id == user.pracownik_id), None)
+    if k is None:
+        k = models.RozliczenieKelner(pracownik_id=user.pracownik_id); roz.kelnerzy.append(k)
+    k.gotowka = dane.gotowka; k.karta = dane.karta; k.kw = dane.kw
+    k.potwierdzone = True            # kelner przesłał raport → przycisk znika
+    # Zamykający dosyła terminale (swój rewir) / kasy (cała zmiana) — trafiają do rozliczenia dnia
+    zamyka, zamyka_rewir, rewir = _kelner_sala_przydzial(db, user.pracownik_id, data)
+    if zamyka_rewir:
+        inne = [t for t in (roz.terminale or []) if (t.get("rewir") or "") != (rewir or "")]
+        roz.terminale = inne + [{"etykieta": None, "kwota": float(t.kwota or 0), "rewir": rewir} for t in dane.terminale]
+    if zamyka:
+        roz.kasy = [{"etykieta": t.etykieta, "kwota": float(t.kwota or 0), "rewir": None} for t in dane.kasy]
+    db.commit()
+    # Gdy WSZYSCY kelnerzy sali danego dnia się rozliczyli → push do admina (raz)
+    if roz.kelnerzy and all(x.potwierdzone for x in roz.kelnerzy) and roz.push_admin_at is None:
+        roz.push_admin_at = datetime.utcnow()
+        wyslij_push_do_adminow(db, "Raport finansowy",
+                               f"Raport finansowy {data.strftime('%d.%m')} czeka na zatwierdzenie", url="/")
+        db.commit()
+
+
+# ── ZESZYT KASOWY ─────────────────────────────────────────────────────────────
+# Kasa dzienna: PRZYCHÓD (SALA z rozliczenia + imprezy) − ROZCHÓD (ręczne wpisy) → STAN
+# (saldo gotówkowe narastająco od „stanu początkowego"). Liczone tylko z gotówki.
+
+def _zeszyt_dane(db, start: date, end: date) -> dict:
+    cfg = db.query(models.ZeszytConfig).first()
+    stan0 = float(cfg.stan_poczatkowy) if cfg else 0.0
+    anchor = cfg.stan_poczatkowy_data if (cfg and cfg.stan_poczatkowy_data) else start
+    if anchor > start:
+        anchor = start                       # licz zawsze od początku okna, gdyby data startowa była później
+    rozl = {r.data: r for r in db.query(models.RozliczenieDnia)
+            .filter(models.RozliczenieDnia.data >= anchor, models.RozliczenieDnia.data <= end).all()}
+    imp_by_day = {}
+    for im in (db.query(models.RozliczenieImprezy)
+               .filter(models.RozliczenieImprezy.data >= anchor, models.RozliczenieImprezy.data <= end).all()):
+        imp_by_day.setdefault(im.data, []).append(im)
+    poz_by_day = {}
+    for p in (db.query(models.ZeszytPozycja)
+              .filter(models.ZeszytPozycja.data >= anchor, models.ZeszytPozycja.data <= end).all()):
+        poz_by_day.setdefault(p.data, []).append(p)
+    przy_by_day = {}
+    for p in (db.query(models.ZeszytPrzychod)
+              .filter(models.ZeszytPrzychod.data >= anchor, models.ZeszytPrzychod.data <= end).all()):
+        przy_by_day.setdefault(p.data, []).append(p)
+
+    dni, stan = [], stan0
+    for ordv in range(anchor.toordinal(), end.toordinal() + 1):
+        d = date.fromordinal(ordv)
+        wiersze, cash_in = [], 0.0
+        r = rozl.get(d)
+        if r:                          # SALA z rozliczenia (także wersji roboczej) trafia do zeszytu
+            w = _wynik_rozliczenia(db, r)
+            sg, sk = w["suma_zeszyt"]["gotowka"], w["suma_zeszyt"]["karta"]
+            if sg or sk:
+                wiersze.append({"zrodlo": "SALA", "gotowka": sg, "terminal": sk, "przelew": 0.0, "impreza": 0.0, "manualny": False})
+                cash_in += sg
+        for im in imp_by_day.get(d, []):
+            g_sf = round(sum(p.kwota for p in im.pozycje if p.forma == "gotowka" and p.sfiskalizowane), 2)
+            g_ns = round(sum(p.kwota for p in im.pozycje if p.forma == "gotowka" and not p.sfiskalizowane), 2)
+            kt = round(sum(p.kwota for p in im.pozycje if p.forma == "karta"), 2)
+            pz = round(sum(p.kwota for p in im.pozycje if p.forma == "przelew"), 2)
+            wiersze.append({"zrodlo": im.opis or "Impreza", "gotowka": g_sf, "terminal": kt, "przelew": pz, "impreza": g_ns, "manualny": False})
+            cash_in += g_sf + g_ns
+        for p in przy_by_day.get(d, []):
+            wiersze.append({"id": p.id, "zrodlo": p.zrodlo or "—", "gotowka": p.gotowka, "terminal": p.terminal,
+                            "przelew": p.przelew, "impreza": p.impreza, "manualny": True})
+            cash_in += (p.gotowka or 0) + (p.impreza or 0)
+        rozchod = [{"id": p.id, "kolumna": p.kolumna, "opis": p.opis, "kwota": p.kwota} for p in poz_by_day.get(d, [])]
+        rozchod_suma = round(sum(p.kwota for p in poz_by_day.get(d, [])), 2)
+        stan = round(stan + cash_in - rozchod_suma, 2)
+        if d >= start:
+            dni.append({"data": str(d), "wiersze": wiersze, "rozchod": rozchod,
+                        "przychod_gotowka": round(cash_in, 2), "rozchod_suma": rozchod_suma, "stan": stan})
+    return {"stan_poczatkowy": stan0,
+            "stan_poczatkowy_data": str(cfg.stan_poczatkowy_data) if (cfg and cfg.stan_poczatkowy_data) else None,
+            "dni": dni}
+
+
+@app.get("/api/zeszyt")
+def get_zeszyt(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    return _zeszyt_dane(db, start, end)
+
+
+@app.get("/api/szef/zeszyt")
+def szef_zeszyt(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    return _zeszyt_dane(db, start, end)
+
+
+@app.post("/api/zeszyt/pozycja", status_code=201)
+def dodaj_zeszyt_pozycja(dane: schemas.ZeszytPozycjaIn, db: Session = Depends(get_db)):
+    if dane.kolumna not in ("towar", "koszty", "wyplaty", "inne"):
+        raise HTTPException(400, "Nieznana kolumna rozchodu.")
+    p = models.ZeszytPozycja(data=dane.data, kolumna=dane.kolumna, opis=dane.opis, kwota=float(dane.kwota or 0))
+    db.add(p); db.commit(); db.refresh(p)
+    return {"id": p.id}
+
+
+@app.delete("/api/zeszyt/pozycja/{poz_id}", status_code=204)
+def usun_zeszyt_pozycja(poz_id: int, db: Session = Depends(get_db)):
+    p = db.get(models.ZeszytPozycja, poz_id)
+    if p:
+        db.delete(p); db.commit()
+
+
+@app.post("/api/zeszyt/przychod", status_code=201)
+def dodaj_zeszyt_przychod(dane: schemas.ZeszytPrzychodIn, db: Session = Depends(get_db)):
+    p = models.ZeszytPrzychod(data=dane.data, zrodlo=dane.zrodlo, gotowka=float(dane.gotowka or 0),
+                              terminal=float(dane.terminal or 0), przelew=float(dane.przelew or 0),
+                              impreza=float(dane.impreza or 0))
+    db.add(p); db.commit(); db.refresh(p)
+    return {"id": p.id}
+
+
+@app.delete("/api/zeszyt/przychod/{poz_id}", status_code=204)
+def usun_zeszyt_przychod(poz_id: int, db: Session = Depends(get_db)):
+    p = db.get(models.ZeszytPrzychod, poz_id)
+    if p:
+        db.delete(p); db.commit()
+
+
+@app.get("/api/zeszyt/config")
+def get_zeszyt_config(db: Session = Depends(get_db)):
+    cfg = db.query(models.ZeszytConfig).first()
+    return {"stan_poczatkowy": float(cfg.stan_poczatkowy) if cfg else 0.0,
+            "stan_poczatkowy_data": str(cfg.stan_poczatkowy_data) if (cfg and cfg.stan_poczatkowy_data) else None}
+
+
+@app.put("/api/zeszyt/config")
+def set_zeszyt_config(dane: schemas.ZeszytConfigIn, db: Session = Depends(get_db)):
+    cfg = db.query(models.ZeszytConfig).first()
+    if cfg is None:
+        cfg = models.ZeszytConfig(id=1); db.add(cfg)
+    cfg.stan_poczatkowy = float(dane.stan_poczatkowy or 0)
+    cfg.stan_poczatkowy_data = dane.stan_poczatkowy_data
+    db.commit()
+    return {"stan_poczatkowy": cfg.stan_poczatkowy,
+            "stan_poczatkowy_data": str(cfg.stan_poczatkowy_data) if cfg.stan_poczatkowy_data else None}
 
 
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
@@ -2037,6 +2360,7 @@ def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Dep
         mapa.setdefault(_norm_nazwa(f"{p.nazwisko} {p.imie}"), p.id)
     teraz = datetime.utcnow()
     n = 0
+    dni_batch = set()
     for it in (payload.get("pozycje") or []):
         try:
             poz_id = str(it["poz_id"])
@@ -2044,6 +2368,7 @@ def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Dep
             d = date.fromisoformat(str(it["data"])[:10])
         except (KeyError, ValueError, TypeError):
             continue
+        dni_batch.add(d)
         nazwa = (it.get("imie_nazwisko") or "").strip()
         try:
             zamkniete = bool(int(it.get("zamkniete") or 0))
@@ -2068,6 +2393,23 @@ def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Dep
         rec.zaktualizowano_at = teraz
         n += 1
     db.commit()
+    # Push „raport oczekuje" do kelnerów sali z ZAMKNIĘTYM rozliczeniem Gastro (wpisane w komputer)
+    # — raz na kelnera/dzień (push_oczekuje_at). Po przesłaniu raportu (potwierdzone) przycisk znika.
+    for d in dni_batch:
+        try:
+            roz = _zbuduj_rozliczenie(db, d)
+        except Exception:
+            continue
+        for k in roz.kelnerzy:
+            if k.potwierdzone or k.push_oczekuje_at is not None:
+                continue
+            zamk = (db.query(models.RozliczenieGastro)
+                    .filter_by(pracownik_id=k.pracownik_id, data=d, zamkniete=True).first())
+            if zamk:
+                wyslij_push_do_pracownika(db, k.pracownik_id, "Rozliczenie zmiany",
+                                          "Twój raport oczekuje na przesłanie", url="/")
+                k.push_oczekuje_at = teraz
+        db.commit()
     return {"ok": True, "pozycje": n}
 
 

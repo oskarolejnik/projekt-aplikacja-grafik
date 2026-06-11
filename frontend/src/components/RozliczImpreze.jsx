@@ -63,7 +63,7 @@ export default function RozliczImpreze({ data, rewir, onClose }) {
           {pozycje.length === 0 && <p className="py-2 text-center text-sm text-muted">Dodaj pozycje płatności.</p>}
           {pozycje.map((p, i) => (
             <div key={i} className="flex items-center gap-2 rounded-xl border border-line bg-surface-2 p-2">
-              <select value={p.forma} onChange={(e) => zmien(i, { forma: e.target.value })} className="rounded-md border border-line bg-surface p-1.5 text-sm text-ink">
+              <select value={p.forma} onChange={(e) => zmien(i, { forma: e.target.value, sfiskalizowane: e.target.value === 'gotowka' ? p.sfiskalizowane : false })} className="rounded-md border border-line bg-surface p-1.5 text-sm text-ink">
                 {FORMY.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}
               </select>
               {p.forma !== 'przelew' ? (

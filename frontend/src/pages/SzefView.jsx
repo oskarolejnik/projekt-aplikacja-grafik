@@ -7,10 +7,12 @@ import StolyLive from '../components/tabs/StolyLive'
 import RaportGodzin from '../components/tabs/RaportGodzin'
 import SzefGrafik from '../components/tabs/SzefGrafik'
 import SzefImprezy from '../components/tabs/SzefImprezy'
+import Zeszyt from '../components/tabs/Zeszyt'
 import Rezerwacje from '../components/tabs/Rezerwacje'
 
 const TABY = [
   { value: 'stoly', label: 'Stoły' },
+  { value: 'zeszyt', label: 'Zeszyt' },
   { value: 'godziny', label: 'Godziny' },
   { value: 'grafik', label: 'Grafik' },
   { value: 'imprezy', label: 'Imprezy' },
@@ -67,6 +69,7 @@ export default function SzefView() {
 
         <div key={widok} className="animate-tab-in">
           {widok === 'stoly' && <StolyLive />}
+          {widok === 'zeszyt' && <Zeszyt readOnly endpoint="/szef/zeszyt" />}
           {widok === 'godziny' && <RaportGodzin />}
           {widok === 'grafik' && <SzefGrafik />}
           {widok === 'imprezy' && <SzefImprezy />}

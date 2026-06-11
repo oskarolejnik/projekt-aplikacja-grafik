@@ -12,12 +12,12 @@ def test_przyklad_z_arkusza():
                   {"gotowka": 1248, "karta": 9382}],
         terminale=[2994, 3885, 3825, 5650],   # Σ 16354
         kasy=[12000, 9000, 2000],             # Σ 23000
-        fv=0, zadatek=500, kp=0, kw=0,
+        fv=0, zadatek_gotowka=500, zadatek_karta=0, kw=0,
         imp={"gotowka_sfiskalizowana": 100, "karta": 0},   # IMP(−) 100 po stronie kas
     )
     assert r["sigma_gotowka"] == 6541 and r["sigma_karta"] == 16382
     assert r["suma_szef"] == {"gotowka": 6041.0, "karta": 16382.0, "razem": 22423.0}
-    assert r["suma_zeszyt"]["gotowka"] == 6541.0          # z zadatkiem
+    assert r["suma_zeszyt"]["gotowka"] == 6541.0          # bez zdejmowania zadatku
     # Karty: terminale 16354 vs deklaracje 16382 -> -28 (brak na kartach)
     assert r["terminale"]["suma"] == 16354.0
     assert r["terminale"]["roznica_karty"] == -28.0 and r["terminale"]["etykieta"] == "brak na kartach"
@@ -36,11 +36,16 @@ def test_imp_karta_odejmuje_od_terminali_i_kas():
     assert zimp["kasy"]["suma"] == bez["kasy"]["suma"] - 1000             # minus kasa
 
 
-def test_kp_kw_zadatek_kierunki():
-    # KP na minus, KW na plus, zadatek osobno (SUMA SZEF bez zadatku, ZESZYT z zadatkiem).
-    r = policz_dzien(kelnerzy=[{"gotowka": 1000, "karta": 0}], kp=100, kw=50, zadatek=200)
-    assert r["suma_szef"]["gotowka"] == 1000 - 100 + 50 - 200   # 750
-    assert r["suma_zeszyt"]["gotowka"] == 1000 - 100 + 50       # 950
+def test_zadatek_rozbity_i_kw_kierunki():
+    # Zadatek zdejmowany z właściwej formy (gotówka/karta), KW na plus,
+    # „zafiskalizowane" (zeszyt) bez zdejmowania zadatku.
+    r = policz_dzien(kelnerzy=[{"gotowka": 1000, "karta": 800}],
+                     kw=50, zadatek_gotowka=200, zadatek_karta=300)
+    assert r["suma_szef"]["gotowka"] == 1000 + 50 - 200    # 850
+    assert r["suma_szef"]["karta"] == 800 - 300            # 500
+    assert r["suma_zeszyt"]["gotowka"] == 1000 + 50        # 1050 (bez zadatku)
+    assert r["suma_zeszyt"]["karta"] == 800
+    assert r["zadatek"] == 500
 
 
 def test_zgodne_gdy_brak_roznic():

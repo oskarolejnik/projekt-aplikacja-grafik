@@ -1,7 +1,7 @@
 """Modele ORM — tabele SQLite przez SQLAlchemy."""
 
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Date, Time, DateTime, Float,
+    Column, Integer, String, Boolean, Date, Time, DateTime, Float, JSON,
     ForeignKey, Table, UniqueConstraint
 )
 from sqlalchemy.orm import relationship, declarative_base
@@ -250,6 +250,44 @@ class Urlop(Base):
     rozpatrzono_at = Column(DateTime, nullable=True)
 
 
+class RozliczenieDnia(Base):
+    """Rozliczenie zmiany (dnia) — sala. Kelnerzy wpisują G/T (+ opcjonalnie KP/KW), zamykający
+    terminale/kasy, admin koryguje + zadatek; FV auto z Gastro, IMP auto z imprez. Obieg:
+    robocze → u_szefa (po „Przekaż do szefa"). Liczenie 1:1 w rozliczenia.policz_dzien."""
+    __tablename__ = "rozliczenia_dnia"
+    id                 = Column(Integer, primary_key=True, index=True)
+    data               = Column(Date, unique=True, nullable=False, index=True)
+    status             = Column(String(16), nullable=False, default="robocze")   # robocze | u_szefa
+    zadatek            = Column(Float, nullable=False, default=0.0)               # legacy (nieużywane)
+    zadatek_gotowka    = Column(Float, nullable=False, default=0.0)               # zadatek (KP) zdjęty z gotówki
+    zadatek_karta      = Column(Float, nullable=False, default=0.0)               # zadatek (KP) zdjęty z karty
+    imp_reczny         = Column(Boolean, nullable=False, default=False)           # nadpisanie IMP z palca
+    imp_gotowka        = Column(Float, nullable=False, default=0.0)               # IMP gotówka sfisk. (gdy ręcznie)
+    imp_karta          = Column(Float, nullable=False, default=0.0)               # IMP karta (gdy ręcznie)
+    terminale          = Column(JSON, nullable=True)   # [{"etykieta","kwota","rewir"}]
+    kasy               = Column(JSON, nullable=True)    # [{"etykieta","kwota","rewir"}]
+    utworzono_at       = Column(DateTime, nullable=True)
+    przekazano_szef_at = Column(DateTime, nullable=True)
+    push_admin_at      = Column(DateTime, nullable=True)   # push „raport czeka na zatwierdzenie" (raz)
+    kelnerzy = relationship("RozliczenieKelner", cascade="all, delete-orphan", backref="rozliczenie")
+
+
+class RozliczenieKelner(Base):
+    """Wiersz kelnera w rozliczeniu dnia. G/T = zadeklarowane; FV z Gastro; KP z opcją „jako zadatek"."""
+    __tablename__ = "rozliczenia_dnia_kelnerzy"
+    id             = Column(Integer, primary_key=True, index=True)
+    rozliczenie_id = Column(Integer, ForeignKey("rozliczenia_dnia.id", ondelete="CASCADE"), nullable=False)
+    pracownik_id   = Column(Integer, ForeignKey("pracownicy.id"), nullable=False)
+    gotowka        = Column(Float, nullable=False, default=0.0)
+    karta          = Column(Float, nullable=False, default=0.0)
+    fv             = Column(Float, nullable=False, default=0.0)
+    kp             = Column(Float, nullable=False, default=0.0)
+    kp_zadatek     = Column(Boolean, nullable=False, default=False)   # KP przypisane jako zadatek
+    kw             = Column(Float, nullable=False, default=0.0)
+    potwierdzone   = Column(Boolean, nullable=False, default=False)   # kelner przesłał swój raport
+    push_oczekuje_at = Column(DateTime, nullable=True)                # kiedy wysłano push „raport oczekuje"
+
+
 class RozliczenieImprezy(Base):
     """Rozliczenie imprezy wpisane przez osobę wyznaczoną w grafiku (przydział rozlicza_imprize).
     Jedno na (pracownik, dzień). Pozycje = kwota+forma (gotówka/karta/przelew). Trafia do REJESTRU
@@ -271,6 +309,38 @@ class RozliczenieImprezyPozycja(Base):
     forma          = Column(String(16), nullable=False)      # 'gotowka' | 'karta' | 'przelew'
     kwota          = Column(Float, nullable=False, default=0.0)
     sfiskalizowane = Column(Boolean, nullable=False, default=False)   # dotyczy gotówki
+
+
+class ZeszytPozycja(Base):
+    """Ręczny wpis rozchodu w zeszycie kasowym (admin): TOWAR / KOSZTY / WYPŁATY / INNE.
+    Przychód (SALA, imprezy) liczony automatycznie z rozliczeń — tu tylko rozchody."""
+    __tablename__ = "zeszyt_pozycje"
+    id     = Column(Integer, primary_key=True, index=True)
+    data   = Column(Date, nullable=False, index=True)
+    kolumna = Column(String(16), nullable=False)   # towar | koszty | wyplaty | inne
+    opis   = Column(String, nullable=True)
+    kwota  = Column(Float, nullable=False, default=0.0)
+
+
+class ZeszytPrzychod(Base):
+    """Ręczny wiersz przychodu w zeszycie (admin): źródło + gotówka/terminal/przelew/impreza.
+    Dla wpływów spoza automatu (SALA z rozliczenia, imprezy) — np. autobus, probostwo, dopłaty."""
+    __tablename__ = "zeszyt_przychody"
+    id       = Column(Integer, primary_key=True, index=True)
+    data     = Column(Date, nullable=False, index=True)
+    zrodlo   = Column(String, nullable=True)
+    gotowka  = Column(Float, nullable=False, default=0.0)
+    terminal = Column(Float, nullable=False, default=0.0)
+    przelew  = Column(Float, nullable=False, default=0.0)
+    impreza  = Column(Float, nullable=False, default=0.0)
+
+
+class ZeszytConfig(Base):
+    """Singleton (id=1): stan początkowy kasy gotówkowej, od którego liczy się saldo narastająco."""
+    __tablename__ = "zeszyt_config"
+    id                   = Column(Integer, primary_key=True)
+    stan_poczatkowy      = Column(Float, nullable=False, default=0.0)
+    stan_poczatkowy_data = Column(Date, nullable=True)
 
 
 class SprzatanieKorekta(Base):
