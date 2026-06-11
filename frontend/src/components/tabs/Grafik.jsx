@@ -30,7 +30,7 @@ export default function Grafik() {
   const [dzial, setDzial] = useState('obsluga')    // który grafik: 'obsluga' | 'kuchnia'
   const [kuchniaId, setKuchniaId] = useState(null) // id ukrytego stanowiska kuchni
   const [modal, setModal] = useState(null)         // edytor komórki gęstej tabeli: { dt, p }
-  const [mForm, setMForm] = useState({ stanowisko_id: '', godz_od: '', rewir: '', zamyka: false })
+  const [mForm, setMForm] = useState({ stanowisko_id: '', godz_od: '', rewir: '', zamyka: false, zamyka_rewir: false, rozlicza_imprize: false })
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
   const load = useCallback(async () => {
@@ -183,14 +183,14 @@ export default function Grafik() {
   const otworzKomorke = (dt, p) => {
     const a = (przyMap[`${dt}_${p.id}`] || [])[0]
     if (a) {
-      setMForm({ stanowisko_id: String(a.stanowisko_id), godz_od: a.godz_od ? hhmm(a.godz_od) : '', rewir: a.rewir || '', zamyka: !!a.zamyka })
+      setMForm({ stanowisko_id: String(a.stanowisko_id), godz_od: a.godz_od ? hhmm(a.godz_od) : '', rewir: a.rewir || '', zamyka: !!a.zamyka, zamyka_rewir: !!a.zamyka_rewir, rozlicza_imprize: !!a.rozlicza_imprize })
     } else {
       const szab = szablonyDla(dt, p)[0]   // podpowiedź z planu (wymagania)
       setMForm({
         stanowisko_id: jestKuchnia ? String(kuchniaId ?? '') : (szab ? String(szab.stanowisko_id) : ''),
         godz_od: szab?.godz_od ? hhmm(szab.godz_od) : '',
         rewir: szab?.rewir || '',
-        zamyka: false,
+        zamyka: false, zamyka_rewir: false, rozlicza_imprize: false,
       })
     }
     setModal({ dt, p })
@@ -201,7 +201,7 @@ export default function Grafik() {
     const a = (przyMap[`${dt}_${p.id}`] || [])[0]
     const sid = +mForm.stanowisko_id || (jestKuchnia ? kuchniaId : 0)
     if (!sid) { toast('Wybierz stanowisko.', 'error'); return }
-    const body = { data: dt, stanowisko_id: sid, pracownik_id: p.id, godz_od: mForm.godz_od ? `${mForm.godz_od}:00` : null, rewir: (mForm.rewir || '').trim() || null }
+    const body = { data: dt, stanowisko_id: sid, pracownik_id: p.id, godz_od: mForm.godz_od ? `${mForm.godz_od}:00` : null, rewir: (mForm.rewir || '').trim() || null, zamyka_rewir: !!mForm.zamyka_rewir, rozlicza_imprize: !!mForm.rozlicza_imprize }
     try {
       let aid = a?.id
       if (a) await api(`/przydzialy/${a.id}`, 'PUT', body)
@@ -341,6 +341,12 @@ export default function Grafik() {
                                 {!jestKuchnia && a.zamyka && (
                                   <span title={`zamyka lokal${a.zamyka_reczny ? ' (ręcznie)' : ''}`} className="inline-flex text-lemon"><Icon name="key" className="h-2.5 w-2.5" /></span>
                                 )}
+                                {!jestKuchnia && a.zamyka_rewir && (
+                                  <span title="zamyka rewir" className="inline-flex text-mint"><Icon name="key" className="h-2.5 w-2.5" /></span>
+                                )}
+                                {a.rozlicza_imprize && (
+                                  <span title="rozlicza imprezę" className="text-[10px] font-bold leading-none text-coral">$</span>
+                                )}
                               </div>
                               {pokazRewir && <div className="truncate text-[9px] font-semibold text-mint" title={a.rewir}>{a.rewir}</div>}
                             </div>
@@ -388,6 +394,18 @@ export default function Grafik() {
                   <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
                     <input type="checkbox" checked={mForm.zamyka} onChange={(ev) => setMForm((f) => ({ ...f, zamyka: ev.target.checked }))} className="h-4 w-4 accent-lemon" />
                     Zamyka lokal <span className="text-[11px] text-muted">(domyślnie automat — najpóźniejszy z Sali)</span>
+                  </label>
+                )}
+                {!jestKuchnia && (
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+                    <input type="checkbox" checked={mForm.zamyka_rewir} onChange={(ev) => setMForm((f) => ({ ...f, zamyka_rewir: ev.target.checked }))} className="h-4 w-4 accent-mint" />
+                    Zamyka rewir <span className="text-[11px] text-muted">(drukuje kasę i terminale swojego rewiru)</span>
+                  </label>
+                )}
+                {!jestKuchnia && /^imprez/i.test(stanMap[+mForm.stanowisko_id]?.nazwa || '') && (
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+                    <input type="checkbox" checked={mForm.rozlicza_imprize} onChange={(ev) => setMForm((f) => ({ ...f, rozlicza_imprize: ev.target.checked }))} className="h-4 w-4 accent-coral" />
+                    Rozlicza imprezę <span className="text-[11px] text-muted">(fiskalizacja — jedna osoba)</span>
                   </label>
                 )}
               </div>

@@ -487,6 +487,8 @@ def moj_grafik(
             "stanowisko": stan_map.get(a.stanowisko_id, ""),
             "rewir": _rewir_dla_pracownika(a.rewir),
             "zamyka": bool(a.zamyka),
+            "zamyka_rewir": bool(a.zamyka_rewir),
+            "rozlicza_imprize": bool(a.rozlicza_imprize),
             "wspolpracownicy": [
                 {"imie": prac_map.get(w.pracownik_id, ""),
                  "stanowisko": stan_map.get(w.stanowisko_id, ""),

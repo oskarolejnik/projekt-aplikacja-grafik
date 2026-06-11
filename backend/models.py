@@ -97,6 +97,8 @@ class PrzydzialZmiany(Base):
     rewir         = Column(String, nullable=True)   # rewir/strefa zmiany (z wymagań lub ręcznie)
     zamyka        = Column(Boolean, nullable=False, default=False)  # ten pracownik zamyka lokal
     zamyka_reczny = Column(Boolean, nullable=False, default=False)  # zamyka ustawione RĘCZNIE (automat nie nadpisuje)
+    zamyka_rewir    = Column(Boolean, nullable=False, default=False)  # zamyka SWÓJ rewir (drukuje kasę/terminale rewiru) — Etap D
+    rozlicza_imprize = Column(Boolean, nullable=False, default=False)  # ta osoba rozlicza imprezę (fiskalizacja) — Etap D
 
     stanowisko = relationship("Stanowisko", back_populates="przydzialy")
     pracownik  = relationship("Pracownik",  back_populates="przydzialy")

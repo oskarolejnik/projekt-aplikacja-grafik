@@ -95,6 +95,16 @@ export default function EmployeeSchedule({ onSeen }) {
                             <Icon name="key" className="h-3 w-3" /> Zamykasz
                           </span>
                         )}
+                        {z.zamyka_rewir && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-mint/15 px-2 py-0.5 text-xs font-bold text-mint">
+                            <Icon name="key" className="h-3 w-3" /> Zamykasz rewir
+                          </span>
+                        )}
+                        {z.rozlicza_imprize && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-coral/15 px-2 py-0.5 text-xs font-bold text-coral">
+                            Rozliczasz imprezę
+                          </span>
+                        )}
                       </div>
                       {z.wspolpracownicy.length > 0 && (
                         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted">

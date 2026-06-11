@@ -56,6 +56,10 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN zamyka BOOLEAN NOT NULL DEFAULT FALSE"))
             if "zamyka_reczny" not in kolumny:
                 conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN zamyka_reczny BOOLEAN NOT NULL DEFAULT FALSE"))
+            if "zamyka_rewir" not in kolumny:
+                conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN zamyka_rewir BOOLEAN NOT NULL DEFAULT FALSE"))
+            if "rozlicza_imprize" not in kolumny:
+                conn.execute(text("ALTER TABLE przydzialy_zmian ADD COLUMN rozlicza_imprize BOOLEAN NOT NULL DEFAULT FALSE"))
     if "dyspozycje" in insp.get_table_names():
         kolumny = {c["name"] for c in insp.get_columns("dyspozycje")}
         if "godz_do" not in kolumny:

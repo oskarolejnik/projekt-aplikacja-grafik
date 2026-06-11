@@ -36,6 +36,7 @@ class DyspozycjaOut(DyspozycjaBase):
 class PrzydzialBase(BaseModel):
     data: date; stanowisko_id: int; pracownik_id: int; godz_od: Optional[time] = None
     rewir: Optional[str] = None; zamyka: bool = False
+    zamyka_rewir: bool = False; rozlicza_imprize: bool = False
 class PrzydzialCreate(PrzydzialBase): pass
 class PrzydzialOut(PrzydzialBase):
     id: int; zamyka_reczny: bool = False; model_config = ConfigDict(from_attributes=True)
