@@ -12,7 +12,7 @@ def test_przyklad_z_arkusza():
                   {"gotowka": 1248, "karta": 9382}],
         terminale=[2994, 3885, 3825, 5650],   # Σ 16354
         kasy=[12000, 9000, 2000],             # Σ 23000
-        L=0, fv=0, zadatek=500, kp=0, kw=0,
+        fv=0, zadatek=500, kp=0, kw=0,
         imp={"gotowka_sfiskalizowana": 100, "karta": 0},   # IMP(−) 100 po stronie kas
     )
     assert r["sigma_gotowka"] == 6541 and r["sigma_karta"] == 16382
