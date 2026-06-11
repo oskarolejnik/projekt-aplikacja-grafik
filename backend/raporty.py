@@ -25,6 +25,11 @@ GRANICA_NOCY = time(9, 0)
 # wszystko powyżej 10 minut, z podziałem: „duże" (>1h, zwykle zmiana w grafiku) i „małe" (10 min–1h).
 PROG_MALE_CIECIE = 10 / 60   # od >10 min w ogóle pokazujemy
 PROG_DUZE_CIECIE = 1.0       # >1h = duże; 10 min–1h = małe
+# Przycinanie startu zmiany do grafiku obowiązuje DOPIERO od tej daty (włącznie). Dni wcześniejsze
+# liczymy w PEŁNI (pełne godziny RCP) — nie odbieramy ludziom godzin wstecz bez ich wiedzy.
+# Reguła wchodzi 2026-06-12. Zmień tę datę, gdy start ma być inny (albo ustaw bardzo wczesną,
+# by przycinać wszystko).
+PRZYCINANIE_OD = date(2026, 6, 12)
 # Pracownik techniczny: nikt nie układa mu grafiku — liczymy pełne godziny RCP × stawka,
 # na to jedno stanowisko (stawka ustawiana per osoba, jak w kuchni).
 TECHNICZNY_NAZWA = "Techniczny"
@@ -111,9 +116,12 @@ def _opublikowany(d: date, zakresy) -> bool:
     return any(s <= d <= k for s, k in zakresy)
 
 
-def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracownik_id=None):
+def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracownik_id=None,
+                          przycinanie_od=None):
     start = date(rok, miesiac, 1)
     end = date(rok, miesiac, monthrange(rok, miesiac)[1])
+    # Od kiedy obowiązuje przycinanie startu do grafiku (domyślnie stała PRZYCINANIE_OD).
+    prog_przycinania = przycinanie_od if przycinanie_od is not None else PRZYCINANIE_OD
     if odbicia is None:
         odbicia = wczytaj_odbicia(db, start, end)
 
@@ -199,8 +207,12 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
         else:
             wybrany = _wybierz_przydzial(przy, wej_t)
             bucket = stan_nazwa.get(wybrany.stanowisko_id, "?")
-            # Przytnij start do grafiku: licz dopiero od zaplanowanej godziny (godz_od).
-            liczone, saved = efektywne_i_oszczednosc(wej_t, wybrany.godz_od, h)
+            # Przytnij start do grafiku — ale DOPIERO od daty wejścia reguły (prog_przycinania).
+            # Wcześniejsze dni liczymy w pełni (nie odbieramy godzin wstecz, patrz PRZYCINANIE_OD).
+            if d >= prog_przycinania:
+                liczone, saved = efektywne_i_oszczednosc(wej_t, wybrany.godz_od, h)
+            else:
+                liczone, saved = h, 0.0
             godziny[pid][bucket] += liczone
             if saved > 0:
                 oszczednosci[pid][bucket] += saved

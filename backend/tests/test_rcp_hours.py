@@ -5,7 +5,9 @@ SAMĄ logikę: upsert po rcp_id, dopasowanie pracownika, liczenie godzin, flagi 
 oraz złączenie z OPUBLIKOWANYM grafikiem.
 """
 
-from datetime import datetime
+from datetime import datetime, date
+
+import pytest
 
 import models
 import factories
@@ -13,6 +15,14 @@ import raporty
 from auth import create_access_token
 
 TOKEN = {"X-RCP-Token": "test-rcp-token"}
+
+
+@pytest.fixture(autouse=True)
+def _przycinanie_od_zawsze(monkeypatch):
+    """Testy ucinania zakładają, że reguła przycinania startu do grafiku obowiązuje OD ZAWSZE
+    (w produkcji wchodzi 2026-06-12 — patrz raporty.PRZYCINANIE_OD). Dzięki temu dane testowe
+    z 2026-06-01 są przycinane normalnie. Test granicy daty podaje własny `przycinanie_od`."""
+    monkeypatch.setattr(raporty, "PRZYCINANIE_OD", date(2000, 1, 1))
 
 
 def _h(user):
@@ -240,6 +250,28 @@ def test_raport_wyroznia_duze_ciecie(db):
     assert c["pracownik"] == "Jan Wczesniak"
     assert c["godziny_uciete"] == 2.0
     assert c["wejscie"] == "12:00" and c["planowane"] == "14:00"
+
+
+def test_przycinanie_obowiazuje_dopiero_od_daty_granicznej(db):
+    """Przycinanie startu działa DOPIERO od `przycinanie_od` (w produkcji 2026-06-12). Dzień przed
+    granicą liczy PEŁNE godziny RCP (nie odbieramy ludziom godzin wstecz), dzień od granicy — przycina."""
+    from datetime import time
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(0), godz_od=time(14, 0))   # 06-01
+    factories.PrzydzialFactory(stanowisko=sala, pracownik=p, data=factories.dzien(11), godz_od=time(14, 0))  # 06-12
+    _opublikuj(db, factories.dzien(0), factories.dzien(13))   # publikacja obejmuje oba dni
+    odbicia = [
+        {"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(0),     # PRZED granicą
+         "godziny": 9.0, "wejscie": datetime(2026, 6, 1, 13, 0)},                    # 1h za wcześnie
+        {"pracownik_id": p.id, "imie_nazwisko": "x", "data": factories.dzien(11),    # OD granicy
+         "godziny": 9.0, "wejscie": datetime(2026, 6, 12, 13, 0)},                   # 1h za wcześnie
+    ]
+    moj = raporty.raport_godzin_miesiac(db, 2026, 6, odbicia=odbicia,
+                                        przycinanie_od=date(2026, 6, 12))["pracownicy"][0]
+    # 06-01: pełne 9h (0 uciętych). 06-12: przycięte do 8h (1h zaoszczędzone). Razem 17h, 1h saved.
+    assert moj["suma_godzin"] == 17.0
+    assert moj["zaoszczedzone_godziny"] == 1.0
 
 
 def test_raport_male_ciecie_w_osobnej_liscie(db):
