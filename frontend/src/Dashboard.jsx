@@ -13,6 +13,7 @@ import Dyspozycje from './components/tabs/Dyspozycje'
 import Grafik from './components/tabs/Grafik'
 import Sprzatanie from './components/tabs/Sprzatanie'
 import Zamowienia from './components/tabs/Zamowienia'
+import Urlopy from './components/tabs/Urlopy'
 import RaportGodzin from './components/tabs/RaportGodzin'
 import RozliczeniaPodglad from './components/tabs/RozliczeniaPodglad'
 import StolyLive from './components/tabs/StolyLive'
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'konta', label: 'Konta pracowników', icon: 'key', group: 'Zarządzanie', title: 'Konta i dostęp', Comp: Konta },
   { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', group: 'Operacje', title: 'Baza imprez — serwer NAS', Comp: Imprezy },
   { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', group: 'Operacje', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },
+  { id: 'urlopy', label: 'Urlopy', icon: 'calendar', group: 'Operacje', title: 'Wnioski urlopowe', Comp: Urlopy },
   { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', group: 'Operacje', title: 'Interaktywny grafik pracy', Comp: Grafik },
   { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', group: 'Operacje', title: 'Grafik sprzątania sal', Comp: Sprzatanie },
   { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', group: 'Operacje', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },

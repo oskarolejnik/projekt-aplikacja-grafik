@@ -233,6 +233,21 @@ class ZamowienieSprzataczki(Base):
     zamowiono_at = Column(DateTime, nullable=True)
 
 
+class Urlop(Base):
+    """Wniosek urlopowy pracownika OBSŁUGI. Status: oczekuje → zaakceptowany/odrzucony (admin).
+    Zaakceptowany urlop blokuje AUTO-przydział w te dni (ręczny wpis nadal możliwy) i jest
+    pokazywany w dyspozycjach. Powód opcjonalny."""
+    __tablename__ = "urlopy"
+    id             = Column(Integer, primary_key=True, index=True)
+    pracownik_id   = Column(Integer, ForeignKey("pracownicy.id"), nullable=False)
+    start          = Column(Date, nullable=False)
+    koniec         = Column(Date, nullable=False)
+    powod          = Column(String, nullable=True)
+    status         = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|zaakceptowany|odrzucony
+    utworzono_at   = Column(DateTime, nullable=False)
+    rozpatrzono_at = Column(DateTime, nullable=True)
+
+
 class SprzatanieKorekta(Base):
     """Ręczna korekta grafiku sprzątania (admin): 'dodaj' pozycję spoza reguł albo 'usun'
     wygenerowaną. Przesunięcie = 'usun' na starym dniu + 'dodaj' na nowym. Jedna korekta

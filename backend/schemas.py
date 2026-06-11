@@ -154,3 +154,13 @@ class ZamowienieIn(BaseModel):
 
 class ZamowienieStatusIn(BaseModel):
     status: str   # 'odczytane' | 'zamowione'
+
+# --- URLOPY (obsługa) ---
+
+class UrlopIn(BaseModel):
+    start: date
+    koniec: date
+    powod: Optional[str] = None
+
+class UrlopStatusIn(BaseModel):
+    status: str   # 'zaakceptowany' | 'odrzucony'

@@ -651,6 +651,81 @@ def zmien_status_zamowienia(zid: int, dane: schemas.ZamowienieStatusIn, db: Sess
     wyslij_push_do_pracownika(db, z.pracownik_id, "Zamówienie", tresc, url="/")
 
 
+# --- URLOPY (obsługa) ---
+
+def _urlop_out(u, prac_map):
+    return {
+        "id": u.id, "pracownik": prac_map.get(u.pracownik_id), "pracownik_id": u.pracownik_id,
+        "start": str(u.start), "koniec": str(u.koniec), "powod": u.powod,
+        "status": u.status, "utworzono_at": u.utworzono_at.isoformat() if u.utworzono_at else None,
+    }
+
+
+@app.post("/api/me/urlopy", status_code=201)
+def zloz_urlop(dane: schemas.UrlopIn,
+               user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Pracownik OBSŁUGI składa wniosek urlopowy → push do administratorów."""
+    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
+    if not prac or prac.dzial != "obsluga":
+        raise HTTPException(403, "Wnioski urlopowe są dla pracowników obsługi.")
+    if dane.koniec < dane.start:
+        raise HTTPException(400, "Data końca nie może być wcześniejsza niż początek.")
+    u = models.Urlop(pracownik_id=prac.id, start=dane.start, koniec=dane.koniec,
+                     powod=(dane.powod or "").strip() or None, status="oczekuje",
+                     utworzono_at=datetime.utcnow())
+    db.add(u); db.commit(); db.refresh(u)
+    wyslij_push_do_adminow(db, "Wniosek urlopowy",
+                           f"{prac.imie} {prac.nazwisko}: {dane.start.strftime('%d.%m')}–{dane.koniec.strftime('%d.%m')}", url="/")
+    return {"id": u.id}
+
+
+@app.get("/api/me/urlopy")
+def moje_urlopy(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.pracownik_id:
+        return {"urlopy": []}
+    rows = (db.query(models.Urlop).filter_by(pracownik_id=user.pracownik_id)
+            .order_by(models.Urlop.start.desc()).all())
+    prac = db.get(models.Pracownik, user.pracownik_id)
+    prac_map = {prac.id: f"{prac.imie} {prac.nazwisko}"} if prac else {}
+    return {"urlopy": [_urlop_out(u, prac_map) for u in rows]}
+
+
+@app.delete("/api/me/urlopy/{uid}", status_code=204)
+def anuluj_urlop(uid: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Pracownik wycofuje WŁASNY wniosek — tylko gdy jeszcze oczekuje."""
+    u = db.get(models.Urlop, uid)
+    if not u or u.pracownik_id != user.pracownik_id:
+        raise HTTPException(404, "Nie znaleziono.")
+    if u.status != "oczekuje":
+        raise HTTPException(400, "Można wycofać tylko wniosek oczekujący.")
+    db.delete(u); db.commit()
+
+
+@app.get("/api/urlopy")
+def lista_urlopow(db: Session = Depends(get_db)):
+    """Wszystkie wnioski (admin) — oczekujące najpierw, potem wg daty startu malejąco."""
+    rows = db.query(models.Urlop).all()
+    prac_map = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    rows.sort(key=lambda u: (u.status != "oczekuje", -u.start.toordinal()))
+    return {"urlopy": [_urlop_out(u, prac_map) for u in rows]}
+
+
+@app.put("/api/urlopy/{uid}/status", status_code=204)
+def rozpatrz_urlop(uid: int, dane: schemas.UrlopStatusIn, db: Session = Depends(get_db)):
+    """Admin: 'zaakceptowany' / 'odrzucony' → push do pracownika."""
+    u = db.get(models.Urlop, uid)
+    if not u:
+        raise HTTPException(404, "Nie znaleziono wniosku.")
+    if dane.status not in ("zaakceptowany", "odrzucony"):
+        raise HTTPException(400, "Status musi być 'zaakceptowany' albo 'odrzucony'.")
+    u.status = dane.status
+    u.rozpatrzono_at = datetime.utcnow()
+    db.commit()
+    slowo = "zaakceptowany" if dane.status == "zaakceptowany" else "odrzucony"
+    wyslij_push_do_pracownika(db, u.pracownik_id, "Urlop",
+                              f"Twój wniosek urlopowy ({u.start.strftime('%d.%m')}–{u.koniec.strftime('%d.%m')}) został {slowo}.", url="/")
+
+
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
 @app.get("/api/me/push/public-key", status_code=200)

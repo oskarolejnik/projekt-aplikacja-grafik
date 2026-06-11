@@ -79,10 +79,10 @@ def test_limit_godzin_w_miesiacu(admin_client):
 
 
 # ── 4. Urlopy ────────────────────────────────────────────────────────────────
-@pytest.mark.xfail(reason="Brak pierwszoklasowej encji/endpointu urlopów (/api/urlopy).", strict=False)
 def test_endpoint_urlopow_istnieje(admin_client):
+    """Dedykowany zasób urlopów — zaimplementowany (Etap C). Zwraca listę wniosków."""
     r = admin_client.get("/api/urlopy")
-    assert r.status_code == 200, "OCZEKIWANE: dedykowany zasób urlopów"
+    assert r.status_code == 200 and "urlopy" in r.json()
 
 
 def test_urlop_jako_zakres_niedostepnosci_dziala(db):

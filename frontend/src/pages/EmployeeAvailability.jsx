@@ -8,6 +8,7 @@ import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, hhmm, NAZWY_DNI, zakresDni } from '../lib/format'
 import { BOUNCE } from '../lib/motion'
+import MojeUrlopy from '../components/MojeUrlopy'
 import { PillSwitch } from '../components/ui/PillSwitch'
 
 // Godzina imprezy z arkusza bywa łańcuchem ("14:30:00", "Brak", "None"...).
@@ -256,6 +257,8 @@ export default function EmployeeAvailability() {
           </button>
         )}
       </Card>
+
+      <MojeUrlopy />
     </>
   )
 }

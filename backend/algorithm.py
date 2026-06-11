@@ -20,6 +20,19 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
         models.Dyspozycja.data >= start, models.Dyspozycja.data <= end
     ).all()
 
+    # Zaakceptowane urlopy nakładające się na zakres — blokują AUTO-przydział w te dni
+    # (ręczny wpis dalej możliwy; to tylko algorytm). Budujemy zbiór (pracownik_id, dzień).
+    urlop_dni = set()
+    urlopy = db.query(models.Urlop).filter(
+        models.Urlop.status == "zaakceptowany",
+        models.Urlop.start <= end, models.Urlop.koniec >= start,
+    ).all()
+    for u in urlopy:
+        d = max(u.start, start)
+        while d <= min(u.koniec, end):
+            urlop_dni.add((u.pracownik_id, d))
+            d += timedelta(days=1)
+
     # Mapowanie danych dla szybszego dostępu
     dys_map = {(d.pracownik_id, d.data): d for d in dyspozycje}
     kwal_map = {p.id: {s.id for s in p.kwalifikacje} for p in pracownicy}
@@ -44,6 +57,8 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
 
     # Funkcja sprawdzająca czy pracownik może podjąć zmianę o konkretnej godzinie
     def is_time_compatible(p_id, check_date, req_od: time) -> bool:
+        if (p_id, check_date) in urlop_dni:
+            return False  # zaakceptowany urlop — auto-przydział pomija ten dzień
         dys = dys_map.get((p_id, check_date))
         if dys is None or not dys.dostepnosc:
             return False
