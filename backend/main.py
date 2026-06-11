@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje
+import models, schemas, raporty, rezerwacje, sprzatanie
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -75,7 +75,7 @@ OVERSIGHT_GET = {
 async def role_guard(request: Request, call_next):
     path = request.url.path
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -193,6 +193,7 @@ def _user_out(u: models.User) -> schemas.UserOut:
     return schemas.UserOut(
         id=u.id, login=u.login, rola=u.rola, aktywny=bool(u.aktywny),
         pracownik_id=u.pracownik_id,
+        dzial=u.pracownik.dzial if u.pracownik else None,
         imie=u.pracownik.imie if u.pracownik else None,
         nazwisko=u.pracownik.nazwisko if u.pracownik else None,
     )
@@ -473,6 +474,67 @@ def moj_grafik(
             ],
         })
     return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat() if pub else None, "zmiany": zmiany}
+
+# --- GRAFIK SPRZĄTANIA (dział techniczny + admin) ---
+
+def _wymagaj_technicznego(user: models.User, db) -> models.Pracownik:
+    """Sprzątanie widzi dział techniczny (i admin). Zwraca pracownika (dla odhaczeń)."""
+    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
+    if user.rola != "admin" and (not prac or prac.dzial != "techniczny"):
+        raise HTTPException(403, "Grafik sprzątania jest dostępny dla działu technicznego.")
+    return prac
+
+
+@app.get("/api/me/sprzatanie")
+def moje_sprzatanie(
+    start: date = Query(...), end: date = Query(...),
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    _wymagaj_technicznego(user, db)
+    return {"pozycje": sprzatanie.generuj(db, start, end), "sale": list(sprzatanie.SALE)}
+
+
+@app.put("/api/me/sprzatanie/zrobione", status_code=204)
+def odhacz_sprzatanie(
+    dane: schemas.SprzatanieZrobioneIn,
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    prac = _wymagaj_technicznego(user, db)
+    if dane.sala not in sprzatanie.SALE:
+        raise HTTPException(400, "Nieznana sala.")
+    istn = db.query(models.SprzatanieOdhaczenie).filter_by(data=dane.data, sala=dane.sala).first()
+    if dane.zrobione and not istn:
+        db.add(models.SprzatanieOdhaczenie(
+            data=dane.data, sala=dane.sala,
+            pracownik_id=prac.id if prac else None, odhaczono_at=datetime.utcnow(),
+        ))
+    elif not dane.zrobione and istn:
+        db.delete(istn)  # odznaczenie ✓ (cofnięcie własnego odhaczenia)
+    db.commit()
+
+
+@app.get("/api/sprzatanie")
+def sprzatanie_admin(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    return {"pozycje": sprzatanie.generuj(db, start, end), "sale": list(sprzatanie.SALE)}
+
+
+@app.post("/api/sprzatanie/korekty", status_code=204)
+def korekta_sprzatania(dane: schemas.SprzatanieKorektaIn, db: Session = Depends(get_db)):
+    """Dodaj/usuń pozycję sprzątania. Przeciwna akcja do istniejącej korekty KASUJE ją
+    (powrót do automatu) — dzięki temu przyciski w UI działają jak przełącznik."""
+    if dane.sala not in sprzatanie.SALE:
+        raise HTTPException(400, "Nieznana sala.")
+    if dane.akcja not in ("dodaj", "usun"):
+        raise HTTPException(400, "Akcja musi być 'dodaj' albo 'usun'.")
+    istn = db.query(models.SprzatanieKorekta).filter_by(data=dane.data, sala=dane.sala).first()
+    if istn:
+        if istn.akcja != dane.akcja:
+            db.delete(istn)   # przeciwna korekta = cofnięcie poprzedniej
+        # ta sama akcja -> idempotentnie nic
+    else:
+        db.add(models.SprzatanieKorekta(data=dane.data, sala=dane.sala, akcja=dane.akcja))
+    db.commit()
+
 
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
@@ -1679,6 +1741,75 @@ def gastro_stoly_historia(db: Session = Depends(get_db)):
         .all()
     )
     return {"dni": [{"data": r.data.isoformat(), "liczba": r.liczba} for r in rows]}
+
+
+@app.post("/api/gastro/rozliczenia")
+def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Pozycje rozliczeń kelnerów z Gastro od agenta (X-RCP-Token). Upsert po poz_id,
+    mapowanie kelnera po imieniu i nazwisku (jak RCP). NIE dotyka RCP — osobna gałąź."""
+    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+        raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
+    mapa = {}
+    for p in db.query(models.Pracownik).all():
+        mapa.setdefault(_norm_nazwa(f"{p.imie} {p.nazwisko}"), p.id)
+        mapa.setdefault(_norm_nazwa(f"{p.nazwisko} {p.imie}"), p.id)
+    teraz = datetime.utcnow()
+    n = 0
+    for it in (payload.get("pozycje") or []):
+        try:
+            poz_id = str(it["poz_id"])
+            roz_id = str(it["rozliczenie_id"])
+            d = date.fromisoformat(str(it["data"])[:10])
+        except (KeyError, ValueError, TypeError):
+            continue
+        nazwa = (it.get("imie_nazwisko") or "").strip()
+        try:
+            zamkniete = bool(int(it.get("zamkniete") or 0))
+        except (ValueError, TypeError):
+            zamkniete = bool(it.get("zamkniete"))
+        rec = db.get(models.RozliczenieGastro, poz_id)
+        if rec is None:
+            rec = models.RozliczenieGastro(poz_id=poz_id)
+            db.add(rec)
+        rec.rozliczenie_id = roz_id
+        if nazwa:
+            rec.imie_nazwisko = nazwa
+        pid = mapa.get(_norm_nazwa(nazwa))
+        if pid is not None:
+            rec.pracownik_id = pid
+        rec.data = d
+        rec.zamknieto = _parse_dt(it.get("zamknieto"))
+        rec.zamkniete = zamkniete
+        rec.forma = (it.get("forma") or "").strip()
+        rec.sprzedaz = float(it.get("sprzedaz") or 0)
+        rec.deklarowane = float(it.get("deklarowane") or 0)
+        rec.zaktualizowano_at = teraz
+        n += 1
+    db.commit()
+    return {"ok": True, "pozycje": n}
+
+
+@app.get("/api/gastro/rozliczenia")
+def gastro_rozliczenia(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    """Podgląd zebranych rozliczeń kelnerów (admin) — zgrupowane per rozliczenie.
+    Posłuży jako prefill formularzy rozliczeń dnia (Etap D2). REPREZENTACJA nie wchodzi
+    do utargu — front pokaże ją osobno."""
+    rows = (
+        db.query(models.RozliczenieGastro)
+        .filter(models.RozliczenieGastro.data >= start, models.RozliczenieGastro.data <= end)
+        .order_by(models.RozliczenieGastro.data.desc(), models.RozliczenieGastro.imie_nazwisko.asc(),
+                  models.RozliczenieGastro.forma.asc())
+        .all()
+    )
+    prac_map = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    return {"pozycje": [{
+        "poz_id": r.poz_id, "rozliczenie_id": r.rozliczenie_id,
+        "imie_nazwisko": r.imie_nazwisko, "pracownik_id": r.pracownik_id,
+        "pracownik": prac_map.get(r.pracownik_id), "data": str(r.data),
+        "zamknieto": r.zamknieto.isoformat() if r.zamknieto else None,
+        "zamkniete": bool(r.zamkniete), "forma": r.forma,
+        "sprzedaz": r.sprzedaz, "deklarowane": r.deklarowane,
+    } for r in rows]}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

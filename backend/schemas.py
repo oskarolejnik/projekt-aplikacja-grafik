@@ -98,6 +98,7 @@ class UserOut(BaseModel):
     rola: str
     aktywny: bool = True
     pracownik_id: Optional[int] = None
+    dzial: Optional[str] = None       # dział powiązanego Pracownika (obsluga/kuchnia/techniczny)
     imie: Optional[str] = None        # uzupełniane z powiązanego Pracownika
     nazwisko: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
@@ -129,3 +130,15 @@ class MojaDyspozycjaIn(BaseModel):
 
 class MojeDyspozycjeBatch(BaseModel):
     dyspozycje: List[MojaDyspozycjaIn]
+
+# --- GRAFIK SPRZĄTANIA ---
+
+class SprzatanieZrobioneIn(BaseModel):
+    data: date
+    sala: str
+    zrobione: bool = True
+
+class SprzatanieKorektaIn(BaseModel):
+    data: date
+    sala: str
+    akcja: str  # 'dodaj' | 'usun' (przeciwna akcja kasuje istniejącą korektę = powrót do automatu)

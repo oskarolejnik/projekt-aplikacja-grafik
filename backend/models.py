@@ -193,3 +193,47 @@ class StolikiHistoria(Base):
     data              = Column(Date, primary_key=True)      # dzień (data otwarcia rachunku)
     liczba            = Column(Integer, nullable=False, default=0)
     zaktualizowano_at = Column(DateTime, nullable=True)
+
+
+class RozliczenieGastro(Base):
+    """Pozycja rozliczenia zmiany kelnera z Gastro (per forma płatności) — wypychana przez
+    lokalnego agenta (NGastroZmianaRozliczeniePracownika + Totalizer, tylko odczyt NOLOCK).
+    Upsert po poz_id. `sprzedaz` = ile naliczył system, `deklarowane` = ile kelner wpisał
+    przy rozliczeniu w POS. `zamkniete` 0→1 = kelner właśnie się rozliczył (trigger pusha
+    „Raport gotowy" — dojdzie z formularzami rozliczeń). NIE dotyka RCP — osobna gałąź agenta."""
+    __tablename__ = "rozliczenia_gastro"
+    poz_id            = Column(String(36), primary_key=True)               # Totalizer.ID
+    rozliczenie_id    = Column(String(36), index=True, nullable=False)    # ZmianaRozliczeniePracownika.ID
+    imie_nazwisko     = Column(String(128), nullable=False, default="")
+    pracownik_id      = Column(Integer, ForeignKey("pracownicy.id"), nullable=True)
+    data              = Column(Date, index=True, nullable=False)           # dzień pracy (DataOtwarcia)
+    zamknieto         = Column(DateTime, nullable=True)                     # moment rozliczenia w POS
+    zamkniete         = Column(Boolean, nullable=False, default=False)
+    forma             = Column(String(64), nullable=False, default="")     # GOTÓWKA / KARTA / KARTA_FV…
+    sprzedaz          = Column(Float, nullable=False, default=0.0)
+    deklarowane       = Column(Float, nullable=False, default=0.0)
+    powiadomiono      = Column(Boolean, nullable=False, default=False)     # push „Raport gotowy" (użyjemy przy formularzach)
+    zaktualizowano_at = Column(DateTime, nullable=True)
+
+
+class SprzatanieKorekta(Base):
+    """Ręczna korekta grafiku sprzątania (admin): 'dodaj' pozycję spoza reguł albo 'usun'
+    wygenerowaną. Przesunięcie = 'usun' na starym dniu + 'dodaj' na nowym. Jedna korekta
+    na (dzień, salę); przeciwna akcja kasuje istniejącą = powrót do stanu z automatu."""
+    __tablename__ = "sprzatanie_korekty"
+    __table_args__ = (UniqueConstraint("data", "sala"),)
+    id    = Column(Integer, primary_key=True, index=True)
+    data  = Column(Date, nullable=False)
+    sala  = Column(String(32), nullable=False)
+    akcja = Column(String(8), nullable=False)   # 'dodaj' | 'usun'
+
+
+class SprzatanieOdhaczenie(Base):
+    """„Zrobione" ✓ w grafiku sprzątania — odhaczane przez sprzątaczkę (dzień + sala)."""
+    __tablename__ = "sprzatanie_odhaczenia"
+    __table_args__ = (UniqueConstraint("data", "sala"),)
+    id           = Column(Integer, primary_key=True, index=True)
+    data         = Column(Date, nullable=False)
+    sala         = Column(String(32), nullable=False)
+    pracownik_id = Column(Integer, ForeignKey("pracownicy.id"), nullable=True)
+    odhaczono_at = Column(DateTime, nullable=False)

@@ -11,6 +11,7 @@ import EmployeeSchedule from './EmployeeSchedule'
 import EmployeeHours from './EmployeeHours'
 import Rezerwacje from '../components/tabs/Rezerwacje'
 import KuchniaImprezy from '../components/tabs/KuchniaImprezy'
+import TechSprzatanie from '../components/tabs/TechSprzatanie'
 
 const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
 
@@ -20,14 +21,17 @@ export default function EmployeeArea() {
   const { user, logout } = useAuth()
   const { biezacy } = useData()
   const { toast } = useToast()
-  const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: tylko Grafik + Godziny (bez Dyspozycyjności)
-  const [widok, setWidok] = useState(jestKuchnia ? 'grafik' : 'dyspozycyjnosc')
+  const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: bez Dyspozycyjności
+  const jestTechniczny = user?.dzial === 'techniczny'  // techniczni: Sprzątanie + Godziny (bez grafiku/dyspo)
+  const [widok, setWidok] = useState(jestTechniczny ? 'sprzatanie' : jestKuchnia ? 'grafik' : 'dyspozycyjnosc')
   const [nowyGrafik, setNowyGrafik] = useState(false)
 
   const imie = user?.imie || user?.login
 
   // Wykryj nowo udostępniony grafik -> baner + odznaka na zakładce „Mój grafik".
+  // (Techniczni nie mają grafiku — pomijamy zapytanie.)
   useEffect(() => {
+    if (jestTechniczny) return
     let off = false
     const [s, e] = biezacy.split('|')
     api(`/me/grafik?start=${s}&end=${e}`)
@@ -42,7 +46,7 @@ export default function EmployeeArea() {
     return () => {
       off = true
     }
-  }, [biezacy, toast])
+  }, [biezacy, toast, jestTechniczny])
 
   const oznaczWidziany = useCallback((ts) => {
     localStorage.setItem(LAST_SEEN_KEY, ts)
@@ -80,10 +84,15 @@ export default function EmployeeArea() {
 
       <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 pb-safe md:py-10">
         {/* Nawigacja zakładek — przewijany pasek. Kuchnia: 4 (Grafik, Godziny, Rezerwacje,
-            Imprezy). Obsługa: 5 (Dyspo + te same co kuchnia). Rezerwacje i Imprezy są wspólne
-            (bez danych klienta). */}
+            Imprezy). Obsługa: 5 (Dyspo + te same co kuchnia). Techniczni: Sprzątanie + Godziny.
+            Rezerwacje i Imprezy są wspólne (bez danych klienta). */}
         <div className="mb-6 flex gap-2 overflow-x-auto pb-1">
-          {(jestKuchnia
+          {(jestTechniczny
+            ? [
+                { value: 'sprzatanie', label: 'Sprzątanie' },
+                { value: 'godziny', label: 'Godziny' },
+              ]
+            : jestKuchnia
             ? [
                 { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
                 { value: 'godziny', label: 'Godziny' },
@@ -119,6 +128,7 @@ export default function EmployeeArea() {
           {widok === 'godziny' && <EmployeeHours />}
           {widok === 'rezerwacje' && <Rezerwacje />}
           {widok === 'imprezy' && <KuchniaImprezy />}
+          {widok === 'sprzatanie' && <TechSprzatanie />}
         </div>
       </main>
     </div>

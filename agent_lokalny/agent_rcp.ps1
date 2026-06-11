@@ -201,6 +201,65 @@ function Invoke-Cykl($cfg, [int]$oknoDni) {
         }
         catch { Write-Log ('Blad historii stolow (pomijam): {0}' -f $_.Exception.Message) }
     }
+
+    # 4) ROZLICZENIA KELNEROW (kwoty deklarowane z POS) - tylko jesli skonfigurowane; wlasny try
+    if ($cfg.ContainsKey('ROZLICZENIA_SQL') -and $cfg['ROZLICZENIA_SQL'] -and $cfg.ContainsKey('VPS_ROZLICZENIA_URL') -and $cfg['VPS_ROZLICZENIA_URL']) {
+        try {
+            $end = (Get-Date).Date
+            $start = $end.AddDays(-1 * $oknoDni)
+            $roz = Get-Rozliczenia $cfg $start $end
+            if ($roz.Count -gt 0) {
+                Send-Rozliczenia $cfg $roz | Out-Null
+                Write-Log ('Rozliczenia: wyslano {0} pozycji -> VPS.' -f $roz.Count)
+            }
+        }
+        catch { Write-Log ('Blad rozliczen (pomijam): {0}' -f $_.Exception.Message) }
+    }
+}
+
+# -- ROZLICZENIA KELNEROW (opcjonalne, OSOBNA sciezka - RCP nietkniete) ---------
+function Get-Rozliczenia($cfg, [datetime]$start, [datetime]$end) {
+    $out = New-Object System.Collections.ArrayList
+    $conn = New-Object System.Data.SqlClient.SqlConnection $cfg.RCP_CONNECTION_STRING
+    try {
+        $conn.Open()
+        $c0 = $conn.CreateCommand()
+        $c0.CommandText = 'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED'
+        [void]$c0.ExecuteNonQuery()
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $cfg.ROZLICZENIA_SQL
+        $cmd.CommandTimeout = 30
+        $ps = $cmd.Parameters.Add('@start', [System.Data.SqlDbType]::Date); $ps.Value = $start.Date
+        $pe = $cmd.Parameters.Add('@end', [System.Data.SqlDbType]::Date);   $pe.Value = $end.Date
+        $r = $cmd.ExecuteReader()
+        try {
+            while ($r.Read()) {
+                $zam = if ($r['zamknieto'] -is [DBNull]) { $null } else { ([datetime]$r['zamknieto']).ToString('yyyy-MM-ddTHH:mm:ss', $Inv) }
+                [void]$out.Add([ordered]@{
+                        poz_id         = [string]$r['poz_id']
+                        rozliczenie_id = [string]$r['rozliczenie_id']
+                        imie_nazwisko  = ([string]$r['imie_nazwisko']).Trim()
+                        data           = ([datetime]$r['data']).ToString('yyyy-MM-dd', $Inv)
+                        zamknieto      = $zam
+                        zamkniete      = [int]$r['zamkniete']
+                        forma          = ([string]$r['forma']).Trim()
+                        sprzedaz       = [decimal]$r['sprzedaz']
+                        deklarowane    = [decimal]$r['deklarowane']
+                    })
+            }
+        }
+        finally { $r.Close() }
+    }
+    finally { $conn.Close() }
+    return $out
+}
+
+function Send-Rozliczenia($cfg, $pozycje) {
+    $payload = @{ pozycje = @($pozycje) } | ConvertTo-Json -Depth 5
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    return Invoke-RestMethod -Uri $cfg.VPS_ROZLICZENIA_URL -Method Post `
+        -Headers @{ 'X-RCP-Token' = $cfg.RCP_INGEST_TOKEN } `
+        -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
 }
 
 # -- main ----------------------------------------------------------------------
