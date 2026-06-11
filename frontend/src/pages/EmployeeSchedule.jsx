@@ -8,6 +8,7 @@ import { Banner } from '../components/ui/Banner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
 import { ddmmyyyy, NAZWY_DNI } from '../lib/format'
+import RozliczImpreze from '../components/RozliczImpreze'
 
 // „Mój grafik" — pracownik widzi swoje zmiany TYLKO po udostępnieniu przez admina:
 // dzień, godzina, stanowisko + rewir oraz z kim dzieli rewir.
@@ -16,6 +17,7 @@ export default function EmployeeSchedule({ onSeen }) {
   const { toast } = useToast()
   const [stan, setStan] = useState({ opublikowany: false, zmiany: [] })
   const [loading, setLoading] = useState(true)
+  const [rozliczImp, setRozliczImp] = useState(null)   // { data, rewir } — modal rozliczenia imprezy
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
   const [s, e] = week.split('|')
 
@@ -101,9 +103,12 @@ export default function EmployeeSchedule({ onSeen }) {
                           </span>
                         )}
                         {z.rozlicza_imprize && (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-coral/15 px-2 py-0.5 text-xs font-bold text-coral">
-                            Rozliczasz imprezę
-                          </span>
+                          <button
+                            onClick={() => setRozliczImp({ data: z.data, rewir: z.rewir })}
+                            className="inline-flex items-center gap-1 rounded-md bg-coral/15 px-2 py-0.5 text-xs font-bold text-coral transition hover:bg-coral/25"
+                          >
+                            <Icon name="clipboard" className="h-3 w-3" /> Rozlicz imprezę
+                          </button>
                         )}
                       </div>
                       {z.wspolpracownicy.length > 0 && (
@@ -131,6 +136,14 @@ export default function EmployeeSchedule({ onSeen }) {
           </div>
         )}
       </Card>
+
+      {rozliczImp && (
+        <RozliczImpreze
+          data={rozliczImp.data}
+          rewir={rozliczImp.rewir}
+          onClose={(zmiana) => { setRozliczImp(null); if (zmiana) load() }}
+        />
+      )}
     </>
   )
 }

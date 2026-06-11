@@ -250,6 +250,29 @@ class Urlop(Base):
     rozpatrzono_at = Column(DateTime, nullable=True)
 
 
+class RozliczenieImprezy(Base):
+    """Rozliczenie imprezy wpisane przez osobę wyznaczoną w grafiku (przydział rozlicza_imprize).
+    Jedno na (pracownik, dzień). Pozycje = kwota+forma (gotówka/karta/przelew). Trafia do REJESTRU
+    IMPREZ (osobno od raportu sali). Liczy IMP: gotówka sfiskalizowana → minus w kasach,
+    karta → minus w terminalach i kasach (przelew wpisuje admin osobno)."""
+    __tablename__ = "rozliczenia_imprez"
+    id           = Column(Integer, primary_key=True, index=True)
+    data         = Column(Date, index=True, nullable=False)
+    pracownik_id = Column(Integer, ForeignKey("pracownicy.id"), nullable=False)
+    opis         = Column(String, nullable=True)             # sala/klient z rewiru przydziału
+    utworzono_at = Column(DateTime, nullable=False)
+    pozycje      = relationship("RozliczenieImprezyPozycja", cascade="all, delete-orphan", backref="rozliczenie")
+
+
+class RozliczenieImprezyPozycja(Base):
+    __tablename__ = "rozliczenia_imprez_pozycje"
+    id             = Column(Integer, primary_key=True, index=True)
+    rozliczenie_id = Column(Integer, ForeignKey("rozliczenia_imprez.id", ondelete="CASCADE"), nullable=False)
+    forma          = Column(String(16), nullable=False)      # 'gotowka' | 'karta' | 'przelew'
+    kwota          = Column(Float, nullable=False, default=0.0)
+    sfiskalizowane = Column(Boolean, nullable=False, default=False)   # dotyczy gotówki
+
+
 class SprzatanieKorekta(Base):
     """Ręczna korekta grafiku sprzątania (admin): 'dodaj' pozycję spoza reguł albo 'usun'
     wygenerowaną. Przesunięcie = 'usun' na starym dniu + 'dodaj' na nowym. Jedna korekta

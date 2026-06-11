@@ -165,3 +165,15 @@ class UrlopIn(BaseModel):
 
 class UrlopStatusIn(BaseModel):
     status: str   # 'zaakceptowany' | 'odrzucony'
+
+# --- ROZLICZANIE IMPREZ ---
+
+class ImprezaPozycjaIn(BaseModel):
+    forma: str            # 'gotowka' | 'karta' | 'przelew'
+    kwota: float = 0.0
+    sfiskalizowane: bool = False   # tylko dla gotówki
+
+class RozliczenieImprezyIn(BaseModel):
+    data: date
+    opis: Optional[str] = None
+    pozycje: List[ImprezaPozycjaIn] = []

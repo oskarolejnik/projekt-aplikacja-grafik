@@ -728,6 +728,95 @@ def rozpatrz_urlop(uid: int, dane: schemas.UrlopStatusIn, db: Session = Depends(
                               f"Twój wniosek urlopowy ({u.start.strftime('%d.%m')}–{u.koniec.strftime('%d.%m')}) został {slowo}.", url="/")
 
 
+# --- ROZLICZANIE IMPREZ (osoba wyznaczona w grafiku) ---
+
+def _moze_rozliczyc_imprize(db, pracownik_id: int, data: date):
+    """Przydział tej osoby tego dnia na stanowisku imprezowym z flagą rozlicza_imprize (albo None)."""
+    imprezy_ids = {s.id for s in db.query(models.Stanowisko).all()
+                   if (s.nazwa or "").strip().lower().startswith("imprez")}
+    if not imprezy_ids:
+        return None
+    return (db.query(models.PrzydzialZmiany)
+            .filter(models.PrzydzialZmiany.pracownik_id == pracownik_id,
+                    models.PrzydzialZmiany.data == data,
+                    models.PrzydzialZmiany.rozlicza_imprize == True,  # noqa: E712
+                    models.PrzydzialZmiany.stanowisko_id.in_(imprezy_ids))
+            .first())
+
+
+def imp_dla_dnia(db, data: date) -> dict:
+    """Kwoty IMP dla rozliczenia dnia (D2). Gotówka SFISKALIZOWANA z imprez → minus w kasach;
+    karta z imprez → minus w terminalach i kasach. Gotówka niesfiskalizowana i przelew NIE wchodzą."""
+    gotowka_sfisk = karta = 0.0
+    for r in db.query(models.RozliczenieImprezy).filter_by(data=data).all():
+        for p in r.pozycje:
+            if p.forma == "gotowka" and p.sfiskalizowane:
+                gotowka_sfisk += p.kwota or 0
+            elif p.forma == "karta":
+                karta += p.kwota or 0
+    return {"gotowka_sfiskalizowana": round(gotowka_sfisk, 2), "karta": round(karta, 2)}
+
+
+@app.post("/api/me/imprezy/rozlicz", status_code=201)
+def rozlicz_imprize(dane: schemas.RozliczenieImprezyIn,
+                    user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Osoba wyznaczona w grafiku rozlicza imprezę (upsert na dany dzień) → push do adminów."""
+    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
+    if not prac or not _moze_rozliczyc_imprize(db, prac.id, dane.data):
+        raise HTTPException(403, "Imprezę rozlicza tylko osoba wyznaczona w grafiku (rozlicza imprezę).")
+    for p in dane.pozycje:
+        if p.forma not in ("gotowka", "karta", "przelew"):
+            raise HTTPException(400, "Forma musi być: gotowka, karta albo przelew.")
+    r = db.query(models.RozliczenieImprezy).filter_by(pracownik_id=prac.id, data=dane.data).first()
+    if r is None:
+        r = models.RozliczenieImprezy(pracownik_id=prac.id, data=dane.data, utworzono_at=datetime.utcnow())
+        db.add(r)
+    r.opis = (dane.opis or "").strip() or None
+    r.pozycje.clear()
+    for p in dane.pozycje:
+        r.pozycje.append(models.RozliczenieImprezyPozycja(
+            forma=p.forma, kwota=float(p.kwota or 0),
+            sfiskalizowane=bool(p.sfiskalizowane) if p.forma == "gotowka" else False))
+    db.commit(); db.refresh(r)
+    wyslij_push_do_adminow(db, "Rozliczenie imprezy",
+                           f"{prac.imie} {prac.nazwisko}: {dane.data.strftime('%d.%m')}", url="/")
+    return {"id": r.id}
+
+
+@app.get("/api/me/imprezy/rozlicz")
+def moje_rozliczenie_imprezy(data: date = Query(...),
+                             user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Czy wolno rozliczać + ewentualne dotychczasowe pozycje (prefill/edycja)."""
+    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
+    przydzial = _moze_rozliczyc_imprize(db, prac.id, data) if prac else None
+    r = db.query(models.RozliczenieImprezy).filter_by(pracownik_id=user.pracownik_id, data=data).first() if prac else None
+    return {
+        "moze": przydzial is not None,
+        "rewir": _rewir_dla_pracownika(przydzial.rewir) if przydzial else None,
+        "pozycje": [{"forma": p.forma, "kwota": p.kwota, "sfiskalizowane": p.sfiskalizowane} for p in (r.pozycje if r else [])],
+    }
+
+
+@app.get("/api/imprezy/rozliczenia")
+def rejestr_imprez(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    """Rejestr rozliczeń imprez (admin) — per impreza, z pozycjami i sumami per forma."""
+    rows = (db.query(models.RozliczenieImprezy)
+            .filter(models.RozliczenieImprezy.data >= start, models.RozliczenieImprezy.data <= end)
+            .order_by(models.RozliczenieImprezy.data.desc()).all())
+    prac_map = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    out = []
+    for r in rows:
+        poz = [{"forma": p.forma, "kwota": p.kwota, "sfiskalizowane": p.sfiskalizowane} for p in r.pozycje]
+        out.append({
+            "id": r.id, "data": str(r.data), "pracownik": prac_map.get(r.pracownik_id), "opis": r.opis,
+            "pozycje": poz,
+            "suma_gotowka": round(sum(p["kwota"] for p in poz if p["forma"] == "gotowka"), 2),
+            "suma_karta": round(sum(p["kwota"] for p in poz if p["forma"] == "karta"), 2),
+            "suma_przelew": round(sum(p["kwota"] for p in poz if p["forma"] == "przelew"), 2),
+        })
+    return {"rozliczenia": out, "razem": {k: round(sum(o[k] for o in out), 2) for k in ("suma_gotowka", "suma_karta", "suma_przelew")}}
+
+
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
 @app.get("/api/me/push/public-key", status_code=200)
