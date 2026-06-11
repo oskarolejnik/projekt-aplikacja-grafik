@@ -56,3 +56,17 @@ def test_szef_widzi_rezerwacje(client, db, monkeypatch):
     monkeypatch.setattr(rezerwacje, "rezerwacje_per_dzien", lambda dni_naprzod=30: [])
     szef = factories.UserFactory(login="szefrez", rola="szef")
     assert client.get("/api/rezerwacje", headers=_h(szef)).status_code == 200
+
+
+def test_obsluga_widzi_pelne_rezerwacje_w_zakladce(client, db, monkeypatch):
+    """Obsługa (employee) ma osobną zakładkę Rezerwacje — pełne /api/rezerwacje (rozbicie
+    godzinowe, bez danych klienta), jak kuchnia. Reszta panelu admina dalej 403."""
+    dane = [{"data": "2026-06-13", "liczba": 3, "osoby": 11,
+             "godziny": [{"godzina": "14:00", "liczba": 2, "osoby": 7}]}]
+    monkeypatch.setattr(rezerwacje, "rezerwacje_per_dzien", lambda dni_naprzod=30: dane)
+    prac = factories.PracownikFactory()
+    emp = factories.UserFactory(login="obsrez", rola="employee", pracownik=prac)
+    r = client.get("/api/rezerwacje", headers=_h(emp))
+    assert r.status_code == 200
+    assert r.json()["dni"][0]["godziny"][0]["godzina"] == "14:00"      # pełne rozbicie godzinowe
+    assert client.get("/api/pracownicy", headers=_h(emp)).status_code == 403  # reszta panelu nadal zamknięta

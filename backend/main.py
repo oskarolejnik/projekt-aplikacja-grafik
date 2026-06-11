@@ -59,6 +59,12 @@ OVERSIGHT_GET = {
     "kuchnia": (
         "/api/rezerwacje",
     ),
+    # Pracownik obsługi (employee): jak kuchnia — rezerwacje (liczby + rozbicie godzinowe,
+    # bez danych klienta) do planowania pracy na sali. Imprezy przez /api/me/imprezy (bez klienta).
+    # Reszta panelu admina dalej 403 (poza /api/me/* dostępnym dla każdego zalogowanego).
+    "employee": (
+        "/api/rezerwacje",
+    ),
 }
 
 
