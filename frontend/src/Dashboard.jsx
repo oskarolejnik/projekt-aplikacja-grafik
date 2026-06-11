@@ -13,6 +13,7 @@ import Dyspozycje from './components/tabs/Dyspozycje'
 import Grafik from './components/tabs/Grafik'
 import Sprzatanie from './components/tabs/Sprzatanie'
 import RaportGodzin from './components/tabs/RaportGodzin'
+import RozliczeniaPodglad from './components/tabs/RozliczeniaPodglad'
 import StolyLive from './components/tabs/StolyLive'
 import Rezerwacje from './components/tabs/Rezerwacje'
 import Eksport from './components/tabs/Eksport'
@@ -27,6 +28,7 @@ const TABS = [
   { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', group: 'Operacje', title: 'Interaktywny grafik pracy', Comp: Grafik },
   { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', group: 'Operacje', title: 'Grafik sprzątania sal', Comp: Sprzatanie },
   { id: 'godziny', label: 'Raport godzin', icon: 'clock', group: 'Operacje', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
+  { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive },
   { id: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar', group: 'Operacje', title: 'Rezerwacje (30 dni)', Comp: Rezerwacje },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', group: 'Operacje', title: 'Eksport danych', Comp: Eksport },
