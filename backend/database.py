@@ -96,6 +96,8 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN imp_karta FLOAT NOT NULL DEFAULT 0"))
             if "push_admin_at" not in kolumny:
                 conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN push_admin_at TIMESTAMP"))
+            if "przelew" not in kolumny:
+                conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN przelew FLOAT NOT NULL DEFAULT 0"))
     if "rozliczenia_dnia_kelnerzy" in insp.get_table_names():
         kolumny = {c["name"] for c in insp.get_columns("rozliczenia_dnia_kelnerzy")}
         with engine.begin() as conn:

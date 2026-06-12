@@ -205,6 +205,28 @@ def test_zeszyt_stan_narastajaco(admin_client, db):
     assert day["stan"] == 1050.0                  # 200 + 1000 − 150
 
 
+def test_przelew_z_palca_w_rozliczeniu_i_zeszycie(admin_client, db):
+    """Admin wpisuje przelew z palca — zapisuje się w rozliczeniu dnia, pojawia w Zeszycie na
+    wierszu SALA (poza saldem gotówki), i da się zmienić lekkim endpointem (z Zeszytu)."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id))
+    _gastro(db, k.id, d, "GOTÓWKA", dekl=500)
+    db.commit()
+    admin_client.get(f"/api/rozliczenie?data={d}")
+    admin_client.put(f"/api/rozliczenie?data={d}", json={"przelew": 700, "zadatek_gotowka": 0, "zadatek_karta": 0,
+        "imp_reczny": False, "imp_gotowka": 0, "imp_karta": 0, "terminale": [], "kasy": [],
+        "kelnerzy": [{"pracownik_id": k.id, "gotowka": 500, "karta": 0, "fv": 0, "kw": 0}]})
+    assert admin_client.get(f"/api/rozliczenie?data={d}").json()["przelew"] == 700
+    day = admin_client.get(f"/api/zeszyt?start={d}&end={d}").json()["dni"][0]
+    sala_w = next(w for w in day["wiersze"] if w["zrodlo"] == "SALA")
+    assert sala_w["przelew"] == 700 and sala_w.get("sala_id")
+    assert day["przychod_gotowka"] == 500          # przelew NIE wchodzi do salda gotówki
+    assert admin_client.put(f"/api/rozliczenie/przelew?data={d}&przelew=1234").status_code == 204
+    assert admin_client.get(f"/api/rozliczenie?data={d}").json()["przelew"] == 1234
+
+
 def test_szef_widzi_zeszyt_nie_edytuje(db):
     from auth import create_access_token
     from fastapi.testclient import TestClient

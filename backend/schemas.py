@@ -198,6 +198,7 @@ class RozliczenieDniaIn(BaseModel):
     imp_reczny: bool = False
     imp_gotowka: float = 0.0
     imp_karta: float = 0.0
+    przelew: float = 0.0
     kelnerzy: List[RozliczenieKelnerIn] = []
     terminale: List[PozycjaKasaIn] = []
     kasy: List[PozycjaKasaIn] = []

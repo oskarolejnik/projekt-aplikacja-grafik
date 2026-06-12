@@ -264,6 +264,7 @@ class RozliczenieDnia(Base):
     imp_reczny         = Column(Boolean, nullable=False, default=False)           # nadpisanie IMP z palca
     imp_gotowka        = Column(Float, nullable=False, default=0.0)               # IMP gotówka sfisk. (gdy ręcznie)
     imp_karta          = Column(Float, nullable=False, default=0.0)               # IMP karta (gdy ręcznie)
+    przelew            = Column(Float, nullable=False, default=0.0)               # przelew dnia (admin z palca, poza kasą)
     terminale          = Column(JSON, nullable=True)   # [{"etykieta","kwota","rewir"}]
     kasy               = Column(JSON, nullable=True)    # [{"etykieta","kwota","rewir"}]
     utworzono_at       = Column(DateTime, nullable=True)

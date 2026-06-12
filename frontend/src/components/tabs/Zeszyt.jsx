@@ -55,6 +55,10 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
     } catch (e) { toast(e.message, 'error') }
   }
   const usunRozchod = async (id) => { try { await api(`/zeszyt/pozycja/${id}`, 'DELETE'); load() } catch (e) { toast(e.message, 'error') } }
+  const setPrzelewSala = async (data, kwota) => {
+    try { await api(`/rozliczenie/przelew?data=${data}&przelew=${num(kwota)}`, 'PUT'); load() }
+    catch (e) { toast(e.message, 'error') }
+  }
 
   const dodajPrzychod = async (data) => {
     const f = formP[data] || {}
@@ -144,7 +148,13 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
                               </td>
                               <td className="px-2 py-1 text-right font-mono">{zl(w.gotowka)}</td>
                               <td className="px-2 py-1 text-right font-mono text-muted">{zl(w.terminal)}</td>
-                              <td className="px-2 py-1 text-right font-mono text-muted">{zl(w.przelew)}</td>
+                              <td className="px-2 py-1 text-right font-mono text-muted">
+                                {!readOnly && w.sala_id ? (
+                                  <input defaultValue={w.przelew || ''} placeholder="0" title="Przelew z palca"
+                                    onBlur={(e) => { if (num(e.target.value) !== (w.przelew || 0)) setPrzelewSala(d.data, e.target.value) }}
+                                    className="w-20 rounded-md border border-line bg-surface px-2 py-0.5 text-right text-xs text-ink outline-none focus:border-mint" />
+                                ) : zl(w.przelew)}
+                              </td>
                               <td className="px-2 py-1 text-right font-mono">{zl(w.impreza)}</td>
                             </tr>
                           ))}

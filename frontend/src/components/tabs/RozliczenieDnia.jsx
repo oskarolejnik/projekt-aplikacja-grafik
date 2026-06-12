@@ -51,6 +51,7 @@ export default function RozliczenieDnia() {
       const body = {
         zadatek_gotowka: num(roz.zadatek_gotowka), zadatek_karta: num(roz.zadatek_karta),
         imp_reczny: !!roz.imp_reczny, imp_gotowka: num(roz.imp_gotowka), imp_karta: num(roz.imp_karta),
+        przelew: num(roz.przelew),
         kelnerzy: roz.kelnerzy.map((k) => ({
           pracownik_id: k.pracownik_id, gotowka: num(k.gotowka), karta: num(k.karta), fv: num(k.fv), kw: num(k.kw),
         })),
@@ -142,6 +143,12 @@ export default function RozliczenieDnia() {
                   <p className="rounded-md bg-lemon/15 px-2 py-1 text-[11px] font-semibold text-lemon">Rozbicie {zl(zadatekSuma)} ≠ KP w bazie {zl(kpBaza)} — sprawdź podział.</p>
                 )}
               </div>
+
+              {/* Przelew z palca (admin) — poza kasą fiskalną; pokaże się też w Zeszycie i u szefa */}
+              <label className="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface-2 px-3 py-2">
+                <span className="text-sm font-semibold text-ink">Przelew <span className="text-xs font-normal text-muted">(z palca)</span></span>
+                <input value={roz.przelew ?? ''} onChange={(e) => setRozPole({ przelew: e.target.value })} className={inpS} />
+              </label>
 
               {/* UTARG — hero */}
               {w && (

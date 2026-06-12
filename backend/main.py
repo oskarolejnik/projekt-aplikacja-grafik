@@ -894,6 +894,7 @@ def _rozliczenie_out(db, roz: models.RozliczenieDnia) -> dict:
         "zadatek_gotowka": roz.zadatek_gotowka or 0, "zadatek_karta": roz.zadatek_karta or 0,
         "kp_baza": _kp_dla_dnia(db, roz.data),    # Σ KP z Gastro (podpowiedź do rozbicia)
         "imp_reczny": roz.imp_reczny, "imp_gotowka": roz.imp_gotowka or 0, "imp_karta": roz.imp_karta or 0,
+        "przelew": roz.przelew or 0,
         "kelnerzy": [{"pracownik_id": k.pracownik_id, "pracownik": pm.get(k.pracownik_id),
                       "gotowka": k.gotowka, "karta": k.karta, "fv": k.fv, "kw": k.kw} for k in roz.kelnerzy],
         "terminale": roz.terminale or [], "kasy": roz.kasy or [],
@@ -914,6 +915,7 @@ def zapisz_rozliczenie(dane: schemas.RozliczenieDniaIn, data: date = Query(...),
     roz.imp_reczny = bool(dane.imp_reczny)
     roz.imp_gotowka = float(dane.imp_gotowka or 0)
     roz.imp_karta = float(dane.imp_karta or 0)
+    roz.przelew = float(dane.przelew or 0)
     roz.terminale = [p.model_dump() for p in dane.terminale]
     roz.kasy = [p.model_dump() for p in dane.kasy]
     by_pid = {k.pracownik_id: k for k in roz.kelnerzy}
@@ -924,6 +926,14 @@ def zapisz_rozliczenie(dane: schemas.RozliczenieDniaIn, data: date = Query(...),
         k.gotowka = kin.gotowka; k.karta = kin.karta; k.fv = kin.fv; k.kw = kin.kw
     db.commit(); db.refresh(roz)
     return _rozliczenie_out(db, roz)
+
+
+@app.put("/api/rozliczenie/przelew", status_code=204)
+def ustaw_przelew(data: date = Query(...), przelew: float = Query(0.0), db: Session = Depends(get_db)):
+    """Przelew dnia z palca (admin) — szybki zapis (używany też z Zeszytu na wierszu SALA)."""
+    roz = _zbuduj_rozliczenie(db, data)
+    roz.przelew = float(przelew or 0)
+    db.commit()
 
 
 @app.post("/api/rozliczenie/przekaz-szef", status_code=204)
@@ -1054,8 +1064,10 @@ def _zeszyt_dane(db, start: date, end: date) -> dict:
         if r:                          # SALA z rozliczenia (także wersji roboczej) trafia do zeszytu
             w = _wynik_rozliczenia(db, r)
             sg, sk = w["suma_zeszyt"]["gotowka"], w["suma_zeszyt"]["karta"]
-            if sg or sk:
-                wiersze.append({"zrodlo": "SALA", "gotowka": sg, "terminal": sk, "przelew": 0.0, "impreza": 0.0, "manualny": False})
+            pz = float(r.przelew or 0)
+            if sg or sk or pz:
+                wiersze.append({"zrodlo": "SALA", "gotowka": sg, "terminal": sk, "przelew": pz, "impreza": 0.0,
+                                "manualny": False, "sala_id": r.id})   # sala_id → edycja przelewu z palca w zeszycie
                 cash_in += sg
         for im in imp_by_day.get(d, []):
             g_sf = round(sum(p.kwota for p in im.pozycje if p.forma == "gotowka" and p.sfiskalizowane), 2)
