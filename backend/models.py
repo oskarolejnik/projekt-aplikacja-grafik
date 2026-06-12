@@ -218,6 +218,20 @@ class RozliczenieGastro(Base):
     zaktualizowano_at = Column(DateTime, nullable=True)
 
 
+class KpZadatek(Base):
+    """Zadatek z Gastro — dokument kasowy KP „Kasa przyjęła" (NGastroKasaDokument, TypOperacji=0),
+    wypychany przez agenta (tylko odczyt NOLOCK). Upsert po id (GUID dokumentu). Gotówkowy.
+    `opis` to wolny tekst (np. „Zadatek za komunię p.Nowak 15.05.2027") — parsowanie nazwiska/daty
+    imprezy i przypisanie do kalendarza imprez to osobny etap; tu trzymamy surowe dane."""
+    __tablename__ = "kp_zadatki"
+    id                = Column(String(36), primary_key=True)            # NGastroKasaDokument.ID
+    numer             = Column(String(64), nullable=True)              # _c_NumerCaly np. „120/2026"
+    kwota             = Column(Float, nullable=False, default=0.0)
+    opis              = Column(String, nullable=True)
+    data              = Column(Date, index=True, nullable=False)        # data wystawienia (przyjęcia)
+    zaktualizowano_at = Column(DateTime, nullable=True)
+
+
 class ZamowienieSprzataczki(Base):
     """Zamówienie produktu zgłoszone przez sprzątaczkę (dział techniczny, kwalifikacja Sprzątaczka).
     Obieg statusów: nowe -> odczytane -> zamowione. Push: nowe->admini, odczytane/zamowione->autorka.

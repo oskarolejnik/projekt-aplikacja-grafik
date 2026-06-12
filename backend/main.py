@@ -75,7 +75,7 @@ OVERSIGHT_GET = {
 async def role_guard(request: Request, call_next):
     path = request.url.path
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -861,11 +861,10 @@ def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
 
 
 def _kp_dla_dnia(db, data: date) -> float:
-    """Σ zadatków (KP) z Gastro — GLOBALNIE po wszystkich osobach dnia (zadatki przyjmuje zwykle
-    menadżer, który nie drukuje własnego rozliczenia). Forma „KP", kwota zadeklarowana."""
-    rows = db.query(models.RozliczenieGastro).filter(models.RozliczenieGastro.data == data).all()
-    s = sum(r.deklarowane for r in rows if (r.forma or "").strip().upper() in ("KP", "KASA PRZYJMIE"))
-    return round(s, 2)
+    """Σ zadatków (KP „Kasa przyjęła") z Gastro dla dnia (po dacie wystawienia dokumentu kasowego).
+    Dokumenty KP idą z agenta do tabeli kp_zadatki. Gotówkowe (KP = dokument kasowy)."""
+    rows = db.query(models.KpZadatek).filter(models.KpZadatek.data == data).all()
+    return round(sum(z.kwota or 0 for z in rows), 2)
 
 
 def _imp_wynikowe(db, roz: models.RozliczenieDnia) -> dict:
@@ -2423,6 +2422,33 @@ def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Dep
                 k.push_oczekuje_at = teraz
         db.commit()
     return {"ok": True, "pozycje": n}
+
+
+@app.post("/api/gastro/zadatki")
+def gastro_zadatki_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Zadatki (KP „Kasa przyjęła") z Gastro od agenta (X-RCP-Token). Upsert po id (GUID dokumentu).
+    Surowe dane (kwota, opis, data) — parsowanie/przypisanie do kalendarza osobnym etapem."""
+    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+        raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
+    teraz = datetime.utcnow()
+    n = 0
+    for it in (payload.get("zadatki") or []):
+        try:
+            zid = str(it["id"])
+            d = date.fromisoformat(str(it["data"])[:10])
+        except (KeyError, ValueError, TypeError):
+            continue
+        rec = db.get(models.KpZadatek, zid)
+        if rec is None:
+            rec = models.KpZadatek(id=zid); db.add(rec)
+        rec.numer = (it.get("numer") or None)
+        rec.kwota = float(it.get("kwota") or 0)
+        rec.opis = (it.get("opis") or None)
+        rec.data = d
+        rec.zaktualizowano_at = teraz
+        n += 1
+    db.commit()
+    return {"ok": True, "zadatki": n}
 
 
 @app.get("/api/gastro/rozliczenia")

@@ -173,10 +173,10 @@ def test_kp_globalny_i_zadatek_rozbity(admin_client, db):
     d = factories.dzien(0)
     db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id))
     _gastro(db, k.id, d, "GOTÓWKA", dekl=1000)
-    _gastro(db, menadzer.id, d, "KP", dekl=500)   # menadżer poza grafikiem Sali
+    db.add(models.KpZadatek(id="kp-1", numer="1/2026", kwota=500, opis="Zadatek za impreze p.Test", data=d))
     db.commit()
     body = admin_client.get(f"/api/rozliczenie?data={d}").json()
-    assert body["kp_baza"] == 500.0               # globalnie, mimo że menadżer nie jest na Sali
+    assert body["kp_baza"] == 500.0               # suma KP (dokument kasowy) z Gastro dla dnia
     payload = {"zadatek_gotowka": 500, "zadatek_karta": 0, "terminale": [], "kasy": [],
                "kelnerzy": [{"pracownik_id": k.id, "gotowka": 1000, "karta": 0, "fv": 0, "kw": 0}]}
     w = admin_client.put(f"/api/rozliczenie?data={d}", json=payload).json()["wynik"]
@@ -269,6 +269,24 @@ def test_rozlicz_sala_dopiero_po_pushu(client, db, monkeypatch):
     assert client.put(f"/api/me/rozliczenie?data={d}", headers=_h(u),
                       json={"gotowka": 900, "karta": 0, "kw": 0}).status_code == 204
     assert status() == "wyslane"
+
+
+def test_gastro_zadatki_ingest_i_kp_baza(client, db, monkeypatch):
+    """Agent wysyła zadatki (KP) → upsert po id → suma KP dla dnia w rozliczeniu."""
+    import main
+    monkeypatch.setattr(main, "RCP_INGEST_TOKEN", "tok123")
+    d = factories.dzien(0)
+    payload = {"zadatki": [
+        {"id": "g1", "numer": "120/2026", "kwota": 500, "opis": "Zadatek za komunie p.Nowak 15.05.2027", "data": str(d)},
+        {"id": "g2", "numer": "121/2026", "kwota": 200, "opis": "kaucja za koryta", "data": str(d)},
+    ]}
+    r = client.post("/api/gastro/zadatki", json=payload, headers={"X-RCP-Token": "tok123"})
+    assert r.status_code == 200 and r.json()["zadatki"] == 2
+    assert main._kp_dla_dnia(db, d) == 700.0
+    client.post("/api/gastro/zadatki", json={"zadatki": [{"id": "g1", "kwota": 500, "data": str(d)}]},
+                headers={"X-RCP-Token": "tok123"})
+    assert db.query(models.KpZadatek).count() == 2          # upsert, bez dubli
+    assert client.post("/api/gastro/zadatki", json={"zadatki": []}).status_code == 401   # bez tokenu
 
 
 def test_zamykajacy_dosyla_terminale_kasy_i_push_admina(client, admin_client, db):

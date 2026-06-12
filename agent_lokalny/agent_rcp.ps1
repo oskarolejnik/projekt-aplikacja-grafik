@@ -215,6 +215,20 @@ function Invoke-Cykl($cfg, [int]$oknoDni) {
         }
         catch { Write-Log ('Blad rozliczen (pomijam): {0}' -f $_.Exception.Message) }
     }
+
+    # 5) ZADATKI (KP - dokumenty kasowe "Kasa przyjela", TypOperacji=0) - tylko jesli skonfigurowane
+    if ($cfg.ContainsKey('ZADATKI_SQL') -and $cfg['ZADATKI_SQL'] -and $cfg.ContainsKey('VPS_ZADATKI_URL') -and $cfg['VPS_ZADATKI_URL']) {
+        try {
+            $end = (Get-Date).Date
+            $start = $end.AddDays(-120)   # szersze okno: zadatki przyjmowane z duzym wyprzedzeniem
+            $zad = Get-Zadatki $cfg $start $end
+            if ($zad.Count -gt 0) {
+                Send-Zadatki $cfg $zad | Out-Null
+                Write-Log ('Zadatki (KP): wyslano {0} pozycji -> VPS.' -f $zad.Count)
+            }
+        }
+        catch { Write-Log ('Blad zadatkow (pomijam): {0}' -f $_.Exception.Message) }
+    }
 }
 
 # -- ROZLICZENIA KELNEROW (opcjonalne, OSOBNA sciezka - RCP nietkniete) ---------
@@ -258,6 +272,46 @@ function Send-Rozliczenia($cfg, $pozycje) {
     $payload = @{ pozycje = @($pozycje) } | ConvertTo-Json -Depth 5
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
     return Invoke-RestMethod -Uri $cfg.VPS_ROZLICZENIA_URL -Method Post `
+        -Headers @{ 'X-RCP-Token' = $cfg.RCP_INGEST_TOKEN } `
+        -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
+}
+
+# -- ZADATKI / KP (opcjonalne, OSOBNA sciezka - dokumenty kasowe "Kasa przyjela") ---
+function Get-Zadatki($cfg, [datetime]$start, [datetime]$end) {
+    $out = New-Object System.Collections.ArrayList
+    $conn = New-Object System.Data.SqlClient.SqlConnection $cfg.RCP_CONNECTION_STRING
+    try {
+        $conn.Open()
+        $c0 = $conn.CreateCommand()
+        $c0.CommandText = 'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED'
+        [void]$c0.ExecuteNonQuery()
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $cfg.ZADATKI_SQL
+        $cmd.CommandTimeout = 30
+        $ps = $cmd.Parameters.Add('@start', [System.Data.SqlDbType]::Date); $ps.Value = $start.Date
+        $pe = $cmd.Parameters.Add('@end', [System.Data.SqlDbType]::Date);   $pe.Value = $end.Date
+        $r = $cmd.ExecuteReader()
+        try {
+            while ($r.Read()) {
+                [void]$out.Add([ordered]@{
+                        id    = [string]$r['id']
+                        numer = if ($r['numer'] -is [DBNull]) { $null } else { ([string]$r['numer']).Trim() }
+                        kwota = [decimal]$r['kwota']
+                        opis  = if ($r['opis'] -is [DBNull]) { $null } else { ([string]$r['opis']).Trim() }
+                        data  = ([datetime]$r['data']).ToString('yyyy-MM-dd', $Inv)
+                    })
+            }
+        }
+        finally { $r.Close() }
+    }
+    finally { $conn.Close() }
+    return $out
+}
+
+function Send-Zadatki($cfg, $zadatki) {
+    $payload = @{ zadatki = @($zadatki) } | ConvertTo-Json -Depth 5
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    return Invoke-RestMethod -Uri $cfg.VPS_ZADATKI_URL -Method Post `
         -Headers @{ 'X-RCP-Token' = $cfg.RCP_INGEST_TOKEN } `
         -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
 }
