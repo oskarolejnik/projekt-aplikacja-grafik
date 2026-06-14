@@ -232,6 +232,23 @@ class KpZadatek(Base):
     zaktualizowano_at = Column(DateTime, nullable=True)
 
 
+class Termin(Base):
+    """Termin w kalendarzu imprez (ręczny, dodawany przez admina). Zadatek dopasowywany z KP
+    (po nazwisku + dacie) lub przypisywany ręcznie ze skrzynki — osobny etap."""
+    __tablename__ = "terminy"
+    id           = Column(Integer, primary_key=True, index=True)
+    data         = Column(Date, nullable=False, index=True)   # data imprezy
+    nazwisko     = Column(String, nullable=False)             # klient
+    typ          = Column(String(32), nullable=True)          # wesele/komunia/chrzciny/...
+    liczba_osob  = Column(Integer, nullable=True)
+    telefon      = Column(String(32), nullable=True)
+    sala         = Column(String(64), nullable=True)
+    notatka      = Column(String, nullable=True)
+    status       = Column(String(16), nullable=False, default="rezerwacja")   # rezerwacja|odbyla|odwolana
+    zadatek      = Column(Float, nullable=False, default=0.0)  # przypisany zadatek (z KP / ręcznie)
+    utworzono_at = Column(DateTime, nullable=True)
+
+
 class ZamowienieSprzataczki(Base):
     """Zamówienie produktu zgłoszone przez sprzątaczkę (dział techniczny, kwalifikacja Sprzątaczka).
     Obieg statusów: nowe -> odczytane -> zamowione. Push: nowe->admini, odczytane/zamowione->autorka.

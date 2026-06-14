@@ -229,3 +229,16 @@ class ZeszytPrzychodIn(BaseModel):
 class ZeszytConfigIn(BaseModel):
     stan_poczatkowy: float = 0.0
     stan_poczatkowy_data: Optional[date] = None
+
+# --- KALENDARZ IMPREZ ---
+
+class TerminIn(BaseModel):
+    data: date
+    nazwisko: str
+    typ: Optional[str] = None
+    liczba_osob: Optional[int] = None
+    telefon: Optional[str] = None
+    sala: Optional[str] = None
+    notatka: Optional[str] = None
+    status: str = "rezerwacja"
+    zadatek: float = 0.0

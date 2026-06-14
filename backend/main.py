@@ -1151,6 +1151,51 @@ def set_zeszyt_config(dane: schemas.ZeszytConfigIn, db: Session = Depends(get_db
             "stan_poczatkowy_data": str(cfg.stan_poczatkowy_data) if cfg.stan_poczatkowy_data else None}
 
 
+# ── KALENDARZ IMPREZ ──────────────────────────────────────────────────────────
+
+def _termin_out(t: models.Termin) -> dict:
+    return {"id": t.id, "data": str(t.data), "nazwisko": t.nazwisko, "typ": t.typ,
+            "liczba_osob": t.liczba_osob, "telefon": t.telefon, "sala": t.sala,
+            "notatka": t.notatka, "status": t.status, "zadatek": t.zadatek or 0}
+
+
+@app.get("/api/terminy")
+def get_terminy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    rows = (db.query(models.Termin)
+            .filter(models.Termin.data >= start, models.Termin.data <= end)
+            .order_by(models.Termin.data.asc(), models.Termin.id.asc()).all())
+    return {"terminy": [_termin_out(t) for t in rows]}
+
+
+@app.post("/api/terminy", status_code=201)
+def dodaj_termin(dane: schemas.TerminIn, db: Session = Depends(get_db)):
+    t = models.Termin(data=dane.data, nazwisko=dane.nazwisko.strip(), typ=dane.typ,
+                      liczba_osob=dane.liczba_osob, telefon=dane.telefon, sala=dane.sala,
+                      notatka=dane.notatka, status=dane.status or "rezerwacja",
+                      zadatek=float(dane.zadatek or 0), utworzono_at=datetime.utcnow())
+    db.add(t); db.commit(); db.refresh(t)
+    return _termin_out(t)
+
+
+@app.put("/api/terminy/{termin_id}")
+def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(get_db)):
+    t = db.get(models.Termin, termin_id)
+    if not t:
+        raise HTTPException(404, "Brak terminu.")
+    t.data = dane.data; t.nazwisko = dane.nazwisko.strip(); t.typ = dane.typ
+    t.liczba_osob = dane.liczba_osob; t.telefon = dane.telefon; t.sala = dane.sala
+    t.notatka = dane.notatka; t.status = dane.status or "rezerwacja"; t.zadatek = float(dane.zadatek or 0)
+    db.commit(); db.refresh(t)
+    return _termin_out(t)
+
+
+@app.delete("/api/terminy/{termin_id}", status_code=204)
+def usun_termin(termin_id: int, db: Session = Depends(get_db)):
+    t = db.get(models.Termin, termin_id)
+    if t:
+        db.delete(t); db.commit()
+
+
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
 @app.get("/api/me/push/public-key", status_code=200)
