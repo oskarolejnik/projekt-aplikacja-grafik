@@ -250,6 +250,7 @@ class Termin(Base):
     status       = Column(String(16), nullable=False, default="rezerwacja")   # rezerwacja|odbyla|odwolana
     zadatek      = Column(Float, nullable=False, default=0.0)  # przypisany zadatek (z KP / ręcznie)
     utworzono_at = Column(DateTime, nullable=True)
+    ical_uid     = Column(String, nullable=True, index=True)   # UID wydarzenia z iCloud (.ics) — klucz dedupu importu; NULL dla wpisów ręcznych
 
 
 class ZamowienieSprzataczki(Base):

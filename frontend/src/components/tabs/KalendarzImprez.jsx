@@ -25,6 +25,7 @@ export default function KalendarzImprez() {
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)   // termin (edycja) lub { data } (nowy)
   const [busy, setBusy] = useState(false)
+  const [importBusy, setImportBusy] = useState(false)
 
   const [y, m] = mc.split('-').map(Number)
   const granice = () => [isoOf(y, m, 1), isoOf(y, m, new Date(y, m, 0).getDate())]
@@ -79,19 +80,46 @@ export default function KalendarzImprez() {
     catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
+  // Import imprez z pliku .ics (eksport z iCloud). Plik czytamy w przeglądarce i wysyłamy
+  // jako tekst — backend tworzy terminy + obsadę. „iCloud tylko dodaje": istniejące pomija.
+  const onImportFile = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''           // pozwól wybrać ten sam plik ponownie
+    if (!file) return
+    setImportBusy(true)
+    try {
+      const ics = await file.text()
+      const r = await api('/imprezy/import-ics', 'POST', { ics })
+      const czesci = [`dodano ${r.dodano_terminy}`]
+      if (r.pominieto) czesci.push(`pominięto ${r.pominieto}`)
+      toast(`Import z iCloud: ${czesci.join(', ')}.`, 'success')
+      ;(r.ostrzezenia || []).forEach((o) => toast(o, 'info'))
+      load()
+    } catch (err) { toast(err.message, 'error') }
+    finally { setImportBusy(false) }
+  }
+
   const fld = 'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-mint'
 
   return (
     <Card className="p-6 sm:p-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <SectionHeader title="Kalendarz imprez" subtitle="Terminy imprez. Kliknij dzień, by dodać; kafelek, by edytować." />
-        <div className="flex items-center gap-2">
-          <button onClick={() => przesun(-1)} aria-label="Poprzedni miesiąc" className="rounded-lg border border-line px-3 py-1.5 text-lg leading-none text-muted hover:text-ink">‹</button>
-          <span className="min-w-[9rem] text-center font-display text-sm font-bold text-ink">
-            {new Date(y, m - 1, 1).toLocaleDateString('pl-PL', { month: 'long', year: 'numeric' })}
-          </span>
-          <button onClick={() => przesun(1)} aria-label="Następny miesiąc" className="rounded-lg border border-line px-3 py-1.5 text-lg leading-none text-muted hover:text-ink">›</button>
-          <button onClick={() => setMc(miesiacTeraz())} className="rounded-lg border border-line px-2.5 py-1.5 text-xs font-semibold text-muted hover:text-ink">dziś</button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label title="Wgraj plik .ics wyeksportowany z kalendarza iCloud — dodaje nowe imprezy, nie nadpisuje ręcznych zmian."
+                 className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink ${importBusy ? 'pointer-events-none opacity-60' : ''}`}>
+            {importBusy ? <Spinner className="h-3.5 w-3.5" /> : <Icon name="upload" className="h-3.5 w-3.5" />}
+            Importuj z iCloud (.ics)
+            <input type="file" accept=".ics,text/calendar" className="hidden" onChange={onImportFile} disabled={importBusy} />
+          </label>
+          <div className="flex items-center gap-2">
+            <button onClick={() => przesun(-1)} aria-label="Poprzedni miesiąc" className="rounded-lg border border-line px-3 py-1.5 text-lg leading-none text-muted hover:text-ink">‹</button>
+            <span className="min-w-[9rem] text-center font-display text-sm font-bold text-ink">
+              {new Date(y, m - 1, 1).toLocaleDateString('pl-PL', { month: 'long', year: 'numeric' })}
+            </span>
+            <button onClick={() => przesun(1)} aria-label="Następny miesiąc" className="rounded-lg border border-line px-3 py-1.5 text-lg leading-none text-muted hover:text-ink">›</button>
+            <button onClick={() => setMc(miesiacTeraz())} className="rounded-lg border border-line px-2.5 py-1.5 text-xs font-semibold text-muted hover:text-ink">dziś</button>
+          </div>
         </div>
       </div>
 

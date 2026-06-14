@@ -107,6 +107,12 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE kp_zadatki ADD COLUMN data_imprezy DATE"))
             if "termin_id" not in kolumny:
                 conn.execute(text("ALTER TABLE kp_zadatki ADD COLUMN termin_id INTEGER"))
+    if "terminy" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("terminy")}
+        with engine.begin() as conn:
+            if "ical_uid" not in kolumny:
+                conn.execute(text("ALTER TABLE terminy ADD COLUMN ical_uid VARCHAR"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_terminy_ical_uid ON terminy (ical_uid)"))
     if "rozliczenia_dnia_kelnerzy" in insp.get_table_names():
         kolumny = {c["name"] for c in insp.get_columns("rozliczenia_dnia_kelnerzy")}
         with engine.begin() as conn:

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -147,6 +147,25 @@ def _jest_sprzataczka(prac: models.Pracownik) -> bool:
 # „Parkiet": stanowiska, których nazwa zaczyna się od „Sala" (Sala, Sala-ABC, Sala-RZP,
 # Sala-Bar...). Spośród nich wybieramy osobę ZAMYKAJĄCĄ lokal — patrz _przelicz_zamykajacego.
 SALA_PREFIX = "sala"
+
+
+def _data_env(nazwa: str, domyslnie: str):
+    """Czyta datę (RRRR-MM-DD) ze zmiennej środowiskowej; puste/niepoprawne -> None."""
+    s = (os.environ.get(nazwa, domyslnie) or "").strip()
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+
+
+# Rozliczenia sali liczymy DOPIERO od dnia startu systemu — inaczej kelnerom wyskakują
+# „zaległe" rozliczenia ze zmian Gastro sprzed wdrożenia (które nigdy nie były potwierdzane
+# w aplikacji). Sterowane env ROZLICZENIA_START=RRRR-MM-DD (ustawiane na serwerze na dzień
+# uruchomienia; puste/brak = bez cięcia). Po ~21 dniach naturalne okno (dziś−21) i tak wyprzedza
+# tę datę, więc cięcie samo przestaje cokolwiek zmieniać.
+ROZLICZENIA_START = _data_env("ROZLICZENIA_START", "")
 
 
 def _sala_stanowisko_ids(db) -> set:
@@ -1007,14 +1026,16 @@ def _rozliczenia_oczekujace(db, pid: int):
     if not sala_ids:
         return []
     od = date.today() - timedelta(days=21)
-    # tylko obsada sali (żeby nie pokazywać np. baru/kuchni)
+    # tylko obsada sali (żeby nie pokazywać np. baru/kuchni) — szersze okno łapie rozjazd grafik↔Gastro
     czy_sala = db.query(models.PrzydzialZmiany).filter(
         models.PrzydzialZmiany.pracownik_id == pid, models.PrzydzialZmiany.data >= od,
         models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first()
     if not czy_sala:
         return []
+    # ale rozliczenia POKAZUJEMY dopiero od startu systemu — bez „zaległych" sprzed wdrożenia
+    od_pokaz = max(od, ROZLICZENIA_START) if ROZLICZENIA_START else od
     daty = sorted({r.data for r in db.query(models.RozliczenieGastro).filter_by(
-        pracownik_id=pid, zamkniete=True).filter(models.RozliczenieGastro.data >= od).all()}, reverse=True)
+        pracownik_id=pid, zamkniete=True).filter(models.RozliczenieGastro.data >= od_pokaz).all()}, reverse=True)
     out = []
     for d in daty:
         roz = db.query(models.RozliczenieDnia).filter_by(data=d).first()
@@ -1248,10 +1269,20 @@ def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(
     t = db.get(models.Termin, termin_id)
     if not t:
         raise HTTPException(404, "Brak terminu.")
+    stara_data = t.data
     t.data = dane.data; t.nazwisko = dane.nazwisko.strip(); t.typ = dane.typ
     t.liczba_osob = dane.liczba_osob; t.telefon = dane.telefon; t.sala = dane.sala
     t.notatka = dane.notatka; t.status = dane.status or "rezerwacja"; t.zadatek = float(dane.zadatek or 0)
+    # Termin z iCloud ma sparowaną Imprezę (obsada) — synchronizujemy ją z ręczną edycją,
+    # żeby korekta liczby osób / daty / sali zmieniła wymagania obsady.
+    if t.ical_uid:
+        imp = db.query(models.Impreza).filter(models.Impreza.sciezka_pliku == f"ical:{t.ical_uid}").first()
+        if imp is not None:
+            imp.data = t.data; imp.klient = t.nazwisko
+            imp.liczba_osob = (t.liczba_osob or 0); imp.sala = (t.sala or "Brak")
     db.commit(); db.refresh(t)
+    if t.ical_uid:
+        _odswiez_wymagania_imprez(db, min(stara_data, t.data), max(stara_data, t.data))
     return _termin_out(t)
 
 
@@ -1261,7 +1292,16 @@ def usun_termin(termin_id: int, db: Session = Depends(get_db)):
     if t:
         for z in db.query(models.KpZadatek).filter_by(termin_id=termin_id).all():
             z.termin_id = None       # odepnij zadatki (zostają w skrzynce)
-        db.delete(t); db.commit()
+        uid, data_t = t.ical_uid, t.data
+        db.delete(t)
+        # Usuń też sparowaną Imprezę z iCloud (obsada) i odśwież wymagania na ten dzień.
+        if uid:
+            imp = db.query(models.Impreza).filter(models.Impreza.sciezka_pliku == f"ical:{uid}").first()
+            if imp is not None:
+                db.delete(imp)
+        db.commit()
+        if uid:
+            _odswiez_wymagania_imprez(db, data_t, data_t)
 
 
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
@@ -2030,6 +2070,96 @@ def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(..
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# IMPREZY — IMPORT Z PLIKU .ics (eksport z iCloud / Apple Calendar)
+#   Admin wgrywa plik .ics; backend tworzy z każdego wydarzenia Termin (kalendarz imprez)
+#   ORAZ Imprezę (źródło obsady). „iCloud tylko dodaje" — istniejące (po UID) pomijamy.
+#   Godzina z kalendarza jest NIEISTOTNA (impreza dostaje 'Brak'); obsada liczy się z osób.
+# ═══════════════════════════════════════════════════════════════════════════
+@app.post("/api/imprezy/import-ics")
+def import_imprez_ics(payload: dict, db: Session = Depends(get_db)):
+    """Import imprez z .ics. Body: {"ics": "<zawartość pliku>"}. Admin-only (middleware).
+    Dla każdego VEVENT (jeśli jeszcze nie ma — dedup po UID):
+      • Termin  — wpis w kalendarzu imprez (zadatki KP dopną się po nazwisku+dacie),
+      • Imprezę — źródło wymagań obsady (godzina='Brak').
+    Istniejące (po UID) POMIJAMY — ręcznych zmian w aplikacji nie nadpisujemy."""
+    tekst = (payload or {}).get("ics") or ""
+    if not isinstance(tekst, str) or not tekst.strip():
+        raise HTTPException(400, "Pusty albo nieprawidłowy plik .ics.")
+
+    rekordy = ical_import.wczytaj_imprezy_z_ics(tekst)
+    dodano_terminy = dodano_imprezy = pominieto = bez_daty = bez_uid = bez_osob = 0
+    daty = []
+
+    for r in rekordy:
+        uid = (r.get("uid") or "").strip()
+        d = r.get("data")
+        if not d:
+            bez_daty += 1
+            continue
+        if not uid:
+            bez_uid += 1   # bez UID nie ma jak bezpiecznie deduplikować — pomijamy
+            continue
+        daty.append(d)
+        nazwa = (r.get("nazwisko") or "").strip() or "(bez nazwy)"
+        liczba = r.get("liczba_osob")
+        if not liczba:
+            bez_osob += 1
+
+        # --- Termin (kalendarz imprez) ---
+        ist_t = db.query(models.Termin).filter(models.Termin.ical_uid == uid).first()
+        if ist_t is None:
+            db.add(models.Termin(
+                data=d, nazwisko=nazwa, typ=r.get("typ"),
+                liczba_osob=liczba, telefon=r.get("telefon"), sala=r.get("sala"),
+                notatka=r.get("notatka"), status="rezerwacja",
+                zadatek=float(r.get("zadatek") or 0), ical_uid=uid,
+                utworzono_at=datetime.utcnow(),
+            ))
+            dodano_terminy += 1
+        else:
+            pominieto += 1
+
+        # --- Impreza (źródło obsady; godzina nieistotna -> 'Brak') ---
+        klucz = f"ical:{uid}"
+        ist_i = db.query(models.Impreza).filter(models.Impreza.sciezka_pliku == klucz).first()
+        if ist_i is None:
+            db.add(models.Impreza(
+                data=d, klient=nazwa, liczba_osob=(liczba or 0),
+                godzina="Brak", sala=(r.get("sala") or "Brak"), sciezka_pliku=klucz,
+            ))
+            dodano_imprezy += 1
+
+    db.commit()
+
+    # Świeże wymagania obsady dla zakresu importu + próba dopięcia zadatków ze skrzynki
+    # (nowo dodane terminy mogą pasować do wcześniej nieprzypisanych KP).
+    if daty:
+        _odswiez_wymagania_imprez(db, min(daty), max(daty))
+    for z in db.query(models.KpZadatek).filter(models.KpZadatek.termin_id.is_(None)).all():
+        _dopasuj_zadatek(db, z)
+    db.commit()
+
+    ostrzezenia = []
+    w = _imprezy_wymagania_warning(db)
+    if w:
+        ostrzezenia.append(w)
+    if bez_osob:
+        ostrzezenia.append(f"{bez_osob} imprez bez liczby osób — dla nich obsada nie zostanie policzona (uzupełnij liczbę osób w kalendarzu).")
+    if bez_daty:
+        ostrzezenia.append(f"{bez_daty} wydarzeń bez poprawnej daty — pominięto.")
+    if bez_uid:
+        ostrzezenia.append(f"{bez_uid} wydarzeń bez UID — pominięto (brak klucza do deduplikacji).")
+
+    return {
+        "dodano_terminy": dodano_terminy,
+        "dodano_imprezy": dodano_imprezy,
+        "pominieto": pominieto,
+        "bez_daty": bez_daty,
+        "ostrzezenia": ostrzezenia,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # RCP — ODBICIA (przyjmowane od lokalnego agenta) + GODZINY/STANOWISKO
 #   VPS nie łączy się z bazą RCP/Gastro. Lokalny agent (na serwerze Gastro) czyta
 #   odbicia read-only (NOLOCK) i WYPYCHA je tutaj. Autoryzacja: stały token X-RCP-Token.
@@ -2520,6 +2650,8 @@ def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Dep
     # Push „raport oczekuje" do kelnerów sali z ZAMKNIĘTYM rozliczeniem Gastro (wpisane w komputer)
     # — raz na kelnera/dzień (push_oczekuje_at). Po przesłaniu raportu (potwierdzone) przycisk znika.
     for d in dni_batch:
+        if ROZLICZENIA_START and d < ROZLICZENIA_START:
+            continue   # nie powiadamiaj o zmianach sprzed startu systemu (zaległe)
         try:
             roz = _zbuduj_rozliczenie(db, d)
         except Exception:

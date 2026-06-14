@@ -374,3 +374,56 @@ def test_do_rozliczenia_tylko_dla_obsady_sali(client, db):
     r = client.get("/api/me/grafik", headers=_h(u),
                    params={"start": str(g_day), "end": str(g_day)}).json()
     assert r.get("rozliczenia_oczekujace") == []
+
+
+def test_rozliczenia_oczekujace_tnie_zalegle_sprzed_startu(client, db, monkeypatch):
+    """„Rozlicz się" nie pokazuje zaległych rozliczeń sprzed startu systemu (ROZLICZENIA_START)."""
+    import main
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(dzial="obsluga")
+    u = factories.UserFactory(login="emp_cutoff", rola="employee", pracownik=p)
+    start = date.today() - timedelta(days=3)
+    monkeypatch.setattr(main, "ROZLICZENIA_START", start)
+    przed = start - timedelta(days=1)   # sprzed startu -> ma zniknąć
+    po = start + timedelta(days=1)       # po starcie -> ma zostać
+    db.add(models.PrzydzialZmiany(data=po, stanowisko_id=sala.id, pracownik_id=p.id))
+    _gastro(db, p.id, przed, "GOTÓWKA", dekl=100)
+    _gastro(db, p.id, po, "GOTÓWKA", dekl=200)
+    db.commit()
+    daty = main._rozliczenia_oczekujace(db, p.id)
+    assert po.isoformat() in daty
+    assert przed.isoformat() not in daty
+    # to samo przez /me/grafik (źródło bannera)
+    r = client.get("/api/me/grafik", headers=_h(u), params={"start": str(przed), "end": str(po)}).json()
+    assert po.isoformat() in r["rozliczenia_oczekujace"]
+    assert przed.isoformat() not in r["rozliczenia_oczekujace"]
+
+
+def test_push_oczekuje_tnie_dni_sprzed_startu(client, db, monkeypatch):
+    """Ingest zamkniętych rozliczeń Gastro NIE wysyła pusha „raport oczekuje" za dni sprzed startu."""
+    import main
+    monkeypatch.setattr(main, "wyslij_push_do_pracownika", lambda *a, **k: 0)
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(dzial="obsluga")
+    start = date.today() - timedelta(days=3)
+    monkeypatch.setattr(main, "ROZLICZENIA_START", start)
+    przed = start - timedelta(days=1)
+    po = start + timedelta(days=1)
+    db.add(models.PrzydzialZmiany(data=po, stanowisko_id=sala.id, pracownik_id=p.id))
+    db.add(models.PrzydzialZmiany(data=przed, stanowisko_id=sala.id, pracownik_id=p.id))
+    db.commit()
+    poz = [
+        {"poz_id": "A", "rozliczenie_id": "r1", "data": str(przed),
+         "imie_nazwisko": f"{p.imie} {p.nazwisko}", "zamkniete": 1, "forma": "GOTÓWKA", "deklarowane": 100},
+        {"poz_id": "B", "rozliczenie_id": "r2", "data": str(po),
+         "imie_nazwisko": f"{p.imie} {p.nazwisko}", "zamkniete": 1, "forma": "GOTÓWKA", "deklarowane": 200},
+    ]
+    r = client.post("/api/gastro/rozliczenia", headers={"x-rcp-token": "test-rcp-token"}, json={"pozycje": poz})
+    assert r.status_code == 200
+    # po starcie: rozliczenie zbudowane, push poszedł
+    roz_po = db.query(models.RozliczenieDnia).filter_by(data=po).first()
+    k_po = next((x for x in roz_po.kelnerzy if x.pracownik_id == p.id), None) if roz_po else None
+    assert k_po is not None and k_po.push_oczekuje_at is not None
+    # sprzed startu: trigger w ogóle nie budował rozliczenia -> brak pusha
+    roz_przed = db.query(models.RozliczenieDnia).filter_by(data=przed).first()
+    assert roz_przed is None or all(k.push_oczekuje_at is None for k in roz_przed.kelnerzy)
