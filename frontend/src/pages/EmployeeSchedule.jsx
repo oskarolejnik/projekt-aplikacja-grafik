@@ -64,6 +64,27 @@ export default function EmployeeSchedule({ onSeen }) {
         <span className="text-sm text-muted">Twój grafik na wybrany tydzień.</span>
       </div>
 
+      {/* „Rozlicz się" — globalne, na podstawie realnych zamkniętych rozliczeń w Gastro
+          (niezależne od oglądanego tygodnia i daty zmiany w grafiku). */}
+      {(stan.rozliczenia_oczekujace?.length > 0) && (
+        <Card className="mb-4 border-coral/40 bg-coral/[0.06] p-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-bold text-coral">
+            <Icon name="clipboard" className="h-4 w-4" />
+            {stan.rozliczenia_oczekujace.length === 1
+              ? 'Masz rozliczenie do przesłania'
+              : `Masz ${stan.rozliczenia_oczekujace.length} rozliczenia do przesłania`}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {stan.rozliczenia_oczekujace.map((d) => (
+              <button key={d} onClick={() => setRozliczSala({ data: d })}
+                className="flex items-center gap-2 rounded-lg bg-coral/15 px-3 py-2 text-sm font-bold text-coral transition hover:bg-coral/25">
+                <Icon name="clipboard" className="h-4 w-4" /> Rozlicz się — {ddmmyyyy(d)}
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <Card className="p-6">
         {loading ? (
           <div className="grid place-items-center py-16">
@@ -80,7 +101,6 @@ export default function EmployeeSchedule({ onSeen }) {
         ) : (
           <div className="space-y-3">
             {dni.map(({ data, zmiany }, i) => {
-              const oczekuje = zmiany.some((z) => z.rozlicz_sala === 'oczekuje')
               return (
               <div key={data} className="animate-fade-up rounded-xl border border-line bg-white/[0.02] p-4" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
                 <div className="mb-3 flex items-baseline gap-2">
@@ -135,11 +155,6 @@ export default function EmployeeSchedule({ onSeen }) {
                     </div>
                   ))}
                 </div>
-                {oczekuje && (
-                  <button onClick={() => setRozliczSala({ data })} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-coral/15 py-2.5 text-sm font-bold text-coral transition hover:bg-coral/25">
-                    <Icon name="clipboard" className="h-4 w-4" /> Rozlicz się
-                  </button>
-                )}
               </div>
               )
             })}

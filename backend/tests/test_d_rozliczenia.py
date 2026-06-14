@@ -1,7 +1,7 @@
 """Etap D — rozliczenia. D1: flagi przydziału „zamyka rewir" i „rozlicza imprezę"
 (ustawiane w grafiku, widoczne w „Moim grafiku")."""
 
-from datetime import datetime, time
+from datetime import datetime, time, date, timedelta
 
 import models
 import factories
@@ -327,3 +327,50 @@ def test_prefill_rozliczenia_imprezy(client, db):
     client.post("/api/me/imprezy/rozlicz", headers=_h(u), json={"data": str(d), "pozycje": [{"forma": "karta", "kwota": 50}]})
     pre2 = client.get(f"/api/me/imprezy/rozlicz?data={d}", headers=_h(u)).json()
     assert len(pre2["pozycje"]) == 1 and pre2["pozycje"][0]["forma"] == "karta"
+
+
+def test_rozlicz_sala_po_dacie_gastro_mimo_rozjazdu_grafiku(client, db):
+    """Rozjazd dat grafik↔Gastro: kelner sali z ZAMKNIĘTYM rozliczeniem Gastro w dniu,
+    w którym NIE ma zmiany w grafiku, i tak widzi „do rozliczenia" (po realnej dacie z
+    Gastro) oraz może się rozliczyć. Po przesłaniu pozycja znika."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(dzial="obsluga")
+    u = factories.UserFactory(login="emp_rozjazd", rola="employee", pracownik=p)
+    g_day = date.today()                            # dzień zamknięcia w Gastro
+    grafik_day = date.today() - timedelta(days=2)   # zmiana w grafiku — INNY dzień (ale obsada sali)
+    db.add(models.PrzydzialZmiany(data=grafik_day, stanowisko_id=sala.id, pracownik_id=p.id))
+    _gastro(db, p.id, g_day, "GOTÓWKA", dekl=1500)
+    _gastro(db, p.id, g_day, "KARTA", dekl=2500)
+    db.commit()
+
+    # /me/grafik zwraca dzień Gastro w „rozliczenia_oczekujace" (mimo braku zmiany tego dnia)
+    r = client.get("/api/me/grafik", headers=_h(u),
+                   params={"start": str(grafik_day), "end": str(g_day)}).json()
+    assert g_day.isoformat() in r["rozliczenia_oczekujace"]
+
+    # kelner może pobrać (prefill z Gastro) i przesłać rozliczenie dla daty Gastro
+    info = client.get("/api/me/rozliczenie", headers=_h(u), params={"data": str(g_day)}).json()
+    assert info["moze"] is True
+    assert info["wiersz"]["gotowka"] == 1500 and info["wiersz"]["karta"] == 2500
+    put = client.put("/api/me/rozliczenie", headers=_h(u), params={"data": str(g_day)},
+                     json={"gotowka": 1500, "karta": 2500, "kw": 0, "terminale": [], "kasy": []})
+    assert put.status_code == 204
+
+    # po przesłaniu znika z „do rozliczenia"
+    r2 = client.get("/api/me/grafik", headers=_h(u),
+                    params={"start": str(grafik_day), "end": str(g_day)}).json()
+    assert g_day.isoformat() not in r2["rozliczenia_oczekujace"]
+
+
+def test_do_rozliczenia_tylko_dla_obsady_sali(client, db):
+    """Pracownik BEZ żadnej zmiany na sali (np. tylko kuchnia) nie dostaje „do rozliczenia",
+    nawet jeśli istnieje wpis Gastro na jego id."""
+    factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(dzial="kuchnia")
+    u = factories.UserFactory(login="emp_kuch_norozl", rola="employee", pracownik=p)
+    g_day = date.today()
+    _gastro(db, p.id, g_day, "GOTÓWKA", dekl=999)
+    db.commit()
+    r = client.get("/api/me/grafik", headers=_h(u),
+                   params={"start": str(g_day), "end": str(g_day)}).json()
+    assert r.get("rozliczenia_oczekujace") == []

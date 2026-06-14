@@ -434,9 +434,12 @@ def moj_grafik(
     prac = db.get(models.Pracownik, user.pracownik_id)
     jest_kuchnia = bool(prac and prac.dzial == "kuchnia")
     pub = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
+    # „Rozlicz się" jest globalne (ostatnie 21 dni z Gastro), niezależne od oglądanego tygodnia.
+    oczekujace = _rozliczenia_oczekujace(db, user.pracownik_id)
     # Kuchnia: grafik „żywy" — kucharz widzi swoje zmiany od razu (bez czekania na publikację).
     if not pub and not jest_kuchnia:
-        return {"opublikowany": False, "opublikowano_at": None, "zmiany": []}
+        return {"opublikowany": False, "opublikowano_at": None, "zmiany": [],
+                "rozliczenia_oczekujace": oczekujace}
 
     moje = (
         db.query(models.PrzydzialZmiany)
@@ -505,7 +508,8 @@ def moj_grafik(
                 for w in wspol
             ],
         })
-    return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat() if pub else None, "zmiany": zmiany}
+    return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat() if pub else None,
+            "zmiany": zmiany, "rozliczenia_oczekujace": oczekujace}
 
 # --- GRAFIK SPRZĄTANIA (dział techniczny + admin) ---
 
@@ -846,16 +850,27 @@ def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
         db.add(roz); db.flush()
     sala_ids = _sala_stanowisko_ids(db)
     istn = {k.pracownik_id for k in roz.kelnerzy}
-    przy = (db.query(models.PrzydzialZmiany)
-            .filter(models.PrzydzialZmiany.data == data,
-                    models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()) if sala_ids else []
-    for a in przy:
-        if a.pracownik_id in istn:
+    pids = set()
+    if sala_ids:
+        # 1) grafik Sali tego dnia
+        pids |= {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
+            models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
+        # 2) faktycznie pracujący na sali = zamknięte rozliczenie Gastro tego dnia + obsada sali w oknie
+        #    (radzi sobie z rozjazdem: data zmiany w grafiku ≠ DataOtwarcia rozliczenia w Gastro)
+        sala_staff = {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
+            models.PrzydzialZmiany.data >= data - timedelta(days=21),
+            models.PrzydzialZmiany.data <= data + timedelta(days=21),
+            models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
+        gastro_pids = {r.pracownik_id for r in db.query(models.RozliczenieGastro).filter(
+            models.RozliczenieGastro.data == data, models.RozliczenieGastro.pracownik_id.isnot(None)).all()}
+        pids |= (gastro_pids & sala_staff)
+    for pid in pids:
+        if pid in istn:
             continue
-        g = _gastro_dla_kelnera(db, a.pracownik_id, data)
+        g = _gastro_dla_kelnera(db, pid, data)
         roz.kelnerzy.append(models.RozliczenieKelner(
-            pracownik_id=a.pracownik_id, gotowka=g["gotowka"], karta=g["karta"], fv=g["fv"]))
-        istn.add(a.pracownik_id)
+            pracownik_id=pid, gotowka=g["gotowka"], karta=g["karta"], fv=g["fv"]))
+        istn.add(pid)
     db.commit(); db.refresh(roz)
     return roz
 
@@ -957,11 +972,56 @@ def szef_rozliczenie(data: date = Query(...), db: Session = Depends(get_db)):
             "roznica_karty": w["terminale"]["roznica_karty"], "roznica_calosc": w["kasy"]["roznica"]}
 
 
+def _obsada_sali_okno(db, pid: int, data: date, sala_ids) -> bool:
+    """Czy pracownik jest obsadą sali w oknie ±21 dni (radzi sobie z rozjazdem dat grafik↔Gastro)."""
+    return bool(sala_ids and db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.pracownik_id == pid,
+        models.PrzydzialZmiany.data >= data - timedelta(days=21),
+        models.PrzydzialZmiany.data <= data + timedelta(days=21),
+        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first())
+
+
 def _kelner_sala_dnia(db, pid: int, data: date) -> bool:
     sala_ids = _sala_stanowisko_ids(db)
-    return bool(pid and sala_ids and db.query(models.PrzydzialZmiany).filter(
-        models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.pracownik_id == pid,
-        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first())
+    if not (pid and sala_ids):
+        return False
+    # 1) przydział Sali tego dnia (grafik)
+    if db.query(models.PrzydzialZmiany).filter(
+            models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.pracownik_id == pid,
+            models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first():
+        return True
+    # 2) zamknięte rozliczenie Gastro tego dnia + obsada sali w oknie (rozjazd dat grafik↔Gastro)
+    if db.query(models.RozliczenieGastro).filter_by(pracownik_id=pid, data=data, zamkniete=True).first() \
+            and _obsada_sali_okno(db, pid, data, sala_ids):
+        return True
+    return False
+
+
+def _rozliczenia_oczekujace(db, pid: int):
+    """Daty (ISO, malejąco) zamkniętych rozliczeń Gastro kelnera sali, których jeszcze NIE przesłał.
+    Niezależne od daty zmiany w grafiku — bazuje na realnych zamknięciach w Gastro (DataOtwarcia),
+    więc przycisk „Rozlicz się" pojawia się nawet gdy dzień zmiany ≠ dzień rozliczenia w Gastro."""
+    if not pid:
+        return []
+    sala_ids = _sala_stanowisko_ids(db)
+    if not sala_ids:
+        return []
+    od = date.today() - timedelta(days=21)
+    # tylko obsada sali (żeby nie pokazywać np. baru/kuchni)
+    czy_sala = db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.pracownik_id == pid, models.PrzydzialZmiany.data >= od,
+        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first()
+    if not czy_sala:
+        return []
+    daty = sorted({r.data for r in db.query(models.RozliczenieGastro).filter_by(
+        pracownik_id=pid, zamkniete=True).filter(models.RozliczenieGastro.data >= od).all()}, reverse=True)
+    out = []
+    for d in daty:
+        roz = db.query(models.RozliczenieDnia).filter_by(data=d).first()
+        k = next((x for x in roz.kelnerzy if x.pracownik_id == pid), None) if roz else None
+        if not (k and k.potwierdzone):
+            out.append(d.isoformat())
+    return out
 
 
 def _rozlicz_sala_status(db, pid: int, data: date, sala_ids=None):
