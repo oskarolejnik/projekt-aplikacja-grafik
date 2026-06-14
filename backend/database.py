@@ -98,6 +98,15 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN push_admin_at TIMESTAMP"))
             if "przelew" not in kolumny:
                 conn.execute(text("ALTER TABLE rozliczenia_dnia ADD COLUMN przelew FLOAT NOT NULL DEFAULT 0"))
+    if "kp_zadatki" in insp.get_table_names():
+        kolumny = {c["name"] for c in insp.get_columns("kp_zadatki")}
+        with engine.begin() as conn:
+            if "nazwisko" not in kolumny:
+                conn.execute(text("ALTER TABLE kp_zadatki ADD COLUMN nazwisko VARCHAR"))
+            if "data_imprezy" not in kolumny:
+                conn.execute(text("ALTER TABLE kp_zadatki ADD COLUMN data_imprezy DATE"))
+            if "termin_id" not in kolumny:
+                conn.execute(text("ALTER TABLE kp_zadatki ADD COLUMN termin_id INTEGER"))
     if "rozliczenia_dnia_kelnerzy" in insp.get_table_names():
         kolumny = {c["name"] for c in insp.get_columns("rozliczenia_dnia_kelnerzy")}
         with engine.begin() as conn:

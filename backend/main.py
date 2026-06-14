@@ -1153,10 +1153,11 @@ def set_zeszyt_config(dane: schemas.ZeszytConfigIn, db: Session = Depends(get_db
 
 # ── KALENDARZ IMPREZ ──────────────────────────────────────────────────────────
 
-def _termin_out(t: models.Termin) -> dict:
+def _termin_out(t: models.Termin, zadatek_kp: float = 0.0) -> dict:
     return {"id": t.id, "data": str(t.data), "nazwisko": t.nazwisko, "typ": t.typ,
             "liczba_osob": t.liczba_osob, "telefon": t.telefon, "sala": t.sala,
-            "notatka": t.notatka, "status": t.status, "zadatek": t.zadatek or 0}
+            "notatka": t.notatka, "status": t.status, "zadatek": t.zadatek or 0,
+            "zadatek_kp": round(zadatek_kp, 2)}   # suma zadatków KP przypisanych do terminu
 
 
 @app.get("/api/terminy")
@@ -1164,7 +1165,12 @@ def get_terminy(start: date = Query(...), end: date = Query(...), db: Session = 
     rows = (db.query(models.Termin)
             .filter(models.Termin.data >= start, models.Termin.data <= end)
             .order_by(models.Termin.data.asc(), models.Termin.id.asc()).all())
-    return {"terminy": [_termin_out(t) for t in rows]}
+    kp_sum = {}
+    ids = [t.id for t in rows]
+    if ids:
+        for z in db.query(models.KpZadatek).filter(models.KpZadatek.termin_id.in_(ids)).all():
+            kp_sum[z.termin_id] = kp_sum.get(z.termin_id, 0) + (z.kwota or 0)
+    return {"terminy": [_termin_out(t, kp_sum.get(t.id, 0)) for t in rows]}
 
 
 @app.post("/api/terminy", status_code=201)
@@ -1193,6 +1199,8 @@ def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(
 def usun_termin(termin_id: int, db: Session = Depends(get_db)):
     t = db.get(models.Termin, termin_id)
     if t:
+        for z in db.query(models.KpZadatek).filter_by(termin_id=termin_id).all():
+            z.termin_id = None       # odepnij zadatki (zostają w skrzynce)
         db.delete(t); db.commit()
 
 
@@ -2469,10 +2477,47 @@ def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Dep
     return {"ok": True, "pozycje": n}
 
 
+_RE_NAZW = re.compile(r"\bp\.?\s*([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)")
+_RE_DATA = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})|(\d{4})\.(\d{1,2})\.(\d{1,2})")
+
+
+def _parsuj_zadatek(opis):
+    """Z opisu KP wyciąga nazwisko (słowo po „p.") i datę imprezy (DD.MM.RRRR lub RRRR.MM.DD)."""
+    if not opis:
+        return None, None
+    mn = _RE_NAZW.search(opis)
+    nazwisko = mn.group(1) if mn else None
+    data_imp = None
+    for m in _RE_DATA.finditer(opis):
+        try:
+            if m.group(3):
+                d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            else:
+                y, mo, d = int(m.group(4)), int(m.group(5)), int(m.group(6))
+            data_imp = date(y, mo, d)
+            break
+        except (ValueError, TypeError):
+            continue
+    return nazwisko, data_imp
+
+
+def _dopasuj_zadatek(db, z) -> bool:
+    """Auto-dopasowanie: termin z tą datą imprezy + nazwiskiem (zawiera). Tylko gdy DOKŁADNIE 1 trafienie."""
+    if z.termin_id or not z.nazwisko or not z.data_imprezy:
+        return False
+    naz = z.nazwisko.lower()
+    kand = [t for t in db.query(models.Termin).filter(models.Termin.data == z.data_imprezy).all()
+            if naz in (t.nazwisko or "").lower()]
+    if len(kand) == 1:
+        z.termin_id = kand[0].id
+        return True
+    return False
+
+
 @app.post("/api/gastro/zadatki")
 def gastro_zadatki_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
-    """Zadatki (KP „Kasa przyjęła") z Gastro od agenta (X-RCP-Token). Upsert po id (GUID dokumentu).
-    Surowe dane (kwota, opis, data) — parsowanie/przypisanie do kalendarza osobnym etapem."""
+    """Zadatki (KP „Kasa przyjęła") z Gastro od agenta (X-RCP-Token). Upsert po id. Parsuje opis
+    (nazwisko + data imprezy) i próbuje auto-dopasować do terminu w kalendarzu."""
     if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
     teraz = datetime.utcnow()
@@ -2490,10 +2535,55 @@ def gastro_zadatki_ingest(payload: dict, request: Request, db: Session = Depends
         rec.kwota = float(it.get("kwota") or 0)
         rec.opis = (it.get("opis") or None)
         rec.data = d
+        rec.nazwisko, rec.data_imprezy = _parsuj_zadatek(rec.opis)
         rec.zaktualizowano_at = teraz
         n += 1
     db.commit()
+    for z in db.query(models.KpZadatek).filter(models.KpZadatek.termin_id.is_(None)).all():
+        _dopasuj_zadatek(db, z)
+    db.commit()
     return {"ok": True, "zadatki": n}
+
+
+def _zadatek_out(db, z) -> dict:
+    t = db.get(models.Termin, z.termin_id) if z.termin_id else None
+    return {"id": z.id, "numer": z.numer, "kwota": z.kwota, "opis": z.opis, "data": str(z.data),
+            "nazwisko": z.nazwisko, "data_imprezy": str(z.data_imprezy) if z.data_imprezy else None,
+            "termin_id": z.termin_id,
+            "termin": ({"id": t.id, "nazwisko": t.nazwisko, "data": str(t.data), "typ": t.typ} if t else None)}
+
+
+@app.get("/api/zadatki")
+def get_zadatki(db: Session = Depends(get_db)):
+    """Zadatki KP: przypisane do terminów + skrzynka „do przypisania" (niedopasowane)."""
+    rows = db.query(models.KpZadatek).order_by(models.KpZadatek.data.desc()).all()
+    return {"przypisane": [_zadatek_out(db, z) for z in rows if z.termin_id],
+            "do_przypisania": [_zadatek_out(db, z) for z in rows if not z.termin_id]}
+
+
+@app.post("/api/zadatki/dopasuj")
+def dopasuj_zadatki(db: Session = Depends(get_db)):
+    n = sum(1 for z in db.query(models.KpZadatek).filter(models.KpZadatek.termin_id.is_(None)).all()
+            if _dopasuj_zadatek(db, z))
+    db.commit()
+    return {"dopasowano": n}
+
+
+@app.put("/api/zadatki/{zid}/przypisz", status_code=204)
+def przypisz_zadatek(zid: str, termin_id: int = Query(...), db: Session = Depends(get_db)):
+    z = db.get(models.KpZadatek, zid)
+    if not z:
+        raise HTTPException(404, "Brak zadatku.")
+    if not db.get(models.Termin, termin_id):
+        raise HTTPException(404, "Brak terminu.")
+    z.termin_id = termin_id; db.commit()
+
+
+@app.put("/api/zadatki/{zid}/odepnij", status_code=204)
+def odepnij_zadatek(zid: str, db: Session = Depends(get_db)):
+    z = db.get(models.KpZadatek, zid)
+    if z:
+        z.termin_id = None; db.commit()
 
 
 @app.get("/api/gastro/rozliczenia")

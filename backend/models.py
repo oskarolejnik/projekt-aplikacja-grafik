@@ -229,6 +229,9 @@ class KpZadatek(Base):
     kwota             = Column(Float, nullable=False, default=0.0)
     opis              = Column(String, nullable=True)
     data              = Column(Date, index=True, nullable=False)        # data wystawienia (przyjęcia)
+    nazwisko          = Column(String, nullable=True)                   # sparsowane z opisu
+    data_imprezy      = Column(Date, nullable=True)                     # sparsowana data wydarzenia
+    termin_id         = Column(Integer, ForeignKey("terminy.id"), nullable=True)   # przypisany termin
     zaktualizowano_at = Column(DateTime, nullable=True)
 
 

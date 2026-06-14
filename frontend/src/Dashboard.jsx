@@ -18,6 +18,7 @@ import RaportGodzin from './components/tabs/RaportGodzin'
 import RozliczeniaPodglad from './components/tabs/RozliczeniaPodglad'
 import ZeszytPanel from './components/tabs/ZeszytPanel'
 import KalendarzImprez from './components/tabs/KalendarzImprez'
+import Zadatki from './components/tabs/Zadatki'
 import StolyLive from './components/tabs/StolyLive'
 import Rezerwacje from './components/tabs/Rezerwacje'
 import Eksport from './components/tabs/Eksport'
@@ -35,6 +36,7 @@ const TABS = [
   { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', group: 'Operacje', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },
   { id: 'godziny', label: 'Raport godzin', icon: 'clock', group: 'Operacje', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
   { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', group: 'Operacje', title: 'Kalendarz imprez', Comp: KalendarzImprez },
+  { id: 'zadatki', label: 'Zadatki', icon: 'clipboard', group: 'Operacje', title: 'Zadatki (KP) — przypisania', Comp: Zadatki },
   { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', group: 'Operacje', title: 'Zeszyt kasowy', Comp: ZeszytPanel },
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive },

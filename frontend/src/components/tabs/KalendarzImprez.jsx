@@ -119,7 +119,7 @@ export default function KalendarzImprez() {
                           className={`block w-full truncate rounded border-l-[3px] bg-surface-2 px-1.5 py-0.5 text-left text-[11px] ${STAT_KOL[t.status] || 'border-l-mint'}`}>
                           <span className="font-semibold text-ink">{t.nazwisko}</span>
                           {t.typ && <span className="text-muted"> · {t.typ}</span>}
-                          {(t.zadatek || 0) > 0 && <span className="ml-1 text-mint" title="Zadatek wpłacony">●</span>}
+                          {((t.zadatek || 0) > 0 || (t.zadatek_kp || 0) > 0) && <span className="ml-1 text-mint" title="Zadatek wpłacony">●</span>}
                         </button>
                       ))}
                     </div>
@@ -158,7 +158,8 @@ export default function KalendarzImprez() {
               <label className="col-span-1 text-xs font-semibold text-muted">Sala
                 <input value={modal.sala || ''} onChange={(e) => setModal((s) => ({ ...s, sala: e.target.value }))} className={fld} /></label>
               <label className="col-span-2 text-xs font-semibold text-muted">Zadatek (zł)
-                <input type="number" value={modal.zadatek ?? ''} onChange={(e) => setModal((s) => ({ ...s, zadatek: e.target.value }))} className={fld} placeholder="0,00" /></label>
+                <input type="number" value={modal.zadatek ?? ''} onChange={(e) => setModal((s) => ({ ...s, zadatek: e.target.value }))} className={fld} placeholder="0,00" />
+                {(modal.zadatek_kp || 0) > 0 && <span className="mt-1 block text-[11px] font-normal text-mint">+ z KP (auto): {zl(modal.zadatek_kp)}</span>}</label>
               <label className="col-span-2 text-xs font-semibold text-muted">Notatka
                 <textarea rows={2} value={modal.notatka || ''} onChange={(e) => setModal((s) => ({ ...s, notatka: e.target.value }))} className={fld} /></label>
             </div>
