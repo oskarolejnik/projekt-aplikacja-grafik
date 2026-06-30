@@ -51,7 +51,7 @@ OVERSIGHT_GET = {
     "szef": (
         "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
         "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
-        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt", "/api/pulpit",
+        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt", "/api/pulpit", "/api/alerty-kasowe",
     ),
     # Szef kuchni: godziny kuchni (bez wypłat), podgląd stołów na żywo, rezerwacje.
     "szef_kuchni": (
@@ -1316,6 +1316,7 @@ def pulpit(start: date = Query(...), end: date = Query(...), db: Session = Depen
     # — Koszt pracy: miesiąc końca okresu (z raportu godzin × stawki) —
     rap = raporty.raport_godzin_miesiac(db, end.year, end.month)
     koszt_pracy = round(sum(float(p["do_wyplaty"] or 0) for p in rap["pracownicy"]), 2)
+    alerty = _alerty_kasowe(db, start, end)
 
     n = max(1, len(przychod_dzienny))
     return {
@@ -1332,7 +1333,46 @@ def pulpit(start: date = Query(...), end: date = Query(...), db: Session = Depen
                  "srednia_dzienna": round(ruch_total / max(1, len(ruch_dzienny)), 1) if ruch_dzienny else 0},
         "rezerwacje": {"razem": len(rez), "wg_statusu": rez_status, "goscie": rez_goscie},
         "koszt_pracy_miesiac": {"rok": end.year, "miesiac": end.month, "kwota": koszt_pracy},
+        "alerty_kasowe": {"dni_z_anomalia": alerty["dni_z_anomalia"],
+                          "suma_braki": alerty["suma_braki"], "suma_nadwyzki": alerty["suma_nadwyzki"]},
     }
+
+
+# ── ALERTY KASOWE (różnice w rozliczeniu: brak/nadwyżka na kartach lub w kasie) ──
+
+def _alerty_kasowe(db, start: date, end: date, prog: float = 1.0) -> dict:
+    """Skanuje rozliczenia dnia w okresie i zwraca dni z różnicą ponad próg [zł].
+    Źródło: policz_dzien → terminale.roznica_karty (karty) i kasy.roznica (fiskalizacja)."""
+    rozl = db.query(models.RozliczenieDnia).filter(
+        models.RozliczenieDnia.data >= start, models.RozliczenieDnia.data <= end).all()
+    alerty = []
+    for r in sorted(rozl, key=lambda x: x.data):
+        w = _wynik_rozliczenia(db, r)
+        rk = float(w["terminale"]["roznica_karty"])
+        rc = float(w["kasy"]["roznica"])
+        problemy = []
+        if abs(rk) >= prog:
+            problemy.append({"typ": "karty", "roznica": rk, "etykieta": w["terminale"]["etykieta"]})
+        if abs(rc) >= prog:
+            problemy.append({"typ": "kasa", "roznica": rc, "etykieta": w["kasy"]["etykieta"]})
+        if problemy:
+            alerty.append({
+                "data": str(r.data), "status": r.status, "problemy": problemy,
+                "braki": round(sum(p["roznica"] for p in problemy if p["roznica"] < 0), 2),
+                "nadwyzki": round(sum(p["roznica"] for p in problemy if p["roznica"] > 0), 2),
+            })
+    return {"prog": prog, "alerty": alerty, "dni_z_anomalia": len(alerty),
+            "suma_braki": round(sum(a["braki"] for a in alerty), 2),
+            "suma_nadwyzki": round(sum(a["nadwyzki"] for a in alerty), 2)}
+
+
+@app.get("/api/alerty-kasowe")
+def alerty_kasowe(start: date = Query(...), end: date = Query(...), prog: float = 1.0,
+                  db: Session = Depends(get_db)):
+    """Dni z anomalią kasową (różnica ≥ prog zł) w okresie. Admin/szef."""
+    if end < start:
+        raise HTTPException(400, "Koniec okresu przed początkiem.")
+    return _alerty_kasowe(db, start, end, max(0.0, float(prog)))
 
 
 # ── KALENDARZ IMPREZ ──────────────────────────────────────────────────────────

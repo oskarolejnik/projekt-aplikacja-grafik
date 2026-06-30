@@ -29,12 +29,18 @@ export default function Pulpit() {
   const [start, setStart] = useState(isoMinus(29))
   const [end, setEnd] = useState(dzisISO())
   const [p, setP] = useState(null)
+  const [alerty, setAlerty] = useState(null)
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
-    try { setP(await api(`/pulpit?start=${start}&end=${end}`)) }
-    catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
+    try {
+      const [pul, al] = await Promise.all([
+        api(`/pulpit?start=${start}&end=${end}`),
+        api(`/alerty-kasowe?start=${start}&end=${end}`),
+      ])
+      setP(pul); setAlerty(al)
+    } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [start, end, toast])
   useEffect(() => { load() }, [load])
 
@@ -62,6 +68,9 @@ export default function Pulpit() {
             <Kpi label="Ruch (rachunki)" value={p.ruch.rachunki} sub={`śr. ${p.ruch.srednia_dzienna}/dzień`} icon="pin" />
             <Kpi label="Rezerwacje" value={p.rezerwacje.razem} sub={`${p.rezerwacje.goscie} gości`} icon="calendar" />
             <Kpi label={`Koszt pracy (${String(p.koszt_pracy_miesiac.miesiac).padStart(2, '0')}.${p.koszt_pracy_miesiac.rok})`} value={zl(p.koszt_pracy_miesiac.kwota)} icon="users" />
+            <Kpi label="Alerty kasowe" value={p.alerty_kasowe.dni_z_anomalia}
+                 sub={p.alerty_kasowe.suma_braki < 0 ? `braki ${zl(p.alerty_kasowe.suma_braki)}` : 'brak braków'}
+                 icon="warning" accent={p.alerty_kasowe.dni_z_anomalia > 0 ? 'text-danger' : 'text-ink'} />
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -92,6 +101,29 @@ export default function Pulpit() {
               <div className="flex flex-wrap gap-2">
                 {Object.entries(p.rezerwacje.wg_statusu).map(([s, n]) => (
                   <span key={s} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-xs text-ink">{STATUS_L[s] || s}: <b>{n}</b></span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {alerty && alerty.alerty.length > 0 && (
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Anomalie kasowe (różnice w rozliczeniu)</div>
+              <div className="space-y-2">
+                {alerty.alerty.map((a) => (
+                  <div key={a.data} className="rounded-xl border border-danger/30 bg-danger/5 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-ink">{a.data}</span>
+                      <span className="text-xs text-muted">{a.status}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                      {a.problemy.map((pr, i) => (
+                        <span key={i} className={`rounded-full px-2 py-0.5 ${pr.roznica < 0 ? 'bg-danger/15 text-danger' : 'bg-lemon/15 text-lemon'}`}>
+                          {pr.typ === 'karty' ? 'Karty' : 'Kasa'}: {zl(pr.roznica)}{pr.etykieta ? ` · ${pr.etykieta}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
