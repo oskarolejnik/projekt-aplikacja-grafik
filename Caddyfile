@@ -1,0 +1,7 @@
+# Reverse proxy z automatycznym HTTPS (Let's Encrypt).
+# Domenę podaje zmienna DOMENA (domyślnie localhost = HTTP do testów lokalnych).
+# Dla prawdziwej domeny z DNS → Caddy sam pobiera i odnawia certyfikat TLS.
+{$DOMENA:localhost} {
+	encode zstd gzip
+	reverse_proxy app:8000
+}

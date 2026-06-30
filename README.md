@@ -134,6 +134,26 @@ python new_client.py restauracja-pod-lipa --nazwa "Restauracja Pod Lipą" \
 Katalog `instances/` zawiera prawdziwe sekrety i bazy — jest w `.gitignore` i **nigdy nie trafia do repo**.
 Następnie uruchom backend ze środowiskiem tej instancji (plik `.env` instancji).
 
+## 🐳 Wdrożenie produkcyjne (Docker + Caddy)
+
+Gotowy stack produkcyjny w `docker-compose.prod.yml`: **aplikacja** (obraz z `Dockerfile` —
+backend FastAPI serwujący zbudowany frontend), **PostgreSQL** i **Caddy** jako reverse proxy
+z **automatycznym HTTPS** (Let's Encrypt). Obraz jest wielostopniowy: etap 1 buduje frontend (Vite),
+etap 2 uruchamia backend serwujący statyki (same-origin). Migracje Alembic wykonują się
+automatycznie przy starcie (`init_db()`), więc wdrożenie sprowadza się do:
+
+```bash
+cp .env.prod.example .env        # uzupełnij DOMENA, SECRET_KEY, POSTGRES_PASSWORD…
+docker compose -f docker-compose.prod.yml up -d --build
+
+# Pierwszy administrator (jednorazowo, po starcie):
+docker compose -f docker-compose.prod.yml exec app python create_admin.py
+```
+
+DNS domeny musi wskazywać na serwer — Caddy sam pobierze i odnowi certyfikat TLS. Do testów
+lokalnych zostaw `DOMENA=localhost` (serwuje po HTTP). Pliki `.env`, bazy i katalog `instances/`
+są w `.gitignore` i nie trafiają ani do repo, ani do obrazu (`.dockerignore`).
+
 ## 🎨 White-label (marka per lokal)
 
 Branding i moduły ustawia administrator przez `PUT /api/lokal/config` (encja `LokalConfig`):

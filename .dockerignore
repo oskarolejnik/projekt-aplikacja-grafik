@@ -1,0 +1,40 @@
+# Konteksty budowania — wyklucz to, co zbędne lub wrażliwe.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+
+# Środowiska wirtualne i zależności (odtwarzane w obrazie).
+.venv/
+.venv-test/
+.venv-run/
+venv/
+backend/venv/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Sekrety, bazy, runtime instancji — NIGDY do obrazu.
+.env
+**/.env
+*.db
+**/*.db
+instances/
+backend/instances/
+*.pem
+google_sa.json
+*-service-account*.json
+*.log
+
+# Niepotrzebne w obrazie webowym.
+.git/
+.gitignore
+.github/
+.claude/
+electron/
+agent_lokalny/
+dist/
+*.app/
+tests/
+backend/tests/
+*.md
+!backend/migrations/README.md
