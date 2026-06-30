@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, uprawnienia
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -322,6 +322,13 @@ def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
 @app.get("/api/auth/me", response_model=schemas.UserOut)
 def auth_me(user: models.User = Depends(get_current_user)):
     return _user_out(user)
+
+
+@app.get("/api/me/uprawnienia")
+def me_uprawnienia(user: models.User = Depends(get_current_user)):
+    """Granularne uprawnienia zalogowanego użytkownika (RBAC) — do sterowania UI.
+    Krytyczny enforcement po stronie API dalej robi middleware role_guard."""
+    return {"rola": user.rola, "uprawnienia": uprawnienia.uprawnienia(user.rola)}
 
 # --- Zarządzanie kontami (dostęp tylko admin — wymusza middleware) ---
 
