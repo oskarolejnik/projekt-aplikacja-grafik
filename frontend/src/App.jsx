@@ -9,6 +9,11 @@ import Dashboard from './Dashboard'
 import EmployeeArea from './pages/EmployeeArea'
 import SzefView from './pages/SzefView'
 import SzefKuchniView from './pages/SzefKuchniView'
+import RezerwacjaWidget from './pages/RezerwacjaWidget'
+
+// Publiczny widget rezerwacji (gość, bez logowania) — osobna „trasa" wykrywana po ?rezerwuj.
+// Działa POZA AuthProvider (nie wymaga tokenu); branding z publicznego /api/lokal/branding.
+const isWidget = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rezerwuj')
 
 // Routing wg stanu zalogowania i roli:
 //   brak użytkownika → ekran startowy (z logowaniem)
@@ -31,6 +36,17 @@ function Routed() {
 }
 
 export default function App() {
+  if (isWidget) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <BrandingProvider>
+          <ToastProvider>
+            <RezerwacjaWidget />
+          </ToastProvider>
+        </BrandingProvider>
+      </MotionConfig>
+    )
+  }
   return (
     <MotionConfig reducedMotion="user">
       <BrandingProvider>
