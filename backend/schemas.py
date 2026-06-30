@@ -313,3 +313,17 @@ class RezerwacjaIn(BaseModel):
 
 class RezerwacjaStatusIn(BaseModel):
     status: str                    # potwierdzona | odbyla | no_show | odwolana
+
+class ListaOczekujacychIn(BaseModel):
+    data: date
+    godz_od: Optional[time] = None
+    liczba_osob: Optional[int] = None
+    nazwisko: str
+    telefon: Optional[str] = None
+    email: Optional[str] = None
+    notatka: Optional[str] = None
+
+class ZrealizujIn(BaseModel):
+    """Realizacja wpisu z listy oczekujących → utworzenie rezerwacji stolika."""
+    stolik_id: int
+    godz_od: Optional[time] = None   # opcjonalne nadpisanie godziny z wpisu

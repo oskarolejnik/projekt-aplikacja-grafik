@@ -1677,6 +1677,74 @@ def wyslij_potwierdzenie_stolik(rid: int, db: Session = Depends(get_db)):
     return {"wyslano": _wyslij_potwierdzenie_rezerwacji(db, t)}
 
 
+# ── Lista oczekujących (waitlist) ────────────────────────────────────────────
+def _lista_out(w: models.ListaOczekujacych) -> dict:
+    return {"id": w.id, "data": str(w.data), "godz_od": _hm(w.godz_od), "liczba_osob": w.liczba_osob,
+            "nazwisko": w.nazwisko, "telefon": w.telefon, "email": w.email, "notatka": w.notatka,
+            "status": w.status, "termin_id": w.termin_id}
+
+
+@app.get("/api/lista-oczekujacych", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_lista_oczekujacych(data: date = Query(...), db: Session = Depends(get_db)):
+    rows = (db.query(models.ListaOczekujacych)
+            .filter(models.ListaOczekujacych.data == data)
+            .order_by(models.ListaOczekujacych.status, models.ListaOczekujacych.godz_od,
+                      models.ListaOczekujacych.id).all())
+    return {"lista": [_lista_out(w) for w in rows]}
+
+
+@app.post("/api/lista-oczekujacych", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def dodaj_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, db: Session = Depends(get_db)):
+    if not dane.nazwisko or not dane.nazwisko.strip():
+        raise HTTPException(400, "Podaj nazwisko / klienta.")
+    w = models.ListaOczekujacych(
+        data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
+        nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
+        notatka=dane.notatka, status="oczekuje", utworzono_at=datetime.utcnow())
+    db.add(w); db.commit(); db.refresh(w)
+    return _lista_out(w)
+
+
+@app.delete("/api/lista-oczekujacych/{wid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def usun_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
+    w = db.get(models.ListaOczekujacych, wid)
+    if w:
+        db.delete(w); db.commit()
+
+
+@app.post("/api/lista-oczekujacych/{wid}/odwolaj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def odwolaj_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
+    w = db.get(models.ListaOczekujacych, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    w.status = "odwolany"
+    db.commit(); db.refresh(w)
+    return _lista_out(w)
+
+
+@app.post("/api/lista-oczekujacych/{wid}/zrealizuj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def zrealizuj_lista_oczekujacych(wid: int, dane: schemas.ZrealizujIn, db: Session = Depends(get_db)):
+    """Realizuje wpis z listy oczekujących → tworzy rezerwację na wskazanym stoliku
+    (walidacja pojemności/kolizji). Wpis dostaje status 'zrealizowany'."""
+    w = db.get(models.ListaOczekujacych, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    if w.status != "oczekuje":
+        raise HTTPException(409, "Wpis już zrealizowany lub odwołany.")
+    godz = dane.godz_od or w.godz_od
+    godz_do = _waliduj_rezerwacje(db, w.data, godz, None, dane.stolik_id, w.liczba_osob)
+    t = models.Termin(
+        data=w.data, nazwisko=w.nazwisko, telefon=w.telefon, email=w.email,
+        liczba_osob=w.liczba_osob, notatka=w.notatka, status="potwierdzona", zadatek=0.0,
+        utworzono_at=datetime.utcnow(), godz_od=godz, godz_do=godz_do, stolik_id=dane.stolik_id,
+        rodzaj="stolik", kanal="reczna")
+    db.add(t); db.flush()
+    w.status = "zrealizowany"; w.zrealizowano_at = datetime.utcnow(); w.termin_id = t.id
+    db.commit(); db.refresh(t)
+    _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
+    return {"rezerwacja": _rezerwacja_out(t), "wpis": _lista_out(w)}
+
+
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
 @app.get("/api/me/push/public-key", status_code=200)

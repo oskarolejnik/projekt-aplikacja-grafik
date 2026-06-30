@@ -32,16 +32,22 @@ export default function RezerwacjeStolik() {
   const [modal, setModal] = useState(null)        // rezerwacja (edycja) lub { data } (nowa)
   const [stolikModal, setStolikModal] = useState(false)
   const [nowyStolik, setNowyStolik] = useState({ nazwa: '', strefa: '', pojemnosc: 2 })
+  const [lista, setLista] = useState([])
+  const [listaModal, setListaModal] = useState(false)
+  const [nowyOcz, setNowyOcz] = useState({ godz_od: '', liczba_osob: '', nazwisko: '', telefon: '' })
+  const [posadzStolik, setPosadzStolik] = useState({})   // { [wid]: stolik_id }
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [rs, ss] = await Promise.all([
+      const [rs, ss, lo] = await Promise.all([
         api(`/rezerwacje-stolik?start=${data}&end=${data}`),
         api('/stoliki'),
+        api(`/lista-oczekujacych?data=${data}`),
       ])
       setRez((rs.rezerwacje || []).sort((a, b) => (a.godz_od || '').localeCompare(b.godz_od || '')))
       setStoliki(ss.stoliki || [])
+      setLista(lo.lista || [])
     } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [data, toast])
 
@@ -97,6 +103,31 @@ export default function RezerwacjeStolik() {
     try { await api(`/stoliki/${id}`, 'DELETE'); load() } catch (e) { toast(e.message, 'error') }
   }
 
+  const dodajOczekujacego = async () => {
+    if (!nowyOcz.nazwisko.trim()) { toast('Podaj nazwisko.', 'error'); return }
+    try {
+      await api('/lista-oczekujacych', 'POST', {
+        data, godz_od: nowyOcz.godz_od || null, liczba_osob: num(nowyOcz.liczba_osob),
+        nazwisko: nowyOcz.nazwisko.trim(), telefon: nowyOcz.telefon || null,
+      })
+      setNowyOcz({ godz_od: '', liczba_osob: '', nazwisko: '', telefon: '' }); load()
+    } catch (e) { toast(e.message, 'error') }
+  }
+  const usunOczekujacego = async (id) => {
+    try { await api(`/lista-oczekujacych/${id}`, 'DELETE'); load() } catch (e) { toast(e.message, 'error') }
+  }
+  const odwolajOczekujacego = async (id) => {
+    try { await api(`/lista-oczekujacych/${id}/odwolaj`, 'POST'); load() } catch (e) { toast(e.message, 'error') }
+  }
+  const posadz = async (w) => {
+    const sid = posadzStolik[w.id]
+    if (!sid) { toast('Wybierz stolik.', 'error'); return }
+    try {
+      await api(`/lista-oczekujacych/${w.id}/zrealizuj`, 'POST', { stolik_id: Number(sid) })
+      toast('Posadzono — utworzono rezerwację.', 'success'); load()
+    } catch (e) { toast(e.message, 'error') }
+  }
+
   const dataLabel = new Date(data).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })
 
   return (
@@ -104,6 +135,9 @@ export default function RezerwacjeStolik() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <SectionHeader title="Rezerwacje stolików" subtitle="Rezerwacje na wybrany dzień. Walidacja pojemności i kolizji slotów." />
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <button onClick={() => setListaModal(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink">
+            <Icon name="clock" className="h-3.5 w-3.5" /> Oczekujący ({lista.filter((w) => w.status === 'oczekuje').length})
+          </button>
           <button onClick={() => setStolikModal(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink">
             <Icon name="pin" className="h-3.5 w-3.5" /> Stoliki ({stoliki.length})
           </button>
@@ -223,6 +257,56 @@ export default function RezerwacjeStolik() {
               <input value={nowyStolik.strefa} onChange={(e) => setNowyStolik((s) => ({ ...s, strefa: e.target.value }))} placeholder="Strefa" className={`${fld} col-span-2`} />
               <input type="number" min="1" value={nowyStolik.pojemnosc} onChange={(e) => setNowyStolik((s) => ({ ...s, pojemnosc: e.target.value }))} placeholder="Os." className={`${fld} col-span-1`} />
               <button onClick={dodajStolik} className="col-span-1 grid place-items-center rounded-lg bg-accent-gradient text-bg"><Icon name="plus" className="h-4 w-4" /></button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal listy oczekujących */}
+      {listaModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setListaModal(false)}>
+          <div className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5 shadow-glow" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-start justify-between">
+              <div className="font-display text-lg font-bold text-ink">Lista oczekujących · {data}</div>
+              <button onClick={() => setListaModal(false)} className="text-muted hover:text-ink"><Icon name="close" className="h-5 w-5" /></button>
+            </div>
+            <div className="mb-4 space-y-2">
+              {lista.length === 0 && <div className="text-sm text-muted">Brak oczekujących na ten dzień.</div>}
+              {lista.map((w) => (
+                <div key={w.id} className="rounded-xl border border-line bg-surface-2 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm text-ink">
+                      <span className="font-semibold">{w.nazwisko}</span>
+                      {w.godz_od ? ` · ${w.godz_od}` : ''}{w.liczba_osob ? ` · ${w.liczba_osob} os.` : ''}{w.telefon ? ` · ${w.telefon}` : ''}
+                    </span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {w.status !== 'oczekuje' && (
+                        <span className={`rounded-full px-2 py-0.5 text-xs ${w.status === 'zrealizowany' ? 'bg-mint/15 text-mint' : 'bg-white/10 text-muted'}`}>
+                          {w.status === 'zrealizowany' ? 'Posadzony' : 'Odwołany'}
+                        </span>
+                      )}
+                      <button onClick={() => usunOczekujacego(w.id)} className="text-muted hover:text-danger"><Icon name="trash" className="h-4 w-4" /></button>
+                    </div>
+                  </div>
+                  {w.status === 'oczekuje' && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <select value={posadzStolik[w.id] || ''} onChange={(e) => setPosadzStolik((s) => ({ ...s, [w.id]: e.target.value }))} className={`${fld} flex-1`}>
+                        <option value="">— wybierz stolik —</option>
+                        {stoliki.filter((s) => s.aktywny).map((s) => <option key={s.id} value={s.id}>{s.nazwa} · {s.pojemnosc} os.</option>)}
+                      </select>
+                      <Button onClick={() => posadz(w)} className="px-3 py-2 text-xs">Posadź</Button>
+                      <button onClick={() => odwolajOczekujacego(w.id)} title="Odwołaj" className="rounded-lg border border-line px-2 py-2 text-muted hover:text-ink"><Icon name="close" className="h-4 w-4" /></button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-12 gap-2 border-t border-line pt-3">
+              <input value={nowyOcz.nazwisko} onChange={(e) => setNowyOcz((s) => ({ ...s, nazwisko: e.target.value }))} placeholder="Nazwisko" className={`${fld} col-span-4`} />
+              <input type="time" value={nowyOcz.godz_od} onChange={(e) => setNowyOcz((s) => ({ ...s, godz_od: e.target.value }))} className={`${fld} col-span-3`} />
+              <input type="number" min="1" value={nowyOcz.liczba_osob} onChange={(e) => setNowyOcz((s) => ({ ...s, liczba_osob: e.target.value }))} placeholder="Os." className={`${fld} col-span-2`} />
+              <input value={nowyOcz.telefon} onChange={(e) => setNowyOcz((s) => ({ ...s, telefon: e.target.value }))} placeholder="Tel." className={`${fld} col-span-2`} />
+              <button onClick={dodajOczekujacego} className="col-span-1 grid place-items-center rounded-lg bg-accent-gradient text-bg"><Icon name="plus" className="h-4 w-4" /></button>
             </div>
           </div>
         </div>

@@ -470,3 +470,21 @@ class GodzinyOtwarcia(Base):
     ostatni_zasiadek  = Column(Time, nullable=True)            # ostatnia możliwa godzina rezerwacji
     dlugosc_slotu_min = Column(Integer, nullable=False, default=120)
     aktywny           = Column(Boolean, nullable=False, default=True)
+
+
+class ListaOczekujacych(Base):
+    """Lista oczekujących (waitlist) — gość bez wolnego stolika. Po zwolnieniu miejsca
+    (odwołanie / no-show) admin REALIZUJE wpis → tworzy rezerwację (Termin rodzaj=stolik)."""
+    __tablename__ = "lista_oczekujacych"
+    id              = Column(Integer, primary_key=True, index=True)
+    data            = Column(Date, nullable=False, index=True)
+    godz_od         = Column(Time, nullable=True)
+    liczba_osob     = Column(Integer, nullable=True)
+    nazwisko        = Column(String(128), nullable=False)
+    telefon         = Column(String(32), nullable=True)
+    email           = Column(String(128), nullable=True)
+    notatka         = Column(String, nullable=True)
+    status          = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|zrealizowany|odwolany
+    utworzono_at    = Column(DateTime, nullable=False)
+    zrealizowano_at = Column(DateTime, nullable=True)
+    termin_id       = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True)
