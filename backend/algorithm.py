@@ -11,8 +11,9 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
     """
     pracownicy = db.query(models.Pracownik).filter(models.Pracownik.aktywny == True).all()
     stanowiska = {s.id: s for s in db.query(models.Stanowisko).all()}
-    # Parkiet (stanowiska „Sala*") ma PRIORYTET przy obsadzaniu — jego sloty idą przed resztą.
-    sala_ids = {sid for sid, st in stanowiska.items() if (st.nazwa or "").strip().lower().startswith("sala")}
+    # Parkiet (rola 'sala' lub — fallback — nazwa „Sala*") ma PRIORYTET przy obsadzaniu.
+    sala_ids = {sid for sid, st in stanowiska.items()
+                if getattr(st, "rola", None) == "sala" or (st.nazwa or "").strip().lower().startswith("sala")}
     wymagania  = db.query(models.WymaganiaDnia).filter(
         models.WymaganiaDnia.data >= start, models.WymaganiaDnia.data <= end
     ).all()

@@ -122,7 +122,66 @@ def _ensure_schema():
                 conn.execute(text("ALTER TABLE rozliczenia_dnia_kelnerzy ADD COLUMN push_oczekuje_at TIMESTAMP"))
 
 
+def _alembic_config():
+    """Konfiguracja Alembica wskazująca na migrations/ obok tego pliku."""
+    import os
+    from alembic.config import Config
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    cfg = Config(os.path.join(here, "alembic.ini"))
+    cfg.set_main_option("script_location", os.path.join(here, "migrations"))
+    return cfg
+
+
+def _alembic_run(action):
+    """Uruchamia akcję Alembica (stamp/upgrade) na silniku aplikacji.
+    Zwraca True przy sukcesie, False gdy Alembic nie jest zainstalowany
+    (wtedy wołający stosuje fallback create_all)."""
+    try:
+        from alembic import command  # noqa: F401
+    except ImportError:
+        return False
+    from alembic import command
+    cfg = _alembic_config()
+    with engine.begin() as conn:           # transakcja domknięta po wyjściu (commit)
+        cfg.attributes["connection"] = conn
+        action(command, cfg)
+    return True
+
+
 def init_db():
-    """Tworzy tabele jeśli nie istnieją i domyka schemat (auto-migracja)."""
-    Base.metadata.create_all(bind=engine)
-    _ensure_schema()
+    """Przygotowanie schematu, świadome Alembica (idempotentne).
+
+    • Baza „legacy" (są tabele, brak alembic_version) — utworzona przed wprowadzeniem
+      Alembica: domyka brakujące kolumny i ADOPTUJE bazę do Alembica (stamp head),
+      bez odtwarzania danych. Dotyczy istniejącego wdrożenia produkcyjnego.
+    • Pusta baza (nowy klient / dev / Electron) lub baza zarządzana przez Alembica:
+      `upgrade head` — buduje schemat z migracji lub stosuje nowe migracje.
+    • Brak zainstalowanego Alembica → bezpieczny fallback create_all + _ensure_schema
+      (zachowanie jak dawniej).
+    """
+    from sqlalchemy import inspect
+
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+
+    if "alembic_version" not in tables and tables:
+        # Baza bez metryki Alembica. Dwa przypadki:
+        #  (a) schemat JUŻ kompletny (wszystkie tabele modeli istnieją — np. utworzony przez
+        #      create_all bieżących modeli: testy / dev-fallback) → adoptuj wprost jako „head"
+        #      (NIE odtwarzaj migracji, bo kolumny/tabele już są).
+        #  (b) starsza baza (sprzed Alembica, bez nowszych tabel) → oznacz BASELINE
+        #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
+        _ensure_schema()
+        model_tables = set(Base.metadata.tables.keys())
+        if model_tables.issubset(tables):
+            _alembic_run(lambda command, cfg: command.stamp(cfg, "head"))
+        elif _alembic_run(lambda command, cfg: command.stamp(cfg, "0001_baseline")):
+            _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+        return
+
+    # Pusta baza lub baza zarządzana przez Alembica → upgrade do najnowszej wersji.
+    if not _alembic_run(lambda command, cfg: command.upgrade(cfg, "head")):
+        # Fallback bez Alembica: utwórz schemat z modeli i domknij kolumny.
+        Base.metadata.create_all(bind=engine)
+        _ensure_schema()

@@ -1,85 +1,73 @@
-import markUrl from '../assets/logo-mark.png'
-import fullUrl from '../assets/logo-rajcula.png'
-import buildingSvg from '../assets/logo-building.svg'
-import bladesSvg from '../assets/logo-blades.svg'
+import { useBranding } from '../context/BrandingContext'
 
-// Logo Rajcula renderowane maską CSS (źródło jest jednokolorowe — maska pozwala
-// nadać dowolny kolor motywu):
-//   variant="ink"      -> jasny logotyp na ciemnym tle
-//   variant="bg"       -> ciemny logotyp na jasnym/gradientowym kaflu
-//   variant="gradient" -> logotyp w gradiencie akcentowym
-// Rozmiar ustawiamy klasą wysokości (np. h-6); szerokość wynika z proporcji.
-const VARIANT_BG = {
-  ink: 'bg-ink',
-  bg: 'bg-bg',
-  gradient: 'bg-accent-gradient',
-  // Gradient akcentowy, który delikatnie „płynie" (kołysanie kolorów) — ekran logowania.
-  'gradient-flow': 'bg-accent-flow bg-[length:250%_100%] animate-gradient-flow',
-}
+// Neutralny, produktowy znak (kalendarz/grafik) w gradiencie akcentowym marki.
+// Bez zewnętrznych plików — czysty SVG inline. Gdy lokal ma własne logo (branding.logo_url),
+// pokazujemy je zamiast znaku domyślnego. `variant` zachowany dla zgodności API (znak jest
+// samokolorujący gradientem, więc wygląda dobrze na ciemnym UI niezależnie od wariantu).
 
-const maskStyle = (url) => ({
-  WebkitMaskImage: `url(${url})`,
-  maskImage: `url(${url})`,
-  WebkitMaskRepeat: 'no-repeat',
-  maskRepeat: 'no-repeat',
-  WebkitMaskPosition: 'center',
-  maskPosition: 'center',
-  WebkitMaskSize: 'contain',
-  maskSize: 'contain',
-})
-
-// Sam znak (wiatrak + zabudowanie) — do małych kafli (nagłówki, logowanie).
-export function Logo({ className = 'h-5', variant = 'ink' }) {
+// Sam znak SVG (gradient akcentowy). `idSuffix` unika kolizji id gradientu przy wielu instancjach.
+function Mark({ idSuffix = '', title = '' }) {
+  const gid = `brandgrad${idSuffix}`
   return (
-    <span
-      role="img"
-      aria-label="Rajcula"
-      className={`inline-block aspect-[758/539] ${VARIANT_BG[variant] || VARIANT_BG.ink} ${className}`}
-      style={maskStyle(markUrl)}
-    />
+    <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className="h-full w-full"
+         role="img" aria-label={title || undefined} aria-hidden={title ? undefined : true}>
+      <defs>
+        <linearGradient id={gid} x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#F4E2A0" />
+          <stop offset="0.5" stopColor="#A7D7C5" />
+          <stop offset="1" stopColor="#F2B8CB" />
+        </linearGradient>
+      </defs>
+      {/* korpus kalendarza */}
+      <rect x="5.5" y="10" width="37" height="31.5" rx="8" stroke={`url(#${gid})`} strokeWidth="3" />
+      {/* uchwyty u góry */}
+      <line x1="15" y1="6" x2="15" y2="13" stroke={`url(#${gid})`} strokeWidth="3" strokeLinecap="round" />
+      <line x1="33" y1="6" x2="33" y2="13" stroke={`url(#${gid})`} strokeWidth="3" strokeLinecap="round" />
+      {/* komórki grafiku — dwie wypełnione (zaplanowane sloty), dwie przygaszone */}
+      <rect x="12" y="20.5" width="9" height="7" rx="2" fill={`url(#${gid})`} />
+      <rect x="27" y="20.5" width="9" height="7" rx="2" fill={`url(#${gid})`} opacity="0.32" />
+      <rect x="12" y="31" width="9" height="7" rx="2" fill={`url(#${gid})`} opacity="0.32" />
+      <rect x="27" y="31" width="9" height="7" rx="2" fill={`url(#${gid})`} />
+    </svg>
   )
 }
 
-// Animowane logo: zabudowanie stoi nieruchomo, a skrzydła wiatraka obracają się płasko
-// (360°) wokół piasty (oś 70.77%/40.07% kadru, na wieży). Renderowane jako DWA obrazki SVG
-// z WBUDOWANYM gradientem — celowo NIE maska CSS, bo maska na SVG nie działa na iOS Safari
-// (zostawał sam gradientowy prostokąt). <img> SVG renderuje się wszędzie, a skrzydła obracam
-// transformą CSS (kompozytor → płynnie 120 Hz). Mocny cień odcina skrzydła od budynku.
-// Osobne warstwy = przestrzeń za skrzydłami pozostaje nienaruszona podczas ruchu.
-export function AnimatedLogo({ className = 'h-24', spin = true }) {
+// Sam znak — do małych kafli (nagłówki, logowanie). Aspekt 1:1.
+export function Logo({ className = 'h-5', variant = 'ink' }) {
+  const { logo_url, nazwa_lokalu } = useBranding()
+  if (logo_url) {
+    return <img src={logo_url} alt={nazwa_lokalu} className={`inline-block w-auto object-contain ${className}`} />
+  }
   return (
-    <span role="img" aria-label="Rajcula" className={`relative inline-block aspect-[756/569] ${className}`}>
-      <img
-        src={buildingSvg}
-        alt=""
-        aria-hidden="true"
-        draggable="false"
-        className="pointer-events-none absolute inset-0 h-full w-full select-none"
-      />
-      <img
-        src={bladesSvg}
-        alt=""
-        aria-hidden="true"
-        draggable="false"
-        className={`pointer-events-none absolute inset-0 h-full w-full select-none ${spin ? 'animate-windmill motion-reduce:animate-none' : ''}`}
-        style={{
-          transformOrigin: '70.77% 40.07%',
-          filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.8)) drop-shadow(0 0 2px rgba(0,0,0,0.6))',
-          willChange: 'transform',
-        }}
-      />
+    <span className={`inline-block aspect-square ${className}`}>
+      <Mark idSuffix="-s" title={nazwa_lokalu} />
     </span>
   )
 }
 
-// Pełny logotyp (znak + napis „Rajcula") — np. ekran główny.
-export function LogoFull({ className = 'h-24', variant = 'ink' }) {
+// „Animowany" znak na ekranie głównym — neutralny mark z delikatnym unoszeniem (bez wiatraka).
+export function AnimatedLogo({ className = 'h-24', spin = true }) {
+  const { logo_url, nazwa_lokalu } = useBranding()
+  if (logo_url) {
+    return <img src={logo_url} alt={nazwa_lokalu} className={`inline-block w-auto object-contain ${className}`} />
+  }
   return (
-    <span
-      role="img"
-      aria-label="Rajcula"
-      className={`inline-block aspect-[2400/1681] ${VARIANT_BG[variant] || VARIANT_BG.ink} ${className}`}
-      style={maskStyle(fullUrl)}
-    />
+    <span className={`inline-block aspect-square ${spin ? 'animate-float motion-reduce:animate-none' : ''} ${className}`}>
+      <Mark idSuffix="-a" title={nazwa_lokalu} />
+    </span>
+  )
+}
+
+// Pełny logotyp: znak + nazwa lokalu (z brandingu). Custom logo z URL nadpisuje całość.
+export function LogoFull({ className = 'h-12', variant = 'ink' }) {
+  const { logo_url, nazwa_lokalu } = useBranding()
+  if (logo_url) {
+    return <img src={logo_url} alt={nazwa_lokalu} className={`inline-block w-auto object-contain ${className}`} />
+  }
+  return (
+    <span className={`inline-flex items-center gap-3 ${className}`}>
+      <span className="inline-block aspect-square h-full"><Mark idSuffix="-f" title={nazwa_lokalu} /></span>
+      <span className="font-display font-bold text-ink leading-none" style={{ fontSize: '0.5em' }}>{nazwa_lokalu}</span>
+    </span>
   )
 }

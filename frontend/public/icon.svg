@@ -1,0 +1,21 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Grafik Pracy">
+  <defs>
+    <linearGradient id="g" x1="128" y1="128" x2="384" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4E2A0"/>
+      <stop offset="0.5" stop-color="#A7D7C5"/>
+      <stop offset="1" stop-color="#F2B8CB"/>
+    </linearGradient>
+  </defs>
+  <!-- tło (maskable safe zone): wypełnia cały kadr -->
+  <rect width="512" height="512" rx="120" fill="#1C1C1E"/>
+  <!-- znak: kalendarz/grafik, wyśrodkowany w ~62% kadru -->
+  <g transform="translate(256 256) scale(5.2) translate(-24 -24)">
+    <rect x="5.5" y="10" width="37" height="31.5" rx="8" fill="none" stroke="url(#g)" stroke-width="3"/>
+    <line x1="15" y1="6" x2="15" y2="13" stroke="url(#g)" stroke-width="3" stroke-linecap="round"/>
+    <line x1="33" y1="6" x2="33" y2="13" stroke="url(#g)" stroke-width="3" stroke-linecap="round"/>
+    <rect x="12" y="20.5" width="9" height="7" rx="2" fill="url(#g)"/>
+    <rect x="27" y="20.5" width="9" height="7" rx="2" fill="url(#g)" opacity="0.32"/>
+    <rect x="12" y="31" width="9" height="7" rx="2" fill="url(#g)" opacity="0.32"/>
+    <rect x="27" y="31" width="9" height="7" rx="2" fill="url(#g)"/>
+  </g>
+</svg>

@@ -1,7 +1,14 @@
 venv/
 .venv/
+.venv-test/
 node_modules/
 __pycache__/
 *.pyc
 backend/scheduler.db
+*.db
 .DS_Store
+
+# Sekrety — NIGDY do repozytorium
+.env
+*.pem
+google_sa.json

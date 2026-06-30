@@ -1,5 +1,6 @@
 import { MotionConfig } from 'framer-motion'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { BrandingProvider } from './context/BrandingContext'
 import { DataProvider } from './context/DataContext'
 import { ToastProvider } from './components/ui/Toast'
 import { Spinner } from './components/ui/Spinner'
@@ -32,13 +33,15 @@ function Routed() {
 export default function App() {
   return (
     <MotionConfig reducedMotion="user">
-      <AuthProvider>
-        <ToastProvider>
-          <DataProvider>
-            <Routed />
-          </DataProvider>
-        </ToastProvider>
-      </AuthProvider>
+      <BrandingProvider>
+        <AuthProvider>
+          <ToastProvider>
+            <DataProvider>
+              <Routed />
+            </DataProvider>
+          </ToastProvider>
+        </AuthProvider>
+      </BrandingProvider>
     </MotionConfig>
   )
 }

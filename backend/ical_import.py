@@ -4,7 +4,7 @@ Bez zależności zewnętrznych. Dla każdego VEVENT zwraca: uid, datę (z DTSTAR
 tytuł (SUMMARY), opis (DESCRIPTION), lokalizację (LOCATION). Z tytułu/opisu
 wyciągamy pola imprezy: nazwisko, typ, liczba_osob, telefon, sala, zadatek.
 
-WAŻNE: GODZINY NIE CZYTAMY ŚWIADOMIE. W kalendarzu „Imprezy Rajcula" godzina
+WAŻNE: GODZINY NIE CZYTAMY ŚWIADOMIE. W kalendarzu imprez godzina
 to tylko orientacyjny slot — obsada liczona jest z liczby osób, nie z godziny
 (impreza dostaje godzina='Brak'). Z DTSTART bierzemy wyłącznie datę.
 """

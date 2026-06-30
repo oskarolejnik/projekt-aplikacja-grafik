@@ -1,10 +1,13 @@
 venv/
 .venv/
+.venv-test/
+.venv-run/
 node_modules/
 __pycache__/
 *.pyc
 backend/scheduler.db
 backend/test.db
+*.db
 .DS_Store
 dist/
 *.app/
@@ -16,3 +19,6 @@ google_sa.json
 *-service-account*.json
 *.log
 *.pem
+
+# Runtime/lock (nie wersjonować)
+.claude/scheduled_tasks.lock

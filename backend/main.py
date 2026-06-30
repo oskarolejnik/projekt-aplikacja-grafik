@@ -26,9 +26,13 @@ from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow,
 
 import openpyxl
 
+import settings as app_settings
+
 app = FastAPI(title="Scheduler API")
 
-ALLOWED_ORIGINS = os.environ.get("CORS_ORIGINS", "*").split(",")
+# CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
+# frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
+ALLOWED_ORIGINS = app_settings.cors_origins()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -47,7 +51,7 @@ OVERSIGHT_GET = {
     "szef": (
         "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
         "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
-        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt",
+        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt", "/api/pulpit",
     ),
     # Szef kuchni: godziny kuchni (bez wypłat), podgląd stołów na żywo, rezerwacje.
     "szef_kuchni": (
@@ -75,7 +79,7 @@ OVERSIGHT_GET = {
 async def role_guard(request: Request, call_next):
     path = request.url.path
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -101,26 +105,44 @@ async def role_guard(request: Request, call_next):
 # się per osoba (StawkaPracownika na tym stanowisku). Dzięki temu reszta logiki (RCP×grafik,
 # wypłaty) działa bez zmian i bez ryzykownej migracji „stanowisko_id NULL".
 KUCHNIA_STANOWISKO = "Kuchnia"
-
-
-def _kuchnia_stanowisko(db) -> models.Stanowisko:
-    s = db.query(models.Stanowisko).filter_by(nazwa=KUCHNIA_STANOWISKO).first()
-    if not s:
-        s = models.Stanowisko(nazwa=KUCHNIA_STANOWISKO)
-        db.add(s); db.commit(); db.refresh(s)
-    return s
-
-
 # Stanowisko dla pracowników technicznych — pełne godziny RCP × stawka (bez grafiku). Jak kuchnia.
 TECHNICZNY_STANOWISKO = "Techniczny"
 
 
-def _techniczny_stanowisko(db) -> models.Stanowisko:
-    s = db.query(models.Stanowisko).filter_by(nazwa=TECHNICZNY_STANOWISKO).first()
-    if not s:
-        s = models.Stanowisko(nazwa=TECHNICZNY_STANOWISKO)
-        db.add(s); db.commit(); db.refresh(s)
+def _stanowisko_wg_roli(db, rola: str, nazwa_legacy: str, utworz: bool = True):
+    """Znajduje (lub tworzy) ukryte stanowisko po ROLI. Niezależne od nazwy — nowy klient może
+    nazwać je dowolnie, byle miało właściwą rolę. Fallback + samo-naprawa: jeśli istnieje
+    stanowisko o nazwie legacy bez ustawionej roli, dostaje rolę (adopcja istniejących danych)."""
+    s = db.query(models.Stanowisko).filter_by(rola=rola).first()
+    if s:
+        return s
+    s = db.query(models.Stanowisko).filter_by(nazwa=nazwa_legacy).first()
+    if s:
+        if s.rola != rola:
+            s.rola = rola; db.commit(); db.refresh(s)
+        return s
+    if not utworz:
+        return None
+    s = models.Stanowisko(nazwa=nazwa_legacy, rola=rola)
+    db.add(s); db.commit(); db.refresh(s)
     return s
+
+
+def _kuchnia_stanowisko(db) -> models.Stanowisko:
+    return _stanowisko_wg_roli(db, "kuchnia", KUCHNIA_STANOWISKO)
+
+
+def _techniczny_stanowisko(db) -> models.Stanowisko:
+    return _stanowisko_wg_roli(db, "techniczny", TECHNICZNY_STANOWISKO)
+
+
+def get_lokal_config(db) -> models.LokalConfig:
+    """Singleton konfiguracji lokalu (id=1). Tworzony leniwie z domyślnymi wartościami."""
+    cfg = db.get(models.LokalConfig, 1)
+    if cfg is None:
+        cfg = models.LokalConfig(id=1)
+        db.add(cfg); db.commit(); db.refresh(cfg)
+    return cfg
 
 
 # Kwalifikacje działu technicznego (nadawane w Pracownikach jak zwykłe kwalifikacje = Stanowiska).
@@ -130,18 +152,28 @@ STROZ_NAZWA = "Stróż"
 
 
 def _ensure_kwalifikacje_techniczne(db):
-    """Dba, by stanowiska-kwalifikacje Sprzątaczka/Stróż istniały (admin może je nadać w Pracownikach)."""
+    """Dba, by stanowiska-kwalifikacje Sprzątaczka/Stróż istniały (admin może je nadać w Pracownikach).
+    Sprzątaczka dostaje flagę `daje_dostep_zamowien` (dawniej rozpoznawana po nazwie)."""
     zmiana = False
     for nazwa in (SPRZATACZKA_NAZWA, STROZ_NAZWA):
-        if not db.query(models.Stanowisko).filter_by(nazwa=nazwa).first():
-            db.add(models.Stanowisko(nazwa=nazwa)); zmiana = True
+        existing = db.query(models.Stanowisko).filter_by(nazwa=nazwa).first()
+        if not existing:
+            db.add(models.Stanowisko(nazwa=nazwa,
+                                     daje_dostep_zamowien=(nazwa == SPRZATACZKA_NAZWA)))
+            zmiana = True
+        elif nazwa == SPRZATACZKA_NAZWA and not existing.daje_dostep_zamowien:
+            existing.daje_dostep_zamowien = True   # adopcja istniejącej Sprzątaczki na flagę
+            zmiana = True
     if zmiana:
         db.commit()
 
 
 def _jest_sprzataczka(prac: models.Pracownik) -> bool:
+    """Dostęp do formularza zamówień: dział techniczny + kwalifikacja z flagą `daje_dostep_zamowien`
+    (fallback po nazwie „Sprzątaczka" dla danych sprzed migracji)."""
     return bool(prac and prac.dzial == "techniczny"
-                and any((s.nazwa or "") == SPRZATACZKA_NAZWA for s in prac.kwalifikacje))
+                and any(getattr(s, "daje_dostep_zamowien", False) or (s.nazwa or "") == SPRZATACZKA_NAZWA
+                        for s in prac.kwalifikacje))
 
 
 # „Parkiet": stanowiska, których nazwa zaczyna się od „Sala" (Sala, Sala-ABC, Sala-RZP,
@@ -169,8 +201,9 @@ ROZLICZENIA_START = _data_env("ROZLICZENIA_START", "")
 
 
 def _sala_stanowisko_ids(db) -> set:
+    """Stanowiska parkietu (kelnerzy). Rola 'sala' albo — fallback — nazwa zaczyna się od „Sala"."""
     return {s.id for s in db.query(models.Stanowisko).all()
-            if (s.nazwa or "").strip().lower().startswith(SALA_PREFIX)}
+            if s.rola == "sala" or (s.nazwa or "").strip().lower().startswith(SALA_PREFIX)}
 
 
 def _przelicz_zamykajacego(db, dzien: date):
@@ -202,6 +235,8 @@ def _przelicz_zamykajacego(db, dzien: date):
 
 @app.on_event("startup")
 def startup():
+    # Fail-fast: w produkcji odmawiamy startu przy niebezpiecznych sekretach domyślnych.
+    app_settings.validate_critical_secrets()
     init_db()
     # Stanowisko kuchni tworzymy LENIWIE (endpoint /api/grafik/kuchnia-stanowisko), nie na starcie —
     # żeby nie zaśmiecać bazy/testów dodatkowym stanowiskiem, gdy grafik kuchni nie jest używany.
@@ -1232,6 +1267,74 @@ def set_zeszyt_config(dane: schemas.ZeszytConfigIn, db: Session = Depends(get_db
             "stan_poczatkowy_data": str(cfg.stan_poczatkowy_data) if cfg.stan_poczatkowy_data else None}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# PULPIT WŁAŚCICIELA (KPI cockpit) — agregacja istniejących danych, zero nowych tabel
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/pulpit")
+def pulpit(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    """Zbiorcze KPI lokalu za okres [start, end]: przychód (z zeszytu kasowego), saldo kasy,
+    rozchód, ruch (rachunki z POS), rezerwacje (moduł stolików) oraz koszt pracy miesiąca
+    końca okresu. Czysta agregacja — nie zapisuje nic do bazy."""
+    if end < start:
+        raise HTTPException(400, "Koniec okresu przed początkiem.")
+
+    # — Przychód, rozchód i saldo kasy: z zeszytu kasowego (SALA + imprezy + ręczne wpisy) —
+    z = _zeszyt_dane(db, start, end)
+    dni = z["dni"]
+    got = term = przel = impr = przychod_total = rozchod_total = 0.0
+    przychod_dzienny = []
+    for d in dni:
+        dsum = 0.0
+        for w in d["wiersze"]:
+            g = float(w.get("gotowka") or 0); k = float(w.get("terminal") or 0)
+            p = float(w.get("przelew") or 0); i = float(w.get("impreza") or 0)
+            got += g; term += k; przel += p; impr += i; dsum += g + k + p + i
+        rozchod_total += float(d["rozchod_suma"] or 0)
+        przychod_total += dsum
+        przychod_dzienny.append({"data": d["data"], "przychod": round(dsum, 2),
+                                 "rozchod": round(float(d["rozchod_suma"] or 0), 2)})
+    saldo = dni[-1]["stan"] if dni else z["stan_poczatkowy"]
+
+    # — Ruch (liczba rachunków z POS) —
+    ruch_rows = sorted(db.query(models.StolikiHistoria).filter(
+        models.StolikiHistoria.data >= start, models.StolikiHistoria.data <= end).all(),
+        key=lambda r: r.data)
+    ruch_total = sum(int(r.liczba or 0) for r in ruch_rows)
+    ruch_dzienny = [{"data": str(r.data), "liczba": int(r.liczba or 0)} for r in ruch_rows]
+
+    # — Rezerwacje (moduł stolików) —
+    rez = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik",
+        models.Termin.data >= start, models.Termin.data <= end).all()
+    rez_status, rez_goscie = {}, 0
+    for r in rez:
+        rez_status[r.status] = rez_status.get(r.status, 0) + 1
+        if r.status in ("rezerwacja", "potwierdzona", "odbyla"):
+            rez_goscie += int(r.liczba_osob or 0)
+
+    # — Koszt pracy: miesiąc końca okresu (z raportu godzin × stawki) —
+    rap = raporty.raport_godzin_miesiac(db, end.year, end.month)
+    koszt_pracy = round(sum(float(p["do_wyplaty"] or 0) for p in rap["pracownicy"]), 2)
+
+    n = max(1, len(przychod_dzienny))
+    return {
+        "okres": {"start": str(start), "end": str(end), "dni": len(dni)},
+        "przychod": {
+            "razem": round(przychod_total, 2), "gotowka": round(got, 2), "karta": round(term, 2),
+            "przelew": round(przel, 2), "impreza": round(impr, 2),
+            "srednia_dzienna": round(przychod_total / n, 2), "dzienny": przychod_dzienny,
+        },
+        "rozchod": {"razem": round(rozchod_total, 2)},
+        "wynik": round(przychod_total - rozchod_total - koszt_pracy, 2),   # poglądowo: przychód − rozchód − koszt pracy
+        "saldo_kasy": saldo,
+        "ruch": {"rachunki": ruch_total, "dzienny": ruch_dzienny,
+                 "srednia_dzienna": round(ruch_total / max(1, len(ruch_dzienny)), 1) if ruch_dzienny else 0},
+        "rezerwacje": {"razem": len(rez), "wg_statusu": rez_status, "goscie": rez_goscie},
+        "koszt_pracy_miesiac": {"rok": end.year, "miesiac": end.month, "kwota": koszt_pracy},
+    }
+
+
 # ── KALENDARZ IMPREZ ──────────────────────────────────────────────────────────
 
 def _termin_out(t: models.Termin, zadatek_kp: float = 0.0) -> dict:
@@ -1304,6 +1407,201 @@ def usun_termin(termin_id: int, db: Session = Depends(get_db)):
             _odswiez_wymagania_imprez(db, data_t, data_t)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# MODUŁ REZERWACJI (stoliki + godziny otwarcia + rezerwacje na encji Termin)
+# ═══════════════════════════════════════════════════════════════════════════
+
+REZ_STATUSY = ("rezerwacja", "potwierdzona", "odbyla", "no_show", "odwolana")
+# Dozwolone przejścia statusu rezerwacji (rezerwacja/potwierdzona = aktywne, reszta terminalna).
+REZ_PRZEJSCIA = {
+    "rezerwacja":   {"potwierdzona", "odbyla", "no_show", "odwolana"},
+    "potwierdzona": {"odbyla", "no_show", "odwolana"},
+    "odbyla": set(), "no_show": set(), "odwolana": set(),
+}
+REZ_AKTYWNE = ("rezerwacja", "potwierdzona")   # blokują stolik (liczą się do kolizji)
+DOMYSLNY_SLOT_MIN = 120
+
+
+def _wymagaj_modul_rezerwacje(db: Session = Depends(get_db)):
+    if not get_lokal_config(db).modul_rezerwacje:
+        raise HTTPException(403, "Moduł rezerwacji jest wyłączony.")
+
+
+def _dodaj_minuty(t: time, minuty: int) -> time:
+    """t + minuty, obcięte do tej samej doby (rezerwacje nie przechodzą przez północ w MVP)."""
+    total = min(t.hour * 60 + t.minute + minuty, 23 * 60 + 59)
+    return time(total // 60, total % 60)
+
+
+def _slot_dlugosc(db, data: date) -> int:
+    go = db.query(models.GodzinyOtwarcia).filter_by(dzien_tygodnia=data.weekday(), aktywny=True).first()
+    return go.dlugosc_slotu_min if go else DOMYSLNY_SLOT_MIN
+
+
+def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomin_id=None):
+    """Walidacja rezerwacji stolika: pojemność + brak kolizji w oknie [godz_od, godz_do].
+    Zwraca policzone godz_do. Bez stolika/godziny nie ma okna kolizji."""
+    if stolik_id is None:
+        return godz_do
+    stolik = db.get(models.Stolik, stolik_id)
+    if not stolik or not stolik.aktywny:
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+    if liczba_osob and stolik.pojemnosc and liczba_osob > stolik.pojemnosc:
+        raise HTTPException(400, f"Stolik „{stolik.nazwa}” mieści {stolik.pojemnosc} os. (próba: {liczba_osob}).")
+    if godz_od is None:
+        return godz_do
+    if godz_do is None:
+        godz_do = _dodaj_minuty(godz_od, _slot_dlugosc(db, data))
+    q = db.query(models.Termin).filter(
+        models.Termin.stolik_id == stolik_id, models.Termin.data == data,
+        models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
+    if pomin_id is not None:
+        q = q.filter(models.Termin.id != pomin_id)
+    for r in q.all():
+        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _slot_dlugosc(db, data))
+        if godz_od < r_do and r.godz_od < godz_do:   # nachodzą
+            raise HTTPException(409, f"Stolik zajęty w tym czasie (kolizja od {r.godz_od.strftime('%H:%M')}).")
+    return godz_do
+
+
+def _hm(t):
+    return t.strftime("%H:%M") if t else None
+
+
+def _rezerwacja_out(t: models.Termin) -> dict:
+    return {"id": t.id, "data": str(t.data), "godz_od": _hm(t.godz_od), "godz_do": _hm(t.godz_do),
+            "stolik_id": t.stolik_id, "nazwisko": t.nazwisko, "telefon": t.telefon, "email": t.email,
+            "liczba_osob": t.liczba_osob, "notatka": t.notatka, "status": t.status,
+            "zadatek": t.zadatek or 0, "kanal": t.kanal}
+
+
+# ── Stoliki ──────────────────────────────────────────────────────────────────
+@app.get("/api/stoliki", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_stoliki(db: Session = Depends(get_db)):
+    rows = db.query(models.Stolik).order_by(models.Stolik.kolejnosc, models.Stolik.id).all()
+    return {"stoliki": [schemas.StolikOut.model_validate(s).model_dump() for s in rows]}
+
+
+@app.post("/api/stoliki", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def dodaj_stolik(dane: schemas.StolikIn, db: Session = Depends(get_db)):
+    s = models.Stolik(**dane.model_dump()); db.add(s); db.commit(); db.refresh(s)
+    return schemas.StolikOut.model_validate(s).model_dump()
+
+
+@app.put("/api/stoliki/{sid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db)):
+    s = db.get(models.Stolik, sid)
+    if not s:
+        raise HTTPException(404, "Brak stolika.")
+    for k, v in dane.model_dump().items():
+        setattr(s, k, v)
+    db.commit(); db.refresh(s)
+    return schemas.StolikOut.model_validate(s).model_dump()
+
+
+@app.delete("/api/stoliki/{sid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def usun_stolik(sid: int, db: Session = Depends(get_db)):
+    s = db.get(models.Stolik, sid)
+    if s:
+        db.query(models.Termin).filter_by(stolik_id=sid).update({"stolik_id": None})
+        db.delete(s); db.commit()
+
+
+# ── Godziny otwarcia ─────────────────────────────────────────────────────────
+@app.get("/api/godziny-otwarcia", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_godziny_otwarcia(db: Session = Depends(get_db)):
+    rows = db.query(models.GodzinyOtwarcia).order_by(models.GodzinyOtwarcia.dzien_tygodnia,
+                                                     models.GodzinyOtwarcia.godz_od).all()
+    return {"godziny": [schemas.GodzinyOtwarciaOut.model_validate(g).model_dump() for g in rows]}
+
+
+@app.post("/api/godziny-otwarcia", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def dodaj_godziny_otwarcia(dane: schemas.GodzinyOtwarciaIn, db: Session = Depends(get_db)):
+    if not (0 <= dane.dzien_tygodnia <= 6):
+        raise HTTPException(400, "dzien_tygodnia musi być 0–6.")
+    g = models.GodzinyOtwarcia(**dane.model_dump()); db.add(g); db.commit(); db.refresh(g)
+    return schemas.GodzinyOtwarciaOut.model_validate(g).model_dump()
+
+
+@app.delete("/api/godziny-otwarcia/{gid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def usun_godziny_otwarcia(gid: int, db: Session = Depends(get_db)):
+    g = db.get(models.GodzinyOtwarcia, gid)
+    if g:
+        db.delete(g); db.commit()
+
+
+# ── Rezerwacje (rodzaj=stolik na encji Termin) ───────────────────────────────
+@app.get("/api/rezerwacje-stolik", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_rezerwacje_stolik(start: date = Query(...), end: date = Query(...),
+                          status: Optional[str] = None, stolik_id: Optional[int] = None,
+                          db: Session = Depends(get_db)):
+    q = db.query(models.Termin).filter(models.Termin.rodzaj == "stolik",
+                                       models.Termin.data >= start, models.Termin.data <= end)
+    if status:
+        q = q.filter(models.Termin.status == status)
+    if stolik_id:
+        q = q.filter(models.Termin.stolik_id == stolik_id)
+    rows = q.order_by(models.Termin.data, models.Termin.godz_od).all()
+    return {"rezerwacje": [_rezerwacja_out(t) for t in rows]}
+
+
+@app.post("/api/rezerwacje-stolik", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def dodaj_rezerwacje_stolik(dane: schemas.RezerwacjaIn, db: Session = Depends(get_db)):
+    godz_do = _waliduj_rezerwacje(db, dane.data, dane.godz_od, dane.godz_do,
+                                  dane.stolik_id, dane.liczba_osob)
+    t = models.Termin(
+        data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
+        liczba_osob=dane.liczba_osob, notatka=dane.notatka, status="potwierdzona",
+        zadatek=float(dane.zadatek or 0), utworzono_at=datetime.utcnow(),
+        godz_od=dane.godz_od, godz_do=godz_do, stolik_id=dane.stolik_id,
+        rodzaj="stolik", kanal="reczna")
+    db.add(t); db.commit(); db.refresh(t)
+    wyslij_push_do_adminow(db, "Nowa rezerwacja",
+                           f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
+    return _rezerwacja_out(t)
+
+
+@app.put("/api/rezerwacje-stolik/{rid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def edytuj_rezerwacje_stolik(rid: int, dane: schemas.RezerwacjaIn, db: Session = Depends(get_db)):
+    t = db.get(models.Termin, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    godz_do = _waliduj_rezerwacje(db, dane.data, dane.godz_od, dane.godz_do,
+                                  dane.stolik_id, dane.liczba_osob, pomin_id=rid)
+    t.data = dane.data; t.nazwisko = dane.nazwisko.strip(); t.telefon = dane.telefon
+    t.email = dane.email; t.liczba_osob = dane.liczba_osob; t.notatka = dane.notatka
+    t.zadatek = float(dane.zadatek or 0); t.godz_od = dane.godz_od; t.godz_do = godz_do
+    t.stolik_id = dane.stolik_id
+    db.commit(); db.refresh(t)
+    return _rezerwacja_out(t)
+
+
+@app.post("/api/rezerwacje-stolik/{rid}/status", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, db: Session = Depends(get_db)):
+    t = db.get(models.Termin, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    nowy = (dane.status or "").strip()
+    if nowy not in REZ_STATUSY:
+        raise HTTPException(400, "Nieznany status.")
+    if nowy not in REZ_PRZEJSCIA.get(t.status, set()):
+        raise HTTPException(409, f"Niedozwolone przejście {t.status} → {nowy}.")
+    t.status = nowy
+    if nowy == "potwierdzona":
+        t.potwierdzono_at = datetime.utcnow()
+    elif nowy == "odwolana":
+        t.odwolano_at = datetime.utcnow()
+    db.commit(); db.refresh(t)
+    return _rezerwacja_out(t)
+
+
+@app.delete("/api/rezerwacje-stolik/{rid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def usun_rezerwacje_stolik(rid: int, db: Session = Depends(get_db)):
+    t = db.get(models.Termin, rid)
+    if t and t.rodzaj == "stolik":
+        db.delete(t); db.commit()
+
+
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---
 
 @app.get("/api/me/push/public-key", status_code=200)
@@ -1374,6 +1672,7 @@ def create_stanowisko(data: schemas.StanowiskoCreate, db: Session = Depends(get_
         raise HTTPException(400, "Stanowisko o tej nazwie już istnieje.")
     s = models.Stanowisko(**data.model_dump())
     s.grupa_widocznosci = (s.grupa_widocznosci or "").strip() or None  # pusty string -> brak grupy
+    s.rola = (s.rola or "").strip() or None
     db.add(s); db.commit(); db.refresh(s)
     return s
 
@@ -1386,6 +1685,8 @@ def update_stanowisko(sid: int, data: schemas.StanowiskoCreate, db: Session = De
     s.tylko_weekend = data.tylko_weekend
     s.widoczny_dla_wszystkich = data.widoczny_dla_wszystkich
     s.grupa_widocznosci = (data.grupa_widocznosci or "").strip() or None
+    s.rola = (data.rola or "").strip() or None
+    s.daje_dostep_zamowien = bool(data.daje_dostep_zamowien)
     db.commit(); db.refresh(s)
     return s
 
@@ -1407,6 +1708,32 @@ def delete_podkategoria(pid: int, db: Session = Depends(get_db)):
     p = db.get(models.Podkategoria, pid)
     if p:
         db.delete(p); db.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# KONFIGURACJA LOKALU (white-label + moduły)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/lokal/branding", response_model=schemas.LokalBrandingOut)
+def lokal_branding(db: Session = Depends(get_db)):
+    """Publiczny branding (nazwa/logo/kolor) — do strony logowania / PWA. Bez logowania."""
+    return get_lokal_config(db)
+
+
+@app.get("/api/lokal/config", response_model=schemas.LokalConfigOut)
+def lokal_config_get(db: Session = Depends(get_db)):
+    """Pełna konfiguracja lokalu (tylko admin — wymusza middleware)."""
+    return get_lokal_config(db)
+
+
+@app.put("/api/lokal/config", response_model=schemas.LokalConfigOut)
+def lokal_config_update(data: schemas.LokalConfigIn, db: Session = Depends(get_db)):
+    """Częściowa aktualizacja konfiguracji lokalu (admin) — zmienia tylko podane pola."""
+    cfg = get_lokal_config(db)
+    for pole, wartosc in data.model_dump(exclude_unset=True).items():
+        setattr(cfg, pole, wartosc)
+    db.commit(); db.refresh(cfg)
+    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1903,9 +2230,9 @@ def eksport_csv(start: date, end: date, db: Session = Depends(get_db)):
 # IMPREZY Z SERWERA NAS (ZINTEGROWANE Z AUTOMATYKĄ WYMAGAŃ)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Ścieżka do plików imprez. Domyślnie macowy mount NAS; na serwerze ustaw IMPREZY_PATH
-# na katalog, do którego lokalny agent wgrywa kopie plików (VPS tylko je odczytuje).
-NAS_BASE_PATH = os.environ.get("IMPREZY_PATH", "/Volumes/RAJCULA/MENU - IMPREZY/USTALONE")
+# Ścieżka do plików imprez. Ustaw IMPREZY_PATH na katalog, do którego lokalny agent wgrywa
+# kopie plików (VPS tylko je odczytuje). Puste = funkcja importu plików imprez wyłączona.
+NAS_BASE_PATH = os.environ.get("IMPREZY_PATH", "")
 
 @app.get("/api/imprezy", response_model=List[schemas.ImprezaOut])
 def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
@@ -1913,9 +2240,11 @@ def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = 
 
 
 def _imprezy_stanowisko(db):
-    """Stanowisko imprez — dopasowanie ELASTYCZNE po nazwie (zaczyna się od „imprez"):
-    łapie „Impreza" (l. poj.) i „Imprezy" (l. mn.), bo admin mógł je nazwać dowolnie.
-    Zwraca pierwsze pasujące stanowisko albo None."""
+    """Stanowisko imprez — najpierw po roli 'imprezy', potem fallback po nazwie (zaczyna się od
+    „imprez": łapie „Impreza"/„Imprezy"). Zwraca pierwsze pasujące stanowisko albo None."""
+    s = db.query(models.Stanowisko).filter_by(rola="imprezy").first()
+    if s:
+        return s
     for s in db.query(models.Stanowisko).all():
         if (s.nazwa or "").strip().lower().startswith("imprez"):
             return s

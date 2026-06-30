@@ -3,7 +3,7 @@
    vite-plugin-pwa (injectManifest) i tu używane jako lista plików do precache. */
 
 const PRECACHE = (self.__WB_MANIFEST || []).map((e) => (typeof e === 'string' ? e : e.url))
-const CACHE = 'rajcula-cache-v2'
+const CACHE = 'grafik-cache-v1'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -69,10 +69,10 @@ self.addEventListener('push', (event) => {
     data = { body: event.data ? event.data.text() : '' }
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Rajcula', {
+    self.registration.showNotification(data.title || 'Grafik Pracy', {
       body: data.body || '',
-      icon: '/pwa-rajcula-192.png',
-      badge: '/pwa-rajcula-192.png',
+      icon: '/icon.svg',
+      badge: '/icon.svg',
       data: { url: data.url || '/' },
     }),
   )

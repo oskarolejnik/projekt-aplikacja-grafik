@@ -45,7 +45,7 @@ export default function Landing() {
       <div aria-hidden className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.16] blur-2xl will-change-transform animate-drift-a" />
       <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-32 h-96 w-96 rounded-full bg-mint opacity-[0.11] blur-2xl will-change-transform animate-drift-b" />
 
-      {/* Sekcja główna: logo Rajcula + zegar + jedyna akcja.
+      {/* Sekcja główna: logo lokalu + zegar + jedyna akcja.
           pt-safe/pb-safe odsuwa treść od notcha iPhone (status bar black-translucent). */}
       <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-safe pt-safe text-center">
         <AnimatedLogo className="mb-9 h-24 animate-fade-up sm:h-28" />

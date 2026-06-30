@@ -17,7 +17,16 @@ function getBackendPath() {
 }
 
 function getPythonPath() {
-  return '/Users/rajcula/Desktop/projekt/venv/bin/python';
+  // Interpreter Pythona backendu. Ustaw zmienną GRAFIK_PYTHON na ścieżkę do venv, np.
+  //   .../backend/venv/bin/python (Linux/macOS)  •  ...\backend\venv\Scripts\python.exe (Windows)
+  // Domyślnie próbujemy venv obok katalogu backendu, a w razie braku — Pythona z PATH.
+  if (process.env.GRAFIK_PYTHON) return process.env.GRAFIK_PYTHON;
+  const venvDir = path.join(getBackendPath(), '..', 'venv');
+  const candidate = process.platform === 'win32'
+    ? path.join(venvDir, 'Scripts', 'python.exe')
+    : path.join(venvDir, 'bin', 'python');
+  if (fs.existsSync(candidate)) return candidate;
+  return process.platform === 'win32' ? 'python' : 'python3';
 }
 
 // ── start backendu ───────────────────────────────────────────────────────

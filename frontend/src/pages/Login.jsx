@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useBranding } from '../context/BrandingContext'
 import { useToast } from '../components/ui/Toast'
 import { Icon } from '../lib/icons'
 import { Logo } from '../components/Logo'
@@ -22,6 +23,7 @@ function walidujRejestracje({ login, haslo, imie, nazwisko }) {
 
 export default function Login({ onClose }) {
   const { login, register } = useAuth()
+  const { nazwa_lokalu } = useBranding()
   const { toast } = useToast()
   const [tryb, setTryb] = useState('login') // 'login' | 'register'
   const [loginName, setLoginName] = useState(() => localStorage.getItem('grafik_login') || '')
@@ -99,7 +101,7 @@ export default function Login({ onClose }) {
           <Logo className="h-9" variant="gradient" />
           <div>
             <h2 className="font-display text-xl font-bold text-ink">{rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}</h2>
-            <p className="text-xs text-muted">{rejestracja ? 'Załóż konto pracownika' : 'Rajcula — panel'}</p>
+            <p className="text-xs text-muted">{rejestracja ? 'Załóż konto pracownika' : `${nazwa_lokalu} — panel`}</p>
           </div>
         </div>
 

@@ -40,6 +40,19 @@ TECHNICZNY_NAZWA = "Techniczny"
 KUCHNIA_NAZWA = "Kuchnia"
 
 
+def _label_dla_roli(stanowiska, rola: str, nazwa_legacy: str) -> str:
+    """Etykieta kubełka godzin dla roli = NAZWA stanowiska o tej roli (fallback po nazwie legacy,
+    a gdy brak — sama nazwa legacy). Etykieta musi pokrywać się z nazwą stanowiska, bo z niej
+    odtwarzana jest stawka (nazwa_to_id), inaczej godziny policzyłyby się jako 0 zł."""
+    for s in stanowiska:
+        if s.rola == rola:
+            return s.nazwa
+    for s in stanowiska:
+        if s.nazwa == nazwa_legacy:
+            return s.nazwa
+    return nazwa_legacy
+
+
 def wczytaj_odbicia(db, start: date, end: date):
     """Zakończone zmiany (mają wyjście i policzone godziny) z zakresu."""
     rows = (
@@ -129,8 +142,12 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
     _stanowiska = db.query(models.Stanowisko).all()
     stan_nazwa = {s.id: s.nazwa for s in _stanowiska}
     nazwa_to_id = {s.nazwa: s.id for s in _stanowiska}
-    # Stanowiska imprezowe (po nazwie zawierającej „imprez") — dla reguły nocy imprezowej.
-    imprezy_ids = {s.id for s in _stanowiska if "imprez" in (s.nazwa or "").lower()}
+    # Etykiety kubełków kuchni/technicznego = NAZWA stanowiska o danej roli (fallback: stała nazwa).
+    # Dzięki temu mapowanie etykieta→stawka działa też, gdy lokal nazwał stanowisko po swojemu.
+    kuchnia_label = _label_dla_roli(_stanowiska, "kuchnia", KUCHNIA_NAZWA)
+    techniczny_label = _label_dla_roli(_stanowiska, "techniczny", TECHNICZNY_NAZWA)
+    # Stanowiska imprezowe (rola 'imprezy' lub nazwa zawiera „imprez") — dla reguły nocy imprezowej.
+    imprezy_ids = {s.id for s in _stanowiska if s.rola == "imprezy" or "imprez" in (s.nazwa or "").lower()}
     _prac = db.query(models.Pracownik).all()
     prac_nazwa = {p.id: f"{p.imie} {p.nazwisko}" for p in _prac}
     prac_dzial = {p.id: (p.dzial or "obsluga") for p in _prac}
@@ -173,9 +190,9 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             niedopasowani[(z.get("imie_nazwisko") or "").strip()] += h
             continue
 
-        # Pracownik techniczny: bez grafiku — pełne godziny RCP na stanowisko „Techniczny".
+        # Pracownik techniczny: bez grafiku — pełne godziny RCP na stanowisko o roli 'techniczny'.
         if pid in techniczny_ids:
-            godziny[pid][TECHNICZNY_NAZWA] += h
+            godziny[pid][techniczny_label] += h
             continue
 
         # Reguła nocy imprezowej: wejście przed 9:00, a poprzedniego dnia pracownik miał
@@ -197,8 +214,8 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             # Brak przydziału w grafiku (tydzień nieopublikowany albo po prostu brak wpisu).
             if pid in kuchnia_ids:
                 # KUCHNIA: płacimy za WSZYSTKIE godziny RCP, także bez wpisu w grafiku
-                # (np. obieranie warzyw). Pełne godziny na stanowisko „Kuchnia" (stawka per osoba).
-                godziny[pid][KUCHNIA_NAZWA] += h
+                # (np. obieranie warzyw). Pełne godziny na stanowisko o roli 'kuchnia' (stawka per osoba).
+                godziny[pid][kuchnia_label] += h
             else:
                 bucket = BUCKET_NIEOPUBLIKOWANY if not opub else BUCKET_POZA_GRAFIKIEM
                 godziny[pid][bucket] += h     # bez przycinania (brak grafiku) — osobny kubełek, 0 zł

@@ -6,6 +6,8 @@ class StanowiskoBase(BaseModel):
     nazwa: str; tylko_weekend: bool = False
     widoczny_dla_wszystkich: bool = False
     grupa_widocznosci: Optional[str] = None
+    rola: Optional[str] = None                    # 'sala'|'kuchnia'|'techniczny'|'imprezy'|None
+    daje_dostep_zamowien: bool = False            # dostęp do formularza zamówień (np. Sprzątaczka)
 class StanowiskoCreate(StanowiskoBase): pass
 
 class PodkategoriaCreate(BaseModel):
@@ -242,3 +244,72 @@ class TerminIn(BaseModel):
     notatka: Optional[str] = None
     status: str = "rezerwacja"
     zadatek: float = 0.0
+
+# --- KONFIGURACJA LOKALU (white-label + moduły) ---
+
+class LokalBrandingOut(BaseModel):
+    """Publiczne dane brandingu (bez sekretów) — do strony logowania / PWA."""
+    nazwa_lokalu: str = "Grafik Pracy"
+    logo_url: Optional[str] = None
+    kolor_primary: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+class LokalConfigOut(LokalBrandingOut):
+    poczatek_tygodnia: int = 2
+    modul_rozliczenia: bool = True
+    modul_imprezy: bool = True
+    modul_pos: bool = True
+    modul_sprzatanie: bool = True
+    modul_rezerwacje: bool = True
+
+class LokalConfigIn(BaseModel):
+    """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
+    nazwa_lokalu: Optional[str] = None
+    logo_url: Optional[str] = None
+    kolor_primary: Optional[str] = None
+    poczatek_tygodnia: Optional[int] = None
+    modul_rozliczenia: Optional[bool] = None
+    modul_imprezy: Optional[bool] = None
+    modul_pos: Optional[bool] = None
+    modul_sprzatanie: Optional[bool] = None
+    modul_rezerwacje: Optional[bool] = None
+
+# --- MODUŁ REZERWACJI ---
+
+class StolikIn(BaseModel):
+    nazwa: str
+    strefa: Optional[str] = None
+    pojemnosc: int = 2
+    laczy_sie: bool = False
+    aktywny: bool = True
+    kolejnosc: int = 0
+class StolikOut(StolikIn):
+    id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class GodzinyOtwarciaIn(BaseModel):
+    dzien_tygodnia: int            # 0=poniedziałek … 6=niedziela
+    godz_od: time
+    godz_do: time
+    ostatni_zasiadek: Optional[time] = None
+    dlugosc_slotu_min: int = 120
+    aktywny: bool = True
+class GodzinyOtwarciaOut(GodzinyOtwarciaIn):
+    id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class RezerwacjaIn(BaseModel):
+    """Rezerwacja stolika (rodzaj=stolik). godz_do liczone z długości slotu, gdy puste."""
+    data: date
+    godz_od: Optional[time] = None
+    godz_do: Optional[time] = None
+    stolik_id: Optional[int] = None
+    liczba_osob: Optional[int] = None
+    nazwisko: str                  # klient
+    telefon: Optional[str] = None
+    email: Optional[str] = None
+    notatka: Optional[str] = None
+    zadatek: float = 0.0
+
+class RezerwacjaStatusIn(BaseModel):
+    status: str                    # potwierdzona | odbyla | no_show | odwolana

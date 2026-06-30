@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useBranding } from '../context/BrandingContext'
 import { Logo } from '../components/Logo'
 import { PushButton } from '../components/PushButton'
 import { Icon } from '../lib/icons'
@@ -172,6 +173,7 @@ function KuchniaGodziny() {
 // podgląd stołów na żywo, rezerwacje. Bez grafiku i bez żadnej edycji.
 export default function SzefKuchniView() {
   const { user, logout } = useAuth()
+  const { nazwa_lokalu } = useBranding()
   const [widok, setWidok] = useState('grafik')
   const imie = user?.imie || user?.login
 
@@ -183,7 +185,7 @@ export default function SzefKuchniView() {
         <div className="flex items-center gap-3">
           <Logo className="h-8" variant="gradient" />
           <div>
-            <h1 className="font-display text-base font-bold text-ink md:text-lg">Rajcula</h1>
+            <h1 className="font-display text-base font-bold text-ink md:text-lg">{nazwa_lokalu}</h1>
             <p className="text-xs text-muted">Panel szefa kuchni{imie ? ` · ${imie}` : ''}</p>
           </div>
         </div>

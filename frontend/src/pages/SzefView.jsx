@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useBranding } from '../context/BrandingContext'
 import { Logo } from '../components/Logo'
 import { PushButton } from '../components/PushButton'
 import { Icon } from '../lib/icons'
@@ -23,6 +24,7 @@ const TABY = [
 // opublikowany grafik, kalendarz imprez. Bez żadnej edycji.
 export default function SzefView() {
   const { user, logout } = useAuth()
+  const { nazwa_lokalu } = useBranding()
   const [widok, setWidok] = useState('stoly')
   const imie = user?.imie || user?.login
 
@@ -34,7 +36,7 @@ export default function SzefView() {
         <div className="flex items-center gap-3">
           <Logo className="h-8" variant="gradient" />
           <div>
-            <h1 className="font-display text-base font-bold text-ink md:text-lg">Rajcula</h1>
+            <h1 className="font-display text-base font-bold text-ink md:text-lg">{nazwa_lokalu}</h1>
             <p className="text-xs text-muted">Panel szefa{imie ? ` · ${imie}` : ''}</p>
           </div>
         </div>

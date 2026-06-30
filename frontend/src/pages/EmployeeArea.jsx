@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
+import { useBranding } from '../context/BrandingContext'
 import { useToast } from '../components/ui/Toast'
 import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
@@ -21,6 +22,7 @@ const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
 export default function EmployeeArea() {
   const { user, logout } = useAuth()
   const { biezacy } = useData()
+  const { nazwa_lokalu } = useBranding()
   const { toast } = useToast()
   const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: bez Dyspozycyjności
   const jestTechniczny = user?.dzial === 'techniczny'  // techniczni: Sprzątanie + Godziny (bez grafiku/dyspo)
@@ -68,7 +70,7 @@ export default function EmployeeArea() {
         <div className="flex items-center gap-3">
           <Logo className="h-8" variant="gradient" />
           <div>
-            <h1 className="font-display text-base font-bold text-ink md:text-lg">Rajcula</h1>
+            <h1 className="font-display text-base font-bold text-ink md:text-lg">{nazwa_lokalu}</h1>
             <p className="text-xs text-muted">Cześć, {imie}!</p>
           </div>
         </div>

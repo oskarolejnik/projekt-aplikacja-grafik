@@ -50,6 +50,17 @@ class Stanowisko(Base):
     #  • grupa_widocznosci — stanowiska z tą samą (niepustą) grupą widzą się WZAJEMNIE (np. KOMP+Wydawka).
     widoczny_dla_wszystkich = Column(Boolean, nullable=False, default=False)
     grupa_widocznosci       = Column(String(64), nullable=True)
+    # Semantyczna ROLA stanowiska — zastępuje rozpoznawanie po nazwie (które było zaszyte pod
+    # jeden lokal). Pozwala dowolnie nazwać stanowisko, a zachowanie wynika z roli:
+    #   'sala'       — parkiet/kelnerzy (rozliczenia dnia, wybór zamykającego, priorytet obsady),
+    #   'kuchnia'    — ukryte stanowisko kuchni (pełne godziny RCP, stawka per osoba),
+    #   'techniczny' — ukryte stanowisko działu technicznego (pełne godziny RCP),
+    #   'imprezy'    — stanowisko obsługi imprez (reguła nocy imprezowej, wymagania imprez),
+    #   NULL         — zwykłe stanowisko.
+    # Logika honoruje też STARĄ konwencję nazw jako fallback (np. nazwa zaczyna się od „Sala").
+    rola = Column(String(16), nullable=True, index=True)
+    # Kwalifikacja dająca dostęp do formularza zamówień (dawniej rozpoznawane po nazwie „Sprzątaczka").
+    daje_dostep_zamowien = Column(Boolean, nullable=False, default=False)
 
     uprawnieni = relationship("Pracownik", secondary=pracownik_stanowisko, back_populates="kwalifikacje")
     przydzialy = relationship("PrzydzialZmiany", back_populates="stanowisko", cascade="all, delete-orphan")
@@ -247,10 +258,22 @@ class Termin(Base):
     telefon      = Column(String(32), nullable=True)
     sala         = Column(String(64), nullable=True)
     notatka      = Column(String, nullable=True)
-    status       = Column(String(16), nullable=False, default="rezerwacja")   # rezerwacja|odbyla|odwolana
+    # Rozszerzony cykl rezerwacji: rezerwacja|potwierdzona|odbyla|no_show|odwolana
+    # (3 stare wartości zachowane wstecznie). Przejścia w endpointach /api/rezerwacje.
+    status       = Column(String(16), nullable=False, default="rezerwacja")
     zadatek      = Column(Float, nullable=False, default=0.0)  # przypisany zadatek (z KP / ręcznie)
     utworzono_at = Column(DateTime, nullable=True)
     ical_uid     = Column(String, nullable=True, index=True)   # UID wydarzenia z iCloud (.ics) — klucz dedupu importu; NULL dla wpisów ręcznych
+    # --- Moduł rezerwacji (stolik/sala/impreza w jednej encji) ---
+    godz_od      = Column(Time, nullable=True)   # start rezerwacji (stolik); impreza może mieć NULL
+    godz_do      = Column(Time, nullable=True)   # koniec/przewidywany koniec zasiadku
+    kanal        = Column(String(16), nullable=False, default="reczna")   # reczna|online|google|ical
+    rodzaj       = Column(String(16), nullable=False, default="impreza")  # stolik|sala|impreza
+    stolik_id    = Column(Integer, ForeignKey("stoliki.id", ondelete="SET NULL"), nullable=True)
+    email        = Column(String(128), nullable=True)          # do potwierdzeń/przypomnień (gość online)
+    token_potwierdzenia = Column(String, nullable=True, index=True)  # link gościa (potwierdź/odwołaj) bez logowania
+    potwierdzono_at     = Column(DateTime, nullable=True)
+    odwolano_at         = Column(DateTime, nullable=True)
 
 
 class ZamowienieSprzataczki(Base):
@@ -400,3 +423,50 @@ class SprzatanieOdhaczenie(Base):
     sala         = Column(String(32), nullable=False)
     pracownik_id = Column(Integer, ForeignKey("pracownicy.id"), nullable=True)
     odhaczono_at = Column(DateTime, nullable=False)
+
+
+class LokalConfig(Base):
+    """Singleton (id=1): konfiguracja lokalu. Zastępuje wartości zaszyte pod jeden lokal
+    (branding, początek tygodnia, włączone moduły). Tworzony leniwie z domyślnymi wartościami
+    przez get_lokal_config(). Fundament produktyzacji: nowy klient konfiguruje to zamiast
+    przerabiać kod."""
+    __tablename__ = "lokal_config"
+    id                = Column(Integer, primary_key=True)
+    # --- Branding (white-label) ---
+    nazwa_lokalu      = Column(String(128), nullable=False, default="Grafik Pracy")
+    logo_url          = Column(String, nullable=True)
+    kolor_primary     = Column(String(16), nullable=True)         # np. '#1f6feb'
+    # --- Parametry grafiku ---
+    # Dzień rozpoczęcia tygodnia grafiku: 0=poniedziałek … 6=niedziela. Domyślnie środa (2).
+    poczatek_tygodnia = Column(Integer, nullable=False, default=2)
+    # --- Włączone moduły (feature flags per lokal) ---
+    modul_rozliczenia = Column(Boolean, nullable=False, default=True)   # rozliczenia kasowe (sala)
+    modul_imprezy     = Column(Boolean, nullable=False, default=True)   # imprezy/wesela, zadatki
+    modul_pos         = Column(Boolean, nullable=False, default=True)   # integracja POS/RCP (agent)
+    modul_sprzatanie  = Column(Boolean, nullable=False, default=True)   # grafik sprzątania
+    modul_rezerwacje  = Column(Boolean, nullable=False, default=True)   # rezerwacje stolików/terminów
+
+
+class Stolik(Base):
+    """Stolik/zasób do rezerwacji (moduł rezerwacji). Strefa = sala/ogród (string, mapuje na
+    Termin.sala). Pojemność kontroluje walidację rezerwacji."""
+    __tablename__ = "stoliki"
+    id        = Column(Integer, primary_key=True, index=True)
+    nazwa     = Column(String(32), nullable=False)            # np. „S1", „Loża 3"
+    strefa    = Column(String(32), nullable=True)             # sala/ogród/antresola
+    pojemnosc = Column(Integer, nullable=False, default=2)
+    laczy_sie = Column(Boolean, nullable=False, default=False)  # czy można łączyć (later)
+    aktywny   = Column(Boolean, nullable=False, default=True)
+    kolejnosc = Column(Integer, nullable=False, default=0)
+
+
+class GodzinyOtwarcia(Base):
+    """Godziny otwarcia i parametry slotów per dzień tygodnia (moduł rezerwacji)."""
+    __tablename__ = "godziny_otwarcia"
+    id                = Column(Integer, primary_key=True, index=True)
+    dzien_tygodnia    = Column(Integer, nullable=False)        # 0=poniedziałek … 6=niedziela
+    godz_od           = Column(Time, nullable=False)
+    godz_do           = Column(Time, nullable=False)
+    ostatni_zasiadek  = Column(Time, nullable=True)            # ostatnia możliwa godzina rezerwacji
+    dlugosc_slotu_min = Column(Integer, nullable=False, default=120)
+    aktywny           = Column(Boolean, nullable=False, default=True)

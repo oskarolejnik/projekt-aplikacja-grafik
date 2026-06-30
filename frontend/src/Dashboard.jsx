@@ -1,9 +1,12 @@
 /* global __BUILD_TIME__ */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Icon } from './lib/icons'
 import { Logo } from './components/Logo'
 import { PushButton } from './components/PushButton'
 import { useAuth } from './context/AuthContext'
+import { useBranding } from './context/BrandingContext'
+import { api } from './lib/api'
+import Pulpit from './components/tabs/Pulpit'
 import Pracownicy from './components/tabs/Pracownicy'
 import Stanowiska from './components/tabs/Stanowiska'
 import Wymagania from './components/tabs/Wymagania'
@@ -21,9 +24,11 @@ import KalendarzImprez from './components/tabs/KalendarzImprez'
 import Zadatki from './components/tabs/Zadatki'
 import StolyLive from './components/tabs/StolyLive'
 import Rezerwacje from './components/tabs/Rezerwacje'
+import RezerwacjeStolik from './components/tabs/RezerwacjeStolik'
 import Eksport from './components/tabs/Eksport'
 
 const TABS = [
+  { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', group: 'Pulpit', title: 'Pulpit właściciela', Comp: Pulpit },
   { id: 'pracownicy', label: 'Pracownicy', icon: 'users', group: 'Zarządzanie', title: 'Zarządzanie pracownikami', Comp: Pracownicy },
   { id: 'stanowiska', label: 'Stanowiska', icon: 'office', group: 'Zarządzanie', title: 'Struktura i stanowiska', Comp: Stanowiska },
   { id: 'wymagania', label: 'Wymagania (plan)', icon: 'clipboard', group: 'Zarządzanie', title: 'Planowanie zmian', Comp: Wymagania },
@@ -40,19 +45,25 @@ const TABS = [
   { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', group: 'Operacje', title: 'Zeszyt kasowy', Comp: ZeszytPanel },
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive },
-  { id: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar', group: 'Operacje', title: 'Rezerwacje (30 dni)', Comp: Rezerwacje },
+  { id: 'rezerwacje', label: 'Rezerwacje (ruch)', icon: 'calendar', group: 'Operacje', title: 'Rezerwacje — ruch (30 dni)', Comp: Rezerwacje },
+  { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', group: 'Operacje', title: 'Rezerwacje stolików', Comp: RezerwacjeStolik, modul: 'modul_rezerwacje' },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', group: 'Operacje', title: 'Eksport danych', Comp: Eksport },
 ]
 
-const GROUPS = ['Zarządzanie', 'Operacje']
+const GROUPS = ['Pulpit', 'Zarządzanie', 'Operacje']
 // Znacznik wersji = czas builda (wstrzykiwany przez Vite define). Fallback „dev" w trybie
 // deweloperskim — żeby brak define nie wywalał komponentu.
 const BUILD = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'dev'
 
 export default function Dashboard() {
   const { user, logout } = useAuth()
-  const [active, setActive] = useState('pracownicy')
+  const { nazwa_lokalu } = useBranding()
+  const [active, setActive] = useState('pulpit')
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [cfg, setCfg] = useState({})
+  // Konfiguracja lokalu — chowamy zakładki wyłączonych modułów (np. modul_rezerwacje).
+  useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
+  const visibleTabs = TABS.filter((t) => !t.modul || cfg[t.modul])
   const current = TABS.find((t) => t.id === active)
   const Active = current.Comp
 
@@ -79,9 +90,7 @@ export default function Dashboard() {
         {/* Logo */}
         <div className="flex min-h-[5rem] items-center gap-3 border-b border-line px-7 pt-safe">
           <Logo className="h-8" variant="gradient" />
-          <h1 className="font-display text-xl font-bold tracking-tight text-ink">
-            Raj<span className="text-gradient">cula</span>
-          </h1>
+          <h1 className="font-display text-xl font-bold tracking-tight text-ink">{nazwa_lokalu}</h1>
         </div>
 
         {/* Nawigacja */}
@@ -90,7 +99,7 @@ export default function Dashboard() {
             <div key={group}>
               <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider text-muted/70">{group}</div>
               <div className="space-y-1">
-                {TABS.filter((t) => t.group === group).map((t) => {
+                {visibleTabs.filter((t) => t.group === group).map((t) => {
                   const on = t.id === active
                   return (
                     <button

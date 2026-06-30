@@ -7,7 +7,7 @@ import models
 import factories
 
 
-# .ics zbudowany na realnych przykładach z kalendarza „Imprezy Rajcula".
+# .ics zbudowany na realnych przykładach z kalendarza imprez.
 # Uwaga: w wartości ICS znak nowej linii to '\n' (backslash+n) -> w źródle Pythona '\\n'.
 # Foldowanie linii: fizyczne złamanie + wiodąca spacja (CRLF + ' ').
 _LINIE = [
