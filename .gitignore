@@ -22,3 +22,7 @@ google_sa.json
 
 # Runtime/lock (nie wersjonować)
 .claude/scheduled_tasks.lock
+
+# Instancje klientów (per-tenant runtime: .env z sekretami + baza) — NIGDY do repo
+instances/
+backend/instances/

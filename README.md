@@ -114,6 +114,26 @@ alembic check                                # CI: czy modele zgadzają się z m
 
 Szczegóły i provisioning nowego klienta: [`backend/migrations/README.md`](backend/migrations/README.md).
 
+## 🏢 Wdrożenie nowego klienta (provisioning)
+
+Model **instance-per-tenant**: każdy klient dostaje izolowaną instancję z własną bazą i sekretami.
+Skrypt `backend/new_client.py` przygotowuje nową instancję **jednym poleceniem** — generuje
+bezpieczne sekrety, tworzy gotowy do produkcji plik `.env` w `backend/instances/<slug>/`, a z flagą
+`--init` od razu inicjuje bazę (Alembic), zakłada administratora i ustawia nazwę lokalu:
+
+```bash
+# Z katalogu backend/ (Postgres zaleca się produkcyjnie przez --db-url):
+python new_client.py restauracja-pod-lipa --nazwa "Restauracja Pod Lipą" \
+    --admin szefowa --domena podlipa.pl --init
+
+# Bez --init skrypt tylko tworzy katalog instancji i .env (bazę inicjujesz później).
+# --db-url postgresql+psycopg2://user:haslo@host:5432/grafik_<slug>   # baza produkcyjna
+# --haslo "..."   # puste = wygeneruje i wypisze losowe hasło administratora
+```
+
+Katalog `instances/` zawiera prawdziwe sekrety i bazy — jest w `.gitignore` i **nigdy nie trafia do repo**.
+Następnie uruchom backend ze środowiskiem tej instancji (plik `.env` instancji).
+
 ## 🎨 White-label (marka per lokal)
 
 Branding i moduły ustawia administrator przez `PUT /api/lokal/config` (encja `LokalConfig`):
