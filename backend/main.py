@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -1734,6 +1734,12 @@ def lokal_config_update(data: schemas.LokalConfigIn, db: Session = Depends(get_d
         setattr(cfg, pole, wartosc)
     db.commit(); db.refresh(cfg)
     return cfg
+
+
+@app.get("/api/integracje/status")
+def integracje_status():
+    """Status integracji instancji (które mają komplet sekretów) — bez wartości sekretów. Admin."""
+    return {"integracje": integracje.status()}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

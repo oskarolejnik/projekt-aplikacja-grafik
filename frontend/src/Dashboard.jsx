@@ -25,6 +25,7 @@ import Zadatki from './components/tabs/Zadatki'
 import StolyLive from './components/tabs/StolyLive'
 import Rezerwacje from './components/tabs/Rezerwacje'
 import RezerwacjeStolik from './components/tabs/RezerwacjeStolik'
+import Ustawienia from './components/tabs/Ustawienia'
 import Eksport from './components/tabs/Eksport'
 
 const TABS = [
@@ -33,18 +34,19 @@ const TABS = [
   { id: 'stanowiska', label: 'Stanowiska', icon: 'office', group: 'Zarządzanie', title: 'Struktura i stanowiska', Comp: Stanowiska },
   { id: 'wymagania', label: 'Wymagania (plan)', icon: 'clipboard', group: 'Zarządzanie', title: 'Planowanie zmian', Comp: Wymagania },
   { id: 'konta', label: 'Konta pracowników', icon: 'key', group: 'Zarządzanie', title: 'Konta i dostęp', Comp: Konta },
-  { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', group: 'Operacje', title: 'Baza imprez — serwer NAS', Comp: Imprezy },
+  { id: 'ustawienia', label: 'Ustawienia lokalu', icon: 'office', group: 'Zarządzanie', title: 'Ustawienia lokalu', Comp: Ustawienia },
+  { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', group: 'Operacje', title: 'Baza imprez — serwer NAS', Comp: Imprezy, modul: 'modul_imprezy' },
   { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', group: 'Operacje', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },
   { id: 'urlopy', label: 'Urlopy', icon: 'calendar', group: 'Operacje', title: 'Wnioski urlopowe', Comp: Urlopy },
   { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', group: 'Operacje', title: 'Interaktywny grafik pracy', Comp: Grafik },
-  { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', group: 'Operacje', title: 'Grafik sprzątania sal', Comp: Sprzatanie },
+  { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', group: 'Operacje', title: 'Grafik sprzątania sal', Comp: Sprzatanie, modul: 'modul_sprzatanie' },
   { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', group: 'Operacje', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },
   { id: 'godziny', label: 'Raport godzin', icon: 'clock', group: 'Operacje', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
-  { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', group: 'Operacje', title: 'Kalendarz imprez', Comp: KalendarzImprez },
-  { id: 'zadatki', label: 'Zadatki', icon: 'clipboard', group: 'Operacje', title: 'Zadatki (KP) — przypisania', Comp: Zadatki },
-  { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', group: 'Operacje', title: 'Zeszyt kasowy', Comp: ZeszytPanel },
-  { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad },
-  { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive },
+  { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', group: 'Operacje', title: 'Kalendarz imprez', Comp: KalendarzImprez, modul: 'modul_imprezy' },
+  { id: 'zadatki', label: 'Zadatki', icon: 'clipboard', group: 'Operacje', title: 'Zadatki (KP) — przypisania', Comp: Zadatki, modul: 'modul_imprezy' },
+  { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', group: 'Operacje', title: 'Zeszyt kasowy', Comp: ZeszytPanel, modul: 'modul_rozliczenia' },
+  { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad, modul: 'modul_rozliczenia' },
+  { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive, modul: 'modul_pos' },
   { id: 'rezerwacje', label: 'Rezerwacje (ruch)', icon: 'calendar', group: 'Operacje', title: 'Rezerwacje — ruch (30 dni)', Comp: Rezerwacje },
   { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', group: 'Operacje', title: 'Rezerwacje stolików', Comp: RezerwacjeStolik, modul: 'modul_rezerwacje' },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', group: 'Operacje', title: 'Eksport danych', Comp: Eksport },
