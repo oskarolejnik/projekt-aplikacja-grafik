@@ -2,6 +2,7 @@ import csv
 import io
 import re
 import os
+import secrets
 from datetime import date, time, timedelta, datetime, timezone
 from typing import Optional, List
 from collections import defaultdict
@@ -10,6 +11,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, uprawnienia
@@ -79,7 +81,7 @@ OVERSIGHT_GET = {
 async def role_guard(request: Request, call_next):
     path = request.url.path
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and not path.startswith("/api/online/") and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -1750,6 +1752,148 @@ def zrealizuj_lista_oczekujacych(wid: int, dane: schemas.ZrealizujIn, db: Sessio
     db.commit(); db.refresh(t)
     _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
     return {"rezerwacja": _rezerwacja_out(t), "wpis": _lista_out(w)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REZERWACJE ONLINE (publiczny widget — bez logowania, za flagą rezerwacje_online)
+# ═══════════════════════════════════════════════════════════════════════════
+
+ONLINE_LIMIT_DZIENNY = 5   # anty-spam: maks. aktywnych rezerwacji online/dzień po telefonie/e-mailu
+
+
+def _wymagaj_rezerwacje_online(db: Session = Depends(get_db)):
+    cfg = get_lokal_config(db)
+    if not (cfg.modul_rezerwacje and cfg.rezerwacje_online):
+        raise HTTPException(404, "Rezerwacje online są niedostępne.")
+
+
+def _sloty_dnia(db, data: date):
+    """(lista godzin slotów, długość slotu w min) wg GodzinyOtwarcia dla dnia. Pusta gdy zamknięte."""
+    go = db.query(models.GodzinyOtwarcia).filter_by(dzien_tygodnia=data.weekday(), aktywny=True).first()
+    if not go:
+        return [], DOMYSLNY_SLOT_MIN
+    krok = go.dlugosc_slotu_min or DOMYSLNY_SLOT_MIN
+    last = go.ostatni_zasiadek or go.godz_do
+    start_m, last_m = go.godz_od.hour * 60 + go.godz_od.minute, last.hour * 60 + last.minute
+    sloty, m = [], start_m
+    while m <= last_m:
+        sloty.append(time(m // 60, m % 60))
+        m += krok
+    return sloty, krok
+
+
+def _stolik_zajety(db, data, stolik_id, godz_od, godz_do) -> bool:
+    for r in db.query(models.Termin).filter(
+            models.Termin.stolik_id == stolik_id, models.Termin.data == data,
+            models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).all():
+        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _slot_dlugosc(db, data))
+        if godz_od < r_do and r.godz_od < godz_do:
+            return True
+    return False
+
+
+def _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby):
+    """Najmniejszy wolny aktywny stolik mieszczący 'osoby' w oknie [godz_od, godz_do]. None gdy brak."""
+    kandydaci = sorted([s for s in db.query(models.Stolik).filter_by(aktywny=True).all()
+                        if (s.pojemnosc or 0) >= max(1, osoby or 1)],
+                       key=lambda s: (s.pojemnosc, s.id))
+    for s in kandydaci:
+        if not _stolik_zajety(db, data, s.id, godz_od, godz_do):
+            return s
+    return None
+
+
+def _online_rez_out(t: models.Termin, stolik=None) -> dict:
+    return {"data": str(t.data), "godz_od": _hm(t.godz_od), "godz_do": _hm(t.godz_do),
+            "liczba_osob": t.liczba_osob, "nazwisko": t.nazwisko, "status": t.status,
+            "stolik": (stolik.nazwa if stolik else None), "token": t.token_potwierdzenia}
+
+
+def _rez_po_tokenie(db, token: str):
+    return db.query(models.Termin).filter_by(token_potwierdzenia=token, kanal="online").first()
+
+
+@app.get("/api/online/dostepnosc", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Depends(get_db)):
+    """Publicznie: wolne sloty na dany dzień (godzina → liczba wolnych stolików dla 'osoby')."""
+    osoby = max(1, osoby)
+    sloty, krok = _sloty_dnia(db, data)
+    stoliki = [s for s in db.query(models.Stolik).filter_by(aktywny=True).all() if (s.pojemnosc or 0) >= osoby]
+    out = []
+    for g in sloty:
+        g_do = _dodaj_minuty(g, krok)
+        wolne = sum(1 for s in stoliki if not _stolik_zajety(db, data, s.id, g, g_do))
+        out.append({"godz_od": _hm(g), "wolne": wolne})
+    return {"data": str(data), "osoby": osoby, "sloty": out}
+
+
+@app.post("/api/online/rezerwacja", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, db: Session = Depends(get_db)):
+    """Publicznie: utworzenie rezerwacji online. System sam dobiera wolny stolik."""
+    if not dane.nazwisko or not dane.nazwisko.strip():
+        raise HTTPException(400, "Podaj imię/nazwisko.")
+    if (dane.liczba_osob or 0) < 1:
+        raise HTTPException(400, "Liczba osób musi być dodatnia.")
+    if dane.data < date.today():
+        raise HTTPException(400, "Nie można rezerwować wstecz.")
+    # Anty-spam: limit aktywnych rezerwacji online/dzień po tym samym telefonie/e-mailu.
+    warunki = []
+    if dane.telefon:
+        warunki.append(models.Termin.telefon == dane.telefon)
+    if dane.email:
+        warunki.append(models.Termin.email == dane.email)
+    if warunki:
+        ile = db.query(models.Termin).filter(
+            models.Termin.kanal == "online", models.Termin.data == dane.data,
+            models.Termin.status.in_(REZ_AKTYWNE), or_(*warunki)).count()
+        if ile >= ONLINE_LIMIT_DZIENNY:
+            raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online.")
+
+    godz_do = _dodaj_minuty(dane.godz_od, _slot_dlugosc(db, dane.data))
+    stolik = _wybierz_wolny_stolik(db, dane.data, dane.godz_od, godz_do, dane.liczba_osob)
+    if not stolik:
+        raise HTTPException(409, "Brak wolnego stolika w wybranym czasie.")
+    cfg = get_lokal_config(db)
+    status = "potwierdzona" if cfg.rezerwacje_auto_potwierdzenie else "rezerwacja"
+    t = models.Termin(
+        data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
+        liczba_osob=dane.liczba_osob, notatka=dane.notatka, status=status, zadatek=0.0,
+        utworzono_at=datetime.utcnow(), godz_od=dane.godz_od, godz_do=godz_do, stolik_id=stolik.id,
+        rodzaj="stolik", kanal="online", token_potwierdzenia=secrets.token_urlsafe(24),
+        potwierdzono_at=(datetime.utcnow() if status == "potwierdzona" else None))
+    db.add(t); db.commit(); db.refresh(t)
+    wyslij_push_do_adminow(db, "Rezerwacja online",
+                           f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
+    _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
+    return {"token": t.token_potwierdzenia, "rezerwacja": _online_rez_out(t, stolik)}
+
+
+@app.get("/api/online/rezerwacja/{token}", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_rezerwacja_get(token: str, db: Session = Depends(get_db)):
+    t = _rez_po_tokenie(db, token)
+    if not t:
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
+
+
+@app.post("/api/online/rezerwacja/{token}/potwierdz", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_rezerwacja_potwierdz(token: str, db: Session = Depends(get_db)):
+    t = _rez_po_tokenie(db, token)
+    if not t:
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    if t.status == "rezerwacja":
+        t.status = "potwierdzona"; t.potwierdzono_at = datetime.utcnow(); db.commit(); db.refresh(t)
+    return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
+
+
+@app.post("/api/online/rezerwacja/{token}/odwolaj", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_rezerwacja_odwolaj(token: str, db: Session = Depends(get_db)):
+    t = _rez_po_tokenie(db, token)
+    if not t:
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    if t.status in REZ_AKTYWNE:
+        t.status = "odwolana"; t.odwolano_at = datetime.utcnow(); db.commit(); db.refresh(t)
+    return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
 
 
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---

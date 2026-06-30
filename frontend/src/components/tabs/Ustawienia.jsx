@@ -53,6 +53,7 @@ export default function Ustawienia() {
         poczatek_tygodnia: Number(cfg.poczatek_tygodnia),
         modul_rezerwacje: cfg.modul_rezerwacje, modul_imprezy: cfg.modul_imprezy,
         modul_rozliczenia: cfg.modul_rozliczenia, modul_pos: cfg.modul_pos, modul_sprzatanie: cfg.modul_sprzatanie,
+        rezerwacje_online: cfg.rezerwacje_online, rezerwacje_auto_potwierdzenie: cfg.rezerwacje_auto_potwierdzenie,
       })
       toast('Zapisano. Odśwież stronę, by zobaczyć zmiany w marce i nawigacji.', 'success')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
@@ -89,6 +90,20 @@ export default function Ustawienia() {
               <Toggle on={!!cfg[k]} onChange={(v) => set(k, v)} />
             </div>
           ))}
+        </div>
+      </Card>
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Rezerwacje online" subtitle="Publiczny widget — goście rezerwują bez logowania (wymaga modułu rezerwacji + godzin otwarcia + stolików)." />
+        <div className="mt-4 space-y-2">
+          <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
+            <span className="text-sm text-ink">Włącz rezerwacje online</span>
+            <Toggle on={!!cfg.rezerwacje_online} onChange={(v) => set('rezerwacje_online', v)} />
+          </div>
+          <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
+            <span className="text-sm text-ink">Automatyczne potwierdzanie (bez akceptacji admina)</span>
+            <Toggle on={!!cfg.rezerwacje_auto_potwierdzenie} onChange={(v) => set('rezerwacje_auto_potwierdzenie', v)} />
+          </div>
         </div>
       </Card>
 

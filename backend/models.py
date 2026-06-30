@@ -445,6 +445,9 @@ class LokalConfig(Base):
     modul_pos         = Column(Boolean, nullable=False, default=True)   # integracja POS/RCP (agent)
     modul_sprzatanie  = Column(Boolean, nullable=False, default=True)   # grafik sprzątania
     modul_rezerwacje  = Column(Boolean, nullable=False, default=True)   # rezerwacje stolików/terminów
+    # --- Rezerwacje online (publiczny widget) ---
+    rezerwacje_online             = Column(Boolean, nullable=False, default=False)  # gość rezerwuje bez logowania
+    rezerwacje_auto_potwierdzenie = Column(Boolean, nullable=False, default=False)  # online od razu 'potwierdzona'
 
 
 class Stolik(Base):

@@ -261,6 +261,8 @@ class LokalConfigOut(LokalBrandingOut):
     modul_pos: bool = True
     modul_sprzatanie: bool = True
     modul_rezerwacje: bool = True
+    rezerwacje_online: bool = False
+    rezerwacje_auto_potwierdzenie: bool = False
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -273,6 +275,8 @@ class LokalConfigIn(BaseModel):
     modul_pos: Optional[bool] = None
     modul_sprzatanie: Optional[bool] = None
     modul_rezerwacje: Optional[bool] = None
+    rezerwacje_online: Optional[bool] = None
+    rezerwacje_auto_potwierdzenie: Optional[bool] = None
 
 # --- MODUŁ REZERWACJI ---
 
@@ -327,3 +331,13 @@ class ZrealizujIn(BaseModel):
     """Realizacja wpisu z listy oczekujących → utworzenie rezerwacji stolika."""
     stolik_id: int
     godz_od: Optional[time] = None   # opcjonalne nadpisanie godziny z wpisu
+
+class OnlineRezerwacjaIn(BaseModel):
+    """Publiczna rezerwacja online (gość, bez logowania) — system sam dobiera wolny stolik."""
+    data: date
+    godz_od: time
+    liczba_osob: int = 2
+    nazwisko: str
+    telefon: Optional[str] = None
+    email: Optional[str] = None
+    notatka: Optional[str] = None
