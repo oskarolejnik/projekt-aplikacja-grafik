@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -1475,6 +1475,27 @@ def _rezerwacja_out(t: models.Termin) -> dict:
             "zadatek": t.zadatek or 0, "kanal": t.kanal}
 
 
+def _tresc_potwierdzenia(t: models.Termin, cfg) -> str:
+    nazwa = cfg.nazwa_lokalu or "Lokal"
+    czesci = [f"dzień {t.data}"]
+    if t.godz_od:
+        czesci.append(f"godz. {_hm(t.godz_od)}")
+    if t.liczba_osob:
+        czesci.append(f"{t.liczba_osob} os.")
+    return (f"Dzień dobry,\n\n"
+            f"Twoja rezerwacja w {nazwa} ({', '.join(czesci)}) została przyjęta.\n\n"
+            f"Do zobaczenia!\n{nazwa}")
+
+
+def _wyslij_potwierdzenie_rezerwacji(db, t: models.Termin) -> bool:
+    """Best-effort e-mail potwierdzenia do gościa (gdy ma adres i integracja e-mail aktywna)."""
+    if not t.email:
+        return False
+    cfg = get_lokal_config(db)
+    return mailer.wyslij_email(t.email, f"Potwierdzenie rezerwacji — {cfg.nazwa_lokalu}",
+                               _tresc_potwierdzenia(t, cfg))
+
+
 # ── Stoliki ──────────────────────────────────────────────────────────────────
 @app.get("/api/stoliki", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def get_stoliki(db: Session = Depends(get_db)):
@@ -1558,6 +1579,7 @@ def dodaj_rezerwacje_stolik(dane: schemas.RezerwacjaIn, db: Session = Depends(ge
     db.add(t); db.commit(); db.refresh(t)
     wyslij_push_do_adminow(db, "Nowa rezerwacja",
                            f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
+    _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort (no-op gdy brak SMTP/adresu)
     return _rezerwacja_out(t)
 
 
@@ -1600,6 +1622,19 @@ def usun_rezerwacje_stolik(rid: int, db: Session = Depends(get_db)):
     t = db.get(models.Termin, rid)
     if t and t.rodzaj == "stolik":
         db.delete(t); db.commit()
+
+
+@app.post("/api/rezerwacje-stolik/{rid}/wyslij-potwierdzenie", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def wyslij_potwierdzenie_stolik(rid: int, db: Session = Depends(get_db)):
+    """Ponowna wysyłka e-maila z potwierdzeniem rezerwacji. Zwraca {wyslano, powod?}."""
+    t = db.get(models.Termin, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    if not t.email:
+        raise HTTPException(400, "Rezerwacja nie ma adresu e-mail.")
+    if not integracje.skonfigurowane("email"):
+        return {"wyslano": False, "powod": "Integracja e-mail nieskonfigurowana."}
+    return {"wyslano": _wyslij_potwierdzenie_rezerwacji(db, t)}
 
 
 # --- POWIADOMIENIA WEB PUSH (pracownik) ---

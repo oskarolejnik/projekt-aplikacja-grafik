@@ -79,6 +79,12 @@ export default function RezerwacjeStolik() {
     try { await api(`/rezerwacje-stolik/${r.id}/status`, 'POST', { status: nowy }); load() }
     catch (e) { toast(e.message, 'error') }
   }
+  const wyslijPotwierdzenie = async () => {
+    try {
+      const r = await api(`/rezerwacje-stolik/${modal.id}/wyslij-potwierdzenie`, 'POST')
+      toast(r.wyslano ? 'E-mail potwierdzenia wysłany.' : (r.powod || 'Nie wysłano.'), r.wyslano ? 'success' : 'info')
+    } catch (e) { toast(e.message, 'error') }
+  }
 
   const dodajStolik = async () => {
     if (!nowyStolik.nazwa.trim()) { toast('Podaj nazwę stolika.', 'error'); return }
@@ -185,6 +191,10 @@ export default function RezerwacjeStolik() {
             </div>
             <div className="mt-4 flex gap-2">
               <Button onClick={zapisz} disabled={busy} className="flex-1"><Icon name="check" className="h-4 w-4" /> Zapisz</Button>
+              {modal.id && modal.email && (
+                <button onClick={wyslijPotwierdzenie} title="Wyślij e-mail potwierdzenia"
+                  className="rounded-xl border border-line px-3 py-2 text-sm font-semibold text-muted hover:text-ink"><Icon name="bell" className="h-4 w-4" /></button>
+              )}
               {modal.id && <button onClick={usun} disabled={busy} className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm font-semibold text-danger"><Icon name="trash" className="h-4 w-4" /></button>}
             </div>
           </div>
