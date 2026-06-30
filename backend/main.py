@@ -1384,6 +1384,48 @@ def alerty_kasowe(start: date = Query(...), end: date = Query(...), prog: float 
     return _alerty_kasowe(db, start, end, max(0.0, float(prog)))
 
 
+# ── PROGNOZA RUCHU (z historii StolikiHistoria — wsparcie decyzji o obsadzie) ──
+
+_DNI_TYG = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
+
+
+@app.get("/api/prognoza-ruchu")
+def prognoza_ruchu(dni: int = 90, db: Session = Depends(get_db)):
+    """Prognoza ruchu (liczba rachunków) z historii: średnia per dzień tygodnia, trend
+    28d vs poprzednie 28d, projekcja na najbliższe 7 dni. Czysto z danych StolikiHistoria."""
+    dni = max(7, min(int(dni), 365))
+    today = date.today()
+    od = today - timedelta(days=dni)
+    rows = db.query(models.StolikiHistoria).filter(models.StolikiHistoria.data >= od,
+                                                   models.StolikiHistoria.data <= today).all()
+    wg_dnia = defaultdict(list)
+    for r in rows:
+        wg_dnia[r.data.weekday()].append(int(r.liczba or 0))
+    per_dzien = []
+    for w in range(7):
+        vals = wg_dnia.get(w, [])
+        per_dzien.append({"dzien": w, "nazwa": _DNI_TYG[w],
+                          "srednia": round(sum(vals) / len(vals), 1) if vals else 0,
+                          "max": max(vals) if vals else 0, "probek": len(vals)})
+    # Trend: ostatnie 28 dni vs poprzednie 28 dni.
+    def _suma(start, end):
+        return sum(int(r.liczba or 0) for r in rows if start <= r.data < end)
+    okno1 = _suma(today - timedelta(days=28), today + timedelta(days=1))
+    okno0 = _suma(today - timedelta(days=56), today - timedelta(days=28))
+    trend = round((okno1 - okno0) / okno0 * 100, 1) if okno0 else None
+    # Projekcja na 7 dni wg średniej dnia tygodnia.
+    srednie = {p["dzien"]: p["srednia"] for p in per_dzien}
+    projekcja = []
+    for i in range(1, 8):
+        d = today + timedelta(days=i)
+        projekcja.append({"data": str(d), "nazwa": _DNI_TYG[d.weekday()], "prognoza": srednie.get(d.weekday(), 0)})
+    return {"okres_dni": dni, "probek": len(rows),
+            "srednia_dzienna": round(sum(int(r.liczba or 0) for r in rows) / len(rows), 1) if rows else 0,
+            "trend_28d_proc": trend,
+            "per_dzien_tygodnia": per_dzien,
+            "projekcja_7dni": projekcja}
+
+
 # ── KALENDARZ IMPREZ ──────────────────────────────────────────────────────────
 
 def _termin_out(t: models.Termin, zadatek_kp: float = 0.0) -> dict:
