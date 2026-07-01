@@ -2805,10 +2805,59 @@ def eksport_csv(start: date, end: date, db: Session = Depends(get_db)):
     # Konwersja na bajty z ukrytym znacznikiem 'utf-8-sig'. 
     # Bez tego polskie znaki takie jak ą, ę, ł wyglądałyby w Excelu jak błędy (np. "krzaczki").
     return StreamingResponse(
-        iter([output.getvalue().encode("utf-8-sig")]), 
-        media_type="text/csv", 
+        iter([output.getvalue().encode("utf-8-sig")]),
+        media_type="text/csv",
         headers=headers
     )
+
+
+@app.get("/api/eksport/wyplaty")
+def eksport_wyplaty(request: Request, rok: int = Query(..., ge=2000, le=2100),
+                    miesiac: int = Query(..., ge=1, le=12),
+                    user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Miesięczny raport wypłat jako sformatowany plik .xlsx dla księgowej: per pracownik rozbicie
+    na stanowiska (godziny × stawka) + wiersz RAZEM i suma wszystkich. Dostęp do płac → audyt (RODO)."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
+    zapisz_audyt(db, user, "eksport_wyplaty", zasob=f"{rok}-{miesiac:02d}", request=request)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Wyplaty {rok}-{miesiac:02d}"
+    naglowek = ["Pracownik", "Stanowisko", "Godziny", "Stawka (zł/h)", "Do wypłaty (zł)"]
+    ws.append(naglowek)
+    naglowek_fill = PatternFill("solid", fgColor="1C1C1E")
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = naglowek_fill
+        c.alignment = Alignment(horizontal="center")
+
+    suma_godzin = suma_kwota = 0.0
+    for p in raport["pracownicy"]:
+        for s in p["stanowiska"]:
+            ws.append([p["pracownik"], s["stanowisko"], s["godziny"], s["stawka"], s["kwota"]])
+        ws.append([p["pracownik"], "RAZEM", p["suma_godzin"], None, p["do_wyplaty"]])
+        for c in ws[ws.max_row]:
+            c.font = Font(bold=True)
+        suma_godzin += p["suma_godzin"]
+        suma_kwota += p["do_wyplaty"]
+
+    ws.append([])
+    ws.append(["WSZYSCY RAZEM", None, round(suma_godzin, 2), None, round(suma_kwota, 2)])
+    for c in ws[ws.max_row]:
+        c.font = Font(bold=True, color="1F7A5C")
+    for col, szer in zip("ABCDE", (26, 22, 10, 13, 16)):
+        ws.column_dimensions[col].width = szer
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    nazwa = f"wyplaty_{rok}_{miesiac:02d}.xlsx"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nazwa}"'})
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IMPREZY Z SERWERA NAS (ZINTEGROWANE Z AUTOMATYKĄ WYMAGAŃ)

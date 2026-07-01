@@ -49,4 +49,25 @@ export async function api(path, method = 'GET', body = null) {
   return data
 }
 
+// Pobranie pliku z API z nagłówkiem Bearer (nawigacja window.location NIE niesie tokena, więc
+// pliki chronione trzeba ściągać przez fetch → blob → link). Rzuca Error z detalem przy błędzie.
+export async function pobierzPlik(path, nazwaPliku) {
+  const token = getToken()
+  const res = await fetch(API + path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (res.status === 401) { setToken(null); if (onUnauthorized) onUnauthorized() }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || res.statusText)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = nazwaPliku
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export { API }
