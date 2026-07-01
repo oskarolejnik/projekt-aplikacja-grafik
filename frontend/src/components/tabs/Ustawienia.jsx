@@ -69,6 +69,9 @@ export default function Ustawienia() {
         impreza_najwczesniej: cfg.impreza_najwczesniej, impreza_sale_min2: cfg.impreza_sale_min2,
         obsada_rachunki_na_osobe: Number(cfg.obsada_rachunki_na_osobe),
         obsada_min: Number(cfg.obsada_min),
+        praca_min_odpoczynek_h: Number(cfg.praca_min_odpoczynek_h),
+        praca_max_dni_tydzien: Number(cfg.praca_max_dni_tydzien),
+        praca_max_dni_miesiac: Number(cfg.praca_max_dni_miesiac),
       })
       toast('Zapisano. Odśwież stronę, by zobaczyć zmiany w marce i nawigacji.', 'success')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
@@ -129,6 +132,18 @@ export default function Ustawienia() {
             <input type="number" min="1" value={cfg.obsada_rachunki_na_osobe ?? 20} onChange={(e) => set('obsada_rachunki_na_osobe', e.target.value)} className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Minimalna obsada na zmianę
             <input type="number" min="1" value={cfg.obsada_min ?? 1} onChange={(e) => set('obsada_min', e.target.value)} className={fld} /></label>
+        </div>
+      </Card>
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Strażnik prawa pracy" subtitle="Limity przy ręcznym przydziale zmian (Kodeks pracy). Wpisz 0, aby wyłączyć dany limit." />
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <label className="text-xs font-semibold text-muted">Min. odpoczynek między zmianami (h)
+            <input type="number" min="0" value={cfg.praca_min_odpoczynek_h ?? 11} onChange={(e) => set('praca_min_odpoczynek_h', e.target.value)} className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Maks. dni pracy w tygodniu
+            <input type="number" min="0" value={cfg.praca_max_dni_tydzien ?? 6} onChange={(e) => set('praca_max_dni_tydzien', e.target.value)} className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Maks. dni pracy w miesiącu
+            <input type="number" min="0" value={cfg.praca_max_dni_miesiac ?? 22} onChange={(e) => set('praca_max_dni_miesiac', e.target.value)} className={fld} /></label>
         </div>
       </Card>
 
