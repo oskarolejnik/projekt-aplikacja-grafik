@@ -7,6 +7,7 @@ import { useAuth } from './context/AuthContext'
 import { useBranding } from './context/BrandingContext'
 import { api } from './lib/api'
 import Pulpit from './components/tabs/Pulpit'
+import PrognozaObsady from './components/tabs/PrognozaObsady'
 import Pracownicy from './components/tabs/Pracownicy'
 import Stanowiska from './components/tabs/Stanowiska'
 import Wymagania from './components/tabs/Wymagania'
@@ -31,6 +32,7 @@ import Eksport from './components/tabs/Eksport'
 
 const TABS = [
   { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', group: 'Pulpit', title: 'Pulpit właściciela', Comp: Pulpit },
+  { id: 'prognoza-obsady', label: 'Prognoza obsady', icon: 'clock', group: 'Pulpit', title: 'Prognoza obsady', Comp: PrognozaObsady },
   { id: 'pracownicy', label: 'Pracownicy', icon: 'users', group: 'Zarządzanie', title: 'Zarządzanie pracownikami', Comp: Pracownicy },
   { id: 'stanowiska', label: 'Stanowiska', icon: 'office', group: 'Zarządzanie', title: 'Struktura i stanowiska', Comp: Stanowiska },
   { id: 'wymagania', label: 'Wymagania (plan)', icon: 'clipboard', group: 'Zarządzanie', title: 'Planowanie zmian', Comp: Wymagania },

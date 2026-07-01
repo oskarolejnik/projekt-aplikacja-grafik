@@ -67,6 +67,8 @@ export default function Ustawienia() {
         impreza_osoby_na_obsluge: Number(cfg.impreza_osoby_na_obsluge),
         impreza_wyprzedzenie_min: Number(cfg.impreza_wyprzedzenie_min),
         impreza_najwczesniej: cfg.impreza_najwczesniej, impreza_sale_min2: cfg.impreza_sale_min2,
+        obsada_rachunki_na_osobe: Number(cfg.obsada_rachunki_na_osobe),
+        obsada_min: Number(cfg.obsada_min),
       })
       toast('Zapisano. Odśwież stronę, by zobaczyć zmiany w marce i nawigacji.', 'success')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
@@ -117,6 +119,16 @@ export default function Ustawienia() {
             <input value={cfg.impreza_najwczesniej ?? '10:00'} onChange={(e) => set('impreza_najwczesniej', e.target.value)} placeholder="10:00" className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Sale z minimum 2 obsady (po przecinku)
             <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="R2Piw,R2G" className={fld} /></label>
+        </div>
+      </Card>
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Prognoza obsady" subtitle="Przeliczanie prognozowanego ruchu na sugerowaną liczbę osób na zmianę (zakładka „Prognoza obsady”)." />
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-xs font-semibold text-muted">Rachunków na 1 osobę obsługi
+            <input type="number" min="1" value={cfg.obsada_rachunki_na_osobe ?? 20} onChange={(e) => set('obsada_rachunki_na_osobe', e.target.value)} className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Minimalna obsada na zmianę
+            <input type="number" min="1" value={cfg.obsada_min ?? 1} onChange={(e) => set('obsada_min', e.target.value)} className={fld} /></label>
         </div>
       </Card>
 
