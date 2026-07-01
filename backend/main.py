@@ -90,6 +90,18 @@ OVERSIGHT_GET = {
 }
 
 
+def _sciezka_na_whitelist(path: str, prefiksy) -> bool:
+    """Dopasowanie whitelisty ODPORNE na kolizję prefiksów. Zwykłe `startswith` przepuszczało
+    „/api/rezerwacje-stolik" (pełne PII gości) na wpisie „/api/rezerwacje" (zagregowany, bez PII) —
+    bo to prefiks tekstowy, nie segmentowy. Dopasowujemy po GRANICY segmentu: dokładnie albo z „/".
+    Dzięki temu „/api/rezerwacje" łapie „/api/rezerwacje" i „/api/rezerwacje/...", ale NIE „...-stolik"."""
+    for p in prefiksy:
+        pp = p.rstrip("/")
+        if path == pp or path.startswith(pp + "/"):
+            return True
+    return False
+
+
 # Centralna ochrona API: /api/auth/* publiczne, /api/me/* dla każdego zalogowanego,
 # pozostałe /api/* tylko dla administratora (role nadzorcze: wybrane GET — patrz OVERSIGHT_GET).
 # Statyczny frontend jest publiczny.
@@ -127,7 +139,7 @@ async def role_guard(request: Request, call_next):
             else:
                 # Pozostałe role nadzorcze (szef, szef_kuchni poza swoją przestrzenią) — tylko GET z whitelisty.
                 dozwolone = OVERSIGHT_GET.get(rola, ())
-                if not (request.method == "GET" and any(path.startswith(p) for p in dozwolone)):
+                if not (request.method == "GET" and _sciezka_na_whitelist(path, dozwolone)):
                     return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
     return await call_next(request)
 
@@ -1189,11 +1201,14 @@ def moje_rozliczenie(data: date = Query(...), user: models.User = Depends(get_cu
     roz = _zbuduj_rozliczenie(db, data)
     k = next((x for x in roz.kelnerzy if x.pracownik_id == user.pracownik_id), None)
     zamyka, zamyka_rewir, rewir = _kelner_sala_przydzial(db, user.pracownik_id, data)
-    term = [p for p in (roz.terminale or []) if (p.get("rewir") or "") == (rewir or "")] if zamyka_rewir else []
+    # Filtrujemy po SUROWYM rewirze (dopasowanie 1:1 do zapisu), ale w odpowiedzi dla pracownika
+    # MASKUJEMY nazwę klienta imprezy — jak w /api/me/grafik (model prywatności).
+    term = [{**p, "rewir": _rewir_dla_pracownika(p.get("rewir"))}
+            for p in (roz.terminale or []) if (p.get("rewir") or "") == (rewir or "")] if zamyka_rewir else []
     return {"moze": True, "status": _rozlicz_sala_status(db, user.pracownik_id, data),
             "potwierdzone": bool(k and k.potwierdzone),
             "wiersz": ({"gotowka": k.gotowka, "karta": k.karta, "fv": k.fv, "kw": k.kw} if k else None),
-            "zamyka": zamyka, "zamyka_rewir": zamyka_rewir, "rewir": rewir,
+            "zamyka": zamyka, "zamyka_rewir": zamyka_rewir, "rewir": _rewir_dla_pracownika(rewir),
             "terminale": term, "kasy": (roz.kasy or []) if zamyka else []}
 
 

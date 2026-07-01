@@ -40,8 +40,12 @@ def crm_goscie(min_wizyt: int = Query(1), limit: int = Query(500), db: Session =
         no_show = sum(1 for t in lista if t.status == "no_show")
         odwolane = sum(1 for t in lista if t.status == "odwolana")
         aktywne = sum(1 for t in lista if t.status in _AKTYWNE)
-        no_show_proc = round(no_show / wizyt * 100) if wizyt else 0
-        ryzyko = "wysokie" if (wizyt >= 3 and no_show_proc >= 30) else ("srednie" if no_show_proc > 0 else "niskie")
+        # Współczynnik no-show liczymy TYLKO po wizytach zamkniętych (odbyte/no_show/odwołane) —
+        # rezerwacje przyszłe/oczekujące (aktywne) nie są dowodem zachowania i rozwadniałyby ryzyko
+        # (im więcej gość ma nadchodzących rezerwacji, tym niżej wychodziłby scoring — błąd).
+        zamkniete = odbyte + no_show + odwolane
+        no_show_proc = round(no_show / zamkniete * 100) if zamkniete else 0
+        ryzyko = "wysokie" if (zamkniete >= 3 and no_show_proc >= 30) else ("srednie" if no_show_proc > 0 else "niskie")
         najnowsza = max(lista, key=lambda t: t.data)
         daty = [t.data for t in lista]
         goscie.append({

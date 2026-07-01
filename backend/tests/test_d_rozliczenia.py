@@ -312,6 +312,25 @@ def test_zamykajacy_dosyla_terminale_kasy_i_push_admina(client, admin_client, db
     assert roz.push_admin_at is not None          # jedyny kelner sali → komplet → push do admina
 
 
+def test_me_rozliczenie_maskuje_rewir_imprezy(client, db):
+    """Regresja prywatności: /api/me/rozliczenie NIE może ujawnić kelnerowi nazwiska klienta
+    imprezy w rewirze — maskujemy jak w /api/me/grafik (pole 'rewir' + rewiry w 'terminale')."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    u = factories.UserFactory(login="kel_imp_rewir", rola="employee", pracownik=k)
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id, godz_od=time(16, 0),
+                                  rewir="IMPREZA: Wesele Kowalski (R2P)", zamyka=True, zamyka_rewir=True))
+    db.commit()
+    assert client.put(f"/api/me/rozliczenie?data={d}", headers=_h(u), json={
+        "gotowka": 0, "karta": 500, "kw": 0,
+        "terminale": [{"kwota": 500}], "kasy": [{"kwota": 500}]}).status_code == 204
+    g = client.get(f"/api/me/rozliczenie?data={d}", headers=_h(u)).json()
+    assert g["rewir"] == "Impreza (R2P)"                       # nazwisko klienta ukryte
+    assert "Kowalski" not in str(g)                            # nigdzie w odpowiedzi (też w 'terminale')
+    assert g["terminale"] and all(t["rewir"] == "Impreza (R2P)" for t in g["terminale"])
+
+
 def test_me_rozliczenie_tylko_kelner_sali(client, db):
     k = factories.PracownikFactory(dzial="obsluga")
     u = factories.UserFactory(login="bezsali", rola="employee", pracownik=k)

@@ -5,7 +5,7 @@ Dotyczy dwóch miejsc:
   • /api/me/grafik   — rewir imprezy „IMPREZA: {klient} ({sala})" -> „Impreza ({sala})".
 """
 
-from datetime import datetime, time
+from datetime import date, datetime, time
 
 import main
 import models
@@ -15,6 +15,28 @@ from auth import create_access_token
 
 def _h(user):
     return {"Authorization": f"Bearer {create_access_token(user)}"}
+
+
+def test_rezerwacje_stolik_pii_niedostepne_dla_pracownika(make_employee_client, admin_client, db):
+    """Regresja (kolizja prefiksów w role_guard): pracownik NIE może pobrać /api/rezerwacje-stolik
+    (pełne PII gościa: nazwisko/telefon/email), mimo że whitelist ma prefiks „/api/rezerwacje"
+    (zagregowany, bez PII). Wcześniej startswith przepuszczał „/api/rezerwacje-stolik" → wyciek RODO.
+    Admin widzi PII (200), pracownik dostaje 403, a zagregowany „/api/rezerwacje" pozostaje dostępny."""
+    prac = factories.PracownikFactory()
+    ce, _ = make_employee_client(prac)
+    db.add(models.Termin(rodzaj="stolik", kanal="reczna", nazwisko="Klient Tajny",
+                         telefon="600100200", email="tajny@example.com",
+                         data=date.today(), status="rezerwacja"))
+    db.commit()
+    okno = {"start": str(date.today()), "end": str(date.today())}
+
+    ra = admin_client.get("/api/rezerwacje-stolik", params=okno)
+    assert ra.status_code == 200
+    assert any(x.get("telefon") == "600100200" for x in ra.json()["rezerwacje"])
+
+    rr = ce.get("/api/rezerwacje-stolik", params=okno)
+    assert rr.status_code == 403                              # PII gościa chronione przed pracownikiem
+    assert ce.get("/api/rezerwacje").status_code == 200        # zagregowany (bez PII) nadal dostępny
 
 
 def test_me_imprezy_bez_klienta_z_sala(client, db):
