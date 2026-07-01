@@ -4,6 +4,7 @@ import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
+import { num } from '../../lib/num'
 import { useToast } from '../ui/Toast'
 
 // Rozliczenie dnia (sala) — widok ADMINA. Kelnerzy wpisują G/T (FV auto z Gastro, KW koryguje).
@@ -11,7 +12,6 @@ import { useToast } from '../ui/Toast'
 // „Gotówka: X, Karta: Y"). IMP auto z imprez (z możliwością nadpisania z palca).
 const iso = (d) => d.toISOString().slice(0, 10)
 const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'
-const num = (v) => (v === '' || v == null ? 0 : parseFloat(v) || 0)
 
 // kolory różnic — czytelne pod daltonizm (etykieta + znak, nie tylko kolor)
 function Roznica({ wartosc, etykieta }) {

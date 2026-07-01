@@ -3,12 +3,12 @@ import { Card, SectionHeader } from '../ui/Card'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
+import { num } from '../../lib/num'
 import { useToast } from '../ui/Toast'
 
 // Zeszyt kasowy — PRZYCHÓD (SALA z rozliczenia + imprezy auto + ręczne wiersze) − ROZCHÓD
 // (Towar/Koszty/Wypłaty/Inne) → STAN (saldo gotówki narastająco). Admin edytuje; szef czyta.
 const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'
-const num = (v) => (v === '' || v == null ? 0 : parseFloat(v) || 0)
 const KOL = [{ v: 'towar', l: 'Towar' }, { v: 'koszty', l: 'Koszty' }, { v: 'wyplaty', l: 'Wypłaty' }, { v: 'inne', l: 'Inne' }]
 const KOL_L = Object.fromEntries(KOL.map((k) => [k.v, k.l]))
 const dz = (s) => { const [, m, d] = s.split('-'); return `${d}.${m}` }
