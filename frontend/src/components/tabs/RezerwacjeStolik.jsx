@@ -31,7 +31,7 @@ export default function RezerwacjeStolik() {
   const [busy, setBusy] = useState(false)
   const [modal, setModal] = useState(null)        // rezerwacja (edycja) lub { data } (nowa)
   const [stolikModal, setStolikModal] = useState(false)
-  const [nowyStolik, setNowyStolik] = useState({ nazwa: '', strefa: '', pojemnosc: 2 })
+  const [nowyStolik, setNowyStolik] = useState({ nazwa: '', strefa: '', pojemnosc: 2, rewir_nr: '' })
   const [lista, setLista] = useState([])
   const [listaModal, setListaModal] = useState(false)
   const [nowyOcz, setNowyOcz] = useState({ godz_od: '', liczba_osob: '', nazwisko: '', telefon: '' })
@@ -95,8 +95,8 @@ export default function RezerwacjeStolik() {
   const dodajStolik = async () => {
     if (!nowyStolik.nazwa.trim()) { toast('Podaj nazwę stolika.', 'error'); return }
     try {
-      await api('/stoliki', 'POST', { nazwa: nowyStolik.nazwa.trim(), strefa: nowyStolik.strefa || null, pojemnosc: Number(nowyStolik.pojemnosc) || 2 })
-      setNowyStolik({ nazwa: '', strefa: '', pojemnosc: 2 }); load()
+      await api('/stoliki', 'POST', { nazwa: nowyStolik.nazwa.trim(), strefa: nowyStolik.strefa || null, pojemnosc: Number(nowyStolik.pojemnosc) || 2, rewir_nr: nowyStolik.rewir_nr ? Number(nowyStolik.rewir_nr) : null })
+      setNowyStolik({ nazwa: '', strefa: '', pojemnosc: 2, rewir_nr: '' }); load()
     } catch (e) { toast(e.message, 'error') }
   }
   const usunStolik = async (id) => {
@@ -247,15 +247,16 @@ export default function RezerwacjeStolik() {
               {stoliki.length === 0 && <div className="text-sm text-muted">Brak stolików — dodaj pierwszy poniżej.</div>}
               {stoliki.map((s) => (
                 <div key={s.id} className="flex items-center justify-between rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm">
-                  <span className="text-ink"><span className="font-semibold">{s.nazwa}</span>{s.strefa ? <span className="text-muted"> · {s.strefa}</span> : null} <span className="text-muted">· {s.pojemnosc} os.</span></span>
+                  <span className="text-ink"><span className="font-semibold">{s.nazwa}</span>{s.strefa ? <span className="text-muted"> · {s.strefa}</span> : null} <span className="text-muted">· {s.pojemnosc} os.</span>{s.rewir_nr ? <span className="ml-1 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted">POS {s.rewir_nr}</span> : null}</span>
                   <button onClick={() => usunStolik(s.id)} className="text-muted hover:text-danger"><Icon name="trash" className="h-4 w-4" /></button>
                 </div>
               ))}
             </div>
             <div className="grid grid-cols-6 gap-2 border-t border-line pt-3">
-              <input value={nowyStolik.nazwa} onChange={(e) => setNowyStolik((s) => ({ ...s, nazwa: e.target.value }))} placeholder="Nazwa" className={`${fld} col-span-2`} />
-              <input value={nowyStolik.strefa} onChange={(e) => setNowyStolik((s) => ({ ...s, strefa: e.target.value }))} placeholder="Strefa" className={`${fld} col-span-2`} />
-              <input type="number" min="1" value={nowyStolik.pojemnosc} onChange={(e) => setNowyStolik((s) => ({ ...s, pojemnosc: e.target.value }))} placeholder="Os." className={`${fld} col-span-1`} />
+              <input value={nowyStolik.nazwa} onChange={(e) => setNowyStolik((s) => ({ ...s, nazwa: e.target.value }))} placeholder="Nazwa" className={`${fld} col-span-3`} />
+              <input value={nowyStolik.strefa} onChange={(e) => setNowyStolik((s) => ({ ...s, strefa: e.target.value }))} placeholder="Strefa" className={`${fld} col-span-3`} />
+              <input type="number" min="1" value={nowyStolik.pojemnosc} onChange={(e) => setNowyStolik((s) => ({ ...s, pojemnosc: e.target.value }))} placeholder="Os." className={`${fld} col-span-2`} />
+              <input type="number" min="1" value={nowyStolik.rewir_nr} onChange={(e) => setNowyStolik((s) => ({ ...s, rewir_nr: e.target.value }))} placeholder="Rewir POS (opc.)" title="Numer rewiru z POS/Gastro — live obłożenie na planie sali" className={`${fld} col-span-3`} />
               <button onClick={dodajStolik} className="col-span-1 grid place-items-center rounded-lg bg-accent-gradient text-bg"><Icon name="plus" className="h-4 w-4" /></button>
             </div>
           </div>

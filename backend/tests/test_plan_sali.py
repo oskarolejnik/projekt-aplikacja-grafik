@@ -21,7 +21,7 @@ def _rez(db, stolik, data, godz, status="rezerwacja", nazwisko="Gość"):
 def test_plan_pusty(admin_client):
     b = admin_client.get("/api/plan-sali").json()
     assert b["stoliki"] == []
-    assert b["podsumowanie"] == {"wolne": 0, "zarezerwowane": 0, "nieaktywne": 0}
+    assert b["podsumowanie"] == {"wolne": 0, "zarezerwowane": 0, "nieaktywne": 0, "zajete_live": 0}
 
 
 def test_status_z_rezerwacji(admin_client, db):
@@ -55,6 +55,22 @@ def test_odwolana_rezerwacja_nie_liczy_sie(admin_client, db):
     _rez(db, s, dt.date.today(), dt.time(18, 0), status="odwolana")
     b = admin_client.get("/api/plan-sali").json()
     assert b["stoliki"][0]["status"] == "wolny"
+
+
+def test_live_oblozenie_z_pos(admin_client, db):
+    s = _stolik(db, "L1", rewir_nr=42)
+    db.add(models.StanStolow(rewir_nr=42, otwarte=3)); db.commit()
+    b = admin_client.get("/api/plan-sali").json()
+    st = next(x for x in b["stoliki"] if x["nazwa"] == "L1")
+    assert st["rewir_nr"] == 42
+    assert st["live"]["zajete"] is True and st["live"]["otwarte"] == 3
+    assert b["podsumowanie"]["zajete_live"] == 1
+
+
+def test_brak_live_gdy_brak_rewiru(admin_client, db):
+    _stolik(db, "L2")  # bez rewir_nr → brak podpięcia POS
+    b = admin_client.get("/api/plan-sali").json()
+    assert b["stoliki"][0]["live"] is None
 
 
 def test_zapisz_pozycje_z_clampem(admin_client, db):

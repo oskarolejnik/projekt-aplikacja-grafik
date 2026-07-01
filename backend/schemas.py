@@ -337,6 +337,7 @@ class StolikIn(BaseModel):
     laczy_sie: bool = False
     aktywny: bool = True
     kolejnosc: int = 0
+    rewir_nr: Optional[int] = None   # powiązanie z rewirem POS (live obłożenie)
 class StolikOut(StolikIn):
     id: int
     model_config = ConfigDict(from_attributes=True)

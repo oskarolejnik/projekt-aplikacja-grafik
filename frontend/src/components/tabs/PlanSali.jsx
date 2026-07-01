@@ -116,7 +116,8 @@ export default function PlanSali() {
               ))}
             </div>
             <div className="text-xs text-muted">
-              Wolne: <b className="text-mint">{plan.podsumowanie.wolne}</b> · Zajęte: <b className="text-coral">{plan.podsumowanie.zarezerwowane}</b>
+              Wolne: <b className="text-mint">{plan.podsumowanie.wolne}</b> · Rezerwacje: <b className="text-coral">{plan.podsumowanie.zarezerwowane}</b>
+              {plan.podsumowanie.zajete_live > 0 && <> · <span className="inline-flex items-center gap-1"><span className="h-2 w-2 animate-pulse rounded-full bg-coral" />Live: <b className="text-coral">{plan.podsumowanie.zajete_live}</b></span></>}
               {plan.podsumowanie.nieaktywne > 0 && <> · Nieaktywne: {plan.podsumowanie.nieaktywne}</>}
             </div>
           </div>
@@ -148,6 +149,12 @@ export default function PlanSali() {
                   {s.rezerwacje.length > 0 && (
                     <span className={`absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[9px] font-bold text-bg ${st.dot}`}>{s.rezerwacje.length}</span>
                   )}
+                  {s.live?.zajete && (
+                    <span className="absolute -left-1 -top-1 flex h-3 w-3" title={`Zajęty na żywo (POS): ${s.live.otwarte} otwartych rachunków`}>
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-coral opacity-70" />
+                      <span className="relative inline-flex h-3 w-3 rounded-full bg-coral" />
+                    </span>
+                  )}
                 </button>
               )
             })}
@@ -163,6 +170,12 @@ export default function PlanSali() {
                 </div>
                 <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${STATUS[wybranyStolik.status]?.bg}`}>{STATUS[wybranyStolik.status]?.label}</span>
               </div>
+              {wybranyStolik.live?.zajete && (
+                <div className="mb-2 flex items-center gap-2 rounded-lg bg-coral/[0.08] px-3 py-1.5 text-xs text-coral">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-coral" />
+                  Na żywo (POS): {wybranyStolik.live.otwarte} otwartych rachunków
+                </div>
+              )}
               {wybranyStolik.rezerwacje.length === 0 ? (
                 <p className="text-sm text-muted">Brak rezerwacji na {plan.data}.</p>
               ) : (

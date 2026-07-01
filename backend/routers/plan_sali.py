@@ -49,6 +49,9 @@ def plan_sali(data: date = Query(None), db: Session = Depends(get_db)):
         if t.stolik_id:
             per_stolik[t.stolik_id].append(t)
 
+    # Live obłożenie z POS (Gastro) — po numerze rewiru; podpięte tylko dla stolików z rewir_nr.
+    stan = {s.rewir_nr: s for s in db.query(models.StanStolow).all()}
+
     out = []
     for s in stoliki:
         rez = sorted(per_stolik.get(s.id, []), key=lambda t: (t.godz_od or time.min))
@@ -60,10 +63,16 @@ def plan_sali(data: date = Query(None), db: Session = Depends(get_db)):
             status = "zarezerwowany"
         else:
             status = "wolny"
+        sn = stan.get(s.rewir_nr) if s.rewir_nr else None
+        live = None if sn is None else {
+            "otwarte": sn.otwarte or 0,
+            "zajete": (sn.otwarte or 0) > 0,
+            "aktualizacja": sn.zaktualizowano_at.isoformat() if sn.zaktualizowano_at else None,
+        }
         out.append({
             "id": s.id, "nazwa": s.nazwa, "strefa": s.strefa, "pojemnosc": s.pojemnosc,
-            "aktywny": s.aktywny, "plan_x": s.plan_x, "plan_y": s.plan_y,
-            "status": status, "rezerwacje": [_rez_out(t) for t in rez],
+            "aktywny": s.aktywny, "plan_x": s.plan_x, "plan_y": s.plan_y, "rewir_nr": s.rewir_nr,
+            "status": status, "rezerwacje": [_rez_out(t) for t in rez], "live": live,
         })
 
     strefy = sorted({s.strefa for s in stoliki if s.strefa})
@@ -75,6 +84,7 @@ def plan_sali(data: date = Query(None), db: Session = Depends(get_db)):
             "wolne": sum(1 for s in out if s["status"] == "wolny"),
             "zarezerwowane": sum(1 for s in out if s["status"] in ("zarezerwowany", "potwierdzony")),
             "nieaktywne": sum(1 for s in out if s["status"] == "nieaktywny"),
+            "zajete_live": sum(1 for s in out if s["live"] and s["live"]["zajete"]),
         },
     }
 

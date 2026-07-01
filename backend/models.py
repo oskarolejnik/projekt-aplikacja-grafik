@@ -510,6 +510,8 @@ class Stolik(Base):
     # --- Plan sali (wizualne rozmieszczenie): pozycja w % kontenera (0–100), NULL = auto-siatka ---
     plan_x    = Column(Integer, nullable=True)
     plan_y    = Column(Integer, nullable=True)
+    # Powiązanie z rewirem POS (StanStolow.rewir_nr) — live obłożenie z Gastro. NULL = brak podpięcia.
+    rewir_nr  = Column(Integer, nullable=True)
 
 
 class GodzinyOtwarcia(Base):
