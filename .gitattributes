@@ -1,0 +1,7 @@
+# Normalizacja końców linii. Domyślnie git decyduje (text=auto), ale pliki uruchamiane
+# w Linux/Docker MUSZĄ mieć LF — CRLF psuje shebang skryptów i entrypointy kontenerów.
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+Caddyfile text eol=lf
+*.py text eol=lf
