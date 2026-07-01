@@ -515,3 +515,16 @@ class AuditLog(Base):
     pracownik_id = Column(Integer, ForeignKey("pracownicy.id", ondelete="SET NULL"), nullable=True)  # kogo dotyczy
     ip           = Column(String(64), nullable=True)
     szczegoly    = Column(String, nullable=True)
+
+
+class Subskrypcja(Base):
+    """Subskrypcja/licencja instancji (singleton id=1; model instance-per-tenant). Bez realnej
+    bramki płatności — status ustawia operator SaaS. Subskrypcja NIEAKTYWNA (wygasła/zawieszona
+    albo po dacie data_do) degraduje instancję do trybu TYLKO-ODCZYT (zapisy zwracają 402)."""
+    __tablename__ = "subskrypcja"
+    id      = Column(Integer, primary_key=True)
+    tier    = Column(String(16), nullable=False, default="free")      # free|basic|pro|premium|enterprise
+    status  = Column(String(16), nullable=False, default="aktywna")   # aktywna|trial|wygasla|zawieszona
+    data_od = Column(Date, nullable=True)
+    data_do = Column(Date, nullable=True)     # None = bezterminowa
+    uwagi   = Column(String, nullable=True)

@@ -80,6 +80,19 @@ OVERSIGHT_GET = {
 @app.middleware("http")
 async def role_guard(request: Request, call_next):
     path = request.url.path
+    # Degradacja READ_ONLY: nieaktywna subskrypcja → tylko odczyt. Zapisy (POST/PUT/DELETE/PATCH)
+    # zwracają 402, POZA: logowaniem (/api/auth/*), zarządzaniem subskrypcją i /api/health.
+    if (request.method in ("POST", "PUT", "DELETE", "PATCH") and path.startswith("/api/")
+            and not path.startswith("/api/auth/") and path != "/api/subskrypcja" and path != "/api/health"):
+        _db = SessionLocal()
+        try:
+            if not subskrypcja_aktywna(_db):
+                return JSONResponse(
+                    {"detail": "Subskrypcja nieaktywna — instancja działa w trybie tylko do odczytu. "
+                               "Przedłuż subskrypcję, aby zapisywać zmiany."},
+                    status_code=402)
+        finally:
+            _db.close()
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
     if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and not path.startswith("/api/online/") and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
         header = request.headers.get("authorization", "")
@@ -145,6 +158,28 @@ def get_lokal_config(db) -> models.LokalConfig:
         cfg = models.LokalConfig(id=1)
         db.add(cfg); db.commit(); db.refresh(cfg)
     return cfg
+
+
+def get_subskrypcja(db) -> models.Subskrypcja:
+    """Singleton subskrypcji/licencji instancji (id=1). Tworzony leniwie (domyślnie aktywny)."""
+    s = db.get(models.Subskrypcja, 1)
+    if s is None:
+        s = models.Subskrypcja(id=1)
+        db.add(s)
+        try:
+            db.commit(); db.refresh(s)
+        except Exception:
+            db.rollback()
+            s = db.get(models.Subskrypcja, 1)   # wyścig przy pierwszym zapisie — ktoś już utworzył
+    return s
+
+
+def subskrypcja_aktywna(db) -> bool:
+    """Czy instancja ma aktywną subskrypcję (status aktywna/trial i przed data_do)."""
+    s = get_subskrypcja(db)
+    if s is None or s.status not in ("aktywna", "trial"):
+        return False
+    return s.data_do is None or s.data_do >= date.today()
 
 
 def zapisz_audyt(db, user, akcja, *, zasob=None, pracownik_id=None, request=None, szczegoly=None):
@@ -2105,6 +2140,29 @@ def lokal_config_update(data: schemas.LokalConfigIn, db: Session = Depends(get_d
         setattr(cfg, pole, wartosc)
     db.commit(); db.refresh(cfg)
     return cfg
+
+
+def _subskrypcja_out(s, db) -> dict:
+    return {"tier": s.tier, "status": s.status,
+            "data_od": s.data_od.isoformat() if s.data_od else None,
+            "data_do": s.data_do.isoformat() if s.data_do else None,
+            "uwagi": s.uwagi, "aktywna": subskrypcja_aktywna(db)}
+
+
+@app.get("/api/subskrypcja")
+def subskrypcja_get(db: Session = Depends(get_db)):
+    """Status subskrypcji/licencji instancji (admin). `aktywna` = czy zapisy są dozwolone."""
+    return _subskrypcja_out(get_subskrypcja(db), db)
+
+
+@app.put("/api/subskrypcja")
+def subskrypcja_update(data: schemas.SubskrypcjaIn, db: Session = Depends(get_db)):
+    """Zmiana subskrypcji (admin) — status/tier/daty. Ustawienie statusu na aktywna odblokowuje zapisy."""
+    s = get_subskrypcja(db)
+    for pole, wartosc in data.model_dump(exclude_unset=True).items():
+        setattr(s, pole, wartosc)
+    db.commit(); db.refresh(s)
+    return _subskrypcja_out(s, db)
 
 
 @app.get("/api/integracje/status")

@@ -286,6 +286,14 @@ class LokalConfigIn(BaseModel):
     impreza_najwczesniej: Optional[str] = None
     impreza_sale_min2: Optional[str] = None
 
+class SubskrypcjaIn(BaseModel):
+    """Częściowa aktualizacja subskrypcji/licencji instancji (admin)."""
+    tier: Optional[str] = None
+    status: Optional[str] = None
+    data_od: Optional[date] = None
+    data_do: Optional[date] = None
+    uwagi: Optional[str] = None
+
 # --- MODUŁ REZERWACJI ---
 
 class StolikIn(BaseModel):
