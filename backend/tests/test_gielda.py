@@ -179,3 +179,31 @@ def test_moje_przydzialy_do_wystawienia(make_employee_client, db):
     # Po wystawieniu flaga się zmienia.
     ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id})
     assert ca.get("/api/me/gielda/przydzialy").json()[0]["wystawiony"] is True
+
+
+def test_push_na_zdarzeniach_gieldy(make_employee_client, admin_client, monkeypatch, db):
+    import push
+    zdarzenia = []
+    monkeypatch.setattr(push, "wyslij_push_do_pracownika",
+                        lambda *a, **k: zdarzenia.append(("prac", a[2])) or 0)
+    monkeypatch.setattr(push, "wyslij_push_do_adminow",
+                        lambda *a, **k: zdarzenia.append(("admin", a[1])) or 0)
+
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    cb, _ = make_employee_client(b)
+
+    # Wystawienie → push do wykwalifikowanego kolegi (b), nie do wystawiającego (a).
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+    assert any(e[0] == "prac" for e in zdarzenia)
+    zdarzenia.clear()
+
+    # Przejęcie → push do adminów + do wystawiającego.
+    cb.post(f"/api/me/gielda/oferty/{oid}/przejmij")
+    assert any(e[0] == "admin" for e in zdarzenia)
+    assert any(e[0] == "prac" for e in zdarzenia)
+    zdarzenia.clear()
+
+    # Akceptacja → push do przejmującego i wystawiającego.
+    admin_client.post(f"/api/gielda/oferty/{oid}/akceptuj")
+    assert sum(1 for e in zdarzenia if e[0] == "prac") >= 1

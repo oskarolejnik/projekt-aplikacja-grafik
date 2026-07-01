@@ -9,6 +9,7 @@ Cykl statusu: otwarta → zajeta → zaakceptowana | (anulowana z otwarta/zajeta
 Odrzucenie przejęcia przez managera cofa ofertę do „otwarta" (nie kasuje oferty).
 """
 
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,11 +17,30 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
+import push
 from auth import get_current_user, require_admin
 from database import get_db
 from deps import utcnow_naive
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _opis_zmiany(o: "models.OfertaZmiany") -> str:
+    """Krótki opis zmiany do treści powiadomienia (data · godz · stanowisko)."""
+    p = o.przydzial
+    if not p:
+        return "zmiana"
+    czesci = [str(p.data)]
+    if p.godz_od:
+        czesci.append(p.godz_od.strftime("%H:%M"))
+    if p.stanowisko:
+        czesci.append(p.stanowisko.nazwa)
+    return " · ".join(czesci)
+
+
+def _imie(prac: "models.Pracownik") -> str:
+    return f"{prac.imie} {prac.nazwisko}" if prac else "Pracownik"
 
 # Statusy, w których oferta jest wciąż „w grze" (blokują drugą ofertę na ten sam przydział).
 _AKTYWNE = ("otwarta", "zajeta")
@@ -95,6 +115,13 @@ def wystaw_oferte(dane: schemas.OfertaZmianyIn,
         powod=(dane.powod or None), status="otwarta", utworzono_at=utcnow_naive(),
     )
     db.add(o); db.commit(); db.refresh(o)
+    # Best-effort push do wykwalifikowanych kolegów (poza wystawiającym) o nowej dostępnej zmianie.
+    try:
+        for prac in (p.stanowisko.uprawnieni if p.stanowisko else []):
+            if prac.id != prac_id:
+                push.wyslij_push_do_pracownika(db, prac.id, "Giełda: nowa zmiana do przejęcia", _opis_zmiany(o))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Push giełdy (wystaw) nie powiódł się: %s", e)
     return _serializuj(o)
 
 
@@ -166,6 +193,12 @@ def przejmij_oferte(oid: int, user: models.User = Depends(get_current_user),
                             "Masz już zmianę tego dnia o tej godzinie.")
     o.status = "zajeta"; o.przejmujacy_id = prac_id; o.zajeto_at = utcnow_naive()
     db.commit(); db.refresh(o)
+    try:
+        opis = _opis_zmiany(o)
+        push.wyslij_push_do_adminow(db, "Giełda: oferta do akceptacji", f"{_imie(prac)} chce przejąć: {opis}")
+        push.wyslij_push_do_pracownika(db, o.wystawiajacy_id, "Giełda: ktoś chce przejąć Twoją zmianę", opis)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Push giełdy (przejmij) nie powiódł się: %s", e)
     return _serializuj(o)
 
 
@@ -218,6 +251,13 @@ def akceptuj_oferte(oid: int, _admin: models.User = Depends(require_admin),
     p.pracownik_id = o.przejmujacy_id
     o.status = "zaakceptowana"; o.rozpatrzono_at = utcnow_naive()
     db.commit(); db.refresh(o)
+    try:
+        opis = _opis_zmiany(o)
+        przej = db.get(models.Pracownik, o.przejmujacy_id)
+        push.wyslij_push_do_pracownika(db, o.przejmujacy_id, "Giełda: przejęcie zaakceptowane", opis)
+        push.wyslij_push_do_pracownika(db, o.wystawiajacy_id, "Giełda: Twoja zmiana przejęta", f"{_imie(przej)} przejmuje: {opis}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Push giełdy (akceptuj) nie powiódł się: %s", e)
     return _serializuj(o)
 
 
@@ -230,6 +270,12 @@ def odrzuc_oferte(oid: int, _admin: models.User = Depends(require_admin),
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Oferta nie istnieje.")
     if o.status != "zajeta":
         raise HTTPException(status.HTTP_409_CONFLICT, "Oferta nie czeka na decyzję.")
+    bylo_przejmujacy = o.przejmujacy_id
     o.status = "otwarta"; o.przejmujacy_id = None; o.zajeto_at = None
     db.commit(); db.refresh(o)
+    try:
+        push.wyslij_push_do_pracownika(db, bylo_przejmujacy, "Giełda: przejęcie odrzucone",
+                                       f"Oferta wróciła na giełdę: {_opis_zmiany(o)}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Push giełdy (odrzuc) nie powiódł się: %s", e)
     return _serializuj(o)
