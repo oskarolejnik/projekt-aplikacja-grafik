@@ -2643,6 +2643,18 @@ def _imprezy_wymagania_warning(db):
     return None
 
 
+def _impreza_params(cfg) -> dict:
+    """Parametry obsady imprez z konfiguracji lokalu (LokalConfig) → dict dla
+    algorithm.przelicz_imprezy_na_wymagania. `impreza_sale_min2` to lista po przecinku."""
+    sale = [s.strip() for s in (cfg.impreza_sale_min2 or "").split(",") if s.strip()]
+    return {
+        "osoby_na_obsluge": cfg.impreza_osoby_na_obsluge,
+        "wyprzedzenie_min": cfg.impreza_wyprzedzenie_min,
+        "najwczesniej": cfg.impreza_najwczesniej,
+        "sale_min2": sale,
+    }
+
+
 def _odswiez_wymagania_imprez(db, start, end):
     """Przelicza wymagania imprez dla [start, end] z AKTUALNEJ tabeli imprez: kasuje stare
     auto-wymagania imprez (jest_impreza=True) i tworzy świeże na stanowisku imprez. Dzięki temu
@@ -2654,7 +2666,7 @@ def _odswiez_wymagania_imprez(db, start, end):
     imprezy = db.query(models.Impreza).filter(
         models.Impreza.data >= start, models.Impreza.data <= end
     ).all()
-    nowe = przelicz_imprezy_na_wymagania(imprezy)
+    nowe = przelicz_imprezy_na_wymagania(imprezy, _impreza_params(get_lokal_config(db)))
     db.query(models.WymaganiaDnia).filter(
         models.WymaganiaDnia.data >= start,
         models.WymaganiaDnia.data <= end,

@@ -450,6 +450,11 @@ class LokalConfig(Base):
     # --- Rezerwacje online (publiczny widget) ---
     rezerwacje_online             = Column(Boolean, nullable=False, default=False)  # gość rezerwuje bez logowania
     rezerwacje_auto_potwierdzenie = Column(Boolean, nullable=False, default=False)  # online od razu 'potwierdzona'
+    # --- Parametry obsady imprez (dawniej zaszyte pod jeden lokal; domyślne = zachowanie historyczne) ---
+    impreza_osoby_na_obsluge = Column(Integer, nullable=False, default=15)             # 1 pracownik na tylu gości
+    impreza_wyprzedzenie_min = Column(Integer, nullable=False, default=120)            # obsługa startuje tyle min przed
+    impreza_najwczesniej     = Column(String(5), nullable=False, default="10:00")      # nie wcześniej niż
+    impreza_sale_min2        = Column(String(128), nullable=False, default="R2Piw,R2G")  # sale z min. 2 obsady (po przecinku)
 
 
 class Stolik(Base):

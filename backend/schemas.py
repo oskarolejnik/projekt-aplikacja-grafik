@@ -263,6 +263,10 @@ class LokalConfigOut(LokalBrandingOut):
     modul_rezerwacje: bool = True
     rezerwacje_online: bool = False
     rezerwacje_auto_potwierdzenie: bool = False
+    impreza_osoby_na_obsluge: int = 15
+    impreza_wyprzedzenie_min: int = 120
+    impreza_najwczesniej: str = "10:00"
+    impreza_sale_min2: str = "R2Piw,R2G"
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -277,6 +281,10 @@ class LokalConfigIn(BaseModel):
     modul_rezerwacje: Optional[bool] = None
     rezerwacje_online: Optional[bool] = None
     rezerwacje_auto_potwierdzenie: Optional[bool] = None
+    impreza_osoby_na_obsluge: Optional[int] = None
+    impreza_wyprzedzenie_min: Optional[int] = None
+    impreza_najwczesniej: Optional[str] = None
+    impreza_sale_min2: Optional[str] = None
 
 # --- MODUŁ REZERWACJI ---
 

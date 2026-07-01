@@ -137,90 +137,53 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
 
 from datetime import datetime, timedelta
 
-def przelicz_imprezy_na_wymagania(imprezy: List[models.Impreza]) -> List[dict]:
-    wymagania_automatyczne = []
-    
-    for imp in imprezy:
-        # --- USTALENIE WARTOŚCI DOMYŚLNYCH ---
-        godzina_pracy = time(10, 0)
-        
-        # 1. Logika godziny
-        # 1. Logika godziny
-        try:
-            godz_str = str(imp.godzina).strip().replace('.', ':')
-            
-            # Próba parsowania z sekundami (%H:%M:%S) lub bez (%H:%M)
-            if len(godz_str) > 5:
-                start_imp = datetime.strptime(godz_str, "%H:%M:%S")
-            else:
-                start_imp = datetime.strptime(godz_str, "%H:%M")
-                
-            start_pracy = start_imp - timedelta(hours=2)
-            
-            # Limit 10:00 rano
-            limit_godzina = datetime.strptime("10:00", "%H:%M")
-            start_pracy = max(start_pracy, limit_godzina)
-            
-            godzina_pracy = start_pracy.time()
-        except Exception as e:
-            print(f"DEBUG: Błąd godziny dla {imp.klient}: {e}")
-        # 2. Logika liczby osób
-        osoby = imp.liczba_osob or 0
-        sala = imp.sala or ""
-        min_osob = 2 if sala in ['R2Piw', 'R2G'] else 1
-        # Wyliczenie potrzebnych pracowników
-        potrzebni = max(min_osob, (osoby // 15) + (1 if osoby % 15 > 0 else 0))
-        
-        # 3. Dodanie do listy
-        wymagania_automatyczne.append({
-            "data": imp.data,
-            "godz_od": godzina_pracy,
-            "liczba_osob": potrzebni,
-            "rewir": f"IMPREZA: {imp.klient} ({sala})",
-            "jest_impreza": True
-        })
-        
-    return wymagania_automatyczne
-    """
-    Przelicza listę imprez na listę słowników wymagań, 
-    które zostaną zapisane w tabeli 'wymagania_dnia'.
-    """
-    wymagania_automatyczne = []
-    
-    for imp in imprezy:
-        # 1. Logika godziny: -2h, najwcześniej 10:00
-        try:
-            # Zakładamy format godziny w bazie: "HH:MM"
-            start_imp = datetime.strptime(imp.godzina, "%H:%M")
-            start_pracy = start_imp - timedelta(hours=2)
-            
-            # Limit 10:00 rano
-            limit_godzina = datetime.strptime("10:00", "%H:%M")
-            start_pracy = max(start_pracy, limit_godzina)
-            
-            godzina_pracy = start_pracy.time()
-        except (ValueError, TypeError):
-            # W razie błędu parsowania, ustawiamy bezpieczne 10:00
-            godzina_pracy = time(10, 0)
+# Domyślne parametry obsady imprez (historycznie zaszyte pod jeden lokal; teraz konfigurowalne
+# per lokal w LokalConfig). Domyślne wartości ZACHOWUJĄ dotychczasowe zachowanie.
+IMPREZA_PARAMS_DOMYSLNE = {
+    "osoby_na_obsluge": 15,          # 1 pracownik obsługi na tylu gości
+    "wyprzedzenie_min": 120,         # obsługa zaczyna tyle minut przed startem imprezy
+    "najwczesniej": "10:00",         # ale nie wcześniej niż ta godzina
+    "sale_min2": ("R2Piw", "R2G"),   # sale wymagające minimum 2 osób obsady
+}
 
-        # 2. Logika zapotrzebowania:
-        # 1 pracownik na 15 osób, ale dla R2Piw/R2G minimum 2 osoby
+
+def przelicz_imprezy_na_wymagania(imprezy: List[models.Impreza], params: dict = None) -> List[dict]:
+    """Przelicza imprezy na wymagania obsady dnia (stanowisko imprez). Parametry obsady
+    (goście na pracownika, wyprzedzenie startu, najwcześniejsza godzina, sale z minimum 2)
+    są konfigurowalne per lokal przez LokalConfig — `params` None = wartości domyślne."""
+    p = {**IMPREZA_PARAMS_DOMYSLNE, **(params or {})}
+    osoby_na_obsluge = max(1, int(p["osoby_na_obsluge"]))
+    wyprzedzenie = timedelta(minutes=int(p["wyprzedzenie_min"]))
+    try:
+        najwczesniej = datetime.strptime(str(p["najwczesniej"]), "%H:%M")
+    except (ValueError, TypeError):
+        najwczesniej = datetime.strptime("10:00", "%H:%M")
+    sale_min2 = set(p["sale_min2"])
+
+    wymagania_automatyczne = []
+    for imp in imprezy:
+        # 1. Godzina startu obsługi: start imprezy - wyprzedzenie, nie wcześniej niż `najwczesniej`.
+        godzina_pracy = najwczesniej.time()
+        try:
+            godz_str = str(imp.godzina).strip().replace(".", ":")
+            fmt = "%H:%M:%S" if len(godz_str) > 5 else "%H:%M"
+            start_imp = datetime.strptime(godz_str, fmt)
+            godzina_pracy = max(start_imp - wyprzedzenie, najwczesniej).time()
+        except Exception:
+            pass
+
+        # 2. Liczba obsady: 1 na `osoby_na_obsluge` (w górę), minimum zależne od sali.
         osoby = imp.liczba_osob or 0
         sala = imp.sala or ""
-        
-        # Sztywne minimum dla konkretnych sal
-        min_osob = 2 if sala in ['R2Piw', 'R2G'] else 1
-        
-        # Wyliczenie: (osoby / 15) zaokrąglone w górę
-        potrzebni = max(min_osob, (osoby // 15) + (1 if osoby % 15 > 0 else 0))
-        
-        # Przygotowanie słownika wymagań
+        min_osob = 2 if sala in sale_min2 else 1
+        potrzebni = max(min_osob, (osoby // osoby_na_obsluge) + (1 if osoby % osoby_na_obsluge > 0 else 0))
+
         wymagania_automatyczne.append({
             "data": imp.data,
             "godz_od": godzina_pracy,
             "liczba_osob": potrzebni,
             "rewir": f"IMPREZA: {imp.klient} ({sala})",
-            "jest_impreza": True
+            "jest_impreza": True,
         })
-        
+
     return wymagania_automatyczne
