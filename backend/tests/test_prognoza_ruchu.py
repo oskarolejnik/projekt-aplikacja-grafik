@@ -17,6 +17,17 @@ def test_prognoza_pusta(admin_client):
     assert all(p["probek"] == 0 and p["srednia"] == 0 for p in b["per_dzien_tygodnia"])
 
 
+def test_prognoza_trend_na_pelnym_oknie_niezaleznie_od_dni(admin_client, db):
+    """Regresja: trend liczony na WŁASNYM, pełnym oknie 56 dni (symetryczne 28 vs 28), niezależnie
+    od parametru `dni`. Krótszy wybór (dni=30) nie zostawia okna0 pustego → przy stałym ruchu trend=0,
+    a nie absurdalne setki %."""
+    today = dt.date.today()
+    for k in range(56):                          # stały ruch 50/dzień przez ostatnie 56 dni
+        db.add(models.StolikiHistoria(data=today - dt.timedelta(days=k), liczba=50))
+    db.commit()
+    assert admin_client.get("/api/prognoza-ruchu?dni=30").json()["trend_28d_proc"] == 0.0
+
+
 def test_prognoza_srednia_per_dzien_tygodnia(admin_client, db):
     today = dt.date.today()
     pon = today - dt.timedelta(days=today.weekday())     # najbliższy poniedziałek wstecz (weekday 0)

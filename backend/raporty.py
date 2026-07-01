@@ -207,7 +207,12 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
         wej_t = _as_time(z.get("wejscie"))
         if wej_t is not None and wej_t < GRANICA_NOCY:
             poprzedni = d - timedelta(days=1)
-            if _opublikowany(poprzedni, zakresy_pub):
+            # ...ale NIE gdy to start DZISIEJSZEJ imprezy nad ranem (przydział Imprezy na D o
+            # godz_od ≤ wejście) — inaczej godziny trafiłyby na wczorajszą imprezę zamiast dzisiejszej.
+            dzis_impreza_start = _opublikowany(d, zakresy_pub) and any(
+                a.stanowisko_id in imprezy_ids and a.godz_od is not None and a.godz_od <= wej_t
+                for a in graf.get((pid, d), []))
+            if not dzis_impreza_start and _opublikowany(poprzedni, zakresy_pub):
                 event = next((a for a in graf.get((pid, poprzedni), [])
                               if a.stanowisko_id in imprezy_ids), None)
                 if event is not None:

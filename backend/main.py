@@ -1502,11 +1502,16 @@ def prognoza_ruchu(dni: int = 90, db: Session = Depends(get_db)):
         per_dzien.append({"dzien": w, "nazwa": _DNI_TYG[w],
                           "srednia": round(sum(vals) / len(vals), 1) if vals else 0,
                           "max": max(vals) if vals else 0, "probek": len(vals)})
-    # Trend: ostatnie 28 dni vs poprzednie 28 dni.
+    # Trend: ostatnie 28 dni vs poprzednie 28 dni — liczone na WŁASNYM, PEŁNYM oknie 56 dni,
+    # niezależnie od parametru `dni`. Inaczej wybór krótszego okna (np. 30 dni) zostawiał
+    # poprzednie 28 dni prawie puste → absurdalny %. Okna SYMETRYCZNE (28 vs 28 dni).
+    trend_rows = rows if dni >= 55 else db.query(models.StolikiHistoria).filter(
+        models.StolikiHistoria.data >= today - timedelta(days=55),
+        models.StolikiHistoria.data <= today).all()
     def _suma(start, end):
-        return sum(int(r.liczba or 0) for r in rows if start <= r.data < end)
-    okno1 = _suma(today - timedelta(days=28), today + timedelta(days=1))
-    okno0 = _suma(today - timedelta(days=56), today - timedelta(days=28))
+        return sum(int(r.liczba or 0) for r in trend_rows if start <= r.data < end)
+    okno1 = _suma(today - timedelta(days=27), today + timedelta(days=1))    # 28 dni: today-27..today
+    okno0 = _suma(today - timedelta(days=55), today - timedelta(days=27))   # 28 dni: today-55..today-28
     trend = round((okno1 - okno0) / okno0 * 100, 1) if okno0 else None
     # Projekcja na 7 dni wg średniej dnia tygodnia + sugerowana obsada (wg parametrów lokalu).
     srednie = {p["dzien"]: p["srednia"] for p in per_dzien}
@@ -1985,13 +1990,16 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Se
         raise HTTPException(400, "Podaj imię/nazwisko.")
     if (dane.liczba_osob or 0) < 1:
         raise HTTPException(400, "Liczba osób musi być dodatnia.")
-    if dane.data < date.today():
+    # Data „dziś" wg strefy LOKALU (nie UTC hosta) — inaczej w oknie nocnym (po północy lokalnej,
+    # przed północą UTC) bramka „wstecz" i dobowy klucz limitu liczyły zły dzień.
+    dzis_lokalnie = (_teraz_lokalnie() or datetime.utcnow()).date()
+    if dane.data < dzis_lokalnie:
         raise HTTPException(400, "Nie można rezerwować wstecz.")
     # Anty-DoS: twardy limit rezerwacji/dzień z jednego IP — działa NIEZALEŻNIE od telefonu/e-maila
     # (bez tego atakujący pomijał limit poniżej, wysyłając rezerwacje bez danych kontaktu). Stan
     # w pamięci procesu (jak limiter logowania); klucz po realnym adresie klienta.
     ip = request.client.host if request.client else "?"
-    if not ratelimit.zuzyj_kwote(f"online-rez:{ip}", str(date.today()), ONLINE_LIMIT_IP_DZIENNY):
+    if not ratelimit.zuzyj_kwote(f"online-rez:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY):
         raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online z tego adresu.")
     # Anty-spam: limit aktywnych rezerwacji online/dzień po tym samym telefonie/e-mailu.
     # Telefon/e-mail są szyfrowane at-rest (niedeterministycznie) — nie da się filtrować
