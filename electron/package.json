@@ -1,0 +1,64 @@
+{
+  "name": "grafik-pracy-desktop",
+  "productName": "Grafik Pracy",
+  "version": "1.0.0",
+  "description": "Grafik Pracy — aplikacja desktopowa do zarządzania lokalem gastronomicznym",
+  "author": "Oskar Olejnik",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env VITE_DEV=1 electron .",
+    "dist": "electron-builder --win",
+    "dist:dir": "electron-builder --win --dir"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "pl.rajcula.grafik",
+    "productName": "Grafik Pracy",
+    "copyright": "© Oskar Olejnik",
+    "directories": {
+      "output": "dist-installer",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/dist",
+        "to": "backend/dist",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend/dist",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "GrafikPracy-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Grafik Pracy",
+      "installerLanguages": ["pl_PL"],
+      "language": "1045"
+    }
+  }
+}

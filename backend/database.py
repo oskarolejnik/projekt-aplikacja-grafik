@@ -123,11 +123,13 @@ def _ensure_schema():
 
 
 def _alembic_config():
-    """Konfiguracja Alembica wskazująca na migrations/ obok tego pliku."""
+    """Konfiguracja Alembica wskazująca na migrations/ obok tego pliku. W spakowanej appce
+    (PyInstaller) pliki danych leżą w katalogu bundla `sys._MEIPASS`, nie obok źródła."""
     import os
+    import sys
     from alembic.config import Config
 
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
     cfg = Config(os.path.join(here, "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(here, "migrations"))
     return cfg

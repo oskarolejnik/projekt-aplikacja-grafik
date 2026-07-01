@@ -3882,7 +3882,9 @@ def moje_rezerwacje(user: models.User = Depends(get_current_user)):
 
 # ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_DIST = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
+# Ścieżkę statyk można nadpisać przez FRONTEND_DIST (aplikacja desktopowa/Electron podaje
+# katalog zasobów, bo względne „../frontend/dist" nie działa w spakowanej appce/PyInstaller).
+FRONTEND_DIST = os.environ.get("FRONTEND_DIST") or os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 else:

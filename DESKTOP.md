@@ -1,0 +1,69 @@
+# Aplikacja desktopowa — Grafik Pracy
+
+Wersja desktopowa to powłoka **Electron**, która uruchamia lokalny serwer aplikacji (FastAPI)
+i pokazuje interfejs w oknie. Cały produkt (API + frontend) działa na komputerze użytkownika;
+baza to lokalny plik SQLite w katalogu danych użytkownika.
+
+Instalator (Windows, NSIS) pakuje **spakowany backend** (PyInstaller → `grafik-backend.exe`),
+dzięki czemu na komputerze klienta **nie trzeba instalować Pythona**.
+
+## Budowanie instalatora (Windows)
+
+Wymagania: Node 20/22, Python 3.11 (do zbudowania backendu), npm.
+
+```powershell
+# w katalogu głównym repozytorium
+.\build-desktop.ps1
+```
+
+Skrypt wykonuje trzy kroki:
+
+1. **Frontend** — `npm --prefix frontend run build` → `frontend/dist`
+2. **Backend** — PyInstaller pakuje serwer do `backend/dist/grafik-backend/grafik-backend.exe`
+   (tworzy własny venv `backend/.venv-build` z zależnościami produkcyjnymi + PyInstaller)
+3. **Instalator** — electron-builder (NSIS) → **`electron/dist-installer/GrafikPracy-Setup-<wersja>.exe`**
+
+Gotowy plik `GrafikPracy-Setup-<wersja>.exe` to instalator do rozdania — dwuklik, wybór katalogu,
+skróty na pulpicie i w menu Start.
+
+## Jak to działa
+
+- `electron/main.js` przy starcie:
+  - przygotowuje **katalog danych** (`%APPDATA%\Grafik Pracy\dane`) — tam trafia baza `grafik.db`
+    oraz jednorazowo wygenerowane sekrety (`sekrety.json`: `SECRET_KEY`, `RCP_INGEST_TOKEN`);
+  - uruchamia backend (spakowany `grafik-backend.exe`, a w trybie dev — `uvicorn` przez Pythona),
+    przekazując przez środowisko `DATABASE_URL` (SQLite w katalogu danych), `SECRET_KEY`,
+    `FRONTEND_DIST` (statyki serwuje backend) i port (domyślnie `8799`, wewnętrzny);
+  - czeka aż `/api/health` odpowie 200 i otwiera okno na `http://127.0.0.1:<port>`;
+  - zamyka proces backendu przy wyjściu; pilnuje pojedynczej instancji.
+- Schemat bazy tworzy/aktualizuje `init_db()` (Alembic `upgrade head`; migracje są dołączone do
+  bundla). Przy aktualizacji aplikacji nowe migracje zastosują się do istniejącej bazy klienta.
+
+## Tryb deweloperski (bez instalatora)
+
+Z Pythonem i zależnościami backendu w venv (`backend/.venv-test` lub własny):
+
+```powershell
+# okno na zbudowanym froncie serwowanym przez backend:
+npm --prefix frontend run build
+npm --prefix electron install
+npm --prefix electron start
+
+# albo z hot-reloadem Vite (osobno uruchom 'npm --prefix frontend run dev'):
+npm --prefix electron run dev        # ładuje http://localhost:5173
+```
+
+W trybie dev `main.js` sam znajdzie Pythona z `backend/.venv-test` / `backend/venv`, albo
+użyje interpretera z `PATH`. Można wskazać własny: `set GRAFIK_PYTHON=...python.exe`.
+
+## Ikona
+
+Umieść `electron/assets/icon.ico` (256×256) — electron-builder użyje jej jako ikony aplikacji
+i instalatora. Bez pliku build użyje domyślnej ikony Electrona.
+
+## Uwagi
+
+- Port `8799` jest wewnętrzny (frontend woła `/api` względnie). Zmienisz go zmienną `GRAFIK_PORT`.
+- Instalator jest **per-user** (bez uprawnień administratora), z możliwością zmiany katalogu.
+- Jeśli PyInstaller nie wychwyci jakiegoś modułu, dodaj go do `hiddenimports` w
+  `backend/grafik-backend.spec`.

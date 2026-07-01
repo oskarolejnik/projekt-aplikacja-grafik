@@ -29,3 +29,9 @@ backend/instances/
 
 # Kopie zapasowe bazy (pg_dump) — dane produkcyjne, nie wersjonować
 backups/
+
+# Build aplikacji desktopowej (Electron + PyInstaller) — artefakty, nie wersjonować
+.venv-build/
+backend/build/
+dist-installer/
+electron/dist-installer/
