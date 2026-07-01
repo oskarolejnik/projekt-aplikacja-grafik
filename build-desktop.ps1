@@ -36,11 +36,15 @@ npm --prefix "$root\frontend" run build
 if (-not $SkipBackend) {
   Write-Host "[2/3] Pakowanie backendu (PyInstaller)..." -ForegroundColor Yellow
   $venv = Join-Path $root "backend\.venv-build"
-  if (-not (Test-Path $venv)) {
-    if ($Python -ne "") { Invoke-Expression "$Python -m venv `"$venv`"" }
-    else { py -3.11 -m venv $venv }
-  }
   $py = Join-Path $venv "Scripts\python.exe"
+  if (-not (Test-Path $py)) {
+    $kandydaci = if ($Python -ne "") { @($Python) } else { @("py -3.11", "py -3.12", "py -3.10", "py -3.9", "py", "python") }
+    foreach ($cmd in $kandydaci) {
+      try { Invoke-Expression "$cmd -m venv `"$venv`"" } catch {}
+      if (Test-Path $py) { break }
+    }
+    if (-not (Test-Path $py)) { throw "Nie znaleziono Pythona do zbudowania backendu — zainstaluj Python 3.9+ (albo podaj -Python <sciezka>)." }
+  }
   & $py -m pip install --upgrade pip
   & $py -m pip install -r (Join-Path $root "backend\requirements.txt") pyinstaller
   Push-Location (Join-Path $root "backend")

@@ -9,7 +9,7 @@ dzięki czemu na komputerze klienta **nie trzeba instalować Pythona**.
 
 ## Budowanie instalatora (Windows)
 
-Wymagania: Node 20/22, Python 3.11 (do zbudowania backendu), npm.
+Wymagania: Node 20/22, Python 3.9+ (do zbudowania backendu; skrypt sam wykryje wersję), npm.
 
 ```powershell
 # w katalogu głównym repozytorium
@@ -60,6 +60,27 @@ użyje interpretera z `PATH`. Można wskazać własny: `set GRAFIK_PYTHON=...pyt
 
 Umieść `electron/assets/icon.ico` (256×256) — electron-builder użyje jej jako ikony aplikacji
 i instalatora. Bez pliku build użyje domyślnej ikony Electrona.
+
+## Rozwiązywanie problemów
+
+**Build instalatora pada na `winCodeSign` — „Cannot create symbolic link ... Klient nie ma
+wymaganych uprawnień".** electron-builder rozpakowuje paczkę `winCodeSign` (do podpisywania kodu),
+która zawiera macOS-owe dowiązania symboliczne — a Windows nie tworzy ich bez uprawnień
+administratora / Trybu dewelopera. Dla niepodpisanego instalatora te pliki są zbędne. Obejścia:
+
+- **Najprościej:** włącz *Tryb dewelopera* (Ustawienia → Prywatność i zabezpieczenia →
+  Dla deweloperów → Tryb dewelopera: WŁ.), albo uruchom build w terminalu „jako administrator".
+- **Bez zmian systemowych:** rozpakuj `winCodeSign` ręcznie, pomijając katalog `darwin`, tak by
+  electron-builder znalazł gotowy cache (`%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0`):
+
+  ```powershell
+  $cache = "$env:LOCALAPPDATA\electron-builder\Cache\winCodeSign"
+  $z = "electron\node_modules\7zip-bin\win\x64\7za.exe"
+  # (paczka .7z zostaje w $cache po pierwszej nieudanej próbie builda)
+  & $z x "$cache\<nazwa>.7z" "-o$cache\winCodeSign-2.6.0" "-xr!darwin" -y
+  ```
+
+  Potem ponów `npm --prefix electron run dist`.
 
 ## Uwagi
 
