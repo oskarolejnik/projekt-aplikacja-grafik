@@ -2139,6 +2139,9 @@ def delete_stanowisko(sid: int, db: Session = Depends(get_db)):
     s = db.get(models.Stanowisko, sid)
     if not s:
         raise HTTPException(404, "Nie znaleziono.")
+    # WymaganiaDnia mają FK do stanowiska BEZ kaskady ORM/ondelete → kasujemy ręcznie, inaczej na
+    # PostgreSQL (produkcja) delete rzuca IntegrityError 500, a na SQLite zostają sieroty.
+    db.query(models.WymaganiaDnia).filter(models.WymaganiaDnia.stanowisko_id == sid).delete(synchronize_session=False)
     db.delete(s); db.commit()
 
 @app.post("/api/stanowiska/{sid}/podkategorie", response_model=schemas.PodkategoriaOut)
@@ -2236,6 +2239,14 @@ def delete_pracownik(pid: int, db: Session = Depends(get_db)):
     p = db.get(models.Pracownik, pid)
     if not p:
         raise HTTPException(404, "Nie znaleziono.")
+    # Rekordy zależne BEZ kaskady ORM/ondelete kasujemy jawnie (przez ORM — by odpaliły zagnieżdżone
+    # kaskady, np. RozliczenieImprezy→pozycje). Inaczej na PostgreSQL FK RESTRICT rzuca 500, a na
+    # SQLite zostają SIEROTY — m.in. wiersz RozliczenieKelner zawyżający utarg dnia bez atrybucji.
+    # Twardy delete pracownika = pełne usunięcie jego danych (miękkie usunięcie = aktywny=False).
+    for Model in (models.RozliczenieKelner, models.RozliczenieImprezy, models.RozliczenieGastro,
+                  models.Urlop, models.ZamowienieSprzataczki, models.SprzatanieOdhaczenie):
+        for row in db.query(Model).filter(Model.pracownik_id == pid).all():
+            db.delete(row)
     db.delete(p); db.commit()
 
 
@@ -2555,6 +2566,13 @@ def clear_przydzialy(
         prac_ids = [pid for (pid,) in db.query(models.Pracownik.id)
                     .filter(models.Pracownik.dzial == dzial).all()]
         q = q.filter(models.PrzydzialZmiany.pracownik_id.in_(prac_ids))
+    # Najpierw skasuj powiązane oferty giełdy: bulk-delete omija ORM, a ondelete=CASCADE nie jest
+    # egzekwowane na SQLite → inaczej oferta zostałaby sierotą na nieistniejącym przydziale, a przy
+    # odzysku id przydziału (SQLite) akceptacja takiej oferty mogłaby przepiąć CUDZĄ zmianę.
+    przydz_ids = [row[0] for row in q.with_entities(models.PrzydzialZmiany.id).all()]
+    if przydz_ids:
+        db.query(models.OfertaZmiany).filter(
+            models.OfertaZmiany.przydzial_id.in_(przydz_ids)).delete(synchronize_session=False)
     q.delete(synchronize_session=False)
     db.commit()
     # Po wyczyszczeniu przelicz zamykającego dla każdego dnia zakresu (zniknęli kandydaci).
