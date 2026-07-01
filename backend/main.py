@@ -147,6 +147,29 @@ def get_lokal_config(db) -> models.LokalConfig:
     return cfg
 
 
+def zapisz_audyt(db, user, akcja, *, zasob=None, pracownik_id=None, request=None, szczegoly=None):
+    """Zapisuje wpis dziennika audytu dostępu do danych wrażliwych (RODO). Best-effort —
+    błąd audytu NIGDY nie przerywa właściwej operacji. `login` denormalizowany (rozliczalność).
+    Znacznik czasu jako naiwny UTC (spójność SQLite/Postgres)."""
+    try:
+        ip = request.client.host if (request is not None and request.client) else None
+        db.add(models.AuditLog(
+            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            user_id=getattr(user, "id", None),
+            login=getattr(user, "login", None),
+            akcja=akcja, zasob=zasob, pracownik_id=pracownik_id, ip=ip, szczegoly=szczegoly,
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _audit_out(w: models.AuditLog) -> dict:
+    return {"id": w.id, "ts": w.ts.isoformat() if w.ts else None, "login": w.login,
+            "akcja": w.akcja, "zasob": w.zasob, "pracownik_id": w.pracownik_id,
+            "ip": w.ip, "szczegoly": w.szczegoly}
+
+
 # Kwalifikacje działu technicznego (nadawane w Pracownikach jak zwykłe kwalifikacje = Stanowiska).
 # „Sprzątaczka" daje dostęp do formularza zamówień; „Stróż" na razie tylko jako oznaczenie.
 SPRZATACZKA_NAZWA = "Sprzątaczka"
@@ -3079,13 +3102,34 @@ def _trwajace_zmiany(db):
 
 
 @app.get("/api/raporty/godziny", status_code=200)
-def raport_godzin(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
+def raport_godzin(request: Request, rok: int = Query(...), miesiac: int = Query(...),
+                  user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Raport godzin wszystkich pracowników (admin + szef — wymusza middleware).
     Dorzuca `na_zmianie` (kto teraz na zmianie) oraz cięcia godzin (duze/male) — widzą je
-    admin i szef (szef_kuchni ma osobny endpoint /api/szefkuchni/godziny, bez cięć)."""
+    admin i szef (szef_kuchni ma osobny endpoint /api/szefkuchni/godziny, bez cięć).
+    Dostęp do danych płacowych jest zapisywany w dzienniku audytu (RODO)."""
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
     raport["na_zmianie"] = _trwajace_zmiany(db)
+    zapisz_audyt(db, user, "raport_godzin", zasob=f"{rok}-{miesiac:02d}", request=request)
     return raport
+
+
+@app.get("/api/audit-log")
+def audit_log_list(od: date = Query(None), do: date = Query(None), login: str = Query(None),
+                   akcja: str = Query(None), limit: int = Query(200), db: Session = Depends(get_db)):
+    """Dziennik audytu dostępu do danych wrażliwych (RODO). Tylko admin (wymusza middleware).
+    Filtry: zakres dat (od/do), login, akcja; najnowsze najpierw."""
+    q = db.query(models.AuditLog)
+    if od:
+        q = q.filter(models.AuditLog.ts >= datetime(od.year, od.month, od.day))
+    if do:
+        q = q.filter(models.AuditLog.ts < datetime(do.year, do.month, do.day) + timedelta(days=1))
+    if login:
+        q = q.filter(models.AuditLog.login == login)
+    if akcja:
+        q = q.filter(models.AuditLog.akcja == akcja)
+    q = q.order_by(models.AuditLog.id.desc()).limit(max(1, min(int(limit), 1000)))
+    return [_audit_out(w) for w in q.all()]
 
 
 def _kuchnia_pids(db):

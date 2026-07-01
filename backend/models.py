@@ -491,3 +491,20 @@ class ListaOczekujacych(Base):
     utworzono_at    = Column(DateTime, nullable=False)
     zrealizowano_at = Column(DateTime, nullable=True)
     termin_id       = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True)
+
+
+class AuditLog(Base):
+    """Dziennik audytu dostępu do danych wrażliwych (RODO). Rejestruje KTO, KIEDY i CZEGO
+    dotyczył dostęp do danych płacowych/finansowych (raporty godzin ze stawkami, rozliczenia).
+    `login` jest denormalizowany, by wpis przetrwał usunięcie konta (rozliczalność).
+    `ts` przechowywane jako naiwny UTC (spójność SQLite/Postgres) — zapisuje je helper zapisz_audyt."""
+    __tablename__ = "audit_log"
+    id           = Column(Integer, primary_key=True, index=True)
+    ts           = Column(DateTime, nullable=False, index=True)
+    user_id      = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    login        = Column(String(64), nullable=True)
+    akcja        = Column(String(64), nullable=False)          # np. 'raport_godzin'
+    zasob        = Column(String(128), nullable=True)          # czego dotyczy, np. '2026-07'
+    pracownik_id = Column(Integer, ForeignKey("pracownicy.id", ondelete="SET NULL"), nullable=True)  # kogo dotyczy
+    ip           = Column(String(64), nullable=True)
+    szczegoly    = Column(String, nullable=True)
