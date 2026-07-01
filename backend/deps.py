@@ -36,3 +36,12 @@ def subskrypcja_aktywna(db) -> bool:
     if s is None or s.status not in ("aktywna", "trial"):
         return False
     return s.data_do is None or s.data_do >= date.today()
+
+
+def get_lokal_config(db) -> models.LokalConfig:
+    """Singleton konfiguracji lokalu (id=1). Tworzony leniwie z domyślnymi wartościami."""
+    cfg = db.get(models.LokalConfig, 1)
+    if cfg is None:
+        cfg = models.LokalConfig(id=1)
+        db.add(cfg); db.commit(); db.refresh(cfg)
+    return cfg

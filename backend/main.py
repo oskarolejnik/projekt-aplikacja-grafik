@@ -29,11 +29,13 @@ from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow,
 import openpyxl
 
 import settings as app_settings
-from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive
+from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config
 from routers.instancja import router as instancja_router
+from routers.lokal import router as lokal_router
 
 app = FastAPI(title="Scheduler API")
 app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status integracji (Rec#5: dekompozycja main)
+app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -152,15 +154,6 @@ def _kuchnia_stanowisko(db) -> models.Stanowisko:
 
 def _techniczny_stanowisko(db) -> models.Stanowisko:
     return _stanowisko_wg_roli(db, "techniczny", TECHNICZNY_STANOWISKO)
-
-
-def get_lokal_config(db) -> models.LokalConfig:
-    """Singleton konfiguracji lokalu (id=1). Tworzony leniwie z domyślnymi wartościami."""
-    cfg = db.get(models.LokalConfig, 1)
-    if cfg is None:
-        cfg = models.LokalConfig(id=1)
-        db.add(cfg); db.commit(); db.refresh(cfg)
-    return cfg
 
 
 def zapisz_audyt(db, user, akcja, *, zasob=None, pracownik_id=None, request=None, szczegoly=None):
@@ -2089,32 +2082,6 @@ def delete_podkategoria(pid: int, db: Session = Depends(get_db)):
     p = db.get(models.Podkategoria, pid)
     if p:
         db.delete(p); db.commit()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# KONFIGURACJA LOKALU (white-label + moduły)
-# ═══════════════════════════════════════════════════════════════════════════
-
-@app.get("/api/lokal/branding", response_model=schemas.LokalBrandingOut)
-def lokal_branding(db: Session = Depends(get_db)):
-    """Publiczny branding (nazwa/logo/kolor) — do strony logowania / PWA. Bez logowania."""
-    return get_lokal_config(db)
-
-
-@app.get("/api/lokal/config", response_model=schemas.LokalConfigOut)
-def lokal_config_get(db: Session = Depends(get_db)):
-    """Pełna konfiguracja lokalu (tylko admin — wymusza middleware)."""
-    return get_lokal_config(db)
-
-
-@app.put("/api/lokal/config", response_model=schemas.LokalConfigOut)
-def lokal_config_update(data: schemas.LokalConfigIn, db: Session = Depends(get_db)):
-    """Częściowa aktualizacja konfiguracji lokalu (admin) — zmienia tylko podane pola."""
-    cfg = get_lokal_config(db)
-    for pole, wartosc in data.model_dump(exclude_unset=True).items():
-        setattr(cfg, pole, wartosc)
-    db.commit(); db.refresh(cfg)
-    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════════════
