@@ -1914,15 +1914,15 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, db: Session = Depends(ge
     if dane.data < date.today():
         raise HTTPException(400, "Nie można rezerwować wstecz.")
     # Anty-spam: limit aktywnych rezerwacji online/dzień po tym samym telefonie/e-mailu.
-    warunki = []
-    if dane.telefon:
-        warunki.append(models.Termin.telefon == dane.telefon)
-    if dane.email:
-        warunki.append(models.Termin.email == dane.email)
-    if warunki:
-        ile = db.query(models.Termin).filter(
+    # Telefon/e-mail są szyfrowane at-rest (niedeterministycznie) — nie da się filtrować
+    # po nich w SQL; pobieramy dzienny (mały) zbiór online i porównujemy po odszyfrowaniu.
+    if dane.telefon or dane.email:
+        dzisiaj_online = db.query(models.Termin).filter(
             models.Termin.kanal == "online", models.Termin.data == dane.data,
-            models.Termin.status.in_(REZ_AKTYWNE), or_(*warunki)).count()
+            models.Termin.status.in_(REZ_AKTYWNE)).all()
+        ile = sum(1 for t in dzisiaj_online
+                  if (dane.telefon and t.telefon == dane.telefon)
+                  or (dane.email and t.email == dane.email))
         if ile >= ONLINE_LIMIT_DZIENNY:
             raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online.")
 

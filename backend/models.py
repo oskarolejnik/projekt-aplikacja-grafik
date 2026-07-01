@@ -6,6 +6,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship, declarative_base
 
+from szyfrowanie import EncryptedString   # pola kontaktowe gości szyfrowane at-rest (RODO)
+
 Base = declarative_base()
 
 pracownik_stanowisko = Table(
@@ -255,7 +257,7 @@ class Termin(Base):
     nazwisko     = Column(String, nullable=False)             # klient
     typ          = Column(String(32), nullable=True)          # wesele/komunia/chrzciny/...
     liczba_osob  = Column(Integer, nullable=True)
-    telefon      = Column(String(32), nullable=True)
+    telefon      = Column(EncryptedString(512), nullable=True)   # PII gościa — szyfrowane at-rest
     sala         = Column(String(64), nullable=True)
     notatka      = Column(String, nullable=True)
     # Rozszerzony cykl rezerwacji: rezerwacja|potwierdzona|odbyla|no_show|odwolana
@@ -270,7 +272,7 @@ class Termin(Base):
     kanal        = Column(String(16), nullable=False, default="reczna")   # reczna|online|google|ical
     rodzaj       = Column(String(16), nullable=False, default="impreza")  # stolik|sala|impreza
     stolik_id    = Column(Integer, ForeignKey("stoliki.id", ondelete="SET NULL"), nullable=True)
-    email        = Column(String(128), nullable=True)          # do potwierdzeń/przypomnień (gość online)
+    email        = Column(EncryptedString(512), nullable=True)  # PII gościa — szyfrowane at-rest (potwierdzenia/przypomnienia)
     token_potwierdzenia = Column(String, nullable=True, index=True)  # link gościa (potwierdź/odwołaj) bez logowania
     potwierdzono_at     = Column(DateTime, nullable=True)
     odwolano_at         = Column(DateTime, nullable=True)
@@ -484,8 +486,8 @@ class ListaOczekujacych(Base):
     godz_od         = Column(Time, nullable=True)
     liczba_osob     = Column(Integer, nullable=True)
     nazwisko        = Column(String(128), nullable=False)
-    telefon         = Column(String(32), nullable=True)
-    email           = Column(String(128), nullable=True)
+    telefon         = Column(EncryptedString(512), nullable=True)   # PII gościa — szyfrowane at-rest
+    email           = Column(EncryptedString(512), nullable=True)   # PII gościa — szyfrowane at-rest
     notatka         = Column(String, nullable=True)
     status          = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|zrealizowany|odwolany
     utworzono_at    = Column(DateTime, nullable=False)
