@@ -469,6 +469,7 @@ class LokalConfig(Base):
     nazwa_lokalu      = Column(String(128), nullable=False, default="Grafik Pracy")
     logo_url          = Column(String, nullable=True)
     kolor_primary     = Column(String(16), nullable=True)         # np. '#1f6feb'
+    typ_lokalu        = Column(String(48), nullable=True)         # id typu z kreatora (np. 'pizzeria', 'dom-weselny')
     # --- Parametry grafiku ---
     # Dzień rozpoczęcia tygodnia grafiku: 0=poniedziałek … 6=niedziela. Domyślnie środa (2).
     poczatek_tygodnia = Column(Integer, nullable=False, default=2)

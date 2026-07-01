@@ -266,6 +266,7 @@ class LokalBrandingOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class LokalConfigOut(LokalBrandingOut):
+    typ_lokalu: Optional[str] = None
     poczatek_tygodnia: int = 2
     modul_rozliczenia: bool = True
     modul_imprezy: bool = True
@@ -287,6 +288,7 @@ class LokalConfigOut(LokalBrandingOut):
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
     nazwa_lokalu: Optional[str] = None
+    typ_lokalu: Optional[str] = None
     logo_url: Optional[str] = None
     kolor_primary: Optional[str] = None
     poczatek_tygodnia: Optional[int] = None

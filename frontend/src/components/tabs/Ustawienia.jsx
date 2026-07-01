@@ -5,6 +5,7 @@ import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
+import { TYPY, TYP_PO_ID, znormalizujModuly } from '../../pages/onboarding/typy'
 
 // Ustawienia lokalu (admin): marka + moduły + parametry imprez + subskrypcja + status integracji.
 // Backend: GET/PUT /api/lokal/config, GET /api/integracje/status, GET/PUT /api/subskrypcja.
@@ -60,6 +61,7 @@ export default function Ustawienia() {
     try {
       await api('/lokal/config', 'PUT', {
         nazwa_lokalu: cfg.nazwa_lokalu, logo_url: cfg.logo_url || null, kolor_primary: cfg.kolor_primary || null,
+        typ_lokalu: cfg.typ_lokalu || null,
         poczatek_tygodnia: Number(cfg.poczatek_tygodnia),
         modul_rezerwacje: cfg.modul_rezerwacje, modul_imprezy: cfg.modul_imprezy,
         modul_rozliczenia: cfg.modul_rozliczenia, modul_pos: cfg.modul_pos, modul_sprzatanie: cfg.modul_sprzatanie,
@@ -105,10 +107,29 @@ export default function Ustawienia() {
           {MODULY.map(([k, l]) => (
             <div key={k} className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
               <span className="text-sm text-ink">{l}</span>
-              <Toggle on={!!cfg[k]} onChange={(v) => set(k, v)} />
+              <Toggle on={!!cfg[k]} onChange={(v) => (k === 'modul_rezerwacje' && !v)
+                ? setCfg((s) => ({ ...s, modul_rezerwacje: false, rezerwacje_online: false }))
+                : set(k, v)} />
             </div>
           ))}
         </div>
+      </Card>
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Typ lokalu" subtitle="Profil Twojej knajpy — z niego dobieramy sensowny zestaw modułów. Możesz go zmienić i zastosować preset ponownie." />
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="flex-1 text-xs font-semibold text-muted">Typ
+            <select value={cfg.typ_lokalu || ''} onChange={(e) => set('typ_lokalu', e.target.value || null)} className={fld}>
+              <option value="">— nie wybrano —</option>
+              {TYPY.map((t) => <option key={t.id} value={t.id}>{t.nazwa}</option>)}
+            </select>
+          </label>
+          <Button variant="ghost" size="md" disabled={!cfg.typ_lokalu || !TYP_PO_ID[cfg.typ_lokalu]}
+            onClick={() => setCfg((s) => ({ ...s, ...znormalizujModuly(TYP_PO_ID[s.typ_lokalu].moduly) }))}>
+            <Icon name="refresh" className="h-4 w-4" /> Zastosuj preset modułów
+          </Button>
+        </div>
+        <p className="mt-2 text-xs text-muted">„Zastosuj preset" ustawi przełączniki modułów wg wybranego typu — zapisz, by utrwalić.</p>
       </Card>
 
       <Card className="p-6 sm:p-8">
@@ -151,8 +172,8 @@ export default function Ustawienia() {
         <SectionHeader title="Rezerwacje online" subtitle="Publiczny widget — goście rezerwują bez logowania (wymaga modułu rezerwacji + godzin otwarcia + stolików)." />
         <div className="mt-4 space-y-2">
           <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
-            <span className="text-sm text-ink">Włącz rezerwacje online</span>
-            <Toggle on={!!cfg.rezerwacje_online} onChange={(v) => set('rezerwacje_online', v)} />
+            <span className="text-sm text-ink">Włącz rezerwacje online <span className="text-xs text-muted">(włączy też moduł rezerwacji)</span></span>
+            <Toggle on={!!cfg.rezerwacje_online} onChange={(v) => setCfg((s) => ({ ...s, ...znormalizujModuly({ ...s, rezerwacje_online: v }) }))} />
           </div>
           <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
             <span className="text-sm text-ink">Automatyczne potwierdzanie (bez akceptacji admina)</span>
