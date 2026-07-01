@@ -62,7 +62,7 @@ def test_lokal_branding_publiczny(client):
     r = client.get("/api/lokal/branding")
     assert r.status_code == 200
     body = r.json()
-    assert body["nazwa_lokalu"] == "Grafik Pracy"           # wartość domyślna singletona
+    assert body["nazwa_lokalu"] == "Lokalo"                 # wartość domyślna singletona
     assert set(body.keys()) == {"nazwa_lokalu", "logo_url", "kolor_primary"}  # bez sekretów
 
 

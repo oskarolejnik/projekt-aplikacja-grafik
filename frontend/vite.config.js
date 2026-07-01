@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// Frontend „Grafik Pracy". Budowany do frontend/dist i serwowany przez FastAPI
+// Frontend „Lokalo". Budowany do frontend/dist i serwowany przez FastAPI
 // pod tym samym originem co API (dzięki czemu względne /api dalej działa).
 // W trybie dev Vite serwuje na :5173 i proxuje /api -> uvicorn (127.0.0.1:8000).
 export default defineConfig({
@@ -25,9 +25,9 @@ export default defineConfig({
       includeAssets: ['icon.svg'],
       manifest: {
         // Domyślna, neutralna marka. Per-klient nazwę/ikonę zmienia się przez branding/own build.
-        name: 'Grafik Pracy',
-        short_name: 'Grafik Pracy',
-        description: 'Grafik pracy, dyspozycyjność i powiadomienia',
+        name: 'Lokalo',
+        short_name: 'Lokalo',
+        description: 'Zarządzanie lokalem gastronomicznym: grafiki, płace, kasa, rezerwacje',
         lang: 'pl',
         theme_color: '#1C1C1E',
         background_color: '#1C1C1E',

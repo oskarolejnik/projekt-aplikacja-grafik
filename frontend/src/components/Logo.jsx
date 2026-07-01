@@ -5,29 +5,26 @@ import { useBranding } from '../context/BrandingContext'
 // pokazujemy je zamiast znaku domyślnego. `variant` zachowany dla zgodności API (znak jest
 // samokolorujący gradientem, więc wygląda dobrze na ciemnym UI niezależnie od wariantu).
 
-// Sam znak SVG (gradient akcentowy). `idSuffix` unika kolizji id gradientu przy wielu instancjach.
+// Znak marki Lokalo: gradientowy kafel (app-tile) z monogramem „L" i akcentem.
+// `idSuffix` unika kolizji id gradientu przy wielu instancjach.
 function Mark({ idSuffix = '', title = '' }) {
   const gid = `brandgrad${idSuffix}`
   return (
-    <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className="h-full w-full"
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" className="h-full w-full"
          role="img" aria-label={title || undefined} aria-hidden={title ? undefined : true}>
       <defs>
-        <linearGradient id={gid} x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#F4E2A0" />
-          <stop offset="0.5" stopColor="#A7D7C5" />
-          <stop offset="1" stopColor="#F2B8CB" />
+        <linearGradient id={gid} x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#A7D7C5" />
+          <stop offset="0.52" stopColor="#F4E2A0" />
+          <stop offset="1" stopColor="#F2A2A2" />
         </linearGradient>
       </defs>
-      {/* korpus kalendarza */}
-      <rect x="5.5" y="10" width="37" height="31.5" rx="8" stroke={`url(#${gid})`} strokeWidth="3" />
-      {/* uchwyty u góry */}
-      <line x1="15" y1="6" x2="15" y2="13" stroke={`url(#${gid})`} strokeWidth="3" strokeLinecap="round" />
-      <line x1="33" y1="6" x2="33" y2="13" stroke={`url(#${gid})`} strokeWidth="3" strokeLinecap="round" />
-      {/* komórki grafiku — dwie wypełnione (zaplanowane sloty), dwie przygaszone */}
-      <rect x="12" y="20.5" width="9" height="7" rx="2" fill={`url(#${gid})`} />
-      <rect x="27" y="20.5" width="9" height="7" rx="2" fill={`url(#${gid})`} opacity="0.32" />
-      <rect x="12" y="31" width="9" height="7" rx="2" fill={`url(#${gid})`} opacity="0.32" />
-      <rect x="27" y="31" width="9" height="7" rx="2" fill={`url(#${gid})`} />
+      {/* kafel marki */}
+      <rect x="0" y="0" width="64" height="64" rx="15" fill={`url(#${gid})`} />
+      {/* monogram L */}
+      <path d="M21 16 H28.5 V41 H45 V48.5 H21 Z" fill="#1C1C1E" />
+      {/* akcent (miejsce / punkt) */}
+      <circle cx="43.5" cy="21.5" r="4.6" fill="#1C1C1E" />
     </svg>
   )
 }

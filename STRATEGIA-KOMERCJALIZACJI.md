@@ -1,4 +1,4 @@
-# Strategia komercjalizacji „Grafik Pracy"
+# Strategia komercjalizacji „Lokalo"
 ### Od aplikacji jednego lokalu (Karczma Rajcula) do produktu SaaS sprzedawalnego gastronomii
 
 *Dokument decyzyjny dla właściciela (Oskar Olejnik). Stan na 2026-06-28.*

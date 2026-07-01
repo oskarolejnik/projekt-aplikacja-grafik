@@ -1,8 +1,8 @@
 {
-  "name": "grafik-pracy-desktop",
-  "productName": "Grafik Pracy",
+  "name": "lokalo-desktop",
+  "productName": "Lokalo",
   "version": "1.0.0",
-  "description": "Grafik Pracy — aplikacja desktopowa do zarządzania lokalem gastronomicznym",
+  "description": "Lokalo — aplikacja desktopowa do zarządzania lokalem gastronomicznym",
   "author": "Oskar Olejnik",
   "license": "UNLICENSED",
   "private": true,
@@ -19,8 +19,8 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "pl.rajcula.grafik",
-    "productName": "Grafik Pracy",
+    "appId": "app.lokalo.desktop",
+    "productName": "Lokalo",
     "copyright": "© Oskar Olejnik",
     "directories": {
       "output": "dist-installer",
@@ -44,10 +44,11 @@
       }
     ],
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         { "target": "nsis", "arch": ["x64"] }
       ],
-      "artifactName": "GrafikPracy-Setup-${version}.${ext}"
+      "artifactName": "Lokalo-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -55,7 +56,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Grafik Pracy",
+      "shortcutName": "Lokalo",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
       "installerLanguages": ["pl_PL"],
       "language": "1045"
     }

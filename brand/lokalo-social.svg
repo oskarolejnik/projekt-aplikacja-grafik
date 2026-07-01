@@ -1,0 +1,19 @@
+<svg viewBox="0 0 1280 640" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lokalo">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A7D7C5"/>
+      <stop offset="0.52" stop-color="#F4E2A0"/>
+      <stop offset="1" stop-color="#F2A2A2"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="#1C1C1E"/>
+  <!-- lockup: kafel + wordmark, wyśrodkowany -->
+  <g transform="translate(360,150) scale(0.34375)">
+    <rect width="512" height="512" rx="120" fill="url(#g)"/>
+    <path d="M168 128 H228 V328 H360 V388 H168 Z" fill="#1C1C1E"/>
+    <circle cx="348" cy="172" r="37" fill="#1C1C1E"/>
+  </g>
+  <text x="572" y="300" font-family="'Segoe UI',Arial,sans-serif" font-size="132" font-weight="700" letter-spacing="-4" fill="#F3F2EF">Lokal<tspan fill="#F2A2A2">o</tspan></text>
+  <text x="640" y="432" text-anchor="middle" font-family="'Segoe UI',Arial,sans-serif" font-size="37" fill="#9C9CA3">Zarządzaj całym lokalem z jednego miejsca</text>
+  <text x="640" y="502" text-anchor="middle" font-family="'Segoe UI',Arial,sans-serif" font-size="28" font-weight="600" fill="#A7D7C5">Grafiki · Płace · Kasa · Rezerwacje · Prognozy</text>
+</svg>

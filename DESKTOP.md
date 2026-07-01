@@ -1,4 +1,4 @@
-# Aplikacja desktopowa — Grafik Pracy
+# Aplikacja desktopowa — Lokalo
 
 Wersja desktopowa to powłoka **Electron**, która uruchamia lokalny serwer aplikacji (FastAPI)
 i pokazuje interfejs w oknie. Cały produkt (API + frontend) działa na komputerze użytkownika;
@@ -21,15 +21,15 @@ Skrypt wykonuje trzy kroki:
 1. **Frontend** — `npm --prefix frontend run build` → `frontend/dist`
 2. **Backend** — PyInstaller pakuje serwer do `backend/dist/grafik-backend/grafik-backend.exe`
    (tworzy własny venv `backend/.venv-build` z zależnościami produkcyjnymi + PyInstaller)
-3. **Instalator** — electron-builder (NSIS) → **`electron/dist-installer/GrafikPracy-Setup-<wersja>.exe`**
+3. **Instalator** — electron-builder (NSIS) → **`electron/dist-installer/Lokalo-Setup-<wersja>.exe`**
 
-Gotowy plik `GrafikPracy-Setup-<wersja>.exe` to instalator do rozdania — dwuklik, wybór katalogu,
+Gotowy plik `Lokalo-Setup-<wersja>.exe` to instalator do rozdania — dwuklik, wybór katalogu,
 skróty na pulpicie i w menu Start.
 
 ## Jak to działa
 
 - `electron/main.js` przy starcie:
-  - przygotowuje **katalog danych** (`%APPDATA%\Grafik Pracy\dane`) — tam trafia baza `grafik.db`
+  - przygotowuje **katalog danych** (`%APPDATA%\Lokalo\dane`) — tam trafia baza `grafik.db`
     oraz jednorazowo wygenerowane sekrety (`sekrety.json`: `SECRET_KEY`, `RCP_INGEST_TOKEN`);
   - uruchamia backend (spakowany `grafik-backend.exe`, a w trybie dev — `uvicorn` przez Pythona),
     przekazując przez środowisko `DATABASE_URL` (SQLite w katalogu danych), `SECRET_KEY`,
@@ -58,8 +58,9 @@ użyje interpretera z `PATH`. Można wskazać własny: `set GRAFIK_PYTHON=...pyt
 
 ## Ikona
 
-Umieść `electron/assets/icon.ico` (256×256) — electron-builder użyje jej jako ikony aplikacji
-i instalatora. Bez pliku build użyje domyślnej ikony Electrona.
+Ikona marki **Lokalo** jest już w repo: `electron/assets/icon.ico` (multi-res 16–256 px,
+generowana z `frontend/public/icon.svg`). electron-builder używa jej jako ikony aplikacji,
+okna i instalatora. Aby ją odświeżyć po zmianie znaku, przegeneruj z `icon.svg`.
 
 ## Rozwiązywanie problemów
 

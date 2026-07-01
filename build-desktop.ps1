@@ -1,14 +1,14 @@
 #requires -version 5
 <#
 .SYNOPSIS
-  Buduje instalator aplikacji desktopowej "Grafik Pracy" na Windows.
+  Buduje instalator aplikacji desktopowej "Lokalo" na Windows.
 
 .DESCRIPTION
   Trzy kroki:
     1) Frontend  — Vite build -> frontend\dist
     2) Backend   — PyInstaller pakuje serwer FastAPI do dist\grafik-backend\grafik-backend.exe
                    (dzieki temu na komputerze klienta NIE trzeba Pythona)
-    3) Instalator— electron-builder (NSIS) -> electron\dist-installer\GrafikPracy-Setup-<wersja>.exe
+    3) Instalator— electron-builder (NSIS) -> electron\dist-installer\Lokalo-Setup-<wersja>.exe
 
 .PARAMETER SkipBackend
   Pomija pakowanie backendu (instalator zadziala wtedy tylko tam, gdzie jest Python z zaleznosciami).
@@ -25,7 +25,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
-Write-Host "== Grafik Pracy - build instalatora desktopowego ==" -ForegroundColor Cyan
+Write-Host "== Lokalo - build instalatora desktopowego ==" -ForegroundColor Cyan
 
 # 1) FRONTEND ------------------------------------------------------------------
 Write-Host "[1/3] Build frontendu (Vite)..." -ForegroundColor Yellow

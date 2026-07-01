@@ -1,4 +1,4 @@
-# Roadmapa produktu: Grafik Pracy → SaaS dla gastronomii
+# Roadmapa produktu: Lokalo → SaaS dla gastronomii
 
 *Wersja 1.0 · dla właściciela (Oskar) · czerwiec 2026*
 

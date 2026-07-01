@@ -4,7 +4,7 @@ import { Icon } from '../lib/icons'
 import { GrafikVignette, PulpitVignette, RezerwacjaVignette, WyplataVignette } from './landing/Vignettes'
 import { useReveal, useSmoothAnchors, animacjeWlaczone, prefersReducedMotion } from './landing/motion'
 
-// Publiczny landing sprzedażowy „Grafik Pracy". Renderowany pod ?produkt ORAZ jako publiczne /
+// Publiczny landing sprzedażowy „Lokalo". Renderowany pod ?produkt ORAZ jako publiczne /
 // dla niezalogowanego gościa (App.jsx). Bez kontekstów instancji — działa samodzielnie.
 // North Star (DESIGN.md): „pastelowy neon na czerni". Ruch: wyraziste reveals + hover + cennik.
 
@@ -236,7 +236,7 @@ export default function Produkt() {
         <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
           <a href="?produkt" className="flex items-center gap-2.5">
             <Logo className="h-8" variant="gradient" />
-            <span className="font-display text-lg font-bold">Grafik Pracy</span>
+            <span className="font-display text-lg font-bold">Lokalo</span>
           </a>
           <div className="hidden items-center gap-7 text-sm font-semibold text-muted md:flex">
             <a href="#mozliwosci" className="transition hover:text-ink">Możliwości</a>
@@ -398,9 +398,9 @@ export default function Produkt() {
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-xs text-muted/70 sm:flex-row sm:px-6">
           <div className="flex items-center gap-2">
             <Logo className="h-6" variant="gradient" />
-            <span className="font-display font-bold text-muted">Grafik Pracy</span>
+            <span className="font-display font-bold text-muted">Lokalo</span>
           </div>
-          <span>© Grafik Pracy — oprogramowanie własnościowe. Wszelkie prawa zastrzeżone.</span>
+          <span>© Lokalo — oprogramowanie własnościowe. Wszelkie prawa zastrzeżone.</span>
         </div>
       </footer>
     </div>

@@ -1,5 +1,5 @@
 ---
-name: Grafik Pracy
+name: Lokalo
 description: System operacyjny dla lokalu gastro — pastelowy neon na czerni
 colors:
   ink: "#F4F4F5"
@@ -84,7 +84,7 @@ components:
     typography: "{typography.label}"
 ---
 
-# Design System: Grafik Pracy
+# Design System: Lokalo
 
 ## 1. Overview
 

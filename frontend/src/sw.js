@@ -69,7 +69,7 @@ self.addEventListener('push', (event) => {
     data = { body: event.data ? event.data.text() : '' }
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Grafik Pracy', {
+    self.registration.showNotification(data.title || 'Lokalo', {
       body: data.body || '',
       icon: '/icon.svg',
       badge: '/icon.svg',

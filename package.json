@@ -1,7 +1,7 @@
 {
-  "name": "grafik-pracy",
+  "name": "lokalo",
   "version": "1.0.0",
-  "description": "Aplikacja do układania grafików pracy",
+  "description": "Lokalo — zarządzanie lokalem gastronomicznym",
   "main": "electron/main.js",
   "scripts": {
     "start": "cd frontend && npm run build && cd .. && electron .",
@@ -16,8 +16,8 @@
     "electron-builder": "^26.8.1"
   },
   "build": {
-    "appId": "pl.grafik.pracy",
-    "productName": "Grafik Pracy",
+    "appId": "app.lokalo.desktop",
+    "productName": "Lokalo",
     "directories": {
       "output": "dist"
     },

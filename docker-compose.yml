@@ -1,4 +1,4 @@
-# Lokalny PostgreSQL dla aplikacji "Grafik Pracy".
+# Lokalny PostgreSQL dla aplikacji "Lokalo".
 # Uruchom:  docker compose up -d
 # Pasuje do domyślnego DATABASE_URL (postgresql+psycopg2://grafik:grafik@localhost:5432/grafik).
 services:

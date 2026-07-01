@@ -11,7 +11,7 @@ import os
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Grafik Pracy — serwer backendu (desktop)")
+    parser = argparse.ArgumentParser(description="Lokalo — serwer backendu (desktop)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.environ.get("GRAFIK_PORT", "8799")))
     args, _ = parser.parse_known_args()

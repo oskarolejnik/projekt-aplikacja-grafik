@@ -466,7 +466,7 @@ class LokalConfig(Base):
     __tablename__ = "lokal_config"
     id                = Column(Integer, primary_key=True)
     # --- Branding (white-label) ---
-    nazwa_lokalu      = Column(String(128), nullable=False, default="Grafik Pracy")
+    nazwa_lokalu      = Column(String(128), nullable=False, default="Lokalo")
     logo_url          = Column(String, nullable=True)
     kolor_primary     = Column(String(16), nullable=True)         # np. '#1f6feb'
     typ_lokalu        = Column(String(48), nullable=True)         # id typu z kreatora (np. 'pizzeria', 'dom-weselny')

@@ -6,7 +6,7 @@ const fs = require('fs')
 const crypto = require('crypto')
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Grafik Pracy — powłoka desktopowa (Electron). Uruchamia lokalny backend FastAPI
+// Lokalo — powłoka desktopowa (Electron). Uruchamia lokalny backend FastAPI
 // i wyświetla aplikację w oknie. Baza i sekrety trzymane są w katalogu danych
 // użytkownika (writable), a NIE w katalogu instalacji (read-only w spakowanej appce).
 // Backend: preferujemy spakowany plik wykonywalny (grafik-backend.exe) — wtedy na
@@ -156,7 +156,8 @@ function createWindow() {
     height: 860,
     minWidth: 1024,
     minHeight: 700,
-    title: 'Grafik Pracy',
+    title: 'Lokalo',
+    icon: path.join(__dirname, 'assets', 'icon.ico'),
     backgroundColor: '#1C1C1E',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

@@ -282,7 +282,7 @@ class TerminIn(BaseModel):
 
 class LokalBrandingOut(BaseModel):
     """Publiczne dane brandingu (bez sekretów) — do strony logowania / PWA."""
-    nazwa_lokalu: str = "Grafik Pracy"
+    nazwa_lokalu: str = "Lokalo"
     logo_url: Optional[str] = None
     kolor_primary: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
