@@ -88,7 +88,8 @@ async def role_guard(request: Request, call_next):
     # Degradacja READ_ONLY: nieaktywna subskrypcja → tylko odczyt. Zapisy (POST/PUT/DELETE/PATCH)
     # zwracają 402, POZA: logowaniem (/api/auth/*), zarządzaniem subskrypcją i /api/health.
     if (request.method in ("POST", "PUT", "DELETE", "PATCH") and path.startswith("/api/")
-            and not path.startswith("/api/auth/") and path != "/api/subskrypcja" and path != "/api/health"):
+            and not path.startswith("/api/auth/") and not path.startswith("/api/onboarding/")
+            and path != "/api/subskrypcja" and path != "/api/health"):
         _db = SessionLocal()
         try:
             if not subskrypcja_aktywna(_db):
@@ -99,7 +100,7 @@ async def role_guard(request: Request, call_next):
         finally:
             _db.close()
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and not path.startswith("/api/online/") and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and not path.startswith("/api/online/") and not path.startswith("/api/onboarding/") and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:
@@ -358,6 +359,34 @@ def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
     db.refresh(user)
     _przypisz_odbicia_do_pracownika(db, prac)  # podlinkuj zalegle odbicia RCP do nowego konta
     return schemas.TokenOut(access_token=create_access_token(user), user=_user_out(user))
+
+
+# ── ONBOARDING (samoobsługowa pierwsza konfiguracja instancji) ────────────────
+
+@app.get("/api/onboarding/status")
+def onboarding_status(db: Session = Depends(get_db)):
+    """Publiczny: czy instancja wymaga pierwszej konfiguracji (brak jakiegokolwiek użytkownika)."""
+    potrzebny = db.query(models.User).first() is None
+    return {"potrzebny": potrzebny, "nazwa_lokalu": get_lokal_config(db).nazwa_lokalu}
+
+
+@app.post("/api/onboarding/bootstrap", response_model=schemas.TokenOut, status_code=201)
+def onboarding_bootstrap(dane: schemas.OnboardingIn, db: Session = Depends(get_db)):
+    """Publiczny, JEDNORAZOWY: na świeżej instancji (0 użytkowników) tworzy pierwszego
+    administratora i ustawia nazwę lokalu, po czym od razu loguje (zwraca token). Jeśli
+    jakikolwiek użytkownik już istnieje → 409 (ochrona przed przejęciem działającej instancji)."""
+    if db.query(models.User).first() is not None:
+        raise HTTPException(409, "Onboarding już wykonany — instancja ma administratora.")
+    login = sprawdz_login(dane.login)
+    sprawdz_haslo(dane.haslo)
+    admin = models.User(login=login, haslo_hash=hash_password(dane.haslo), rola="admin")
+    db.add(admin)
+    cfg = get_lokal_config(db)
+    if dane.nazwa_lokalu and dane.nazwa_lokalu.strip():
+        cfg.nazwa_lokalu = dane.nazwa_lokalu.strip()
+    db.commit(); db.refresh(admin)
+    return schemas.TokenOut(access_token=create_access_token(admin), user=_user_out(admin))
+
 
 @app.get("/api/auth/me", response_model=schemas.UserOut)
 def auth_me(user: models.User = Depends(get_current_user)):

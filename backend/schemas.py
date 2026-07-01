@@ -95,6 +95,12 @@ class RegisterIn(BaseModel):
     imie: str
     nazwisko: str
 
+class OnboardingIn(BaseModel):
+    """Pierwsza konfiguracja instancji (samoobsługowy kreator) — tworzy pierwszego admina."""
+    login: str
+    haslo: str
+    nazwa_lokalu: Optional[str] = None
+
 class UserOut(BaseModel):
     id: int
     login: str
