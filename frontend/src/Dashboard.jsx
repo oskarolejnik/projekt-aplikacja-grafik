@@ -31,6 +31,7 @@ import GieldaZmian from './components/tabs/GieldaZmian'
 import PlanSali from './components/tabs/PlanSali'
 import Ustawienia from './components/tabs/Ustawienia'
 import Eksport from './components/tabs/Eksport'
+import Ogloszenia from './components/tabs/Ogloszenia'
 
 const TABS = [
   { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', group: 'Pulpit', title: 'Pulpit właściciela', Comp: Pulpit },
@@ -39,6 +40,7 @@ const TABS = [
   { id: 'stanowiska', label: 'Stanowiska', icon: 'office', group: 'Zarządzanie', title: 'Struktura i stanowiska', Comp: Stanowiska },
   { id: 'wymagania', label: 'Wymagania (plan)', icon: 'clipboard', group: 'Zarządzanie', title: 'Planowanie zmian', Comp: Wymagania },
   { id: 'konta', label: 'Konta pracowników', icon: 'key', group: 'Zarządzanie', title: 'Konta i dostęp', Comp: Konta },
+  { id: 'ogloszenia', label: 'Ogłoszenia', icon: 'bell', group: 'Zarządzanie', title: 'Ogłoszenia dla zespołu', Comp: Ogloszenia },
   { id: 'ustawienia', label: 'Ustawienia lokalu', icon: 'office', group: 'Zarządzanie', title: 'Ustawienia lokalu', Comp: Ustawienia },
   { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', group: 'Operacje', title: 'Baza imprez — serwer NAS', Comp: Imprezy, modul: 'modul_imprezy' },
   { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', group: 'Operacje', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },

@@ -11,6 +11,7 @@ import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
 import EmployeeHours from './EmployeeHours'
 import EmployeeGielda from './EmployeeGielda'
+import EmployeeOgloszenia from './EmployeeOgloszenia'
 import Rezerwacje from '../components/tabs/Rezerwacje'
 import KuchniaImprezy from '../components/tabs/KuchniaImprezy'
 import TechSprzatanie from '../components/tabs/TechSprzatanie'
@@ -30,8 +31,14 @@ export default function EmployeeArea() {
   const jestSprzataczka = !!user?.sprzataczka          // sprzątaczka: dodatkowo zakładka Zamówienia
   const [widok, setWidok] = useState(jestTechniczny ? 'sprzatanie' : jestKuchnia ? 'grafik' : 'dyspozycyjnosc')
   const [nowyGrafik, setNowyGrafik] = useState(false)
+  const [nieprzeczytaneOgl, setNieprzeczytaneOgl] = useState(0)
 
   const imie = user?.imie || user?.login
+
+  // Licznik nieprzeczytanych ogłoszeń → odznaka na zakładce „Ogłoszenia".
+  useEffect(() => {
+    api('/me/ogloszenia').then((r) => setNieprzeczytaneOgl(r.nieprzeczytane || 0)).catch(() => {})
+  }, [])
 
   // Wykryj nowo udostępniony grafik -> baner + odznaka na zakładce „Mój grafik".
   // (Techniczni nie mają grafiku — pomijamy zapytanie.)
@@ -97,6 +104,7 @@ export default function EmployeeArea() {
                 { value: 'sprzatanie', label: 'Sprzątanie' },
                 ...(jestSprzataczka ? [{ value: 'zamowienia', label: 'Zamówienia' }] : []),
                 { value: 'godziny', label: 'Godziny' },
+                { value: 'ogloszenia', label: 'Ogłoszenia', badge: nieprzeczytaneOgl > 0 },
               ]
             : jestKuchnia
             ? [
@@ -105,6 +113,7 @@ export default function EmployeeArea() {
                 { value: 'godziny', label: 'Godziny' },
                 { value: 'rezerwacje', label: 'Rezerwacje' },
                 { value: 'imprezy', label: 'Imprezy' },
+                { value: 'ogloszenia', label: 'Ogłoszenia', badge: nieprzeczytaneOgl > 0 },
               ]
             : [
                 { value: 'dyspozycyjnosc', label: 'Dyspo' },
@@ -113,6 +122,7 @@ export default function EmployeeArea() {
                 { value: 'godziny', label: 'Godziny' },
                 { value: 'rezerwacje', label: 'Rezerwacje' },
                 { value: 'imprezy', label: 'Imprezy' },
+                { value: 'ogloszenia', label: 'Ogłoszenia', badge: nieprzeczytaneOgl > 0 },
               ]
           ).map((t) => (
             <button
@@ -134,6 +144,7 @@ export default function EmployeeArea() {
           {widok === 'dyspozycyjnosc' && <EmployeeAvailability />}
           {widok === 'grafik' && <EmployeeSchedule onSeen={oznaczWidziany} />}
           {widok === 'gielda' && <EmployeeGielda />}
+          {widok === 'ogloszenia' && <EmployeeOgloszenia onZmiana={setNieprzeczytaneOgl} />}
           {widok === 'godziny' && <EmployeeHours />}
           {widok === 'rezerwacje' && <Rezerwacje />}
           {widok === 'imprezy' && <KuchniaImprezy />}

@@ -7,6 +7,13 @@ class OfertaZmianyIn(BaseModel):
     przydzial_id: int
     powod: Optional[str] = None
 
+class OgloszenieIn(BaseModel):
+    """Utworzenie/edycja ogłoszenia zespołowego (tablica manager→pracownicy)."""
+    tytul: str
+    tresc: str
+    przypiete: bool = False
+    wazne_do: Optional[date] = None
+
 class PlanPozycjaIn(BaseModel):
     """Pozycja stolika na planie sali (w % kontenera, 0–100)."""
     id: int

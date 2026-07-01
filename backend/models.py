@@ -588,3 +588,32 @@ class Platnosc(Base):
     link         = Column(String, nullable=True)               # URL do zapłaty
     utworzono_at = Column(DateTime, nullable=False)
     oplacono_at  = Column(DateTime, nullable=True)
+
+
+class Ogloszenie(Base):
+    """Ogłoszenie zespołowe — tablica komunikatów manager→pracownicy. Widoczne dla WSZYSTKICH
+    pracowników (przez /api/me/ogloszenia); przypięte trzyma się na górze; wygasa po `wazne_do`
+    (opcjonalne). Potwierdzenia przeczytania (kto/kiedy) w OgloszeniePotwierdzenie."""
+    __tablename__ = "ogloszenia"
+    id           = Column(Integer, primary_key=True, index=True)
+    tytul        = Column(String(160), nullable=False)
+    tresc        = Column(String, nullable=False)
+    autor_login  = Column(String, nullable=True)          # denormalizacja autora (rozliczalność), jak AuditLog
+    przypiete    = Column(Boolean, nullable=False, default=False)
+    wazne_do     = Column(Date, nullable=True)            # po tej dacie znika z widoku pracownika (None = bez limitu)
+    utworzono_at = Column(DateTime, nullable=False)
+
+    potwierdzenia = relationship("OgloszeniePotwierdzenie", cascade="all, delete-orphan",
+                                 back_populates="ogloszenie")
+
+
+class OgloszeniePotwierdzenie(Base):
+    """Potwierdzenie przeczytania ogłoszenia przez pracownika (read-receipt) — jedno na parę."""
+    __tablename__ = "ogloszenia_potwierdzenia"
+    id              = Column(Integer, primary_key=True, index=True)
+    ogloszenie_id   = Column(Integer, ForeignKey("ogloszenia.id", ondelete="CASCADE"), nullable=False, index=True)
+    pracownik_id    = Column(Integer, ForeignKey("pracownicy.id", ondelete="CASCADE"), nullable=False, index=True)
+    potwierdzono_at = Column(DateTime, nullable=False)
+    __table_args__ = (UniqueConstraint("ogloszenie_id", "pracownik_id", name="uq_ogloszenie_pracownik"),)
+
+    ogloszenie = relationship("Ogloszenie", back_populates="potwierdzenia")
