@@ -74,6 +74,22 @@ def test_online_wstecz_400(admin_client, client):
                        "liczba_osob": 2, "nazwisko": "Wstecz"}).status_code == 400
 
 
+def test_online_limit_per_ip_bez_kontaktu(admin_client, client, monkeypatch):
+    """Regresja anty-DoS: rezerwacje online BEZ telefonu/e-maila omijały limit per-kontakt
+    (warunek `if telefon or email`). Teraz twardy limit per-IP/dzień łapie je niezależnie."""
+    import main
+    monkeypatch.setattr(main, "ONLINE_LIMIT_IP_DZIENNY", 3)
+    _enable(admin_client)
+    admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": 4})
+    fut = _fut().isoformat()
+    for g in ["10:00", "12:00", "14:00"]:                 # 3x bez kontaktu → mieszczą się w limicie IP
+        assert client.post("/api/online/rezerwacja", json={"data": fut, "godz_od": g,
+                           "liczba_osob": 2, "nazwisko": "Anon"}).status_code == 201
+    r4 = client.post("/api/online/rezerwacja", json={"data": fut, "godz_od": "16:00",
+                     "liczba_osob": 2, "nazwisko": "Anon"})   # 4-ta z tego samego IP → blokada
+    assert r4.status_code == 429
+
+
 def test_online_antyspam_429(admin_client, client):
     _enable(admin_client)
     admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": 4})

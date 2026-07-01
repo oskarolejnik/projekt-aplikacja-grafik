@@ -39,6 +39,7 @@ OKNO_SEKUNDY = _int_env("LOGIN_OKNO_SEKUNDY", 900)         # okno akumulacji nie
 _zegar = time.monotonic           # podmienialne w testach (monkeypatch)
 _lock = threading.Lock()
 _proby: dict = {}                 # klucz -> {"fails": int, "last": float, "locked_until": float}
+_kwoty: dict = {}                 # klucz -> (dzien_iso, licznik) — proste kwoty dzienne (np. anty-DoS)
 
 
 def _teraz() -> float:
@@ -83,7 +84,22 @@ def zarejestruj_sukces(klucz: str) -> None:
         _proby.pop(klucz, None)
 
 
+def zuzyj_kwote(klucz: str, dzien: str, limit: int) -> bool:
+    """Prosta dzienna kwota per klucz (np. „online-rez:<ip>"). Zwraca True i zlicza użycie,
+    gdy MIEŚCI się w limicie; False (bez zliczania), gdy limit na dany `dzien` już wyczerpany.
+    Licznik resetuje się automatycznie przy zmianie `dzien`. Stan per-proces jak reszta modułu."""
+    with _lock:
+        d, n = _kwoty.get(klucz, (dzien, 0))
+        if d != dzien:
+            n = 0
+        if n >= limit:
+            return False
+        _kwoty[klucz] = (dzien, n + 1)
+        return True
+
+
 def reset() -> None:
     """Czyści cały stan (używane w testach dla izolacji)."""
     with _lock:
         _proby.clear()
+        _kwoty.clear()

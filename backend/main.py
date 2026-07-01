@@ -1898,6 +1898,7 @@ def zrealizuj_lista_oczekujacych(wid: int, dane: schemas.ZrealizujIn, db: Sessio
 # ═══════════════════════════════════════════════════════════════════════════
 
 ONLINE_LIMIT_DZIENNY = 5   # anty-spam: maks. aktywnych rezerwacji online/dzień po telefonie/e-mailu
+ONLINE_LIMIT_IP_DZIENNY = 15   # anty-DoS: maks. rezerwacji online/dzień z jednego IP (niezależnie od kontaktu)
 
 
 def _wymagaj_rezerwacje_online(db: Session = Depends(get_db)):
@@ -1967,7 +1968,7 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
 
 
 @app.post("/api/online/rezerwacja", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
-def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, db: Session = Depends(get_db)):
+def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Session = Depends(get_db)):
     """Publicznie: utworzenie rezerwacji online. System sam dobiera wolny stolik."""
     if not dane.nazwisko or not dane.nazwisko.strip():
         raise HTTPException(400, "Podaj imię/nazwisko.")
@@ -1975,6 +1976,12 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, db: Session = Depends(ge
         raise HTTPException(400, "Liczba osób musi być dodatnia.")
     if dane.data < date.today():
         raise HTTPException(400, "Nie można rezerwować wstecz.")
+    # Anty-DoS: twardy limit rezerwacji/dzień z jednego IP — działa NIEZALEŻNIE od telefonu/e-maila
+    # (bez tego atakujący pomijał limit poniżej, wysyłając rezerwacje bez danych kontaktu). Stan
+    # w pamięci procesu (jak limiter logowania); klucz po realnym adresie klienta.
+    ip = request.client.host if request.client else "?"
+    if not ratelimit.zuzyj_kwote(f"online-rez:{ip}", str(date.today()), ONLINE_LIMIT_IP_DZIENNY):
+        raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online z tego adresu.")
     # Anty-spam: limit aktywnych rezerwacji online/dzień po tym samym telefonie/e-mailu.
     # Telefon/e-mail są szyfrowane at-rest (niedeterministycznie) — nie da się filtrować
     # po nich w SQL; pobieramy dzienny (mały) zbiór online i porównujemy po odszyfrowaniu.
@@ -2270,11 +2277,20 @@ def delete_wymagania(wid: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Nie znaleziono.")
     db.delete(w); db.commit()
 
+def _data_z_body(body: dict, klucz: str) -> date:
+    """Bezpieczne parsowanie daty ISO z surowego body: 400 (czytelny) zamiast 500,
+    gdy klucz brakuje lub format jest zły."""
+    try:
+        return date.fromisoformat(body[klucz])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, f"Nieprawidłowa lub brakująca data: {klucz}.")
+
+
 @app.post("/api/wymagania/kopiuj", status_code=200)
 def kopiuj_wymagania(body: dict, db: Session = Depends(get_db)):
-    source = date.fromisoformat(body["source_date"])
-    start  = date.fromisoformat(body["start_date"])
-    end    = date.fromisoformat(body["end_date"])
+    source = _data_z_body(body, "source_date")
+    start  = _data_z_body(body, "start_date")
+    end    = _data_z_body(body, "end_date")
 
     source_reqs = db.query(models.WymaganiaDnia).filter_by(data=source).all()
     if not source_reqs:
@@ -2314,8 +2330,8 @@ def kopiuj_wymagania(body: dict, db: Session = Depends(get_db)):
 def kopiuj_wymagania_tydzien(body: dict, db: Session = Depends(get_db)):
     """Kopiuje wszystkie wymagania z tygodnia źródłowego na docelowy (dzień w dzień,
     przez offset dat). Tygodnie środa→wtorek mają ten sam układ dni tygodnia."""
-    src_start = date.fromisoformat(body["source_start"])
-    dst_start = date.fromisoformat(body["target_start"])
+    src_start = _data_z_body(body, "source_start")
+    dst_start = _data_z_body(body, "target_start")
     offset = (dst_start - src_start).days
     if offset == 0:
         raise HTTPException(400, "Tydzień źródłowy i docelowy są takie same.")
@@ -2742,7 +2758,13 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
             match = file_pattern.match(file)
             if not match: continue
 
-            event_date = datetime.strptime(match.group(1), "%Y.%m.%d").date()
+            # Regex dopuszcza \d{2} miesiąc/dzień → data poprawna formatowo, lecz nieistniejąca
+            # (np. „2026.13.45") rzuca ValueError. Liczymy jako błąd i pomijamy, żeby jeden zły
+            # plik nie wywalał całej synchronizacji (500).
+            try:
+                event_date = datetime.strptime(match.group(1), "%Y.%m.%d").date()
+            except ValueError:
+                bledy += 1; continue
             if not (start <= event_date <= end): continue
 
             file_path = os.path.join(root, file)
@@ -3075,7 +3097,7 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/me/godziny", status_code=200)
 def moje_godziny(
-    rok: int = Query(...), miesiac: int = Query(...),
+    rok: int = Query(..., ge=2000, le=2100), miesiac: int = Query(..., ge=1, le=12),
     user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     """Miesięczne podsumowanie przepracowanych godzin zalogowanego pracownika
@@ -3166,7 +3188,7 @@ def _trwajace_zmiany(db):
 
 
 @app.get("/api/raporty/godziny", status_code=200)
-def raport_godzin(request: Request, rok: int = Query(...), miesiac: int = Query(...),
+def raport_godzin(request: Request, rok: int = Query(..., ge=2000, le=2100), miesiac: int = Query(..., ge=1, le=12),
                   user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Raport godzin wszystkich pracowników (admin + szef — wymusza middleware).
     Dorzuca `na_zmianie` (kto teraz na zmianie) oraz cięcia godzin (duze/male) — widzą je
@@ -3185,7 +3207,7 @@ def _kuchnia_pids(db):
 
 
 @app.get("/api/szefkuchni/godziny", status_code=200)
-def raport_godzin_kuchnia(rok: int = Query(...), miesiac: int = Query(...), db: Session = Depends(get_db)):
+def raport_godzin_kuchnia(rok: int = Query(..., ge=2000, le=2100), miesiac: int = Query(..., ge=1, le=12), db: Session = Depends(get_db)):
     """Godziny pracowników KUCHNI (dział „kuchnia") — BEZ kwot wypłaty. Dla szefa kuchni.
     Zwraca te same godziny/stanowiska co raport admina, ale OBCINA pola finansowe
     (stawka/kwota/do_wyplaty). Dorzuca `na_zmianie`: kto z kuchni jest teraz na zmianie (live)."""
