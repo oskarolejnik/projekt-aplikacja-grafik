@@ -1,18 +1,45 @@
-# Grafik Pracy — system zarządzania lokalem gastronomicznym
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/lokalo-logo.svg">
+  <img alt="Lokalo" src="brand/lokalo-logo-light.svg" width="300">
+</picture>
+
+### Zarządzaj całym lokalem z jednego miejsca
+
+Grafiki · płace · kasa · rezerwacje · prognozy — web (PWA) i desktop (Electron)
 
 [![CI](https://github.com/oskarolejnik/projekt-aplikacja-grafik/actions/workflows/ci.yml/badge.svg)](https://github.com/oskarolejnik/projekt-aplikacja-grafik/actions/workflows/ci.yml)
+&nbsp;·&nbsp; FastAPI + React + Electron
+&nbsp;·&nbsp; Oprogramowanie własnościowe
 
-**Grafik Pracy** to komercyjny system (SaaS) do prowadzenia restauracji, domu weselnego czy kawiarni:
-automatyczne układanie grafików, ewidencja czasu pracy, rozliczenia kasowe, rezerwacje i imprezy oraz
-powiadomienia — dostępny jako aplikacja **webowa (PWA)** i **desktopowa (Electron)**.
+</div>
 
-Produkt jest **white-label** i **konfigurowalny per lokal**: nazwę, logo i moduły ustawia się bez zmian w kodzie,
-dzięki czemu ten sam system wdraża się w dowolnej firmie gastronomicznej.
+---
+
+**Lokalo** to komercyjny system (SaaS) do prowadzenia restauracji, domu weselnego czy kawiarni:
+automatyczne układanie grafików, ewidencja czasu pracy, rozliczenia kasowe, rezerwacje i imprezy,
+prognozy ruchu oraz powiadomienia — dostępny jako aplikacja **webowa (PWA)** i **desktopowa (Electron)**.
+
+Zamiast Excela, papieru i pięciu osobnych aplikacji — **jeden system, który prowadzi cały lokal.**
+Produkt jest **white-label** i **konfigurowalny per lokal**: nazwę, logo i moduły ustawia się bez zmian
+w kodzie, dzięki czemu ten sam system wdraża się w dowolnej firmie gastronomicznej.
 
 > 🔒 **Oprogramowanie własnościowe (komercyjne).** Wszelkie prawa zastrzeżone — zob. [LICENSE](LICENSE).
 > Repozytorium nie jest oprogramowaniem open source; używanie, kopiowanie i wdrażanie wymaga licencji.
+> Kod źródłowy dostępny pod roboczą nazwą repozytorium `projekt-aplikacja-grafik`.
 
 ---
+
+## 📸 Zrzuty ekranu
+
+Prawdziwe ekrany działającej aplikacji (ciemny motyw „Pastelowy neon na czerni"):
+
+| Interaktywny grafik — auto-przydział (AI) | Plan sali — rezerwacje i statusy stołów |
+|:---:|:---:|
+| ![Interaktywny grafik](docs/screenshots/01-grafik.png) | ![Plan sali](docs/screenshots/02-plan-sali.png) |
+| **Prognoza obsady — ile osób na zmianę** | **Rezerwacje stolików online** |
+| ![Prognoza obsady](docs/screenshots/03-prognoza.png) | ![Rezerwacje](docs/screenshots/04-rezerwacje.png) |
 
 ## ✨ Główne funkcje
 
@@ -23,9 +50,13 @@ dzięki czemu ten sam system wdraża się w dowolnej firmie gastronomicznej.
   synchronizacja z systemem POS przez lokalnego agenta.
 - **Rozliczenia kasowe** — rozliczenia dnia (sala) i imprez: gotówka, karty, terminale, kasy, zadatki;
   zeszyt kasowy z saldem.
-- **Rezerwacje i imprezy** — kalendarz imprez, import z Google Calendar oraz plików `.ics` i Excel (`.xlsx`).
+- **Rezerwacje i imprezy** — rezerwacje stolików online (bez prowizji portali), plan sali, kalendarz imprez,
+  import z Google Calendar oraz plików `.ics` i Excel (`.xlsx`).
+- **Prognoza ruchu i obsady** — na podstawie własnej historii lokalu system przewiduje obłożenie dni
+  i **sugeruje, ile osób wystawić na zmianę** — z opcją zastosowania do wymagań grafiku.
+- **Napiwki** — sprawiedliwy podział dziennej puli między obsługę sali.
 - **Role i uprawnienia** — administrator, szef, szef kuchni, pracownik obsługi/kuchni, dział techniczny.
-- **Powiadomienia Web Push** — np. „raport gotowy", „start zmiany".
+- **Powiadomienia Web Push** — np. „raport gotowy", „start zmiany", alerty niedoboru obsady.
 - **Konfiguracja lokalu (white-label)** — nazwa, logo, kolor, początek tygodnia i włączone moduły
   ustawiane per instancja (encja `LokalConfig`, endpoint `/api/lokal/config`).
 
@@ -36,9 +67,9 @@ dzięki czemu ten sam system wdraża się w dowolnej firmie gastronomicznej.
 | **Backend** | Python, FastAPI, SQLAlchemy, Alembic, Uvicorn; JWT (bcrypt), Web Push (VAPID) |
 | **Baza danych** | PostgreSQL (produkcja) lub SQLite (dev) — wybór przez `DATABASE_URL` |
 | **Frontend** | React 18, Vite, Tailwind CSS, framer-motion, PWA (service worker) |
-| **Desktop** | Electron |
+| **Desktop** | Electron + electron-builder (instalator NSIS dla Windows) |
 | **Agent lokalny** | Python / PowerShell — odczyt z MS SQL Server (POS Gastro/RCP), jednokierunkowy push danych |
-| **Migracje / testy** | Alembic, pytest |
+| **Migracje / testy** | Alembic, pytest (backend) + Vitest (frontend); ~500 testów automatycznych |
 
 Model wdrożenia: **instance-per-tenant** — każdy klient to izolowana instancja (własna baza), hostowana
 centralnie. Backend serwuje zbudowany frontend z tego samego adresu (same-origin).
@@ -48,8 +79,10 @@ centralnie. Backend serwuje zbudowany frontend z tego samego adresu (same-origin
 ```
 backend/         API (FastAPI), modele, algorytm grafiku, logika rozliczeń, migracje (Alembic), testy
 frontend/        Aplikacja React (Vite) + PWA
-electron/        Powłoka desktopowa (uruchamia backend i ładuje frontend)
+electron/        Powłoka desktopowa (uruchamia backend i ładuje frontend) + instalator
 agent_lokalny/   Agent czytający bazę POS/RCP i wysyłający dane na backend
+brand/           Logo i identyfikacja marki (SVG)
+docs/            Zrzuty ekranu i dokumentacja
 sample_data/     Przykładowe dane
 docker-compose.yml   Lokalny PostgreSQL
 ```
@@ -59,7 +92,7 @@ docker-compose.yml   Lokalny PostgreSQL
 Publiczna landing marketingowa z cennikiem (Darmowy / Basic / Pro / Premium / Enterprise)
 i sekcją „dla kogo" dostępna jest pod trasą **`/?produkt`** — ta sama aplikacja frontendu, bez
 logowania (`frontend/src/pages/Produkt.jsx`). Docelowo serwuje się ją pod osobną domeną produktu
-(np. `grafikpracy.pl`), oddzieloną od instancji klientów. Publiczny widget rezerwacji gościa
+(np. `lokalo.pl`), oddzieloną od instancji klientów. Publiczny widget rezerwacji gościa
 działa analogicznie pod `/?rezerwuj`.
 
 ## 🚀 Uruchomienie lokalne
@@ -111,6 +144,7 @@ npm start                     # buduje frontend i uruchamia Electron
 ```
 
 > Ścieżkę interpretera Pythona ustaw zmienną `GRAFIK_PYTHON` (lub umieść venv w `backend/venv`).
+> Budowa instalatora `.exe` (Windows, NSIS): zob. [DESKTOP.md](DESKTOP.md).
 
 ## 🗄️ Migracje bazy (Alembic)
 
@@ -205,6 +239,9 @@ Szczegóły: [`agent_lokalny/README.md`](agent_lokalny/README.md).
 cd backend
 pip install -r tests/requirements-test.txt
 pytest
+
+cd ../frontend
+npm test
 ```
 
 ## 📄 Licencja
@@ -216,11 +253,12 @@ W sprawie licencji komercyjnej i wdrożeń: oskarolejnik0@gmail.com.
 
 ### English summary
 
-**Grafik Pracy** is a commercial (proprietary) management system for restaurants and event venues:
-automated staff scheduling, time tracking, cash settlements, reservations/events and Web Push notifications.
-Built with **FastAPI + SQLAlchemy + Alembic** (backend, PostgreSQL/SQLite), **React + Vite** (PWA frontend)
-and **Electron** (desktop), plus an optional local agent that reads a POS/RCP database (MS SQL Server) and
-pushes data to the backend. The product is **white-label** and configured per venue (no code changes).
+**Lokalo** is a commercial (proprietary) all-in-one management system for restaurants and event venues:
+automated staff scheduling, time tracking, cash settlements, online table reservations, event management,
+demand & staffing forecasting, tip pooling and Web Push notifications. Built with **FastAPI + SQLAlchemy +
+Alembic** (backend, PostgreSQL/SQLite), **React + Vite** (PWA frontend) and **Electron** (desktop, with a
+Windows installer), plus an optional local agent that reads a POS/RCP database (MS SQL Server) and pushes
+data to the backend. The product is **white-label** and configured per venue (no code changes).
 Deployment model: instance-per-tenant. **All rights reserved** — see [LICENSE](LICENSE).
 
 **Author:** Oskar Olejnik · 2025–2026

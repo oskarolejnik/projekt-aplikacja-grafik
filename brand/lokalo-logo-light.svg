@@ -1,0 +1,16 @@
+<svg viewBox="0 0 300 72" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lokalo">
+  <defs>
+    <linearGradient id="lokaloTile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#A7D7C5"/>
+      <stop offset="0.52" stop-color="#F4E2A0"/>
+      <stop offset="1" stop-color="#F2A2A2"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(8,10)">
+    <rect x="0" y="0" width="52" height="52" rx="12.5" fill="url(#lokaloTile)"/>
+    <path d="M17 13 H23 V33.3 H36.5 V39.4 H17 Z" fill="#1C1C1E"/>
+    <circle cx="35.4" cy="17.5" r="3.7" fill="#1C1C1E"/>
+  </g>
+  <text x="76" y="47" font-family="'Space Grotesk','Poppins','Segoe UI',system-ui,sans-serif"
+        font-size="38" font-weight="700" letter-spacing="-1.2" fill="#1C1C1E">Lokal<tspan fill="#E08A8A">o</tspan></text>
+</svg>
