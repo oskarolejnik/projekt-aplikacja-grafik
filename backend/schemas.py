@@ -7,6 +7,12 @@ class OfertaZmianyIn(BaseModel):
     przydzial_id: int
     powod: Optional[str] = None
 
+class PlanPozycjaIn(BaseModel):
+    """Pozycja stolika na planie sali (w % kontenera, 0–100)."""
+    id: int
+    plan_x: int
+    plan_y: int
+
 class StanowiskoBase(BaseModel):
     nazwa: str; tylko_weekend: bool = False
     widoczny_dla_wszystkich: bool = False

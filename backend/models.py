@@ -507,6 +507,9 @@ class Stolik(Base):
     laczy_sie = Column(Boolean, nullable=False, default=False)  # czy można łączyć (later)
     aktywny   = Column(Boolean, nullable=False, default=True)
     kolejnosc = Column(Integer, nullable=False, default=0)
+    # --- Plan sali (wizualne rozmieszczenie): pozycja w % kontenera (0–100), NULL = auto-siatka ---
+    plan_x    = Column(Integer, nullable=True)
+    plan_y    = Column(Integer, nullable=True)
 
 
 class GodzinyOtwarcia(Base):
