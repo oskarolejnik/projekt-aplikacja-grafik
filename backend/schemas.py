@@ -2,6 +2,11 @@ from pydantic import BaseModel, ConfigDict
 from datetime import date, time
 from typing import Optional, List
 
+class OfertaZmianyIn(BaseModel):
+    """Wystawienie przydziału na giełdę wymiany zmian."""
+    przydzial_id: int
+    powod: Optional[str] = None
+
 class StanowiskoBase(BaseModel):
     nazwa: str; tylko_weekend: bool = False
     widoczny_dla_wszystkich: bool = False

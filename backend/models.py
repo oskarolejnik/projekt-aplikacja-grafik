@@ -116,6 +116,37 @@ class PrzydzialZmiany(Base):
     stanowisko = relationship("Stanowisko", back_populates="przydzialy")
     pracownik  = relationship("Pracownik",  back_populates="przydzialy")
 
+
+class OfertaZmiany(Base):
+    """Giełda wymiany zmian (roadmapa v1.5). Pracownik wystawia SWÓJ przydział
+    (PrzydzialZmiany) do przejęcia; inny wykwalifikowany pracownik go przejmuje;
+    admin (manager) akceptuje → przepięcie pracownik_id na przydziale.
+
+    Cykl statusu:
+      otwarta   — wystawiona, czeka na chętnego,
+      zajeta    — ktoś ją przejął, czeka na decyzję managera,
+      zaakceptowana — manager zaakceptował, przydział przepięty (stan końcowy),
+      anulowana — wystawiający wycofał ofertę (stan końcowy).
+    Odrzucenie przejęcia przez managera cofa ofertę do „otwarta" (nie jest osobnym stanem).
+    """
+    __tablename__ = "oferty_zmian"
+    id              = Column(Integer, primary_key=True, index=True)
+    przydzial_id    = Column(Integer, ForeignKey("przydzialy_zmian.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    wystawiajacy_id = Column(Integer, ForeignKey("pracownicy.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    przejmujacy_id  = Column(Integer, ForeignKey("pracownicy.id", ondelete="SET NULL"),
+                             nullable=True, index=True)
+    status          = Column(String(16), nullable=False, default="otwarta", index=True)
+    powod           = Column(String(256), nullable=True)
+    utworzono_at    = Column(DateTime, nullable=False)
+    zajeto_at       = Column(DateTime, nullable=True)
+    rozpatrzono_at  = Column(DateTime, nullable=True)
+
+    przydzial    = relationship("PrzydzialZmiany")
+    wystawiajacy = relationship("Pracownik", foreign_keys=[wystawiajacy_id])
+    przejmujacy  = relationship("Pracownik", foreign_keys=[przejmujacy_id])
+
 # --- NOWE MODELE ---
 
 class Impreza(Base):

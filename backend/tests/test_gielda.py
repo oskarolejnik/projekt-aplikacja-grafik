@@ -1,0 +1,166 @@
+"""Giełda wymiany zmian (roadmapa v1.5) — /api/me/gielda/* (pracownik) + /api/gielda/* (manager).
+
+Przepływ: pracownik wystawia swój przyszły przydział → wykwalifikowany kolega przejmuje
+→ manager akceptuje → przydział przepięty. Odrzucenie cofa ofertę na giełdę.
+"""
+
+from datetime import date, time, timedelta
+
+import factories
+import models
+
+PRZYSZLOSC = date.today() + timedelta(days=3)
+GODZ = time(10, 0)
+
+
+def _stan_z_dwoma(db):
+    """Stanowisko + dwaj wykwalifikowani pracownicy (A=właściciel zmiany, B=chętny) + przydział A."""
+    stan = factories.StanowiskoFactory(nazwa="Obsługa sali")
+    a = factories.PracownikFactory(imie="Ala", nazwisko="Kowalska")
+    b = factories.PracownikFactory(imie="Bartek", nazwisko="Nowak")
+    a.kwalifikacje = [stan]
+    b.kwalifikacje = [stan]
+    factories.Session.commit()
+    przydzial = factories.PrzydzialFactory(pracownik=a, stanowisko=stan, data=PRZYSZLOSC, godz_od=GODZ)
+    return stan, a, b, przydzial
+
+
+def test_wystaw_oferte(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    r = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id, "powod": "wesele"})
+    assert r.status_code == 201, r.text
+    o = r.json()
+    assert o["status"] == "otwarta"
+    assert o["wystawiajacy_id"] == a.id
+    assert o["stanowisko"] == "Obsługa sali"
+    assert db.query(models.OfertaZmiany).count() == 1
+
+
+def test_nie_moge_wystawic_cudzej_zmiany(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    cb, _ = make_employee_client(b)                       # B wystawia zmianę A
+    r = cb.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id})
+    assert r.status_code == 403
+
+
+def test_nie_moge_wystawic_minionej_zmiany(make_employee_client, db):
+    stan = factories.StanowiskoFactory(nazwa="Bar")
+    a = factories.PracownikFactory()
+    a.kwalifikacje = [stan]; factories.Session.commit()
+    miniona = factories.PrzydzialFactory(pracownik=a, stanowisko=stan,
+                                         data=date.today() - timedelta(days=1), godz_od=GODZ)
+    ca, _ = make_employee_client(a)
+    r = ca.post("/api/me/gielda/oferty", json={"przydzial_id": miniona.id})
+    assert r.status_code == 400
+
+
+def test_podwojne_wystawienie_konflikt(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    assert ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).status_code == 201
+    r = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id})
+    assert r.status_code == 409
+
+
+def test_przejecie_wymaga_kwalifikacji(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    c = factories.PracownikFactory()                     # C bez kwalifikacji na stan
+    ca, _ = make_employee_client(a)
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+    cc, _ = make_employee_client(c)
+    r = cc.post(f"/api/me/gielda/oferty/{oid}/przejmij")
+    assert r.status_code == 403
+
+
+def test_nie_moge_przejac_wlasnej(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+    r = ca.post(f"/api/me/gielda/oferty/{oid}/przejmij")
+    assert r.status_code == 400
+
+
+def test_pelny_przeplyw_przejecie_i_akceptacja(make_employee_client, admin_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    cb, _ = make_employee_client(b)
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+
+    r = cb.post(f"/api/me/gielda/oferty/{oid}/przejmij")
+    assert r.status_code == 200 and r.json()["status"] == "zajeta"
+    assert r.json()["przejmujacy_id"] == b.id
+
+    r = admin_client.post(f"/api/gielda/oferty/{oid}/akceptuj")
+    assert r.status_code == 200 and r.json()["status"] == "zaakceptowana"
+    # Przydział został przepięty na B.
+    db.expire_all()
+    assert db.get(models.PrzydzialZmiany, przydzial.id).pracownik_id == b.id
+
+
+def test_odrzucenie_wraca_na_gielde(make_employee_client, admin_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    cb, _ = make_employee_client(b)
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+    cb.post(f"/api/me/gielda/oferty/{oid}/przejmij")
+
+    r = admin_client.post(f"/api/gielda/oferty/{oid}/odrzuc")
+    assert r.status_code == 200
+    assert r.json()["status"] == "otwarta"
+    assert r.json()["przejmujacy_id"] is None
+    # Przydział NIE został przepięty.
+    db.expire_all()
+    assert db.get(models.PrzydzialZmiany, przydzial.id).pracownik_id == a.id
+
+
+def test_anulowanie_tylko_przez_wystawiajacego(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    cb, _ = make_employee_client(b)
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+    assert cb.post(f"/api/me/gielda/oferty/{oid}/anuluj").status_code == 403   # B nie może
+    r = ca.post(f"/api/me/gielda/oferty/{oid}/anuluj")                          # A może
+    assert r.status_code == 200 and r.json()["status"] == "anulowana"
+
+
+def test_widok_moje_oferty(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    cb, _ = make_employee_client(b)
+    ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id})
+
+    widok_b = cb.get("/api/me/gielda/oferty").json()
+    assert len(widok_b["dostepne"]) == 1                 # B jest wykwalifikowany → widzi ofertę
+    assert widok_b["dostepne"][0]["wystawiajacy"] == "Ala Kowalska"
+    assert widok_b["moje"] == []
+
+    widok_a = ca.get("/api/me/gielda/oferty").json()
+    assert widok_a["dostepne"] == []                     # nie widzę własnej w „dostępne"
+    assert len(widok_a["moje"]) == 1
+
+
+def test_podwojne_obsadzenie_blokuje_przejecie(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    # B ma już własną zmianę tego samego dnia o tej samej godzinie (kolizja).
+    factories.PrzydzialFactory(pracownik=b, stanowisko=stan, data=PRZYSZLOSC, godz_od=GODZ)
+    ca, _ = make_employee_client(a)
+    cb, _ = make_employee_client(b)
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+    r = cb.post(f"/api/me/gielda/oferty/{oid}/przejmij")
+    assert r.status_code == 409
+
+
+def test_admin_lista_i_filtr(make_employee_client, admin_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id})
+    assert len(admin_client.get("/api/gielda/oferty").json()) == 1
+    assert len(admin_client.get("/api/gielda/oferty?status_filtr=otwarta").json()) == 1
+    assert admin_client.get("/api/gielda/oferty?status_filtr=zaakceptowana").json() == []
+
+
+def test_pracownik_nie_ma_dostepu_do_endpointow_managera(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    ca, _ = make_employee_client(a)
+    assert ca.get("/api/gielda/oferty").status_code == 403

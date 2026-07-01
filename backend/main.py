@@ -36,6 +36,7 @@ from routers.instancja import router as instancja_router
 from routers.lokal import router as lokal_router
 from routers.platnosci import router as platnosci_router
 from routers.crm import router as crm_router
+from routers.gielda import router as gielda_router
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -43,6 +44,7 @@ app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status int
 app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
 app.include_router(platnosci_router)   # płatności zadatków online (Rec#7)
 app.include_router(crm_router)         # CRM gości / scoring no-show (roadmapa v1.5)
+app.include_router(gielda_router)      # giełda wymiany zmian (roadmapa v1.5)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
