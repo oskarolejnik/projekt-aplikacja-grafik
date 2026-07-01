@@ -114,11 +114,17 @@ def efektywne_i_oszczednosc(wej_t, godz_od, h):
 
 def _wybierz_przydzial(przydzialy, wejscie_time):
     """Przy zmianie dzielonej (>1 przydział) wybiera tę, którą pracownik realnie rozpoczął
-    (najpóźniejsze godz_od ≤ czas wejścia). Fallback: pierwszy."""
+    (najpóźniejsze godz_od ≤ czas wejścia). Fallback (wejście PRZED wszystkimi splitami): split
+    o NAJWCZEŚNIEJSZYM godz_od — nie przycinamy względem późniejszego okna niż faktycznie
+    rozpoczęte. (Wcześniej `przydzialy[0]` było niezdeterminowane — bez order_by w zapytaniu —
+    i mogło wybrać późny split, zerując całą zmianę i zaniżając wypłatę.)"""
     if len(przydzialy) == 1 or wejscie_time is None:
         return przydzialy[0]
     pasujace = [a for a in przydzialy if a.godz_od and a.godz_od <= wejscie_time]
-    return max(pasujace, key=lambda a: a.godz_od) if pasujace else przydzialy[0]
+    if pasujace:
+        return max(pasujace, key=lambda a: a.godz_od)
+    z_godzina = [a for a in przydzialy if a.godz_od]
+    return min(z_godzina, key=lambda a: a.godz_od) if z_godzina else przydzialy[0]
 
 
 def _zakresy_publikacji(db):

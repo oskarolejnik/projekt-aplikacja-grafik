@@ -1272,11 +1272,15 @@ def _zeszyt_dane(db, start: date, end: date) -> dict:
         if r:                          # SALA z rozliczenia (także wersji roboczej) trafia do zeszytu
             w = _wynik_rozliczenia(db, r)
             sg, sk = w["suma_zeszyt"]["gotowka"], w["suma_zeszyt"]["karta"]
+            # suma_zeszyt.gotowka = Σ gotówka + KW (rekonstrukcja UTARGU do porównania z kasą fiskalną).
+            # Do FIZYCZNEGO salda szuflady wchodzi utarg BEZ KW — KW to gotówka WYPŁACONA (np. zwrot
+            # kaucji), więc jej doliczanie zawyżało saldo kasy/Pulpit o kwotę KW każdego takiego dnia.
+            kw_dnia = w["kw"]
             pz = float(r.przelew or 0)
             if sg or sk or pz:
                 wiersze.append({"zrodlo": "SALA", "gotowka": sg, "terminal": sk, "przelew": pz, "impreza": 0.0,
                                 "manualny": False, "sala_id": r.id})   # sala_id → edycja przelewu z palca w zeszycie
-                cash_in += sg
+                cash_in += sg - kw_dnia
         for im in imp_by_day.get(d, []):
             g_sf = round(sum(p.kwota for p in im.pozycje if p.forma == "gotowka" and p.sfiskalizowane), 2)
             g_ns = round(sum(p.kwota for p in im.pozycje if p.forma == "gotowka" and not p.sfiskalizowane), 2)
@@ -3147,7 +3151,10 @@ def moje_godziny(
     ).all():
         h = float(o.godziny or 0.0)
         przy = przydz.get(o.data, [])
-        if przy and raporty._opublikowany(o.data, zakresy_pub):
+        # Przycinamy start do grafiku TYLKO od daty obowiązywania reguły (PRZYCINANIE_OD) — tak samo
+        # jak raport miesięczny (raporty.py). Bez tej bramki dni sprzed progu zaniżały godziny i suma
+        # słupków przestawała się zgadzać z nagłówkiem suma_godzin (liczonym z raportu).
+        if przy and raporty._opublikowany(o.data, zakresy_pub) and o.data >= raporty.PRZYCINANIE_OD:
             wt = o.wejscie.time() if o.wejscie else None
             wybrany = raporty._wybierz_przydzial(przy, wt)
             h, _ = raporty.efektywne_i_oszczednosc(wt, wybrany.godz_od, h)

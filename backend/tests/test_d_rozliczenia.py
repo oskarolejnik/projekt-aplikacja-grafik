@@ -205,6 +205,24 @@ def test_zeszyt_stan_narastajaco(admin_client, db):
     assert day["stan"] == 1050.0                  # 200 + 1000 − 150
 
 
+def test_zeszyt_saldo_nie_wlicza_kw(admin_client, db):
+    """Regresja: KW (gotówka WYPŁACONA z szuflady, np. zwrot kaucji) było doliczane do salda kasy
+    zamiast pomijane → saldo/stan zawyżone o KW. Do salda wchodzi fizyczna gotówka = utarg − KW."""
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    k = factories.PracownikFactory(dzial="obsluga")
+    d = factories.dzien(0)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=k.id))
+    db.commit()
+    admin_client.get(f"/api/rozliczenie?data={d}")   # auto-create
+    admin_client.put(f"/api/rozliczenie?data={d}", json={"zadatek_gotowka": 0, "zadatek_karta": 0,
+        "terminale": [], "kasy": [],
+        "kelnerzy": [{"pracownik_id": k.id, "gotowka": 1000, "karta": 0, "fv": 0, "kw": 200}]})
+    admin_client.put("/api/zeszyt/config", json={"stan_poczatkowy": 0, "stan_poczatkowy_data": str(d)})
+    day = admin_client.get(f"/api/zeszyt?start={d}&end={d}").json()["dni"][0]
+    assert day["przychod_gotowka"] == 1000.0    # utarg 1000 + KW 200 = 1200, ale do salda tylko 1000
+    assert day["stan"] == 1000.0                # 0 + 1000 (bez KW), nie 1200
+
+
 def test_przelew_z_palca_w_rozliczeniu_i_zeszycie(admin_client, db):
     """Admin wpisuje przelew z palca — zapisuje się w rozliczeniu dnia, pojawia w Zeszycie na
     wierszu SALA (poza saldem gotówki), i da się zmienić lekkim endpointem (z Zeszytu)."""

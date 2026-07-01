@@ -5,7 +5,7 @@ SAMĄ logikę: upsert po rcp_id, dopasowanie pracownika, liczenie godzin, flagi 
 oraz złączenie z OPUBLIKOWANYM grafikiem.
 """
 
-from datetime import datetime, date
+from datetime import datetime, date, time
 
 import pytest
 
@@ -457,6 +457,36 @@ def test_me_godziny_pokazuje_miesieczne_podsumowanie(client, db):
 
 def test_me_godziny_wymaga_logowania(client):
     assert client.get("/api/me/godziny", params={"rok": 2026, "miesiac": 6}).status_code == 401
+
+
+def test_wybierz_przydzial_fallback_najwczesniejszy_split():
+    """Regresja: przy zmianie dzielonej i wejściu PRZED wszystkimi splitami fallback ma wybrać
+    split o NAJWCZEŚNIEJSZYM godz_od (deterministycznie), nie pierwszy z niezdeterminowanej listy —
+    inaczej przycięcie względem późnego splitu zerowało godziny i zaniżało wypłatę."""
+    class _P:
+        def __init__(self, godz_od): self.godz_od = godz_od
+    a, b = _P(time(12, 0)), _P(time(20, 0))
+    assert raporty._wybierz_przydzial([b, a], time(11, 0)) is a   # kolejność listy bez znaczenia
+    assert raporty._wybierz_przydzial([a, b], time(11, 0)) is a
+    assert raporty._wybierz_przydzial([a, b], time(21, 0)) is b   # normalnie: najpóźniejszy ≤ wejście
+
+
+def test_me_godziny_dni_sumuja_do_naglowka_przed_progiem(client, db, monkeypatch):
+    """Regresja: rozbicie dzienne przycinało start BEZWARUNKOWO, ignorując bramkę PRZYCINANIE_OD,
+    którą raport respektuje → słupki dni nie sumowały się do suma_godzin dla dni sprzed progu."""
+    monkeypatch.setattr(raporty, "PRZYCINANIE_OD", date(2030, 1, 1))   # wszystkie daty testu < próg → bez przycinania
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory(imie="Jan", nazwisko="Przedprogiem")
+    emp = factories.UserFactory(login="jan_prog", rola="employee", pracownik=p)
+    d = date(2026, 6, 5)
+    db.add(models.PrzydzialZmiany(data=d, stanowisko_id=sala.id, pracownik_id=p.id, godz_od=time(16, 0)))
+    _opublikuj(db, date(2026, 6, 1), date(2026, 6, 30))
+    db.add(models.OdbicieRcp(rcp_id="pg1", imie_nazwisko="Jan Przedprogiem", pracownik_id=p.id, data=d,
+                             wejscie=datetime(2026, 6, 5, 15, 0), wyjscie=datetime(2026, 6, 5, 23, 0), godziny=8.0))
+    db.commit()
+    body = client.get("/api/me/godziny", headers=_h(emp), params={"rok": 2026, "miesiac": 6}).json()
+    assert body["suma_godzin"] == 8.0                                   # dzień < próg → pełne 8h
+    assert round(sum(x["godziny"] for x in body["dni"]), 2) == body["suma_godzin"]   # słupki == nagłówek
 
 
 def test_me_godziny_pokazuje_trwajaca_zmiane(client, db):
