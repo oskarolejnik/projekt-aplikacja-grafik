@@ -1,5 +1,7 @@
 # Grafik Pracy — system zarządzania lokalem gastronomicznym
 
+[![CI](https://github.com/oskarolejnik/projekt-aplikacja-grafik/actions/workflows/ci.yml/badge.svg)](https://github.com/oskarolejnik/projekt-aplikacja-grafik/actions/workflows/ci.yml)
+
 **Grafik Pracy** to komercyjny system (SaaS) do prowadzenia restauracji, domu weselnego czy kawiarni:
 automatyczne układanie grafików, ewidencja czasu pracy, rozliczenia kasowe, rezerwacje i imprezy oraz
 powiadomienia — dostępny jako aplikacja **webowa (PWA)** i **desktopowa (Electron)**.
