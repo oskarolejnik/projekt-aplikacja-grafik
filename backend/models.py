@@ -590,6 +590,18 @@ class Platnosc(Base):
     oplacono_at  = Column(DateTime, nullable=True)
 
 
+class NapiwkiDnia(Base):
+    """Pula napiwków z danego dnia do podziału między obsługę sali. Manager wpisuje łączną kwotę
+    i sposób podziału: 'godziny' (proporcjonalnie do przepracowanych godzin z RCP) lub 'rowno'
+    (po równo). Sam podział liczony jest w locie z grafiku/RCP — tu trzymamy tylko wejście."""
+    __tablename__ = "napiwki_dnia"
+    id           = Column(Integer, primary_key=True, index=True)
+    data         = Column(Date, unique=True, nullable=False, index=True)
+    kwota        = Column(Float, nullable=False, default=0.0)
+    sposob       = Column(String(16), nullable=False, default="godziny")   # godziny | rowno
+    utworzono_at = Column(DateTime, nullable=False)
+
+
 class Ogloszenie(Base):
     """Ogłoszenie zespołowe — tablica komunikatów manager→pracownicy. Widoczne dla WSZYSTKICH
     pracowników (przez /api/me/ogloszenia); przypięte trzyma się na górze; wygasa po `wazne_do`

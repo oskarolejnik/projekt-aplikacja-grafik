@@ -1481,6 +1481,106 @@ def alerty_kasowe(start: date = Query(...), end: date = Query(...), prog: float 
     return _alerty_kasowe(db, start, end, max(0.0, float(prog)))
 
 
+# ── NAPIWKI (pula dnia dzielona między obsługę sali wg godzin z RCP) ──────────
+def _rozdziel_kwote(kwota: float, wagi):
+    """Dzieli kwotę (w złotych) na len(wagi) części proporcjonalnie do `wagi`, DOKŁADNIE co do
+    grosza (metoda największej reszty) — suma części = kwota. Zerowe/ujemne wagi → podział równy."""
+    n = len(wagi)
+    if n == 0:
+        return []
+    grosze = round(float(kwota) * 100)
+    suma = sum(wagi)
+    if grosze <= 0:
+        return [0.0] * n
+    if suma <= 0:                                  # brak wag → po równo
+        baza, reszta = divmod(grosze, n)
+        return [round((baza + (1 if i < reszta else 0)) / 100, 2) for i in range(n)]
+    surowe = [grosze * w / suma for w in wagi]
+    podl = [int(x) for x in surowe]
+    reszta = grosze - sum(podl)
+    for i in sorted(range(n), key=lambda i: surowe[i] - podl[i], reverse=True)[:reszta]:
+        podl[i] += 1
+    return [round(g / 100, 2) for g in podl]
+
+
+def _napiwki_obsada(db, data: date):
+    """Obsada sali danego dnia (kandydaci do napiwków) + godziny z RCP. Baza = pracownicy z
+    przydziałem na Sali tego dnia; godziny sumowane z odbić RCP (0, gdy brak odbicia)."""
+    sala_ids = _sala_stanowisko_ids(db)
+    if not sala_ids:
+        return []
+    pids = {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data == data,
+        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
+    if not pids:
+        return []
+    godz = defaultdict(float)
+    for o in db.query(models.OdbicieRcp).filter(
+            models.OdbicieRcp.data == data, models.OdbicieRcp.pracownik_id.in_(pids)).all():
+        godz[o.pracownik_id] += float(o.godziny or 0.0)
+    prac = {p.id: f"{p.imie} {p.nazwisko}"
+            for p in db.query(models.Pracownik).filter(models.Pracownik.id.in_(pids)).all()}
+    out = [{"pracownik_id": pid, "pracownik": prac.get(pid, "—"), "godziny": round(godz.get(pid, 0.0), 2)}
+           for pid in pids]
+    out.sort(key=lambda x: x["pracownik"])
+    return out
+
+
+def _napiwki_podzial(db, data: date) -> dict:
+    """Buduje podział napiwków dnia: kwota + sposób + lista {pracownik, godziny, kwota}."""
+    rec = db.query(models.NapiwkiDnia).filter_by(data=data).first()
+    kwota = float(rec.kwota) if rec else 0.0
+    sposob = rec.sposob if (rec and rec.sposob in ("godziny", "rowno")) else "godziny"
+    obsada = _napiwki_obsada(db, data)
+    if sposob == "godziny" and sum(o["godziny"] for o in obsada) > 0:
+        wagi = [o["godziny"] for o in obsada]
+    else:
+        wagi = [1] * len(obsada)                   # „rowno" albo brak godzin RCP → po równo
+    kwoty = _rozdziel_kwote(kwota, wagi)
+    podzial = [{**o, "kwota": k} for o, k in zip(obsada, kwoty)]
+    return {"data": str(data), "kwota": round(kwota, 2), "sposob": sposob,
+            "suma_godzin": round(sum(o["godziny"] for o in obsada), 2), "podzial": podzial}
+
+
+@app.get("/api/napiwki")
+def get_napiwki(data: date = Query(...), db: Session = Depends(get_db)):
+    """Manager: podział napiwków dnia na obsługę sali (wg zapisanej kwoty/sposobu)."""
+    return _napiwki_podzial(db, data)
+
+
+@app.put("/api/napiwki")
+def zapisz_napiwki(dane: schemas.NapiwkiIn, data: date = Query(...), db: Session = Depends(get_db)):
+    """Manager: ustaw pulę napiwków dnia i sposób podziału ('godziny'|'rowno')."""
+    if (dane.kwota or 0) < 0:
+        raise HTTPException(400, "Kwota napiwków nie może być ujemna.")
+    sposob = dane.sposob if dane.sposob in ("godziny", "rowno") else "godziny"
+    rec = db.query(models.NapiwkiDnia).filter_by(data=data).first()
+    if rec is None:
+        rec = models.NapiwkiDnia(data=data, utworzono_at=utcnow_naive())
+        db.add(rec)
+    rec.kwota = float(dane.kwota or 0); rec.sposob = sposob
+    db.commit()
+    return _napiwki_podzial(db, data)
+
+
+@app.get("/api/me/napiwki")
+def moje_napiwki(start: date = Query(...), end: date = Query(...),
+                 user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Pracownik: jego udział w napiwkach w zakresie dat (per dzień + suma)."""
+    if not user.pracownik_id:
+        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    pid = user.pracownik_id
+    dni = []
+    for rec in db.query(models.NapiwkiDnia).filter(
+            models.NapiwkiDnia.data >= start, models.NapiwkiDnia.data <= end,
+            models.NapiwkiDnia.kwota > 0).all():
+        moj = next((x for x in _napiwki_podzial(db, rec.data)["podzial"] if x["pracownik_id"] == pid), None)
+        if moj and moj["kwota"] > 0:
+            dni.append({"data": str(rec.data), "kwota": moj["kwota"], "godziny": moj["godziny"]})
+    dni.sort(key=lambda x: x["data"])
+    return {"dni": dni, "suma": round(sum(d["kwota"] for d in dni), 2)}
+
+
 # ── PROGNOZA RUCHU (z historii StolikiHistoria — wsparcie decyzji o obsadzie) ──
 
 _DNI_TYG = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]

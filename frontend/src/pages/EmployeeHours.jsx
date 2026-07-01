@@ -14,7 +14,15 @@ export default function EmployeeHours() {
   const [rok, setRok] = useState(dzis.getFullYear())
   const [miesiac, setMiesiac] = useState(dzis.getMonth() + 1) // 1-12
   const [dane, setDane] = useState(null)
+  const [napiwki, setNapiwki] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  // Napiwki pracownika w tym miesiącu (suma + rozbicie na dni) — osobno, nie blokuje spinnera godzin.
+  useEffect(() => {
+    const mm = String(miesiac).padStart(2, '0')
+    const ostatni = String(new Date(rok, miesiac, 0).getDate()).padStart(2, '0')
+    api(`/me/napiwki?start=${rok}-${mm}-01&end=${rok}-${mm}-${ostatni}`).then(setNapiwki).catch(() => setNapiwki(null))
+  }, [rok, miesiac])
 
   const etykietaMiesiaca = useMemo(
     () => new Intl.DateTimeFormat('pl-PL', { month: 'long', year: 'numeric' }).format(new Date(rok, miesiac - 1, 1)),
@@ -120,6 +128,26 @@ export default function EmployeeHours() {
               </div>
             </Card>
           </div>
+
+          {/* Napiwki miesiąca — suma + rozbicie na dni (jeśli są). */}
+          {napiwki && napiwki.suma > 0 && (
+            <Card className="border-lemon/30 bg-lemon/[0.05] p-4 sm:p-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
+                  <Icon name="sparkles" className="h-4 w-4 text-lemon" /> Napiwki w miesiącu
+                </div>
+                <div className="font-display text-xl font-bold tabular-nums text-lemon">{zl(napiwki.suma)}</div>
+              </div>
+              <div className="mt-2 space-y-0.5">
+                {napiwki.dni.map((d) => (
+                  <div key={d.data} className="flex items-center justify-between border-b border-line/60 py-1.5 text-sm last:border-0">
+                    <span className="text-muted">{ddmmyyyy(d.data)}</span>
+                    <span className="font-mono font-bold tabular-nums text-ink">{zl(d.kwota)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
 
           {(dane?.suma_godzin ?? 0) === 0 ? (
             <Card className="p-8 text-center text-sm text-muted">

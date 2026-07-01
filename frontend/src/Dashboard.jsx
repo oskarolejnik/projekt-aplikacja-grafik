@@ -32,6 +32,7 @@ import PlanSali from './components/tabs/PlanSali'
 import Ustawienia from './components/tabs/Ustawienia'
 import Eksport from './components/tabs/Eksport'
 import Ogloszenia from './components/tabs/Ogloszenia'
+import Napiwki from './components/tabs/Napiwki'
 
 const TABS = [
   { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', group: 'Pulpit', title: 'Pulpit właściciela', Comp: Pulpit },
@@ -54,6 +55,7 @@ const TABS = [
   { id: 'zadatki', label: 'Zadatki', icon: 'clipboard', group: 'Operacje', title: 'Zadatki (KP) — przypisania', Comp: Zadatki, modul: 'modul_imprezy' },
   { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', group: 'Operacje', title: 'Zeszyt kasowy', Comp: ZeszytPanel, modul: 'modul_rozliczenia' },
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad, modul: 'modul_rozliczenia' },
+  { id: 'napiwki', label: 'Napiwki', icon: 'sparkles', group: 'Operacje', title: 'Napiwki — podział między obsługę', Comp: Napiwki },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive, modul: 'modul_pos' },
   { id: 'rezerwacje', label: 'Rezerwacje (ruch)', icon: 'calendar', group: 'Operacje', title: 'Rezerwacje — ruch (30 dni)', Comp: Rezerwacje },
   { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', group: 'Operacje', title: 'Rezerwacje stolików', Comp: RezerwacjeStolik, modul: 'modul_rezerwacje' },

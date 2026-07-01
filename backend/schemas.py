@@ -7,6 +7,11 @@ class OfertaZmianyIn(BaseModel):
     przydzial_id: int
     powod: Optional[str] = None
 
+class NapiwkiIn(BaseModel):
+    """Pula napiwków dnia + sposób podziału ('godziny' | 'rowno')."""
+    kwota: float = 0.0
+    sposob: str = "godziny"
+
 class OgloszenieIn(BaseModel):
     """Utworzenie/edycja ogłoszenia zespołowego (tablica manager→pracownicy)."""
     tytul: str
