@@ -50,13 +50,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # Node 22 (LTS): jsdom@29 wymaga node ^20.19 || ^22.13 || >=24, a vitest@4
-          # wyklucza starsze 20.x — gołe „20" mogło rozwiązać się do wersji poniżej progu.
-          node-version: "22"
+          # Node 24: dostarcza npm 11 — tę samą wersję, którą wygenerowano lockfile
+          # (natywne optionalDependencies rolldown/oxc). Node 22 (npm 10) potrafił
+          # wywalić `npm ci` mimo kompletnego lockfile; 24 spełnia też silniki
+          # jsdom@29 / vitest@4 (>=24) i odświeża klucz cache npm runnera.
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Instalacja zależności
-        run: npm ci
+        run: |
+          node -v && npm -v
+          npm ci
       - name: Testy jednostkowe (Vitest)
         run: npm test
       - name: Build produkcyjny
