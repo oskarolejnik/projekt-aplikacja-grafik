@@ -528,3 +528,19 @@ class Subskrypcja(Base):
     data_od = Column(Date, nullable=True)
     data_do = Column(Date, nullable=True)     # None = bezterminowa
     uwagi   = Column(String, nullable=True)
+
+
+class Platnosc(Base):
+    """Płatność zadatku online (Rec#7). Bez realnej bramki działa w trybie 'sandbox' (link do
+    lokalnego potwierdzenia/demo); docelowo provider Stripe/Przelewy24. Status:
+    oczekuje → oplacona (webhook bramki albo ręcznie przez admina) / anulowana."""
+    __tablename__ = "platnosci"
+    id           = Column(Integer, primary_key=True, index=True)
+    termin_id    = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True, index=True)
+    kwota        = Column(Float, nullable=False, default=0.0)
+    status       = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|oplacona|anulowana
+    provider     = Column(String(32), nullable=False, default="sandbox")   # sandbox|api(Stripe/P24)
+    external_id  = Column(String, nullable=True, index=True)   # token/id z bramki
+    link         = Column(String, nullable=True)               # URL do zapłaty
+    utworzono_at = Column(DateTime, nullable=False)
+    oplacono_at  = Column(DateTime, nullable=True)

@@ -300,6 +300,11 @@ class SubskrypcjaIn(BaseModel):
     data_do: Optional[date] = None
     uwagi: Optional[str] = None
 
+class PlatnoscIn(BaseModel):
+    """Utworzenie płatności zadatku (admin)."""
+    termin_id: Optional[int] = None
+    kwota: float
+
 # --- MODUŁ REZERWACJI ---
 
 class StolikIn(BaseModel):
