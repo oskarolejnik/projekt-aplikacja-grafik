@@ -30,16 +30,18 @@ export default function Pulpit() {
   const [end, setEnd] = useState(dzisISO())
   const [p, setP] = useState(null)
   const [alerty, setAlerty] = useState(null)
+  const [obsada, setObsada] = useState(null)
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [pul, al] = await Promise.all([
+      const [pul, al, ob] = await Promise.all([
         api(`/pulpit?start=${start}&end=${end}`),
         api(`/alerty-kasowe?start=${start}&end=${end}`),
+        api('/alerty-obsady?dni=14'),
       ])
-      setP(pul); setAlerty(al)
+      setP(pul); setAlerty(al); setObsada(ob)
     } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [start, end, toast])
   useEffect(() => { load() }, [load])
@@ -101,6 +103,22 @@ export default function Pulpit() {
               <div className="flex flex-wrap gap-2">
                 {Object.entries(p.rezerwacje.wg_statusu).map(([s, n]) => (
                   <span key={s} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-xs text-ink">{STATUS_L[s] || s}: <b>{n}</b></span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {obsada?.alerty?.length > 0 && (
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                <Icon name="warning" className="h-4 w-4 text-lemon" /> Niedobór obsady (najbliższe {obsada.dni} dni) — brakuje {obsada.razem_brakuje} os.
+              </div>
+              <div className="space-y-2">
+                {obsada.alerty.map((a, i) => (
+                  <div key={i} className="flex items-center justify-between gap-3 rounded-xl border border-lemon/30 bg-lemon/[0.05] px-4 py-2.5 text-sm">
+                    <span className="text-ink"><b>{a.data}</b> · {a.stanowisko}</span>
+                    <span className="text-muted">obsadzone {a.obsadzone}/{a.wymagane} · <b className="text-lemon">brakuje {a.brakuje}</b></span>
+                  </div>
                 ))}
               </div>
             </div>

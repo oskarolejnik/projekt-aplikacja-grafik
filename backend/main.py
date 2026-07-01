@@ -71,7 +71,8 @@ OVERSIGHT_GET = {
     "szef": (
         "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
         "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
-        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt", "/api/pulpit", "/api/alerty-kasowe",
+        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt", "/api/pulpit",
+        "/api/alerty-kasowe", "/api/alerty-obsady",
     ),
     # Szef kuchni: godziny kuchni (bez wypłat), podgląd stołów na żywo, rezerwacje.
     "szef_kuchni": (
@@ -1479,6 +1480,32 @@ def alerty_kasowe(start: date = Query(...), end: date = Query(...), prog: float 
     if end < start:
         raise HTTPException(400, "Koniec okresu przed początkiem.")
     return _alerty_kasowe(db, start, end, max(0.0, float(prog)))
+
+
+@app.get("/api/alerty-obsady")
+def alerty_obsady(dni: int = 14, db: Session = Depends(get_db)):
+    """Nadchodzące dni z NIEDOBOREM obsady: wymagana liczba osób (WymaganiaDnia) > przydzielona
+    (PrzydzialZmiany) na danym stanowisku. Wsparcie decyzji „gdzie brakuje ludzi". Admin/szef."""
+    dni = max(1, min(int(dni), 60))
+    today = date.today()
+    end = today + timedelta(days=dni)
+    wymagane = defaultdict(int)
+    for w in db.query(models.WymaganiaDnia).filter(
+            models.WymaganiaDnia.data >= today, models.WymaganiaDnia.data <= end).all():
+        wymagane[(w.data, w.stanowisko_id)] += (w.liczba_osob or 0)
+    obsadzone = defaultdict(int)
+    for p in db.query(models.PrzydzialZmiany).filter(
+            models.PrzydzialZmiany.data >= today, models.PrzydzialZmiany.data <= end).all():
+        obsadzone[(p.data, p.stanowisko_id)] += 1
+    stan_nazwa = {s.id: s.nazwa for s in db.query(models.Stanowisko).all()}
+    alerty = []
+    for (d, sid), wym in wymagane.items():
+        obs = obsadzone.get((d, sid), 0)
+        if obs < wym:
+            alerty.append({"data": str(d), "stanowisko": stan_nazwa.get(sid, "?"),
+                           "wymagane": wym, "obsadzone": obs, "brakuje": wym - obs})
+    alerty.sort(key=lambda x: (x["data"], x["stanowisko"]))
+    return {"alerty": alerty, "razem_brakuje": sum(a["brakuje"] for a in alerty), "dni": dni}
 
 
 # ── NAPIWKI (pula dnia dzielona między obsługę sali wg godzin z RCP) ──────────
