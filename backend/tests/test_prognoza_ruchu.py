@@ -45,3 +45,44 @@ def test_prognoza_pomija_dane_spoza_okna(admin_client, db):
     b = admin_client.get("/api/prognoza-ruchu?dni=30").json()
     assert b["probek"] == 0
     assert b["srednia_dzienna"] == 0
+
+
+def _zasiej_ruch(db, dni_wstecz, liczba):
+    """Dodaje po jednej próbce ruchu na każdy z ostatnich `dni_wstecz` dni."""
+    today = dt.date.today()
+    for k in range(1, dni_wstecz + 1):
+        db.add(models.StolikiHistoria(data=today - dt.timedelta(days=k), liczba=liczba))
+    db.commit()
+
+
+def test_prognoza_obsada_domyslne_parametry(admin_client, db):
+    # ~40 rachunków każdego dnia → ceil(40/20) = 2 osoby na zmianę (domyślne 20/1).
+    _zasiej_ruch(db, 28, 40)
+    b = admin_client.get("/api/prognoza-ruchu").json()
+    assert b["parametry_obsady"] == {"rachunki_na_osobe": 20, "min": 1}
+    assert len(b["projekcja_7dni"]) == 7
+    assert all("sugerowana_obsada" in p for p in b["projekcja_7dni"])
+    assert all(p["sugerowana_obsada"] == 2 for p in b["projekcja_7dni"])
+
+
+def test_prognoza_obsada_pusty_ruch_to_minimum(admin_client):
+    # Brak danych → prognoza 0 → obsada = obsada_min (domyślnie 1).
+    b = admin_client.get("/api/prognoza-ruchu").json()
+    assert all(p["prognoza"] == 0 for p in b["projekcja_7dni"])
+    assert all(p["sugerowana_obsada"] == 1 for p in b["projekcja_7dni"])
+
+
+def test_prognoza_obsada_reaguje_na_config(admin_client, db):
+    _zasiej_ruch(db, 28, 40)
+    # Zmiana: 1 osoba obsługuje 10 rachunków, minimum 3 → ceil(40/10)=4 (>3).
+    r = admin_client.put("/api/lokal/config", json={"obsada_rachunki_na_osobe": 10, "obsada_min": 3})
+    assert r.status_code == 200
+    b = admin_client.get("/api/prognoza-ruchu").json()
+    assert b["parametry_obsady"] == {"rachunki_na_osobe": 10, "min": 3}
+    assert all(p["sugerowana_obsada"] == 4 for p in b["projekcja_7dni"])
+
+
+def test_config_domyslne_pola_obsady(admin_client):
+    cfg = admin_client.get("/api/lokal/config").json()
+    assert cfg["obsada_rachunki_na_osobe"] == 20
+    assert cfg["obsada_min"] == 1

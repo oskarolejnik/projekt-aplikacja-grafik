@@ -2,6 +2,7 @@ import csv
 import io
 import re
 import os
+import math
 import logging
 import secrets
 from datetime import date, time, timedelta, datetime, timezone
@@ -1486,15 +1487,22 @@ def prognoza_ruchu(dni: int = 90, db: Session = Depends(get_db)):
     okno1 = _suma(today - timedelta(days=28), today + timedelta(days=1))
     okno0 = _suma(today - timedelta(days=56), today - timedelta(days=28))
     trend = round((okno1 - okno0) / okno0 * 100, 1) if okno0 else None
-    # Projekcja na 7 dni wg średniej dnia tygodnia.
+    # Projekcja na 7 dni wg średniej dnia tygodnia + sugerowana obsada (wg parametrów lokalu).
     srednie = {p["dzien"]: p["srednia"] for p in per_dzien}
+    cfg = get_lokal_config(db)
+    na_osobe = max(1, int(cfg.obsada_rachunki_na_osobe or 20))
+    obsada_min = max(1, int(cfg.obsada_min or 1))
     projekcja = []
     for i in range(1, 8):
         d = today + timedelta(days=i)
-        projekcja.append({"data": str(d), "nazwa": _DNI_TYG[d.weekday()], "prognoza": srednie.get(d.weekday(), 0)})
+        prog = srednie.get(d.weekday(), 0)
+        obsada = max(obsada_min, math.ceil(prog / na_osobe)) if prog else obsada_min
+        projekcja.append({"data": str(d), "nazwa": _DNI_TYG[d.weekday()], "prognoza": prog,
+                          "sugerowana_obsada": obsada})
     return {"okres_dni": dni, "probek": len(rows),
             "srednia_dzienna": round(sum(int(r.liczba or 0) for r in rows) / len(rows), 1) if rows else 0,
             "trend_28d_proc": trend,
+            "parametry_obsady": {"rachunki_na_osobe": na_osobe, "min": obsada_min},
             "per_dzien_tygodnia": per_dzien,
             "projekcja_7dni": projekcja}
 

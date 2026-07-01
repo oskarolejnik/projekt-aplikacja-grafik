@@ -455,6 +455,9 @@ class LokalConfig(Base):
     impreza_wyprzedzenie_min = Column(Integer, nullable=False, default=120)            # obsługa startuje tyle min przed
     impreza_najwczesniej     = Column(String(5), nullable=False, default="10:00")      # nie wcześniej niż
     impreza_sale_min2        = Column(String(128), nullable=False, default="R2Piw,R2G")  # sale z min. 2 obsady (po przecinku)
+    # --- Prognoza obsady (sugerowana liczba osób na zmianę wg prognozowanego ruchu) ---
+    obsada_rachunki_na_osobe = Column(Integer, nullable=False, default=20)  # ilu rachunków „obsługuje" 1 osoba
+    obsada_min               = Column(Integer, nullable=False, default=1)   # minimalna obsada na zmianę
 
 
 class Stolik(Base):

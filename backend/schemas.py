@@ -273,6 +273,8 @@ class LokalConfigOut(LokalBrandingOut):
     impreza_wyprzedzenie_min: int = 120
     impreza_najwczesniej: str = "10:00"
     impreza_sale_min2: str = "R2Piw,R2G"
+    obsada_rachunki_na_osobe: int = 20
+    obsada_min: int = 1
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -291,6 +293,8 @@ class LokalConfigIn(BaseModel):
     impreza_wyprzedzenie_min: Optional[int] = None
     impreza_najwczesniej: Optional[str] = None
     impreza_sale_min2: Optional[str] = None
+    obsada_rachunki_na_osobe: Optional[int] = None
+    obsada_min: Optional[int] = None
 
 class SubskrypcjaIn(BaseModel):
     """Częściowa aktualizacja subskrypcji/licencji instancji (admin)."""
