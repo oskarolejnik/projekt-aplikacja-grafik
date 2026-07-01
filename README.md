@@ -54,6 +54,14 @@ sample_data/     Przykładowe dane
 docker-compose.yml   Lokalny PostgreSQL
 ```
 
+## 🌐 Strona produktu i cennik
+
+Publiczna landing marketingowa z cennikiem (Darmowy / Basic / Pro / Premium / Enterprise)
+i sekcją „dla kogo" dostępna jest pod trasą **`/?produkt`** — ta sama aplikacja frontendu, bez
+logowania (`frontend/src/pages/Produkt.jsx`). Docelowo serwuje się ją pod osobną domeną produktu
+(np. `grafikpracy.pl`), oddzieloną od instancji klientów. Publiczny widget rezerwacji gościa
+działa analogicznie pod `/?rezerwuj`.
+
 ## 🚀 Uruchomienie lokalne
 
 ### 1. Backend (FastAPI)
