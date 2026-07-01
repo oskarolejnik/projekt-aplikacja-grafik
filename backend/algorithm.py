@@ -3,6 +3,8 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 from typing import List
 import models
+import prawo_pracy
+from deps import get_lokal_config
 
 def auto_assign(db: Session, start: date, end: date) -> dict:
     """
@@ -10,6 +12,12 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
     Uwzględnia kwalifikacje, dyspozycyjność oraz zbalansowanie liczby zmian.
     """
     pracownicy = db.query(models.Pracownik).filter(models.Pracownik.aktywny == True).all()
+    # Limity prawa pracy z konfiguracji lokalu — automat NIE może układać grafiku łamiącego KP
+    # (odpoczynek, maks. dni w tygodniu/miesiącu), którego ręczny przydział by nie dopuścił. 0=wyłączony.
+    _cfg = get_lokal_config(db)
+    _limity = {"min_odpoczynek_h": _cfg.praca_min_odpoczynek_h or 0,
+               "max_dni_tydzien": _cfg.praca_max_dni_tydzien or 0,
+               "max_dni_miesiac": _cfg.praca_max_dni_miesiac or 0}
     stanowiska = {s.id: s for s in db.query(models.Stanowisko).all()}
     # Parkiet (rola 'sala' lub — fallback — nazwa „Sala*") ma PRIORYTET przy obsadzaniu.
     sala_ids = {sid for sid, st in stanowiska.items()
@@ -41,20 +49,22 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
     # Liczniki dla sprawiedliwego podziału zmian
     shift_count = defaultdict(int)
     station_count = defaultdict(int)
-    assigned_slots_count = defaultdict(int) 
+    assigned_slots_count = defaultdict(int)
     busy_workers_per_day = set()
+    zmiany_prac = defaultdict(list)   # pracownik_id -> [(data, godz_od)] (do kontroli prawa pracy)
 
     # Ładowanie już istniejących przydziałów (np. wpisanych ręcznie)
     existing = db.query(models.PrzydzialZmiany).filter(
         models.PrzydzialZmiany.data >= start, models.PrzydzialZmiany.data <= end
     ).all()
-    
+
     for a in existing:
         shift_count[a.pracownik_id] += 1
         station_count[(a.pracownik_id, a.stanowisko_id)] += 1
         busy_workers_per_day.add((a.data, a.pracownik_id))
         key = (a.data, a.stanowisko_id, a.godz_od, getattr(a, 'rewir', None))
         assigned_slots_count[key] += 1
+        zmiany_prac[a.pracownik_id].append((a.data, a.godz_od))
 
     # Funkcja sprawdzająca czy pracownik może podjąć zmianę o konkretnej godzinie
     def is_time_compatible(p_id, check_date, req_od: time) -> bool:
@@ -84,9 +94,14 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
         for w in dzisiejsze_wymagania:
             stan = stanowiska.get(w.stanowisko_id)
             if stan is None or (stan.tylko_weekend and not is_weekend): continue
-            
-            # Obliczamy ile osób jeszcze brakuje na dane stanowisko i godzinę
-            wolne_miejsca = max(0, w.liczba_osob - assigned_slots_count[(current, w.stanowisko_id, w.godz_od, w.rewir)])
+
+            # Ile osób jeszcze brakuje na dane stanowisko/godzinę/rewir. KONSUMUJEMY licznik
+            # istniejących przydziałów, by przy kilku wierszach WymaganiaDnia o TYM SAMYM kluczu
+            # nie odejmować tych samych „existing" wielokrotnie (inaczej łączna obsada zaniżona).
+            key = (current, w.stanowisko_id, w.godz_od, w.rewir)
+            uzyte = min(w.liczba_osob, assigned_slots_count[key])
+            assigned_slots_count[key] -= uzyte
+            wolne_miejsca = w.liczba_osob - uzyte
             slots.extend([w] * wolne_miejsca)
 
         # Sortowanie slotów: najpierw te, które najtrudniej obsadzić (mało kandydatów)
@@ -96,8 +111,10 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
                       and is_time_compatible(p.id, current, req.godz_od))
             return cnt
 
-        # Najpierw PARKIET (Sala*), potem reszta; w obrębie grupy — najtrudniej obsadzić najpierw.
-        slots.sort(key=lambda s: (0 if s.stanowisko_id in sala_ids else 1, evaluate_slot_difficulty(s)))
+        # Najpierw najtrudniej obsadzić (najmniej kandydatów), a PARKIET (Sala*) jako tie-break przy
+        # równej trudności. Twardy priorytet sali PRZED trudnością potrafił zabrać jedynego kandydata
+        # trudniejszego slotu poza salą i wygenerować niepotrzebny niedobór mimo pełnego rozwiązania.
+        slots.sort(key=lambda s: (evaluate_slot_difficulty(s), 0 if s.stanowisko_id in sala_ids else 1))
 
         # Przydzielanie kandydatów
         for req in slots:
@@ -113,9 +130,21 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
                 niedobory.append({"data": str(current), "stanowisko": nazwa_wyswietlana, "powod": "Brak dostępnych pracowników"})
                 continue
 
-            # Wybór: osoba z najmniejszą liczbą zmian (zbalansowanie)
+            # Wybór: osoba z najmniejszą liczbą zmian (zbalansowanie), ale POMIJAMY kandydatów, dla
+            # których nowa zmiana złamałaby limity prawa pracy (odpoczynek/dni) — tak jak ręczny przydział.
             candidates.sort(key=lambda p: (shift_count[p.id], station_count[(p.id, req.stanowisko_id)]))
-            wybrany = candidates[0]
+            wybrany = next(
+                (c for c in candidates
+                 if not prawo_pracy.sprawdz(zmiany_prac[c.id], current, req.godz_od, **_limity)),
+                None,
+            )
+            if wybrany is None:
+                rewir_str = f"({req.rewir})" if req.rewir else ""
+                godz_str = f"[{req.godz_od.strftime('%H:%M')}]" if req.godz_od else ""
+                nazwa_wyswietlana = f"{stan.nazwa} {rewir_str} {godz_str}".strip().replace("  ", " ")
+                niedobory.append({"data": str(current), "stanowisko": nazwa_wyswietlana,
+                                  "powod": "Limity prawa pracy (odpoczynek / dni pracy)"})
+                continue
 
             nowy_przydzial = models.PrzydzialZmiany(
                 data=current, stanowisko_id=req.stanowisko_id,
@@ -125,6 +154,7 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
             busy_workers_per_day.add((current, wybrany.id))
             shift_count[wybrany.id] += 1
             station_count[(wybrany.id, req.stanowisko_id)] += 1
+            zmiany_prac[wybrany.id].append((current, req.godz_od))
 
         current += timedelta(days=1)
 
