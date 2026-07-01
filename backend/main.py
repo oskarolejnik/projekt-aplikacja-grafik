@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, uprawnienia, ratelimit
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, uprawnienia, ratelimit
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -1650,12 +1650,18 @@ def _tresc_potwierdzenia(t: models.Termin, cfg) -> str:
 
 
 def _wyslij_potwierdzenie_rezerwacji(db, t: models.Termin) -> bool:
-    """Best-effort e-mail potwierdzenia do gościa (gdy ma adres i integracja e-mail aktywna)."""
-    if not t.email:
-        return False
+    """Best-effort powiadomienie do gościa: e-mail (gdy ma adres + integracja e-mail aktywna)
+    ORAZ SMS (gdy ma telefon + integracja SMS aktywna). Żaden kanał nie wywraca żądania —
+    to tylko dodatkowe powiadomienia. Zwraca, czy udało się wysłać e-mail (dla kompatybilności)."""
     cfg = get_lokal_config(db)
-    return mailer.wyslij_email(t.email, f"Potwierdzenie rezerwacji — {cfg.nazwa_lokalu}",
-                               _tresc_potwierdzenia(t, cfg))
+    wyslano_mail = False
+    if t.email:
+        wyslano_mail = mailer.wyslij_email(t.email, f"Potwierdzenie rezerwacji — {cfg.nazwa_lokalu}",
+                                           _tresc_potwierdzenia(t, cfg))
+    if t.telefon:
+        godz = _hm(t.godz_od) if t.godz_od else ""
+        sms.wyslij_sms(t.telefon, f"{cfg.nazwa_lokalu}: rezerwacja {t.data} {godz}. Do zobaczenia!")
+    return wyslano_mail
 
 
 # ── Stoliki ──────────────────────────────────────────────────────────────────
