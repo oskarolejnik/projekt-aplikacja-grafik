@@ -24,7 +24,10 @@ sys.path.insert(0, str(BACKEND_DIR))
 # Musi być ustawione PRZED importem `database`/`main` (czytają env przy imporcie).
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("TOKEN_TTL_MINUTES", "720")
-os.environ.setdefault("RCP_INGEST_TOKEN", "test-rcp-token")
+# WYMUSZAMY (override, nie setdefault): testy ingestu hardkodują nagłówek
+# X-RCP-Token="test-rcp-token", więc token w środowisku (np. RCP_INGEST_TOKEN ustawiony
+# w CI) NIE MOŻE go nadpisywać — inaczej ingest jest odrzucany i testy padają tylko w CI.
+os.environ["RCP_INGEST_TOKEN"] = "test-rcp-token"
 os.environ["DATABASE_URL"] = "sqlite://"
 
 from sqlalchemy import create_engine  # noqa: E402
