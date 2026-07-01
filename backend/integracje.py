@@ -23,7 +23,7 @@ INTEGRACJE = [
     {"klucz": "pos",        "nazwa": "Agent POS / RCP (Gastro)",          "env": ["RCP_INGEST_TOKEN"]},
     {"klucz": "kalendarz",  "nazwa": "Google Calendar (rezerwacje)",      "env": ["GOOGLE_SA_JSON", "GOOGLE_CALENDAR_ID"]},
     {"klucz": "email",      "nazwa": "E-mail (SMTP) — potwierdzenia",     "env": ["SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD"]},
-    {"klucz": "sms",        "nazwa": "SMS (bramka)",                      "env": ["SMS_API_TOKEN"]},
+    {"klucz": "sms",        "nazwa": "SMS (bramka)",                      "env": ["SMS_API_TOKEN", "SMS_API_URL"]},
     {"klucz": "platnosci",  "nazwa": "Płatności online (zadatki)",        "env": ["PAYMENTS_API_KEY"]},
 ]
 
