@@ -10,6 +10,7 @@ import { PushButton } from '../components/PushButton'
 import EmployeeAvailability from './EmployeeAvailability'
 import EmployeeSchedule from './EmployeeSchedule'
 import EmployeeHours from './EmployeeHours'
+import EmployeeGielda from './EmployeeGielda'
 import Rezerwacje from '../components/tabs/Rezerwacje'
 import KuchniaImprezy from '../components/tabs/KuchniaImprezy'
 import TechSprzatanie from '../components/tabs/TechSprzatanie'
@@ -100,6 +101,7 @@ export default function EmployeeArea() {
             : jestKuchnia
             ? [
                 { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
+                { value: 'gielda', label: 'Giełda' },
                 { value: 'godziny', label: 'Godziny' },
                 { value: 'rezerwacje', label: 'Rezerwacje' },
                 { value: 'imprezy', label: 'Imprezy' },
@@ -107,6 +109,7 @@ export default function EmployeeArea() {
             : [
                 { value: 'dyspozycyjnosc', label: 'Dyspo' },
                 { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
+                { value: 'gielda', label: 'Giełda' },
                 { value: 'godziny', label: 'Godziny' },
                 { value: 'rezerwacje', label: 'Rezerwacje' },
                 { value: 'imprezy', label: 'Imprezy' },
@@ -130,6 +133,7 @@ export default function EmployeeArea() {
         <div key={widok} className="animate-tab-in">
           {widok === 'dyspozycyjnosc' && <EmployeeAvailability />}
           {widok === 'grafik' && <EmployeeSchedule onSeen={oznaczWidziany} />}
+          {widok === 'gielda' && <EmployeeGielda />}
           {widok === 'godziny' && <EmployeeHours />}
           {widok === 'rezerwacje' && <Rezerwacje />}
           {widok === 'imprezy' && <KuchniaImprezy />}

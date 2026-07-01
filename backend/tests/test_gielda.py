@@ -164,3 +164,18 @@ def test_pracownik_nie_ma_dostepu_do_endpointow_managera(make_employee_client, d
     stan, a, b, przydzial = _stan_z_dwoma(db)
     ca, _ = make_employee_client(a)
     assert ca.get("/api/gielda/oferty").status_code == 403
+
+
+def test_moje_przydzialy_do_wystawienia(make_employee_client, db):
+    stan, a, b, przydzial = _stan_z_dwoma(db)
+    # Miniona zmiana A — nie powinna być kandydatem.
+    factories.PrzydzialFactory(pracownik=a, stanowisko=stan,
+                               data=date.today() - timedelta(days=2), godz_od=GODZ)
+    ca, _ = make_employee_client(a)
+    lista = ca.get("/api/me/gielda/przydzialy").json()
+    assert len(lista) == 1                                  # tylko przyszła zmiana
+    assert lista[0]["przydzial_id"] == przydzial.id
+    assert lista[0]["wystawiony"] is False
+    # Po wystawieniu flaga się zmienia.
+    ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id})
+    assert ca.get("/api/me/gielda/przydzialy").json()[0]["wystawiony"] is True

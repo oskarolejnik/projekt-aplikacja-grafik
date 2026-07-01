@@ -27,6 +27,7 @@ import StolyLive from './components/tabs/StolyLive'
 import Rezerwacje from './components/tabs/Rezerwacje'
 import RezerwacjeStolik from './components/tabs/RezerwacjeStolik'
 import CrmGoscie from './components/tabs/CrmGoscie'
+import GieldaZmian from './components/tabs/GieldaZmian'
 import Ustawienia from './components/tabs/Ustawienia'
 import Eksport from './components/tabs/Eksport'
 
@@ -42,6 +43,7 @@ const TABS = [
   { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', group: 'Operacje', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },
   { id: 'urlopy', label: 'Urlopy', icon: 'calendar', group: 'Operacje', title: 'Wnioski urlopowe', Comp: Urlopy },
   { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', group: 'Operacje', title: 'Interaktywny grafik pracy', Comp: Grafik },
+  { id: 'gielda', label: 'Giełda zmian', icon: 'clipboard', group: 'Operacje', title: 'Giełda wymiany zmian', Comp: GieldaZmian },
   { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', group: 'Operacje', title: 'Grafik sprzątania sal', Comp: Sprzatanie, modul: 'modul_sprzatanie' },
   { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', group: 'Operacje', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },
   { id: 'godziny', label: 'Raport godzin', icon: 'clock', group: 'Operacje', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },

@@ -98,6 +98,30 @@ def wystaw_oferte(dane: schemas.OfertaZmianyIn,
     return _serializuj(o)
 
 
+@router.get("/api/me/gielda/przydzialy")
+def moje_przydzialy_do_wystawienia(user: models.User = Depends(get_current_user),
+                                   db: Session = Depends(get_db)):
+    """Przyszłe zmiany zalogowanego — kandydaci do wystawienia na giełdę.
+    `wystawiony`=True, gdy zmiana ma już aktywną ofertę (nie da się wystawić drugi raz)."""
+    prac_id = _wymagaj_pracownika(user)
+    przydzialy = db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.pracownik_id == prac_id,
+        models.PrzydzialZmiany.data >= date.today(),
+    ).order_by(models.PrzydzialZmiany.data.asc(), models.PrzydzialZmiany.godz_od.asc()).all()
+    aktywne_przydzialy = {
+        o.przydzial_id for o in db.query(models.OfertaZmiany).filter(
+            models.OfertaZmiany.status.in_(_AKTYWNE)).all()
+    }
+    return [{
+        "przydzial_id": p.id,
+        "data": str(p.data),
+        "godz_od": p.godz_od.strftime("%H:%M") if p.godz_od else None,
+        "stanowisko": (p.stanowisko.nazwa if p.stanowisko else None),
+        "rewir": p.rewir,
+        "wystawiony": p.id in aktywne_przydzialy,
+    } for p in przydzialy]
+
+
 @router.get("/api/me/gielda/oferty")
 def moje_oferty(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Widok pracownika: otwarte oferty, które mogę przejąć (mam kwalifikację, nie moje)
