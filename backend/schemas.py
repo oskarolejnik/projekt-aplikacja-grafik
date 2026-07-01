@@ -280,6 +280,9 @@ class LokalConfigOut(LokalBrandingOut):
     impreza_sale_min2: str = "R2Piw,R2G"
     obsada_rachunki_na_osobe: int = 20
     obsada_min: int = 1
+    praca_min_odpoczynek_h: int = 11
+    praca_max_dni_tydzien: int = 6
+    praca_max_dni_miesiac: int = 22
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -300,6 +303,9 @@ class LokalConfigIn(BaseModel):
     impreza_sale_min2: Optional[str] = None
     obsada_rachunki_na_osobe: Optional[int] = None
     obsada_min: Optional[int] = None
+    praca_min_odpoczynek_h: Optional[int] = None
+    praca_max_dni_tydzien: Optional[int] = None
+    praca_max_dni_miesiac: Optional[int] = None
 
 class SubskrypcjaIn(BaseModel):
     """Częściowa aktualizacja subskrypcji/licencji instancji (admin)."""

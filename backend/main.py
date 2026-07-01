@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, uprawnienia, ratelimit
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, uprawnienia, ratelimit, prawo_pracy
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -2406,12 +2406,30 @@ def _powiadom_kuchnie_o_zmianie(db, pracownik_id, tytul, tresc):
             pass
 
 
+def _sprawdz_prawo_pracy(db, pracownik_id: int, data: date, godz_od, pomin_id: int = None):
+    """Strażnik prawa pracy: odpoczynek + limit dni w tygodniu/miesiącu (parametry z LokalConfig).
+    Rzuca HTTPException 400 z konkretnym komunikatem, gdy ręczny przydział łamie limit."""
+    cfg = get_lokal_config(db)
+    q = db.query(models.PrzydzialZmiany).filter(models.PrzydzialZmiany.pracownik_id == pracownik_id)
+    if pomin_id is not None:
+        q = q.filter(models.PrzydzialZmiany.id != pomin_id)
+    inne = [(p.data, p.godz_od) for p in q.all()]
+    blad = prawo_pracy.sprawdz(
+        inne, data, godz_od,
+        min_odpoczynek_h=cfg.praca_min_odpoczynek_h or 0,
+        max_dni_tydzien=cfg.praca_max_dni_tydzien or 0,
+        max_dni_miesiac=cfg.praca_max_dni_miesiac or 0,
+    )
+    if blad:
+        raise HTTPException(400, blad)
+
+
 @app.post("/api/przydzialy", response_model=schemas.PrzydzialOut, status_code=201)
 def create_przydział(data: schemas.PrzydzialCreate, db: Session = Depends(get_db)):
     stan = db.get(models.Stanowisko, data.stanowisko_id)
     if stan and stan.tylko_weekend and data.data.weekday() < 5:
         raise HTTPException(400, f"Stanowisko '{stan.nazwa}' jest aktywne tylko w weekendy.")
-    
+
     # Zasada biznesowa: maksymalnie JEDNA zmiana na pracownika w danym dniu.
     istniejaca = db.query(models.PrzydzialZmiany).filter_by(
         data=data.data,
@@ -2420,6 +2438,8 @@ def create_przydział(data: schemas.PrzydzialCreate, db: Session = Depends(get_d
 
     if istniejaca:
         raise HTTPException(400, "Pracownik ma już przydzieloną zmianę w tym dniu (maks. 1 zmiana dziennie).")
+
+    _sprawdz_prawo_pracy(db, data.pracownik_id, data.data, data.godz_od)
 
     a = models.PrzydzialZmiany(**data.model_dump())
     db.add(a); db.commit(); db.refresh(a)
@@ -2445,6 +2465,8 @@ def update_przydział(aid: int, data: schemas.PrzydzialCreate, db: Session = Dep
     ).first()
     if kolizja:
         raise HTTPException(400, "Pracownik ma już przydzieloną zmianę w tym dniu (maks. 1 zmiana dziennie).")
+
+    _sprawdz_prawo_pracy(db, data.pracownik_id, data.data, data.godz_od, pomin_id=aid)
 
     stara_data = a.data
     for k, v in data.model_dump().items():

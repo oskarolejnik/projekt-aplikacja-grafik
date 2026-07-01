@@ -489,6 +489,10 @@ class LokalConfig(Base):
     # --- Prognoza obsady (sugerowana liczba osób na zmianę wg prognozowanego ruchu) ---
     obsada_rachunki_na_osobe = Column(Integer, nullable=False, default=20)  # ilu rachunków „obsługuje" 1 osoba
     obsada_min               = Column(Integer, nullable=False, default=1)   # minimalna obsada na zmianę
+    # --- Strażnik prawa pracy (limity przy ręcznym przydziale zmian; 0 = limit wyłączony) ---
+    praca_min_odpoczynek_h = Column(Integer, nullable=False, default=11)  # min. godzin przerwy między zmianami (KP art. 132)
+    praca_max_dni_tydzien  = Column(Integer, nullable=False, default=6)   # maks. dni pracy w tygodniu (KP: 1 dzień wolny)
+    praca_max_dni_miesiac  = Column(Integer, nullable=False, default=22)  # maks. dni pracy w miesiącu kalendarzowym
 
 
 class Stolik(Base):

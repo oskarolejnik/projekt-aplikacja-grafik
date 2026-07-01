@@ -45,7 +45,7 @@ def _zdolny(stan, data, dostepnosc=True, godz_od=None):
 
 
 # ── 1. Minimalny odpoczynek między zmianami ──────────────────────────────────
-@pytest.mark.xfail(reason="Brak walidacji min. odpoczynku (np. 11h) między zmianami z różnych dni.", strict=False)
+# ZAIMPLEMENTOWANE (strażnik prawa pracy): POST /api/przydzialy pilnuje min. odpoczynku.
 def test_minimalny_odpoczynek_miedzy_zmianami(admin_client):
     stan = factories.StanowiskoFactory()
     prac = factories.PracownikFactory()
@@ -55,7 +55,7 @@ def test_minimalny_odpoczynek_miedzy_zmianami(admin_client):
 
 
 # ── 2. Limit w tygodniu ──────────────────────────────────────────────────────
-@pytest.mark.xfail(reason="Brak limitu dni/godzin pracy w tygodniu — można obsadzić wszystkie 7 dni.", strict=False)
+# ZAIMPLEMENTOWANE: limit dni pracy w tygodniu (LokalConfig.praca_max_dni_tydzien, dom. 6).
 def test_limit_dni_pracy_w_tygodniu(admin_client):
     stan = factories.StanowiskoFactory()
     prac = factories.PracownikFactory()
@@ -67,7 +67,8 @@ def test_limit_dni_pracy_w_tygodniu(admin_client):
 
 
 # ── 3. Limit w miesiącu ──────────────────────────────────────────────────────
-@pytest.mark.xfail(reason="Brak limitu godzin w miesiącu.", strict=False)
+# ZAIMPLEMENTOWANE: 28-dniowy ciąg jest odrzucany (limit tygodnia/miesiąca) — patrz też
+# dedykowany test miesięczny w test_prawo_pracy.py (izoluje limit miesiąca).
 def test_limit_godzin_w_miesiacu(admin_client):
     stan = factories.StanowiskoFactory()
     prac = factories.PracownikFactory()
