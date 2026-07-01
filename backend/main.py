@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, uprawnienia
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, uprawnienia, ratelimit
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -277,10 +277,22 @@ def _user_out(u: models.User) -> schemas.UserOut:
     )
 
 @app.post("/api/auth/login", response_model=schemas.TokenOut)
-def login(dane: schemas.LoginIn, db: Session = Depends(get_db)):
+def login(dane: schemas.LoginIn, request: Request, db: Session = Depends(get_db)):
+    # Ochrona przed brute-force: limit prób + czasowy lockout (per login+IP oraz per IP).
+    ip = request.client.host if request.client else "?"
+    klucze = [f"login:{dane.login}|ip:{ip}", f"ip:{ip}"]
+    for k in klucze:
+        blok = ratelimit.pozostala_blokada(k)
+        if blok:
+            raise HTTPException(429, f"Za dużo prób logowania. Spróbuj ponownie za {blok} s.",
+                                headers={"Retry-After": str(blok)})
     user = db.query(models.User).filter(models.User.login == dane.login).first()
     if not user or not user.aktywny or not verify_password(dane.haslo, user.haslo_hash):
+        for k in klucze:
+            ratelimit.zarejestruj_porazke(k)
         raise HTTPException(401, "Nieprawidłowy login lub hasło.")
+    for k in klucze:
+        ratelimit.zarejestruj_sukces(k)
     return schemas.TokenOut(access_token=create_access_token(user), user=_user_out(user))
 
 @app.post("/api/auth/register", response_model=schemas.TokenOut, status_code=201)

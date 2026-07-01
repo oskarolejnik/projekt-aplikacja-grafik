@@ -85,6 +85,14 @@ def _mock_push(monkeypatch):
     monkeypatch.setattr(main, "wyslij_push", lambda *a, **k: 0)
 
 
+@pytest.fixture(autouse=True)
+def _reset_ratelimit():
+    """Limiter logowania trzyma stan w pamięci procesu — zeruj przed każdym testem (izolacja)."""
+    import ratelimit
+    ratelimit.reset()
+    yield
+
+
 @pytest.fixture
 def db():
     """Bezpośrednia sesja do asercji na bazie (ta sama baza co aplikacja)."""
