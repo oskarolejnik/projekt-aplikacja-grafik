@@ -9,12 +9,15 @@ Klucze generuje skrypt: python generate_vapid.py
 
 import os
 import json
+import logging
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import models
+
+logger = logging.getLogger(__name__)
 
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
@@ -28,12 +31,12 @@ def push_skonfigurowany() -> bool:
 def _wyslij_do_subskrypcji(db, subskrypcje, tytul: str, tresc: str, url: str) -> int:
     """Wysyła payload do podanej listy subskrypcji. Kasuje wygasłe (404/410)."""
     if not push_skonfigurowany():
-        print("[PUSH] Pominięto — brak kluczy VAPID (ustaw VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY).")
+        logger.info("Web Push pominięty — brak kluczy VAPID (VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY).")
         return 0
     try:
         from pywebpush import webpush, WebPushException
     except ImportError:
-        print("[PUSH] Brak biblioteki pywebpush — pomijam wysyłkę.")
+        logger.warning("Brak biblioteki pywebpush — pomijam wysyłkę Web Push.")
         return 0
 
     payload = json.dumps({"title": tytul, "body": tresc, "url": url})
@@ -55,7 +58,7 @@ def _wyslij_do_subskrypcji(db, subskrypcje, tytul: str, tresc: str, url: str) ->
             if code in (404, 410):
                 db.delete(sub)  # subskrypcja wygasła — usuwamy
         except Exception as e:  # noqa: BLE001
-            print("[PUSH] błąd wysyłki:", e)
+            logger.warning("Błąd wysyłki Web Push: %s", e)
     db.commit()
     return wyslano
 

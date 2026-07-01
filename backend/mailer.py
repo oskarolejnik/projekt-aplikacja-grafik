@@ -7,12 +7,15 @@ wywrócić żądania (np. utworzenia rezerwacji) z powodu problemu z pocztą.
 Zmienne: SMTP_HOST, SMTP_PORT (domyślnie 587), SMTP_USER, SMTP_PASSWORD, SMTP_FROM (opc.).
 """
 
+import logging
 import os
 import smtplib
 import ssl
 from email.message import EmailMessage
 
 import integracje
+
+logger = logging.getLogger(__name__)
 
 
 def wyslij_email(do: str, temat: str, tresc: str) -> bool:
@@ -36,5 +39,5 @@ def wyslij_email(do: str, temat: str, tresc: str) -> bool:
             s.send_message(msg)
         return True
     except Exception as e:  # noqa: BLE001 — poczta nigdy nie wywraca żądania
-        print("[MAIL] błąd wysyłki:", e)
+        logger.warning("Błąd wysyłki e-mail: %s", e)
         return False

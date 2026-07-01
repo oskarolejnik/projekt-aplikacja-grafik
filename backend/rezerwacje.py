@@ -8,11 +8,14 @@ Pracownik dostaje TYLKO liczby (bez danych klienta). Liczbę osób bierzemy z op
 wydarzenia ("Liczba osób: N", format Bookero). Wynik cache'owany ~60 s.
 """
 
+import logging
 import os
 import re
 import time
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
 
@@ -124,6 +127,6 @@ def rezerwacje_per_dzien(dni_naprzod: int = 30):
         dane = parsuj(_pobierz_wydarzenia(start.isoformat(), end.isoformat()))
         _cache["ts"], _cache["dane"] = teraz, dane
     except Exception as e:  # noqa: BLE001
-        print("[REZERWACJE] błąd pobierania:", e)
+        logger.warning("Błąd pobierania rezerwacji z Google Calendar: %s", e)
         dane = _cache["dane"] or []
     return dane

@@ -2,6 +2,7 @@ import csv
 import io
 import re
 import os
+import logging
 import secrets
 from datetime import date, time, timedelta, datetime, timezone
 from typing import Optional, List
@@ -33,6 +34,7 @@ from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_c
 from routers.instancja import router as instancja_router
 from routers.lokal import router as lokal_router
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
 app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status integracji (Rec#5: dekompozycja main)
 app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
@@ -3544,4 +3546,4 @@ if os.path.isdir(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 else:
     # Tryb deweloperski: frontend serwuje Vite (:5173), backend udostępnia tylko /api.
-    print("UWAGA: frontend/dist nie istnieje — pomijam serwowanie frontu. Uruchom 'npm --prefix frontend run build' lub 'npm run dev'.")
+    logger.warning("frontend/dist nie istnieje — pomijam serwowanie frontu. Uruchom 'npm --prefix frontend run build' lub 'npm run dev'.")
