@@ -20,6 +20,7 @@ import { api } from './lib/api'
 const _params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
 const isWidget = _params.has('rezerwuj')
 const isProdukt = _params.has('produkt')
+const isLogin = _params.has('login')   // ?login → ekran logowania (landing marketingowy prowadzi tu z „Zaloguj")
 
 // Routing wg stanu zalogowania i roli:
 //   brak użytkownika → ekran startowy (z logowaniem)
@@ -43,7 +44,8 @@ function Routed() {
   if (!user) {
     if (onboarding === null) return spinner       // czekamy na status onboardingu
     if (onboarding) return <Onboarding />
-    return <Landing />
+    if (isLogin) return <Landing />               // ?login → ekran logowania (z landingu „Zaloguj")
+    return <Produkt />                            // publiczny landing sprzedażowy (domyślny widok gościa)
   }
   if (user.rola === 'admin') return <Dashboard />
   if (user.rola === 'szef') return <SzefView />
