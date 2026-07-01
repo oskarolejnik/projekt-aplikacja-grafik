@@ -29,7 +29,7 @@ from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow,
 import openpyxl
 
 import settings as app_settings
-from deps import get_subskrypcja, subskrypcja_aktywna
+from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive
 from routers.instancja import router as instancja_router
 
 app = FastAPI(title="Scheduler API")
@@ -650,7 +650,7 @@ def odhacz_sprzatanie(
     if dane.zrobione and not istn:
         db.add(models.SprzatanieOdhaczenie(
             data=dane.data, sala=dane.sala,
-            pracownik_id=prac.id if prac else None, odhaczono_at=datetime.utcnow(),
+            pracownik_id=prac.id if prac else None, odhaczono_at=utcnow_naive(),
         ))
     elif not dane.zrobione and istn:
         db.delete(istn)  # odznaczenie ✓ (cofnięcie własnego odhaczenia)
@@ -708,7 +708,7 @@ def utworz_zamowienie(dane: schemas.ZamowienieIn,
     if dane.zdjecie and len(dane.zdjecie) > ZDJECIE_MAX:
         raise HTTPException(400, "Zdjęcie jest za duże — zrób mniejsze lub pomiń.")
     z = models.ZamowienieSprzataczki(
-        pracownik_id=prac.id, utworzono_at=datetime.utcnow(), nazwa=nazwa,
+        pracownik_id=prac.id, utworzono_at=utcnow_naive(), nazwa=nazwa,
         ilosc=(dane.ilosc or "").strip() or None, notatka=(dane.notatka or "").strip() or None,
         zdjecie=dane.zdjecie or None, status="nowe",
     )
@@ -761,7 +761,7 @@ def zmien_status_zamowienia(zid: int, dane: schemas.ZamowienieStatusIn, db: Sess
         raise HTTPException(404, "Nie znaleziono zamówienia.")
     if dane.status not in ("odczytane", "zamowione"):
         raise HTTPException(400, "Status musi być 'odczytane' albo 'zamowione'.")
-    teraz = datetime.utcnow()
+    teraz = utcnow_naive()
     z.status = dane.status
     if dane.status == "odczytane" and not z.odczytano_at:
         z.odczytano_at = teraz
@@ -794,7 +794,7 @@ def zloz_urlop(dane: schemas.UrlopIn,
         raise HTTPException(400, "Data końca nie może być wcześniejsza niż początek.")
     u = models.Urlop(pracownik_id=prac.id, start=dane.start, koniec=dane.koniec,
                      powod=(dane.powod or "").strip() or None, status="oczekuje",
-                     utworzono_at=datetime.utcnow())
+                     utworzono_at=utcnow_naive())
     db.add(u); db.commit(); db.refresh(u)
     wyslij_push_do_adminow(db, "Wniosek urlopowy",
                            f"{prac.imie} {prac.nazwisko}: {dane.start.strftime('%d.%m')}–{dane.koniec.strftime('%d.%m')}", url="/")
@@ -841,7 +841,7 @@ def rozpatrz_urlop(uid: int, dane: schemas.UrlopStatusIn, db: Session = Depends(
     if dane.status not in ("zaakceptowany", "odrzucony"):
         raise HTTPException(400, "Status musi być 'zaakceptowany' albo 'odrzucony'.")
     u.status = dane.status
-    u.rozpatrzono_at = datetime.utcnow()
+    u.rozpatrzono_at = utcnow_naive()
     db.commit()
     slowo = "zaakceptowany" if dane.status == "zaakceptowany" else "odrzucony"
     wyslij_push_do_pracownika(db, u.pracownik_id, "Urlop",
@@ -889,7 +889,7 @@ def rozlicz_imprize(dane: schemas.RozliczenieImprezyIn,
             raise HTTPException(400, "Forma musi być: gotowka, karta albo przelew.")
     r = db.query(models.RozliczenieImprezy).filter_by(pracownik_id=prac.id, data=dane.data).first()
     if r is None:
-        r = models.RozliczenieImprezy(pracownik_id=prac.id, data=dane.data, utworzono_at=datetime.utcnow())
+        r = models.RozliczenieImprezy(pracownik_id=prac.id, data=dane.data, utworzono_at=utcnow_naive())
         db.add(r)
     r.opis = (dane.opis or "").strip() or None
     r.pozycje.clear()
@@ -953,7 +953,7 @@ def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
     """Get-or-create rozliczenia dnia + dołożenie wierszy kelnerów z grafiku Sali (prefill z Gastro)."""
     roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
     if roz is None:
-        roz = models.RozliczenieDnia(data=data, status="robocze", utworzono_at=datetime.utcnow(),
+        roz = models.RozliczenieDnia(data=data, status="robocze", utworzono_at=utcnow_naive(),
                                      terminale=[], kasy=[])
         db.add(roz); db.flush()
     sala_ids = _sala_stanowisko_ids(db)
@@ -1063,7 +1063,7 @@ def przekaz_szef(data: date = Query(...), db: Session = Depends(get_db)):
     roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
     if not roz:
         raise HTTPException(404, "Brak rozliczenia tego dnia.")
-    roz.status = "u_szefa"; roz.przekazano_szef_at = datetime.utcnow(); db.commit()
+    roz.status = "u_szefa"; roz.przekazano_szef_at = utcnow_naive(); db.commit()
 
 
 @app.get("/api/szef/rozliczenie")
@@ -1194,7 +1194,7 @@ def zapisz_moje_rozliczenie(dane: schemas.MojRozliczenieIn, data: date = Query(.
     db.commit()
     # Gdy WSZYSCY kelnerzy sali danego dnia się rozliczyli → push do admina (raz)
     if roz.kelnerzy and all(x.potwierdzone for x in roz.kelnerzy) and roz.push_admin_at is None:
-        roz.push_admin_at = datetime.utcnow()
+        roz.push_admin_at = utcnow_naive()
         wyslij_push_do_adminow(db, "Raport finansowy",
                                f"Raport finansowy {data.strftime('%d.%m')} czeka na zatwierdzenie", url="/")
         db.commit()
@@ -1498,7 +1498,7 @@ def dodaj_termin(dane: schemas.TerminIn, db: Session = Depends(get_db)):
     t = models.Termin(data=dane.data, nazwisko=dane.nazwisko.strip(), typ=dane.typ,
                       liczba_osob=dane.liczba_osob, telefon=dane.telefon, sala=dane.sala,
                       notatka=dane.notatka, status=dane.status or "rezerwacja",
-                      zadatek=float(dane.zadatek or 0), utworzono_at=datetime.utcnow())
+                      zadatek=float(dane.zadatek or 0), utworzono_at=utcnow_naive())
     db.add(t); db.commit(); db.refresh(t)
     return _termin_out(t)
 
@@ -1709,7 +1709,7 @@ def dodaj_rezerwacje_stolik(dane: schemas.RezerwacjaIn, db: Session = Depends(ge
     t = models.Termin(
         data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
         liczba_osob=dane.liczba_osob, notatka=dane.notatka, status="potwierdzona",
-        zadatek=float(dane.zadatek or 0), utworzono_at=datetime.utcnow(),
+        zadatek=float(dane.zadatek or 0), utworzono_at=utcnow_naive(),
         godz_od=dane.godz_od, godz_do=godz_do, stolik_id=dane.stolik_id,
         rodzaj="stolik", kanal="reczna")
     db.add(t); db.commit(); db.refresh(t)
@@ -1746,9 +1746,9 @@ def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, d
         raise HTTPException(409, f"Niedozwolone przejście {t.status} → {nowy}.")
     t.status = nowy
     if nowy == "potwierdzona":
-        t.potwierdzono_at = datetime.utcnow()
+        t.potwierdzono_at = utcnow_naive()
     elif nowy == "odwolana":
-        t.odwolano_at = datetime.utcnow()
+        t.odwolano_at = utcnow_naive()
     db.commit(); db.refresh(t)
     return _rezerwacja_out(t)
 
@@ -1796,7 +1796,7 @@ def dodaj_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, db: Session = De
     w = models.ListaOczekujacych(
         data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
         nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
-        notatka=dane.notatka, status="oczekuje", utworzono_at=datetime.utcnow())
+        notatka=dane.notatka, status="oczekuje", utworzono_at=utcnow_naive())
     db.add(w); db.commit(); db.refresh(w)
     return _lista_out(w)
 
@@ -1832,10 +1832,10 @@ def zrealizuj_lista_oczekujacych(wid: int, dane: schemas.ZrealizujIn, db: Sessio
     t = models.Termin(
         data=w.data, nazwisko=w.nazwisko, telefon=w.telefon, email=w.email,
         liczba_osob=w.liczba_osob, notatka=w.notatka, status="potwierdzona", zadatek=0.0,
-        utworzono_at=datetime.utcnow(), godz_od=godz, godz_do=godz_do, stolik_id=dane.stolik_id,
+        utworzono_at=utcnow_naive(), godz_od=godz, godz_do=godz_do, stolik_id=dane.stolik_id,
         rodzaj="stolik", kanal="reczna")
     db.add(t); db.flush()
-    w.status = "zrealizowany"; w.zrealizowano_at = datetime.utcnow(); w.termin_id = t.id
+    w.status = "zrealizowany"; w.zrealizowano_at = utcnow_naive(); w.termin_id = t.id
     db.commit(); db.refresh(t)
     _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
     return {"rezerwacja": _rezerwacja_out(t), "wpis": _lista_out(w)}
@@ -1945,9 +1945,9 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, db: Session = Depends(ge
     t = models.Termin(
         data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
         liczba_osob=dane.liczba_osob, notatka=dane.notatka, status=status, zadatek=0.0,
-        utworzono_at=datetime.utcnow(), godz_od=dane.godz_od, godz_do=godz_do, stolik_id=stolik.id,
+        utworzono_at=utcnow_naive(), godz_od=dane.godz_od, godz_do=godz_do, stolik_id=stolik.id,
         rodzaj="stolik", kanal="online", token_potwierdzenia=secrets.token_urlsafe(24),
-        potwierdzono_at=(datetime.utcnow() if status == "potwierdzona" else None))
+        potwierdzono_at=(utcnow_naive() if status == "potwierdzona" else None))
     db.add(t); db.commit(); db.refresh(t)
     wyslij_push_do_adminow(db, "Rezerwacja online",
                            f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
@@ -1969,7 +1969,7 @@ def online_rezerwacja_potwierdz(token: str, db: Session = Depends(get_db)):
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
     if t.status == "rezerwacja":
-        t.status = "potwierdzona"; t.potwierdzono_at = datetime.utcnow(); db.commit(); db.refresh(t)
+        t.status = "potwierdzona"; t.potwierdzono_at = utcnow_naive(); db.commit(); db.refresh(t)
     return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
 
 
@@ -1979,7 +1979,7 @@ def online_rezerwacja_odwolaj(token: str, db: Session = Depends(get_db)):
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
     if t.status in REZ_AKTYWNE:
-        t.status = "odwolana"; t.odwolano_at = datetime.utcnow(); db.commit(); db.refresh(t)
+        t.status = "odwolana"; t.odwolano_at = utcnow_naive(); db.commit(); db.refresh(t)
     return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
 
 
@@ -2013,7 +2013,7 @@ def status_publikacji(start: date = Query(...), end: date = Query(...), db: Sess
 @app.post("/api/grafik/publikuj", status_code=200)
 def publikuj_grafik(start: date = Query(...), end: date = Query(...), cisza: bool = False, db: Session = Depends(get_db)):
     """Publikuje grafik tygodnia. cisza=true -> bez powiadomien push (np. dla starych tygodni)."""
-    teraz = datetime.utcnow()
+    teraz = utcnow_naive()
     p = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
     if p:
         p.opublikowano_at = teraz
@@ -2835,7 +2835,7 @@ def import_imprez_ics(payload: dict, db: Session = Depends(get_db)):
                 liczba_osob=liczba, telefon=r.get("telefon"), sala=r.get("sala"),
                 notatka=r.get("notatka"), status="rezerwacja",
                 zadatek=float(r.get("zadatek") or 0), ical_uid=uid,
-                utworzono_at=datetime.utcnow(),
+                utworzono_at=utcnow_naive(),
             ))
             dodano_terminy += 1
         else:
@@ -3002,7 +3002,7 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
                 rec.wyjscie = wyjscie
         if rec.wejscie and rec.wyjscie:
             rec.godziny = round((rec.wyjscie - rec.wejscie).total_seconds() / 3600.0, 2)
-        rec.zaktualizowano_at = datetime.utcnow()
+        rec.zaktualizowano_at = utcnow_naive()
         db.flush()
 
         if rec.wejscie and rec.pracownik_id and not rec.powiadomiono_wejscie:
@@ -3255,7 +3255,7 @@ def gastro_stoly_ingest(payload: dict, request: Request, db: Session = Depends(g
     """Snapshot zajętości stołów od agenta (X-RCP-Token). Upsert per rewir. NIE dotyka RCP."""
     if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
-    teraz = datetime.utcnow()
+    teraz = utcnow_naive()
     for it in (payload.get("stoly") or []):
         try:
             nr = int(it["rewir_nr"])
@@ -3285,7 +3285,7 @@ def gastro_stoly(db: Session = Depends(get_db)):
         "wynos": stan.get(STOLY_WYNOS, 0),
         "kuchnia": stan.get(STOLY_KUCHNIA, 0),
         "kuchnia_pozycje": stan.get(STOLY_KUCHNIA_POZYCJE, 0),
-        # Znacznik UTC (zapis przez datetime.utcnow()) — z offsetem, żeby przeglądarka
+        # Znacznik UTC (zapis przez utcnow_naive()) — z offsetem, żeby przeglądarka
         # przeliczyła na czas lokalny (bez tego pokazywało −2h: UTC czytane jako lokalny).
         "zaktualizowano_at": (last.zaktualizowano_at.replace(tzinfo=timezone.utc).isoformat()
                               if last and last.zaktualizowano_at else None),
@@ -3297,7 +3297,7 @@ def gastro_stoly_historia_ingest(payload: dict, request: Request, db: Session = 
     """Dzienna historia liczby stolików od agenta (X-RCP-Token). Upsert per dzień. NIE dotyka RCP."""
     if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
-    teraz = datetime.utcnow()
+    teraz = utcnow_naive()
     for it in (payload.get("dni") or []):
         try:
             d = date.fromisoformat(str(it["data"])[:10])
@@ -3337,7 +3337,7 @@ def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Dep
     for p in db.query(models.Pracownik).all():
         mapa.setdefault(_norm_nazwa(f"{p.imie} {p.nazwisko}"), p.id)
         mapa.setdefault(_norm_nazwa(f"{p.nazwisko} {p.imie}"), p.id)
-    teraz = datetime.utcnow()
+    teraz = utcnow_naive()
     n = 0
     dni_batch = set()
     for it in (payload.get("pozycje") or []):
@@ -3437,7 +3437,7 @@ def gastro_zadatki_ingest(payload: dict, request: Request, db: Session = Depends
     (nazwisko + data imprezy) i próbuje auto-dopasować do terminu w kalendarzu."""
     if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
-    teraz = datetime.utcnow()
+    teraz = utcnow_naive()
     n = 0
     for it in (payload.get("zadatki") or []):
         try:

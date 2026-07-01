@@ -4,9 +4,16 @@ Wydzielone tutaj, aby routery mogły z nich korzystać BEZ importowania main.py
 (co dawałoby cykl importów: main → router → main). Zależą tylko od models.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import models
+
+
+def utcnow_naive() -> datetime:
+    """Bieżący czas UTC jako NAIWNY datetime (bez tzinfo) — zamiennik przestarzałego
+    `datetime.utcnow()` (deprecated od Pythona 3.12). Zachowuje dotychczasowy format
+    zapisu w kolumnach DateTime (naiwny UTC, spójny na SQLite i PostgreSQL)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def get_subskrypcja(db) -> models.Subskrypcja:
