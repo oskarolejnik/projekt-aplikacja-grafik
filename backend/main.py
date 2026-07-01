@@ -991,7 +991,14 @@ def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
     if roz is None:
         roz = models.RozliczenieDnia(data=data, status="robocze", utworzono_at=utcnow_naive(),
                                      terminale=[], kasy=[])
-        db.add(roz); db.flush()
+        db.add(roz)
+        try:
+            db.flush()
+        except Exception:
+            # Wyścig przy pierwszym dostępie do nowego dnia (kolumna data ma UNIQUE) — ktoś już
+            # utworzył rozliczenie. Rollback + ponowny odczyt istniejącego zamiast 500.
+            db.rollback()
+            roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
     sala_ids = _sala_stanowisko_ids(db)
     istn = {k.pracownik_id for k in roz.kelnerzy}
     pids = set()

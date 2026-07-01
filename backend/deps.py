@@ -43,7 +43,12 @@ def get_lokal_config(db) -> models.LokalConfig:
     cfg = db.get(models.LokalConfig, 1)
     if cfg is None:
         cfg = models.LokalConfig(id=1)
-        db.add(cfg); db.commit(); db.refresh(cfg)
+        db.add(cfg)
+        try:
+            db.commit(); db.refresh(cfg)
+        except Exception:
+            db.rollback()
+            cfg = db.get(models.LokalConfig, 1)   # wyścig przy pierwszym zapisie — ktoś już utworzył
     return cfg
 
 

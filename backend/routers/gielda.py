@@ -100,7 +100,10 @@ def wystaw_oferte(dane: schemas.OfertaZmianyIn,
                   db: Session = Depends(get_db)):
     """Pracownik wystawia SWÓJ (przyszły) przydział na giełdę."""
     prac_id = _wymagaj_pracownika(user)
-    p = db.get(models.PrzydzialZmiany, dane.przydzial_id)
+    # with_for_update blokuje wiersz przydziału na czas SELECT-then-INSERT, żeby dwa równoległe
+    # „Wystaw" (np. podwójny klik) nie utworzyły DWÓCH aktywnych ofert na tę samą zmianę.
+    # (Na SQLite no-op, ale tam i tak zapisy są serializowane; broni PostgreSQL na produkcji.)
+    p = db.query(models.PrzydzialZmiany).filter_by(id=dane.przydzial_id).with_for_update().first()
     if p is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Przydział nie istnieje.")
     if p.pracownik_id != prac_id:
@@ -194,7 +197,15 @@ def przejmij_oferte(oid: int, user: models.User = Depends(get_current_user),
     if _dwie_zmiany_koliduja(db, prac_id, o.przydzial.data, o.przydzial.godz_od):
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Masz już zmianę tego dnia o tej godzinie.")
-    o.status = "zajeta"; o.przejmujacy_id = prac_id; o.zajeto_at = utcnow_naive()
+    # Atomowe przejście otwarta→zajeta: warunkowy UPDATE broni wyścigu dwóch pracowników
+    # przejmujących tę samą ofertę (check-then-set gubił jednego przez last-writer-wins).
+    zmienione = db.query(models.OfertaZmiany).filter(
+        models.OfertaZmiany.id == oid, models.OfertaZmiany.status == "otwarta"
+    ).update({"status": "zajeta", "przejmujacy_id": prac_id, "zajeto_at": utcnow_naive()},
+             synchronize_session=False)
+    if not zmienione:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Oferta nie jest już otwarta.")
     db.commit(); db.refresh(o)
     try:
         opis = _opis_zmiany(o)
@@ -251,8 +262,18 @@ def akceptuj_oferte(oid: int, _admin: models.User = Depends(require_admin),
     if _dwie_zmiany_koliduja(db, o.przejmujacy_id, p.data, p.godz_od, pomin_przydzial_id=p.id):
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Przejmujący ma już zmianę tego dnia o tej godzinie.")
-    p.pracownik_id = o.przejmujacy_id
-    o.status = "zaakceptowana"; o.rozpatrzono_at = utcnow_naive()
+    # Atomowe przejście zajeta→zaakceptowana: warunkowy UPDATE broni wyścigu akceptuj×odrzuc/anuluj
+    # oraz podwójnej akceptacji. Przydział przepinamy TYLKO gdy UPDATE faktycznie zmienił ofertę
+    # (inaczej można było przepiąć zmianę wbrew równoległemu odrzuceniu).
+    przej_id = o.przejmujacy_id
+    zmienione = db.query(models.OfertaZmiany).filter(
+        models.OfertaZmiany.id == oid, models.OfertaZmiany.status == "zajeta"
+    ).update({"status": "zaakceptowana", "rozpatrzono_at": utcnow_naive()},
+             synchronize_session=False)
+    if not zmienione:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Oferta nie czeka już na akceptację.")
+    p.pracownik_id = przej_id
     db.commit(); db.refresh(o)
     try:
         opis = _opis_zmiany(o)
