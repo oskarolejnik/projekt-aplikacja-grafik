@@ -51,4 +51,10 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:8000',
     },
   },
+  // Testy jednostkowe frontu (Vitest). Domyślnie środowisko 'node' (czyste funkcje z lib/);
+  // testy komponentów (jsdom + @testing-library) dojdą osobno.
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.{js,jsx}'],
+  },
 })
