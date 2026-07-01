@@ -12,11 +12,14 @@ import SzefView from './pages/SzefView'
 import SzefKuchniView from './pages/SzefKuchniView'
 import RezerwacjaWidget from './pages/RezerwacjaWidget'
 import Onboarding from './pages/Onboarding'
+import Produkt from './pages/Produkt'
 import { api } from './lib/api'
 
-// Publiczny widget rezerwacji (gość, bez logowania) — osobna „trasa" wykrywana po ?rezerwuj.
-// Działa POZA AuthProvider (nie wymaga tokenu); branding z publicznego /api/lokal/branding.
-const isWidget = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rezerwuj')
+// Publiczne „trasy" wykrywane po query param (bez logowania, poza AuthProvider):
+//   ?rezerwuj → widget rezerwacji gościa,  ?produkt → strona produktu/cennik (marketing).
+const _params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
+const isWidget = _params.has('rezerwuj')
+const isProdukt = _params.has('produkt')
 
 // Routing wg stanu zalogowania i roli:
 //   brak użytkownika → ekran startowy (z logowaniem)
@@ -49,6 +52,14 @@ function Routed() {
 }
 
 export default function App() {
+  // Strona produktu (marketing/cennik) — statyczna, bez logowania i bez kontekstów instancji.
+  if (isProdukt) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <Produkt />
+      </MotionConfig>
+    )
+  }
   if (isWidget) {
     return (
       <MotionConfig reducedMotion="user">
