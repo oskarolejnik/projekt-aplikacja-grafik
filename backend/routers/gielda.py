@@ -20,7 +20,7 @@ import schemas
 import push
 from auth import get_current_user, require_admin
 from database import get_db
-from deps import utcnow_naive
+from deps import utcnow_naive, rewir_dla_pracownika
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -66,8 +66,11 @@ def _dwie_zmiany_koliduja(db: Session, pracownik_id: int, data, godz_od, pomin_p
     return db.query(q.exists()).scalar()
 
 
-def _serializuj(o: models.OfertaZmiany) -> dict:
+def _serializuj(o: models.OfertaZmiany, dla_pracownika: bool = False) -> dict:
+    # dla_pracownika=True (ścieżki /api/me/*): maskujemy nazwisko klienta w rewirze imprezy,
+    # zgodnie z modelem prywatności (jak /api/me/grafik). Widok managera (admin) dostaje surowy rewir.
     p = o.przydzial
+    rewir = None if not p else (rewir_dla_pracownika(p.rewir) if dla_pracownika else p.rewir)
     return {
         "id": o.id,
         "status": o.status,
@@ -78,7 +81,7 @@ def _serializuj(o: models.OfertaZmiany) -> dict:
         "przydzial_id": o.przydzial_id,
         "data": str(p.data) if p else None,
         "godz_od": p.godz_od.strftime("%H:%M") if (p and p.godz_od) else None,
-        "rewir": p.rewir if p else None,
+        "rewir": rewir,
         "stanowisko": (p.stanowisko.nazwa if (p and p.stanowisko) else None),
         "stanowisko_id": (p.stanowisko_id if p else None),
         "wystawiajacy_id": o.wystawiajacy_id,
@@ -122,7 +125,7 @@ def wystaw_oferte(dane: schemas.OfertaZmianyIn,
                 push.wyslij_push_do_pracownika(db, prac.id, "Giełda: nowa zmiana do przejęcia", _opis_zmiany(o))
     except Exception as e:  # noqa: BLE001
         logger.warning("Push giełdy (wystaw) nie powiódł się: %s", e)
-    return _serializuj(o)
+    return _serializuj(o, dla_pracownika=True)
 
 
 @router.get("/api/me/gielda/przydzialy")
@@ -144,7 +147,7 @@ def moje_przydzialy_do_wystawienia(user: models.User = Depends(get_current_user)
         "data": str(p.data),
         "godz_od": p.godz_od.strftime("%H:%M") if p.godz_od else None,
         "stanowisko": (p.stanowisko.nazwa if p.stanowisko else None),
-        "rewir": p.rewir,
+        "rewir": rewir_dla_pracownika(p.rewir),
         "wystawiony": p.id in aktywne_przydzialy,
     } for p in przydzialy]
 
@@ -162,11 +165,11 @@ def moje_oferty(user: models.User = Depends(get_current_user), db: Session = Dep
     for o in oferty:
         if o.wystawiajacy_id == prac_id:
             if o.status in _AKTYWNE or o.status == "zaakceptowana":
-                moje.append(_serializuj(o))
+                moje.append(_serializuj(o, dla_pracownika=True))
             continue
         # Cudze: pokazuj otwarte, dla których mam kwalifikację na dane stanowisko.
         if o.status == "otwarta" and o.przydzial and o.przydzial.stanowisko_id in moje_stanowiska:
-            dostepne.append(_serializuj(o))
+            dostepne.append(_serializuj(o, dla_pracownika=True))
     dostepne.sort(key=lambda x: (x["data"] or "", x["godz_od"] or ""))
     moje.sort(key=lambda x: (x["data"] or "", x["godz_od"] or ""))
     return {"dostepne": dostepne, "moje": moje}
@@ -199,7 +202,7 @@ def przejmij_oferte(oid: int, user: models.User = Depends(get_current_user),
         push.wyslij_push_do_pracownika(db, o.wystawiajacy_id, "Giełda: ktoś chce przejąć Twoją zmianę", opis)
     except Exception as e:  # noqa: BLE001
         logger.warning("Push giełdy (przejmij) nie powiódł się: %s", e)
-    return _serializuj(o)
+    return _serializuj(o, dla_pracownika=True)
 
 
 @router.post("/api/me/gielda/oferty/{oid}/anuluj", status_code=200)
@@ -216,7 +219,7 @@ def anuluj_oferte(oid: int, user: models.User = Depends(get_current_user),
         raise HTTPException(status.HTTP_409_CONFLICT, "Oferty nie można już anulować.")
     o.status = "anulowana"; o.rozpatrzono_at = utcnow_naive()
     db.commit(); db.refresh(o)
-    return _serializuj(o)
+    return _serializuj(o, dla_pracownika=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

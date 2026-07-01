@@ -199,7 +199,7 @@ export default function Onboarding() {
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-bold text-ink">{m.label}</div>
                       <div className="text-xs leading-relaxed text-muted">{m.opis}</div>
-                      {zaleznyOff && <div className="mt-1 text-[11px] text-lemon">Włączy się razem z modułem rezerwacji.</div>}
+                      {zaleznyOff && <div className="mt-1 text-[11px] text-lemon">Włączenie automatycznie doda też moduł rezerwacji.</div>}
                     </div>
                     <Toggle on={!!moduly[m.key]} onClick={() => przelacz(m.key)} />
                   </div>

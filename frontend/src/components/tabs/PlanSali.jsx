@@ -64,6 +64,17 @@ export default function PlanSali() {
     setDragId(id)
   }
 
+  // Przełączenie trybu. Wyjście z Edycji z niezapisanym układem gubi „Zapisz" (chowa się w Podglądzie),
+  // więc pytamy o potwierdzenie i — po zgodzie — odrzucamy zmiany, przeładowując zapisany układ.
+  const zmienTryb = (k) => {
+    if (k === tryb) return
+    if (tryb === 'edycja' && brudne) {
+      if (!window.confirm('Masz niezapisane zmiany układu sali. Wyjść z edycji i je odrzucić?')) return
+      load()   // przywróć pozycje z ostatnio zapisanego planu (odrzuca przeciągnięcia)
+    }
+    setTryb(k); setWybrany(null)
+  }
+
   const zapisz = async () => {
     setBusy(true)
     try {
@@ -85,7 +96,7 @@ export default function PlanSali() {
                  className="rounded-lg border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint disabled:opacity-50" />
           <div className="inline-flex rounded-lg border border-line bg-surface-2 p-0.5">
             {[['podglad', 'Podgląd'], ['edycja', 'Edycja']].map(([k, l]) => (
-              <button key={k} onClick={() => { setTryb(k); setWybrany(null) }}
+              <button key={k} onClick={() => zmienTryb(k)}
                 className={`rounded-md px-3 py-1 text-sm font-semibold transition ${tryb === k ? 'bg-accent-gradient text-bg' : 'text-muted hover:text-ink'}`}>{l}</button>
             ))}
           </div>

@@ -31,7 +31,7 @@ from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow,
 import openpyxl
 
 import settings as app_settings
-from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config
+from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, rewir_dla_pracownika as _rewir_dla_pracownika
 from routers.instancja import router as instancja_router
 from routers.lokal import router as lokal_router
 from routers.platnosci import router as platnosci_router
@@ -552,15 +552,6 @@ def zapisz_moje_dyspozycje(
         zapisano += 1
     db.commit()
     return {"zapisano": zapisano}
-
-
-def _rewir_dla_pracownika(rewir):
-    """Ukrywa nazwę klienta/imprezy przed pracownikiem. Rewir imprezy ma postać
-    „IMPREZA: {klient} ({sala})" — zwracamy tylko „Impreza ({sala})". Zwykłe rewiry bez zmian."""
-    if rewir and rewir.startswith("IMPREZA:"):
-        sala = rewir[rewir.rfind("(") + 1 : -1].strip() if rewir.endswith(")") and "(" in rewir else ""
-        return f"Impreza ({sala})" if sala and sala.lower() not in ("brak", "none") else "Impreza"
-    return rewir
 
 
 @app.get("/api/me/grafik", status_code=200)

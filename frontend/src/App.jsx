@@ -42,7 +42,9 @@ function Routed() {
   )
   if (loading) return spinner
   if (!user) {
-    if (onboarding === null) return spinner       // czekamy na status onboardingu
+    // Nie blokujemy publicznej strony sprzedażowej spinnerem na czas /onboarding/status —
+    // domyślnie (status jeszcze null) renderujemy landing OD RAZU. Kreator pokazujemy dopiero,
+    // gdy status potwierdzi świeżą instancję (potrzebny=true) — rzadki, jednorazowy przypadek.
     if (onboarding) return <Onboarding />
     if (isLogin) return <Landing />               // ?login → ekran logowania (z landingu „Zaloguj")
     return <Produkt />                            // publiczny landing sprzedażowy (domyślny widok gościa)

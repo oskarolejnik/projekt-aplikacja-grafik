@@ -45,3 +45,14 @@ def get_lokal_config(db) -> models.LokalConfig:
         cfg = models.LokalConfig(id=1)
         db.add(cfg); db.commit(); db.refresh(cfg)
     return cfg
+
+
+def rewir_dla_pracownika(rewir):
+    """Ukrywa nazwę klienta/imprezy przed pracownikiem (model prywatności). Rewir imprezy ma
+    postać „IMPREZA: {klient} ({sala})" — zwracamy tylko „Impreza ({sala})". Zwykłe rewiry bez zmian.
+    Współdzielone przez main (/api/me/grafik, rozliczenia) i routery (giełda), żeby nazwisko klienta
+    NIGDY nie wyciekło pracownikowi. Widoki managera (admin) mogą pokazywać surowy rewir."""
+    if rewir and rewir.startswith("IMPREZA:"):
+        sala = rewir[rewir.rfind("(") + 1 : -1].strip() if rewir.endswith(")") and "(" in rewir else ""
+        return f"Impreza ({sala})" if sala and sala.lower() not in ("brak", "none") else "Impreza"
+    return rewir

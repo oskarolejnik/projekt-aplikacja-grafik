@@ -181,6 +181,37 @@ def test_moje_przydzialy_do_wystawienia(make_employee_client, db):
     assert ca.get("/api/me/gielda/przydzialy").json()[0]["wystawiony"] is True
 
 
+def test_gielda_maskuje_nazwe_klienta_imprezy_pracownikowi(make_employee_client, admin_client, db):
+    """Prywatność (regresja): rewir imprezy „IMPREZA: {klient} ({sala})" NIE może ujawnić
+    pracownikowi nazwiska klienta na giełdzie — tak jak w /api/me/grafik. Manager (admin) widzi surowy."""
+    stan = factories.StanowiskoFactory(nazwa="Kelner")
+    a = factories.PracownikFactory(imie="Ala", nazwisko="Kowalska")
+    b = factories.PracownikFactory(imie="Bartek", nazwisko="Nowak")
+    a.kwalifikacje = [stan]; b.kwalifikacje = [stan]; factories.Session.commit()
+    przydzial = factories.PrzydzialFactory(pracownik=a, stanowisko=stan, data=PRZYSZLOSC,
+                                           godz_od=GODZ, rewir="IMPREZA: Nowakowscy (Sala Kominkowa)")
+    ca, _ = make_employee_client(a)
+    cb, _ = make_employee_client(b)
+
+    # A widzi swój przydział do wystawienia — bez nazwiska klienta.
+    moje_przydz = ca.get("/api/me/gielda/przydzialy").json()
+    assert moje_przydz[0]["rewir"] == "Impreza (Sala Kominkowa)"
+    assert "Nowakowscy" not in str(moje_przydz)
+
+    oid = ca.post("/api/me/gielda/oferty", json={"przydzial_id": przydzial.id}).json()["id"]
+    # A wystawił → w jego „moje" rewir zamaskowany.
+    widok_a = ca.get("/api/me/gielda/oferty").json()
+    assert widok_a["moje"][0]["rewir"] == "Impreza (Sala Kominkowa)"
+    # B (chętny) w „dostepne" też nie widzi klienta.
+    widok_b = cb.get("/api/me/gielda/oferty").json()
+    assert widok_b["dostepne"][0]["rewir"] == "Impreza (Sala Kominkowa)"
+    assert "Nowakowscy" not in str(widok_b)
+
+    # Manager (admin) — surowy rewir z nazwiskiem klienta (ma pełny wgląd w grafik).
+    widok_admin = admin_client.get("/api/gielda/oferty").json()
+    assert widok_admin[0]["rewir"] == "IMPREZA: Nowakowscy (Sala Kominkowa)"
+
+
 def test_push_na_zdarzeniach_gieldy(make_employee_client, admin_client, monkeypatch, db):
     import push
     zdarzenia = []
