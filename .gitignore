@@ -26,3 +26,6 @@ google_sa.json
 # Instancje klientów (per-tenant runtime: .env z sekretami + baza) — NIGDY do repo
 instances/
 backend/instances/
+
+# Kopie zapasowe bazy (pg_dump) — dane produkcyjne, nie wersjonować
+backups/

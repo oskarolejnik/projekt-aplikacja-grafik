@@ -55,6 +55,24 @@ services:
       - app
     restart: unless-stopped
 
+  # Kopia zapasowa na żądanie (profil "backup" — nie startuje z całym stackiem):
+  #   docker compose -f docker-compose.prod.yml --profile backup run --rm backup
+  # Zaplanuj przez cron hosta, np. codziennie o 3:00.
+  backup:
+    image: postgres:16-alpine
+    profiles: ["backup"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-grafik}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-grafik}
+      BACKUP_DIR: /backups
+      RETENCJA_DNI: ${RETENCJA_DNI:-14}
+    volumes:
+      - ./scripts/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    entrypoint: ["sh", "/backup.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:
   caddy_data:

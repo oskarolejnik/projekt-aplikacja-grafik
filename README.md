@@ -156,6 +156,28 @@ DNS domeny musi wskazywać na serwer — Caddy sam pobierze i odnowi certyfikat 
 lokalnych zostaw `DOMENA=localhost` (serwuje po HTTP). Pliki `.env`, bazy i katalog `instances/`
 są w `.gitignore` i nie trafiają ani do repo, ani do obrazu (`.dockerignore`).
 
+## 💾 Kopie zapasowe i odtwarzanie
+
+Skrypt [`scripts/backup.sh`](scripts/backup.sh) robi zrzut bazy PostgreSQL (`pg_dump`), kompresuje
+go i usuwa kopie starsze niż `RETENCJA_DNI` (domyślnie 14). Działa lokalnie i w kontenerze:
+
+```bash
+# Bezpośrednio (host z dostępem do bazy):
+DATABASE_URL="postgresql://grafik:haslo@localhost:5432/grafik" ./scripts/backup.sh
+
+# W stacku Docker (profil "backup" — nie startuje z całym stackiem):
+docker compose -f docker-compose.prod.yml --profile backup run --rm backup
+
+# Codziennie o 3:00 przez cron hosta:
+0 3 * * * cd /sciezka/do/projektu && docker compose -f docker-compose.prod.yml --profile backup run --rm backup
+```
+
+Kopie lądują w `./backups/grafik-<data>.sql.gz` (katalog w `.gitignore`). **Odtworzenie:**
+
+```bash
+gunzip -c backups/grafik-20260701-030000.sql.gz | psql "postgresql://grafik:haslo@host:5432/grafik"
+```
+
 ## 🎨 White-label (marka per lokal)
 
 Branding i moduły ustawia administrator przez `PUT /api/lokal/config` (encja `LokalConfig`):
