@@ -13,12 +13,35 @@ export default function PrognozaObsady() {
   const [d, setD] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  const [stanowiska, setStanowiska] = useState([])
+  const [stanId, setStanId] = useState('')
+  const [busy, setBusy] = useState(false)
+
   const load = useCallback(async () => {
     setLoading(true)
     try { setD(await api(`/prognoza-ruchu?dni=${dni}`)) }
     catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [dni, toast])
   useEffect(() => { load() }, [load])
+
+  // Lista stanowisk do wyboru celu auto-obsady (domyślnie pierwsze stanowisko Sali).
+  useEffect(() => {
+    api('/stanowiska').then((lista) => {
+      const arr = Array.isArray(lista) ? lista : []
+      setStanowiska(arr)
+      const sala = arr.find((s) => (s.nazwa || '').toLowerCase().startsWith('sala')) || arr[0]
+      if (sala) setStanId(String(sala.id))
+    }).catch(() => {})
+  }, [])
+
+  const zastosuj = async () => {
+    if (!stanId) { toast('Wybierz stanowisko.', 'error'); return }
+    setBusy(true)
+    try {
+      const r = await api('/wymagania/z-prognozy', 'POST', { stanowisko_id: Number(stanId) })
+      toast(`Zastosowano obsadę na ${r.zastosowano} dni (${r.stanowisko}).`, 'success')
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
 
   const maxProg = d ? Math.max(1, ...d.projekcja_7dni.map((p) => p.prognoza)) : 1
 
@@ -97,6 +120,22 @@ export default function PrognozaObsady() {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Auto-obsada: zamień prognozę w wymagania grafiku jednym klikiem. */}
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-mint/30 bg-mint/[0.05] p-4">
+            <div className="min-w-[200px] flex-1">
+              <div className="text-sm font-semibold text-ink">Zastosuj sugerowaną obsadę do grafiku</div>
+              <div className="text-xs text-muted">Utworzy wymagania na 7 dni dla wybranego stanowiska (istniejące na ten dzień nadpisze).</div>
+            </div>
+            <select value={stanId} onChange={(e) => setStanId(e.target.value)}
+                    className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-mint">
+              {stanowiska.map((s) => <option key={s.id} value={s.id}>{s.nazwa}</option>)}
+            </select>
+            <button onClick={zastosuj} disabled={busy || !stanId}
+                    className="rounded-xl bg-accent-gradient px-4 py-2 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
+              {busy ? 'Stosuję…' : 'Zastosuj do wymagań'}
+            </button>
           </div>
 
           <div className="rounded-xl border border-line bg-surface-2 px-4 py-3 text-xs text-muted">

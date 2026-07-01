@@ -28,6 +28,41 @@ def test_prognoza_trend_na_pelnym_oknie_niezaleznie_od_dni(admin_client, db):
     assert admin_client.get("/api/prognoza-ruchu?dni=30").json()["trend_28d_proc"] == 0.0
 
 
+def test_auto_obsada_z_prognozy(admin_client, db):
+    """Auto-obsada: POST /api/wymagania/z-prognozy tworzy wymagania na 7 dni z sugerowanej obsady.
+    Historia ~40 rachunków/dzień → ceil(40/20)=2 (domyślny config)."""
+    import factories
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    today = dt.date.today()
+    for k in range(1, 85):                        # 12 tygodni historii po 40 rachunków
+        db.add(models.StolikiHistoria(data=today - dt.timedelta(days=k), liczba=40))
+    db.commit()
+    r = admin_client.post("/api/wymagania/z-prognozy", json={"stanowisko_id": sala.id}).json()
+    assert r["zastosowano"] == 7 and r["stanowisko"] == "Sala"
+    wym = db.query(models.WymaganiaDnia).filter_by(stanowisko_id=sala.id).all()
+    assert len(wym) == 7 and all(w.liczba_osob == 2 for w in wym)
+
+
+def test_auto_obsada_upsert_bez_dubli(admin_client, db):
+    import factories
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    admin_client.post("/api/wymagania/z-prognozy", json={"stanowisko_id": sala.id})
+    admin_client.post("/api/wymagania/z-prognozy", json={"stanowisko_id": sala.id})
+    assert db.query(models.WymaganiaDnia).filter_by(stanowisko_id=sala.id).count() == 7   # nie 14
+
+
+def test_auto_obsada_zle_stanowisko_404(admin_client):
+    assert admin_client.post("/api/wymagania/z-prognozy", json={"stanowisko_id": 99999}).status_code == 404
+
+
+def test_auto_obsada_tylko_admin(make_employee_client, db):
+    import factories
+    sala = factories.StanowiskoFactory(nazwa="Sala")
+    p = factories.PracownikFactory()
+    ce, _ = make_employee_client(p)
+    assert ce.post("/api/wymagania/z-prognozy", json={"stanowisko_id": sala.id}).status_code == 403
+
+
 def test_prognoza_srednia_per_dzien_tygodnia(admin_client, db):
     today = dt.date.today()
     pon = today - dt.timedelta(days=today.weekday())     # najbliższy poniedziałek wstecz (weekday 0)

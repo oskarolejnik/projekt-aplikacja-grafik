@@ -1635,6 +1635,57 @@ def prognoza_ruchu(dni: int = 90, db: Session = Depends(get_db)):
             "projekcja_7dni": projekcja}
 
 
+def _projekcja_obsady(db):
+    """Projekcja 7 dni: prognoza (śr. rachunki wg dnia tygodnia z ostatnich 90 dni) + sugerowana
+    obsada (ceil(prognoza / rachunki_na_osobe), min obsada_min z LokalConfig). Współdzielona baza
+    dla /api/prognoza-ruchu (informacyjnie) i /api/wymagania/z-prognozy (auto-obsada)."""
+    today = date.today()
+    rows = db.query(models.StolikiHistoria).filter(
+        models.StolikiHistoria.data >= today - timedelta(days=90),
+        models.StolikiHistoria.data <= today).all()
+    wg = defaultdict(list)
+    for r in rows:
+        wg[r.data.weekday()].append(int(r.liczba or 0))
+    srednie = {w: (round(sum(v) / len(v), 1) if v else 0) for w, v in wg.items()}
+    cfg = get_lokal_config(db)
+    na_osobe = max(1, int(cfg.obsada_rachunki_na_osobe or 20))
+    obsada_min = max(1, int(cfg.obsada_min or 1))
+    out = []
+    for i in range(1, 8):
+        d = today + timedelta(days=i)
+        prog = srednie.get(d.weekday(), 0)
+        obsada = max(obsada_min, math.ceil(prog / na_osobe)) if prog else obsada_min
+        out.append({"data": str(d), "nazwa": _DNI_TYG[d.weekday()], "prognoza": prog,
+                    "sugerowana_obsada": obsada})
+    return out
+
+
+@app.post("/api/wymagania/z-prognozy", status_code=200)
+def wymagania_z_prognozy(dane: schemas.WymaganiaZPrognozy, db: Session = Depends(get_db)):
+    """Auto-obsada: tworzy/aktualizuje wymagania na najbliższe 7 dni z sugerowanej obsady prognozy,
+    na wskazanym stanowisku (zwykle Sala). Upsert po (data, stanowisko, godz_od=None, rewir=None)."""
+    stan = db.get(models.Stanowisko, dane.stanowisko_id)
+    if stan is None:
+        raise HTTPException(404, "Stanowisko nie istnieje.")
+    projekcja = _projekcja_obsady(db)
+    zastosowano = 0
+    for p in projekcja:
+        d = date.fromisoformat(p["data"])
+        osob = int(p["sugerowana_obsada"])
+        if osob < 1:
+            continue
+        istn = db.query(models.WymaganiaDnia).filter_by(
+            data=d, stanowisko_id=stan.id, godz_od=None, rewir=None).first()
+        if istn:
+            istn.liczba_osob = osob
+        else:
+            db.add(models.WymaganiaDnia(data=d, stanowisko_id=stan.id, godz_od=None,
+                                        rewir=None, liczba_osob=osob))
+        zastosowano += 1
+    db.commit()
+    return {"zastosowano": zastosowano, "stanowisko": stan.nazwa, "projekcja": projekcja}
+
+
 # ── KALENDARZ IMPREZ ──────────────────────────────────────────────────────────
 
 def _termin_out(t: models.Termin, zadatek_kp: float = 0.0) -> dict:

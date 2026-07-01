@@ -12,6 +12,10 @@ class NapiwkiIn(BaseModel):
     kwota: float = 0.0
     sposob: str = "godziny"
 
+class WymaganiaZPrognozy(BaseModel):
+    """Zastosowanie sugerowanej obsady z prognozy do wymagań na najbliższe 7 dni (dla stanowiska)."""
+    stanowisko_id: int
+
 class OgloszenieIn(BaseModel):
     """Utworzenie/edycja ogłoszenia zespołowego (tablica manager→pracownicy)."""
     tytul: str
