@@ -34,6 +34,7 @@ import Eksport from './components/tabs/Eksport'
 import Ogloszenia from './components/tabs/Ogloszenia'
 import Napiwki from './components/tabs/Napiwki'
 import Zgodnosc from './components/tabs/Zgodnosc'
+import ZapytaniaImprez from './components/tabs/ZapytaniaImprez'
 
 const TABS = [
   { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', group: 'Pulpit', title: 'Pulpit właściciela', Comp: Pulpit },
@@ -53,6 +54,7 @@ const TABS = [
   { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', group: 'Operacje', title: 'Grafik sprzątania sal', Comp: Sprzatanie, modul: 'modul_sprzatanie' },
   { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', group: 'Operacje', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },
   { id: 'godziny', label: 'Raport godzin', icon: 'clock', group: 'Operacje', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
+  { id: 'zapytania-imprez', label: 'Zapytania o imprezy', icon: 'sparkles', group: 'Operacje', title: 'Zapytania o imprezy', Comp: ZapytaniaImprez, modul: 'modul_imprezy' },
   { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', group: 'Operacje', title: 'Kalendarz imprez', Comp: KalendarzImprez, modul: 'modul_imprezy' },
   { id: 'zadatki', label: 'Zadatki', icon: 'clipboard', group: 'Operacje', title: 'Zadatki (KP) — przypisania', Comp: Zadatki, modul: 'modul_imprezy' },
   { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', group: 'Operacje', title: 'Zeszyt kasowy', Comp: ZeszytPanel, modul: 'modul_rozliczenia' },

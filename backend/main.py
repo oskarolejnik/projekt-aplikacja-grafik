@@ -40,6 +40,7 @@ from routers.gielda import router as gielda_router
 from routers.plan_sali import router as plan_sali_router
 from routers.ogloszenia import router as ogloszenia_router
 from routers.zgodnosc import router as zgodnosc_router
+from routers.imprezy_ai import router as imprezy_ai_router
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -51,6 +52,7 @@ app.include_router(gielda_router)      # giełda wymiany zmian (roadmapa v1.5)
 app.include_router(plan_sali_router)   # plan sali — rozmieszczenie stolików + status (roadmapa v1.5)
 app.include_router(ogloszenia_router)  # ogłoszenia zespołowe — tablica manager→pracownicy (roadmapa v1.5)
 app.include_router(zgodnosc_router)    # zgodność lokalu — badania załogi + terminy (roadmapa v2, oś B)
+app.include_router(imprezy_ai_router)  # skrzynka zapytań o imprezy — ekstrakcja+dostępność+szkic (roadmapa v2, oś A)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
