@@ -1,0 +1,1209 @@
+[
+ {
+  "nr": 9,
+  "nazwa": "Skrzynka zapytań o imprezy z AI",
+  "soczewka": "ai",
+  "opis": "Właściciel wkleja (lub podpina skrzynkę e-mail/Messengera) zapytanie typu 'szukamy sali na wesele, ~120 osób, sierpień 2027, budżet 250 zł/os'. Claude tool-use wyciąga datę, liczbę gości i budżet, sprawdza dostępność w istniejącym kalendarzu imprez i generuje gotowy szkic odpowiedzi z wolnymi terminami oraz wstępnie wypełnioną kartę imprezy do zatwierdzenia jednym kliknięciem.",
+  "wartosc": "Odpowiedź na zapytanie weselne w 2 minuty zamiast 2 dni — a pary rezerwują u tego, kto odpisze pierwszy, więc każda godzina zwłoki to realnie utracone imprezy warte 20-50 tys. zł.",
+  "wysilek": "M",
+  "wyroznik": "Żaden polski system gastro nie zamyka pętli od maila z zapytaniem do wpisu w kalendarzu imprez — konkurencja ma CRM-y, ale to człowiek musi wszystko przepisać ręcznie.",
+  "impact": 4.3,
+  "feasibility": 4,
+  "moat": 4,
+  "score": 5.01,
+  "glosyTop5": 3,
+  "uwagi": [
+   "Szybkość odpowiedzi = wygrane wesela; świetne demo sprzedażowe",
+   "Wersja wklej-tekst prosta; integracja skrzynek to osobny etap",
+   "szybkość odpowiedzi wygrywa rezerwacje wesel — realna przewaga"
+  ]
+ },
+ {
+  "nr": 60,
+  "nazwa": "Portal klienta imprezy weselnej",
+  "soczewka": "konkurencja",
+  "opis": "Publiczna, tokenowa strona dla pary młodej / organizatora imprezy: aktualna liczba gości, wybory menu, harmonogram wpłat i status zadatków, ustalenia i pliki w jednym wątku zamiast dziesiątek telefonów i maili. Zmiany klienta trafiają prosto do karty imprezy i do prognozy obsady.",
+  "wartosc": "Manager domu weselnego odzyskuje kilka godzin tygodniowo na 'a ile ostatecznie będzie gości?', a ustalenia mają ślad pisemny, który ucina spory przy rozliczeniu.",
+  "wysilek": "M",
+  "wyroznik": "MojStolik, resOS i cała konkurencja rezerwacyjna kończy na stolikach — segment domów weselnych i imprez okolicznościowych w Polsce nie ma żadnego dedykowanego narzędzia.",
+  "impact": 4.7,
+  "feasibility": 4,
+  "moat": 4.3,
+  "score": 4.93,
+  "glosyTop5": 2,
+  "uwagi": [
+   "Duplikat #4 bez płatności — szybsza wersja MVP dla core ICP",
+   "Tokenowa strona jak istniejący widget; prostsza wersja #4 bez płatności",
+   "duplikat #4, lżejsza wersja tokenowa — dobry start"
+  ]
+ },
+ {
+  "nr": 11,
+  "nazwa": "Antyfraud POS: storna i rabaty",
+  "soczewka": "ai",
+  "opis": "Agent lokalny czyta z bazy Gastro storna, anulacje, rabaty i otwarte rachunki per kelner. Prosty model statystyczny porównuje każdego kelnera do reszty zespołu (z poprawką na zmiany i ruch) i flaguje odstających, a Claude raz w tygodniu pisze właścicielowi zrozumiałe podsumowanie: 'Marek stornuje 3x częściej niż zespół, głównie napoje po 22:00'.",
+  "wartosc": "Nadużycia kelnerskie to w gastro typowo 1-3% obrotu — wyłapanie jednego 'kombinującego' pracownika zwraca abonament na lata.",
+  "wysilek": "M",
+  "wyroznik": "Systemy POS pokazują surowe raporty stornowań, ale nikt nie robi porównania statystycznego per pracownik z wnioskami po polsku — to funkcja, dla której właściciel kupi Pro bez mrugnięcia.",
+  "impact": 4.3,
+  "feasibility": 3.7,
+  "moat": 4,
+  "score": 4.9,
+  "glosyTop5": 3,
+  "uwagi": [
+   "Właściciele kupują antykradzieżowe od ręki; działa tylko przy POS Gastro",
+   "Agent już czyta Gastro; komunikować jako flagi, nie oskarżenia",
+   "właściciele to kupią od ręki; drażliwe kadrowo"
+  ]
+ },
+ {
+  "nr": 33,
+  "nazwa": "Strażnik badań i sanepidu",
+  "soczewka": "hr",
+  "opis": "Cyfrowa teczka pracownika: orzeczenia sanitarno-epidemiologiczne (dawna książeczka sanepidowska), badania medycyny pracy, szkolenia BHP — ze skanem i datą ważności. System przypomina Web Pushem (istniejący kanał) 30/14/3 dni przed wygaśnięciem, a auto-grafik (istniejący strażnik prawa pracy) blokuje lub flaguje wstawienie do zmiany osoby z przeterminowanymi dokumentami.",
+  "wartosc": "Zero mandatów przy kontroli sanepidu/PIP — kary za brak orzeczeń to setki-tysiące złotych, a właściciel dziś pilnuje tego w segregatorze albo wcale.",
+  "wysilek": "M",
+  "wyroznik": "Kadromierz i inEwi trzymają dokumenty w szufladzie — Lokalo jako jedyne łączy ważność badań bezpośrednio z układaniem grafiku (przeterminowany = nie wchodzi na zmianę).",
+  "impact": 4,
+  "feasibility": 4.7,
+  "moat": 4,
+  "score": 4.52,
+  "glosyTop5": 1,
+  "uwagi": [
+   "Duplikat #58; blokada w auto-grafiku to unikalny wyróżnik",
+   "CRUD+push+hak do auto-grafiku — wszystko już w systemie; realny ból",
+   "pokrywa się z #58; blokada w grafiku unikalna"
+  ]
+ },
+ {
+  "nr": 4,
+  "nazwa": "Portal Pary Młodej",
+  "soczewka": "monetyzacja",
+  "opis": "Płatny add-on dla domów weselnych: para młoda dostaje własne logowanie, w którym wybiera menu, sama rozsadza gości na istniejącym planie sali (drag&drop), śledzi harmonogram wpłat i płaci raty online. Manager widzi wszystko na bieżąco w Lokalo zamiast prowadzić dziesiątki telefonów i maili.",
+  "wartosc": "Dom weselny robiący 40 wesel rocznie oszczędza godziny ustaleń przy każdym z nich, a add-on za 149-199 zł/mc plus 1% od rat online daje Lokalo 2-3x wyższy przychód z takiego klienta.",
+  "wysilek": "L",
+  "wyroznik": "Systemy bankietowe obsługują managera — portal, w którym to para sama klika usadzenie gości zsynchronizowane z planem sali i grafikiem obsługi, nie istnieje na polskim rynku.",
+  "impact": 4.7,
+  "feasibility": 3.3,
+  "moat": 4.3,
+  "score": 4.41,
+  "glosyTop5": 1,
+  "uwagi": [
+   "Duplikat #60 w wersji z płatnościami rat online",
+   "Buduje na planie sali i imprezach; raty online fazować później",
+   "duplikat #60; killer dla domów weselnych, koniec telefonów"
+  ]
+ },
+ {
+  "nr": 58,
+  "nazwa": "Terminarz zgodności lokalu i załogi",
+  "soczewka": "konkurencja",
+  "opis": "Jedno miejsce pilnujące terminów: badania sanitarno-epidemiologiczne każdego pracownika, koncesja alkoholowa (oświadczenie i raty 31.01/31.05/30.09), przeglądy gaśnic, wentylacji, szkolenia BHP. Alerty z wyprzedzeniem 30/14/3 dni, a strażnik grafiku ostrzega przy planowaniu zmiany osobie z przeterminowanymi badaniami.",
+  "wartosc": "Zero ryzyka mandatu z sanepidu za nieważną książeczkę i zero utraty koncesji za spóźnioną ratę — a to są kary idące w tysiące złotych i realne zamknięcia lokali.",
+  "wysilek": "S",
+  "wyroznik": "Żaden polski system grafikowy ani rezerwacyjny nie pilnuje 'papierów lokalu' — konkurencja kończy na kodeksie pracy, Lokalo domyka całą zgodność gastro.",
+  "impact": 4,
+  "feasibility": 5,
+  "moat": 3,
+  "score": 4.3,
+  "glosyTop5": 1,
+  "uwagi": [
+   "Nakłada się z #33; najtańszy compliance-win na liście",
+   "Czyste terminy+alerty na istniejącym Web Push; pokrywa się z #33",
+   "pokrywa się z #33; raty koncesji alkoholowej = realny strach"
+  ]
+ },
+ {
+  "nr": 40,
+  "nazwa": "Portfel pracownika na żywo",
+  "soczewka": "hr",
+  "opis": "Pracownik widzi w swojej strefie licznik 'zarobiłeś już w tym miesiącu X zł' liczony z danych RCP, które Lokalo i tak przetwarza, plus symulację 'weź tę zmianę z giełdy = +180 zł'. Do tego prosty wniosek o zaliczkę z limitem procentowym, akceptowany jednym kliknięciem managera i automatycznie potrącany z wypłaty.",
+  "wartosc": "Koniec pytań 'ile będę miał wypłaty?' i ręcznego liczenia zaliczek w zeszycie — a widoczny licznik zarobków realnie podbija chęć brania dodatkowych zmian.",
+  "wysilek": "M",
+  "wyroznik": "Wypłata na żądanie (EWA) to w Polsce osobne fintechy z prowizją — Lokalo daje 80% tej wartości za darmo w abonamencie, bo dane o zarobkach co do minuty już ma.",
+  "impact": 4,
+  "feasibility": 4,
+  "moat": 3.7,
+  "score": 4.19,
+  "glosyTop5": 1,
+  "uwagi": [
+   "Retencja załogi + argument rekrutacyjny; zaliczki sprawdzić pod kątem EWA",
+   "Dane z RCP już liczone; zaliczka to workflow, nie kredytowanie",
+   "zaliczki to codzienność w gastro; mocny argument retencyjny"
+  ]
+ },
+ {
+  "nr": 41,
+  "nazwa": "Skrzynka kosztów z KSeF",
+  "soczewka": "integracje",
+  "opis": "Lokalo łączy się z API KSeF 2.0 i samo pobiera faktury zakupowe lokalu (hurtownia, browar, pralnia, media), które od kwietnia 2026 i tak lądują w systemie. Każda faktura jest automatycznie przypisana do dostawcy i kategorii kosztu, a ceny pozycji porównywane między dostawami — alert, gdy masło czy schab podrożały skokowo. Komplet faktur z miesiąca leci jednym kliknięciem do biura rachunkowego.",
+  "wartosc": "Koniec segregatora z papierowymi fakturami i przepisywania kosztów — właściciel widzi realne koszty lokalu na bieżąco, a nie 20-go następnego miesiąca u księgowej, i wyłapuje podwyżki cen dostawców w dzień, nie w kwartał.",
+  "wysilek": "L",
+  "wyroznik": "Cała branża traktuje KSeF jako przykry obowiązek wystawiania — Lokalo jako pierwsze robi z niego darmowe, urzędowe źródło danych o kosztach lokalu.",
+  "impact": 4,
+  "feasibility": 3.3,
+  "moat": 3.7,
+  "score": 3.97,
+  "glosyTop5": 1,
+  "uwagi": [
+   "KSeF obowiązkowy od 2026 — idealny timing sprzedażowy",
+   "API KSeF 2.0 świeże, auth certyfikatami, ryzyko zmian po starcie",
+   "obowiązkowy KSeF 2026 = idealny timing wejścia"
+  ]
+ },
+ {
+  "nr": 49,
+  "nazwa": "Wypożyczalnia pracowników między lokalami",
+  "soczewka": "skala",
+  "opis": "Właściciel 2-3 lokali łączy je w sieć: pracownik ma jedno konto, a auto-grafik widzi jego dyspozycyjność i kwalifikacje we wszystkich lokalach naraz. Gdy w jednym brakuje kelnera na sobotnie wesele, system podpowiada wolnych ludzi z drugiego lokalu, a istniejąca giełda zmian zaczyna działać cross-lokal.",
+  "wartosc": "Zamiast dzwonić w panice po znajomych, właściciel łata braki własnymi sprawdzonymi ludźmi — zero kosztów agencji pracy i mniej zmian obsadzonych 'byle kim'.",
+  "wysilek": "L",
+  "wyroznik": "Żaden polski grafik gastro nie robi obsady między lokalami, a im więcej lokali klient wpina, tym trudniej mu odejść od Lokalo.",
+  "impact": 3.7,
+  "feasibility": 2.7,
+  "moat": 4.3,
+  "score": 3.86,
+  "glosyTop5": 1,
+  "uwagi": [
+   "Wymaga przebudowy architektury pod cross-instance; nisza multi-lokal",
+   "Konflikt z architekturą instance-per-tenant — potrzebna centralna tożsamość",
+   "dokładnie mój przypadek: 2 restauracje + dom weselny"
+  ]
+ },
+ {
+  "nr": 12,
+  "nazwa": "Radar odejść pracowników",
+  "soczewka": "ai",
+  "opis": "Scoring liczony wyłącznie na danych, które Lokalo już ma: spadająca dyspozycyjność, coraz więcej zmian oddawanych na giełdzie, rosnące spóźnienia z RCP, malejąca liczba branych nadgodzin. Gdy wskaźnik przekroczy próg, właściciel dostaje dyskretny alert: 'Kasia wykazuje sygnały odejścia — 4 oddane zmiany w miesiąc, dyspozycyjność spadła o połowę'.",
+  "wartosc": "Wymiana jednego kelnera to 2-4 tygodnie dziury w grafiku i koszty wdrożenia — tygodniowe wyprzedzenie pozwala porozmawiać i zatrzymać człowieka, zanim złoży wypowiedzenie w piątek przed weselem.",
+  "wysilek": "S",
+  "wyroznik": "Nikt na rynku nie robi predykcji rotacji dla gastro, a Lokalo ma unikalny komplet sygnałów (dyspozycje + giełda + RCP) w jednym miejscu — konkurencyjne grafiki widzą tylko wycinek.",
+  "impact": 3,
+  "feasibility": 5,
+  "moat": 3.3,
+  "score": 3.78,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #36/#63; tani, unikalne dane, ale sam nie sprzedaje abonamentu",
+   "Duplikat #36 i #63; czysto istniejące dane, effort S",
+   "duplikat #36/#63; dobry manager i tak to widzi"
+  ]
+ },
+ {
+  "nr": 29,
+  "nazwa": "HACCP w telefonie pracownika",
+  "soczewka": "kuchnia",
+  "opis": "Cyfrowe checklisty sanitarne przypisane do zmiany z grafiku: rano osoba otwierająca dostaje na telefon listę 'temperatury lodówek, czystość, daty przydatności', klika i wpisuje odczyty w 3 minuty. Braki eskalują push-em do managera, a całość składa się w gotowy do wydruku rejestr na kontrolę sanepidu.",
+  "wartosc": "Segregatory z pomiętymi kartkami znikają, kontrola sanepidu przestaje być paniką ('wydrukuj rejestr z ostatnich 3 miesięcy' = jeden klik), a właściciel widzi, że kuchnia faktycznie mierzy temperatury, a nie uzupełnia wstecz.",
+  "wysilek": "M",
+  "wyroznik": "Zadania HACCP przypinają się do osoby realnie stojącej na zmianie (integracja z grafikiem i RCP) — samodzielne appki HACCP nie wiedzą, kto dziś pracuje, Lokalo wie.",
+  "impact": 4,
+  "feasibility": 4,
+  "moat": 3.3,
+  "score": 3.78,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #57; strach przed sanepidem dobrze sprzedaje",
+   "Pokrywa się z #57 — zbudować raz; zero zależności zewnętrznych",
+   "duplikat #57; spięcie z grafikiem/RCP unikalne"
+  ]
+ },
+ {
+  "nr": 57,
+  "nazwa": "Cyfrowy HACCP pod kontrolę sanepidu",
+  "soczewka": "konkurencja",
+  "opis": "Rejestry temperatur lodówek, mycia i dezynfekcji oraz checklisty GHP/GMP prowadzone w telefonie przez osoby realnie obecne na zmianie (spięte z grafikiem i RCP). Jeden przycisk 'Teczka na kontrolę' generuje komplet PDF-ów z podpisami, datami i lukami do uzupełnienia. Alerty, gdy rejestr nie został wypełniony do godziny X.",
+  "wartosc": "Właściciel oszczędza 100-200 zł/mc na osobnej apce HACCP i przechodzi kontrolę sanepidu bez nocnego uzupełniania zeszytów — od 2025 r. wymogi dokumentacyjne są ostrzejsze.",
+  "wysilek": "M",
+  "wyroznik": "Kadromierz/inEwi pilnują kodeksu pracy, apki HACCP nie znają grafiku — tylko Lokalo wie, KTO był na zmianie, więc wpisy w rejestrach są wiarygodne i automatycznie przypisane.",
+  "impact": 4,
+  "feasibility": 4,
+  "moat": 3.3,
+  "score": 3.78,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #29; spięcie z RCP/grafikiem wyróżnia na tle konkurencji",
+   "Pokrywa się z #29; spięcie z grafikiem/RCP to wyróżnik vs konkurencja",
+   "duplikat #29; 'teczka na kontrolę' to mocny hak sprzedażowy"
+  ]
+ },
+ {
+  "nr": 63,
+  "nazwa": "Radar rotacji — kto zaraz odejdzie",
+  "soczewka": "konkurencja",
+  "opis": "Analiza sygnałów, które Lokalo już ma: spadająca dyspozycyjność, oddawanie zmian na giełdzie, malejąca liczba godzin, brane L4 — składane w prosty wskaźnik 'ryzyko odejścia' przy pracowniku. Do tego licznik kosztu rotacji (ile kosztuje wdrożenie nowej osoby na tym stanowisku).",
+  "wartosc": "Właściciel rozmawia z kluczowym kucharzem miesiąc PRZED wypowiedzeniem, a nie dzień po — jedno zatrzymane odejście to oszczędność tygodni szukania i szkolenia następcy.",
+  "wysilek": "S",
+  "wyroznik": "Cała konkurencja pomaga układać grafik, nikt nie pomaga zatrzymać ludzi — a tylko Lokalo ma dane behawioralne (dyspozycje, giełda, RCP), z których to widać.",
+  "impact": 3,
+  "feasibility": 5,
+  "moat": 3.3,
+  "score": 3.78,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #12/#36; wersja z licznikiem kosztu rotacji najlepsza",
+   "Duplikat #12 i #36; licznik kosztu rotacji to dobry dodatek",
+   "duplikat #12/#36; licznik kosztu rotacji to dobry dodatek"
+  ]
+ },
+ {
+  "nr": 2,
+  "nazwa": "Napiwki QR z auto-podziałem",
+  "soczewka": "monetyzacja",
+  "opis": "Kod QR na stoliku lub paragonie prowadzi do strony, na której gość zostawia napiwek BLIK-iem w 10 sekund, bez instalowania czegokolwiek. Kwota wpada automatycznie do istniejącego modułu podziału napiwków według przepracowanych zmian z RCP, a Lokalo pobiera 1-1,5% prowizji od transakcji.",
+  "wartosc": "Przy ~80% płatności kartą napiwki gotówkowe wysychają — cyfrowy napiwek odzyskuje te pieniądze dla zespołu i pomaga utrzymać ludzi bez podnoszenia stawek.",
+  "wysilek": "M",
+  "wyroznik": "Aplikacje napiwkowe na rynku są oderwane od grafiku — tu napiwek sam rozdziela się według realnie przepracowanych godzin, czego nie ma żaden konkurent.",
+  "impact": 3.7,
+  "feasibility": 3.3,
+  "moat": 3.3,
+  "score": 3.74,
+  "glosyTop5": 1,
+  "uwagi": [
+   "Duplikat #61; wypłaty napiwków pracownikom = ryzyko pośrednictwa płatniczego",
+   "Prowizja 1-1,5% poniżej kosztów PSP; podatkowe traktowanie napiwków",
+   "duplikat #61; auto-podział z RCP realnie wyróżnia"
+  ]
+ },
+ {
+  "nr": 36,
+  "nazwa": "Radar rotacji — kto zaraz odejdzie",
+  "soczewka": "hr",
+  "opis": "Prosty scoring ryzyka odejścia liczony z danych, które Lokalo już ma: rosnące oddawanie zmian na giełdę, malejąca dyspozycyjność, spóźnienia z RCP, spadek liczby przepracowanych godzin i napiwków. Manager dostaje dyskretny alert: 'Kasia od 3 tygodni wykazuje sygnały wypalenia — porozmawiaj', z wykresem trendu zamiast zgadywania.",
+  "wartosc": "Wyłapanie jednej osoby przed wypowiedzeniem to oszczędność 3-5 tys. zł na rekrutacji i wdrożeniu następcy plus uniknięcie dziury w grafiku w sezonie.",
+  "wysilek": "M",
+  "wyroznik": "To czysta renta z danych, które konkurencja w ogóle nie zbiera w jednym miejscu (grafik + RCP + giełda + napiwki) — funkcja niemożliwa do skopiowania bez całego stosu Lokalo.",
+  "impact": 3,
+  "feasibility": 4.7,
+  "moat": 3.3,
+  "score": 3.67,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #12/#63",
+   "Duplikat #12 i #63",
+   "duplikat #12/#63"
+  ]
+ },
+ {
+  "nr": 48,
+  "nazwa": "Konektory polskich POS-ów chmurowych",
+  "soczewka": "integracje",
+  "opis": "Lokalny agent Lokalo umie już czytać Gastro po MS SQL — ten pomysł dodaje adaptery do chmurowych POS-ów popularnych w Polsce: Dotykačka, GoPOS, POSbistro (API/webhooki sprzedaży). Utargi i rachunki wpadają do rozliczenia dnia, pulpitu KPI i prognozy ruchu niezależnie od tego, na czym bije kasa.",
+  "wartosc": "Lokalo przestaje być produktem tylko dla lokali na Gastro — właściciel nie zmienia kasy, żeby mieć grafiki, rozliczenia i prognozy, więc próg wejścia spada do zera.",
+  "wysilek": "L",
+  "wyroznik": "Konkurenci każą wybrać ich POS albo nic — Lokalo gra rolę szwajcarskiego scyzoryka nad dowolną kasą, co dla solo-deva jest tańsze niż budowa własnego POS-a i otwiera cały rynek.",
+  "impact": 4.3,
+  "feasibility": 3,
+  "moat": 3.7,
+  "score": 3.67,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Strategiczne: poszerza rynek poza klientów z Gastro",
+   "Strategicznie kluczowe (rynek poza Gastro), ale 3 API i umowy partnerskie",
+   "warunek wejścia na szerszy rynek, nie feature dla mnie"
+  ]
+ },
+ {
+  "nr": 42,
+  "nazwa": "Faktury weselne prosto do KSeF",
+  "soczewka": "integracje",
+  "opis": "Z rozliczenia imprezy i przyjętego zadatku (KP już jest w systemie) Lokalo wystawia strukturalną fakturę zaliczkową, a po weselu fakturę końcową — od razu w KSeF, z numerem KSeF na wydruku dla klienta. Obsługuje też fakturę do paragonu z NIP, która od 2027 r. musi iść przez KSeF, bo drukowanie jej z kasy przestaje być legalne.",
+  "wartosc": "Właściciel domu weselnego nie kupuje osobnego programu do faktur i nie ryzykuje kar — faktura zaliczkowa do zadatku powstaje w 10 sekund z danych, które i tak już są w Lokalo.",
+  "wysilek": "M",
+  "wyroznik": "Programy do faktur nie znają pojęcia zadatku na wesele, a systemy weselne nie znają KSeF — Lokalo spina jedno z drugim w jednym przepływie.",
+  "impact": 4,
+  "feasibility": 3.3,
+  "moat": 3.3,
+  "score": 3.56,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Must-have dla domów weselnych po wejściu KSeF",
+   "Poprawność VAT faktur zaliczkowych krytyczna — błąd = problem klienta",
+   "faktury zaliczkowe do wesel i tak muszę wystawiać"
+  ]
+ },
+ {
+  "nr": 44,
+  "nazwa": "Stolik widoczny w Google",
+  "soczewka": "integracje",
+  "opis": "Podpięcie istniejącego widgetu rezerwacji Lokalo pod program Reserve with Google oraz Google Business Profile API. Gość klika \"Zarezerwuj stolik\" bezpośrednio w Mapach Google lub wynikach wyszukiwania, a rezerwacja wpada do planu sali w Lokalo; w drugą stronę Lokalo automatycznie aktualizuje w Google godziny otwarcia, święta i przerwy techniczne ustawione w systemie.",
+  "wartosc": "Darmowe rezerwacje z miejsca, gdzie gość naprawdę szuka restauracji — bez płacenia prowizji portalom i bez wstydu za nieaktualne godziny otwarcia w Google w Wigilię.",
+  "wysilek": "L",
+  "wyroznik": "Reserve with Google mają w Polsce głównie zagraniczne molochy typu TheFork — polski system z tą integracją od razu gra w wyższej lidze widoczności.",
+  "impact": 4.7,
+  "feasibility": 2.7,
+  "moat": 3.3,
+  "score": 3.56,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Reserve with Google wymaga akceptacji partnerskiej — bardzo trudna dla solo-deva",
+   "Reserve with Google wymaga formalnego partnerstwa i certyfikacji — miesiące",
+   "parytet z MojStolik, ale realnie napędza rezerwacje"
+  ]
+ },
+ {
+  "nr": 54,
+  "nazwa": "Panel partnera dla księgowych i doradców",
+  "soczewka": "skala",
+  "opis": "Konto partnerskie spinające wiele lokali-klientów: księgowa widzi w jednym miejscu (read-only) eksporty płac, rozliczenia kasowe i raporty godzin wszystkich swoich gastro-klientów, bez logowania do każdej instancji osobno. Do tego link polecający z prowizją od abonamentu; technicznie cienki centralny serwis agregujący tokeny dostępu do instancji.",
+  "wartosc": "Właściciel przestaje co miesiąc wysyłać księgowej XLSX-y mailem, a Lokalo zdobywa kanał sprzedaży — jedna księgowa od gastro obsługuje 10-30 lokali.",
+  "wysilek": "M",
+  "wyroznik": "Solo-dev nie zbuduje działu handlowego — program partnerski to jedyny skalowalny kanał dystrybucji, którego polscy konkurenci w gastro-back-office nie mają.",
+  "impact": 3.7,
+  "feasibility": 3.3,
+  "moat": 3.7,
+  "score": 3.56,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Księgowe jako kanał dystrybucji — realnie obniża CAC",
+   "Księgowe = kanał dystrybucji; bezpieczeństwo tokenów kluczowe",
+   "księgowa jako kanał sprzedaży — sprytna dystrybucja"
+  ]
+ },
+ {
+  "nr": 8,
+  "nazwa": "Ogłoszenia o pracę z prognozy obsady",
+  "soczewka": "monetyzacja",
+  "opis": "Gdy prognoza obsady wykrywa trwały niedobór (np. brak kelnera w każdą sobotę), Lokalo proponuje wystawienie ogłoszenia: publiczny landing aplikacyjny lokalu, skrzynka kandydatów i proste etapy rekrutacji zamiast Messengera i karteczek przy barze. Płatne per aktywne ogłoszenie (np. 49 zł/mc) albo w pakiecie Premium.",
+  "wartosc": "Wakat na sobotnie zmiany zamyka się szybciej, a każda niedoobsadzona sobota to realnie utracony utarg i wypalona reszta zespołu.",
+  "wysilek": "M",
+  "wyroznik": "Żaden system grafikowy w Polsce nie domyka pętli \"system sam wykrył brak rąk do pracy, więc sam pomógł zatrudnić\".",
+  "impact": 3,
+  "feasibility": 4,
+  "moat": 3.3,
+  "score": 3.44,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #64; trigger z prognozy obsady unikalny",
+   "Duplikat #64; trigger z prognozy obsady to wyróżnik",
+   "duplikat #64; rekrutacja i tak idzie przez Facebooka/OLX"
+  ]
+ },
+ {
+  "nr": 15,
+  "nazwa": "Głosowy raport zamknięcia zmiany",
+  "soczewka": "ai",
+  "opis": "Manager po zamknięciu nagrywa w PWA głosówkę: 'zepsuł się ekspres, Ania zamieniła się z Kasią na piątek, brakuje rozmienionego drobnych, gość zarezerwował salę na komunię 10 maja'. Claude transkrybuje i rozdziela treść na strukturalne wpisy: usterka do zadań, notatka w istniejącym zeszycie, szkic rezerwacji sali — każdy do zatwierdzenia rano jednym tapnięciem.",
+  "wartosc": "Koniec z karteczkami i 'zapomniałem przekazać' — wszystko z zamknięcia trafia w odpowiednie miejsce systemu w 30 sekund, bez siadania do komputera o pierwszej w nocy.",
+  "wysilek": "S",
+  "wyroznik": "To najniższy możliwy próg wejścia do digitalizacji lokalu (mówisz zamiast klikać) — idealny 'moment wow' na demo i funkcja, której nie ma żaden konkurent w PL.",
+  "impact": 3,
+  "feasibility": 4,
+  "moat": 3.3,
+  "score": 3.44,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Świetny wow-efekt w demo, retencja managerów",
+   "Transkrypcja+parsing proste, wpina się w istniejący zeszyt"
+  ]
+ },
+ {
+  "nr": 18,
+  "nazwa": "Lejek opinii Google po wizycie",
+  "soczewka": "goscie",
+  "opis": "Po zamknięciu rezerwacji Lokalo automatycznie wysyła gościowi krótkie 'jak było?' (1-5 gwiazdek). Zadowoleni (4-5) dostają bezpośredni link do wystawienia opinii Google, niezadowoleni trafiają na prywatny formularz do managera — zanim wyleją żal publicznie. Panel pokazuje trend ocen i nierozwiązane skargi.",
+  "wartosc": "Więcej opinii Google to wyższa pozycja w Mapach i realnie pełniejsza sala — lokale robiące taki lejek zbierają 3-5x więcej recenzji, a złe emocje lądują u managera zamiast w internecie.",
+  "wysilek": "M",
+  "wyroznik": "Lokalo jako jedyny wie, KTO faktycznie był (status rezerwacji + CRM), więc prosi o opinię tylko realnych gości we właściwym momencie — nie spamuje na ślepo.",
+  "impact": 4,
+  "feasibility": 4.3,
+  "moat": 2,
+  "score": 3.44,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Sprawdzona kategoria; filtrowanie ocen (gating) narusza regulamin Google",
+   "Filtrowanie 4-5 gwiazdek to review gating — wbrew regulaminowi Google",
+   "filtrowanie ocen (gating) łamie regulamin Google"
+  ]
+ },
+ {
+  "nr": 28,
+  "nazwa": "Produkcja kuchni pod wesela i imprezy",
+  "soczewka": "kuchnia",
+  "opis": "Menu imprezy (moduł imprez już istnieje) łączy się z recepturami: podajesz liczbę gości, a Lokalo generuje listę zakupów w kilogramach per dostawca i harmonogram przygotowań — co robić 2 dni przed, dzień przed, w dniu wesela, z podziałem na osoby z grafiku. Szef kuchni widzi to w swoim widoku.",
+  "wartosc": "Koniec liczenia na kartce 'ile schabu na 120 osób' — zero niedokupionego towaru w sobotę rano i realny koszt talerzyka znany PRZED podpisaniem umowy z parą młodą, więc wycena imprezy przestaje być zgadywanką.",
+  "wysilek": "M",
+  "wyroznik": "Domy weselne to segment, którego nie obsługuje żaden system gastro w Polsce — a Lokalo ma już imprezy, zadatki, grafik i widok szefa kuchni, więc spina wszystko jedną nitką.",
+  "impact": 3.3,
+  "feasibility": 3,
+  "moat": 4,
+  "score": 3.44,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Idealnie pod ICP domów weselnych; nikt tego nie robi",
+   "Wymaga receptur; unikalne sprzężenie imprezy-kuchnia-grafik",
+   "nikt nie robi tego pod domy weselne"
+  ]
+ },
+ {
+  "nr": 39,
+  "nazwa": "Umowy i dokumenty na telefonie",
+  "soczewka": "hr",
+  "opis": "Generator umów zlecenie z szablonów (dominująca forma w gastro, nie wymaga formy pisemnej — wystarczy zwykły podpis elektroniczny w telefonie), aneksy przy zmianie stawki, oświadczenia PIT-2 i zgody RODO. Stawka z umowy zasila automatycznie istniejący moduł wypłat, a dokumenty lądują w teczce pracownika z pilnowaniem terminów.",
+  "wartosc": "Zatrudnienie studenta na weekend w 10 minut bez drukarki i skanera — dziś to godzina papierologii albo praca 'na zeszyt' z ryzykiem kary z PIP.",
+  "wysilek": "L",
+  "wyroznik": "HRappka robi dokumenty, ale nie zna grafiku ani RCP — u Lokalo podpisana umowa od razu ustawia stawkę do wypłat co do minuty, bez przepisywania.",
+  "impact": 4,
+  "feasibility": 3,
+  "moat": 3.3,
+  "score": 3.44,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duży pain administracyjny; ryzyko prawne szablonów i formy podpisu",
+   "Ryzyko prawne szablonów umów — wymaga stałej obsługi prawnej",
+   "realny ból papierologii; ryzyko prawne szablonów umów"
+  ]
+ },
+ {
+  "nr": 59,
+  "nazwa": "Checklisty otwarcia i zamknięcia zmiany",
+  "soczewka": "konkurencja",
+  "opis": "Szablony zadań przypisane do ról na zmianie (otwarcie baru, zamknięcie kuchni, przygotowanie sali na imprezę), które trafiają automatycznie do osób z grafiku danego dnia. Wykonanie potwierdzane odhaczeniem lub zdjęciem, manager widzi na żywo co zrobione, a co wisi.",
+  "wartosc": "Właściciel przestaje dzwonić wieczorem 'czy wyłączyliście frytkownicę' — standard lokalu trzyma się sam nawet przy nowym pracowniku, co przy rotacji w gastro oszczędza godziny szkoleń tygodniowo.",
+  "wysilek": "M",
+  "wyroznik": "To model amerykańskiego Jolt/7shifts, którego w Polsce nikt nie oferuje — a tylko system znający grafik może wysłać zadanie do tego, kto faktycznie dziś pracuje.",
+  "impact": 3.3,
+  "feasibility": 4,
+  "moat": 3,
+  "score": 3.44,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Auto-przypisanie zadań z grafiku to lekki wyróżnik; podnosi retencję",
+   "Auto-przypisanie z grafiku odróżnia od generycznych checklist",
+   "przypisanie zadań z grafiku dnia podnosi wykonanie"
+  ]
+ },
+ {
+  "nr": 61,
+  "nazwa": "Napiwki QR prosto do podziału",
+  "soczewka": "konkurencja",
+  "opis": "Naklejka z QR na stoliku lub kod na rachunku — gość płaci napiwek BLIK-iem/kartą, kwota wpada do istniejącego modułu podziału napiwków i rozlicza się automatycznie według zmian z grafiku. Bez terminala, bez gotówki, bez zbierania do słoika.",
+  "wartosc": "W lokalach, gdzie 80%+ płatności jest bezgotówkowa, kelnerzy odzyskują napiwki, które dziś przepadają — to realnie wyższe pensje bez kosztu dla właściciela i łatwiejsza rekrutacja.",
+  "wysilek": "L",
+  "wyroznik": "Samodzielne apki napiwkowe biorą prowizję i nie wiedzą, kto był na zmianie — Lokalo zna obsadę co do minuty z RCP, więc dzieli uczciwie i automatycznie.",
+  "impact": 3.7,
+  "feasibility": 3.3,
+  "moat": 3.3,
+  "score": 3.44,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #2",
+   "Duplikat #2; i tak wymaga integracji płatności",
+   "duplikat #2"
+  ]
+ },
+ {
+  "nr": 13,
+  "nazwa": "Radar opinii Google z odpowiedziami",
+  "soczewka": "ai",
+  "opis": "Lokalo pobiera nowe recenzje Google/Facebook lokalu, klasyfikuje sentyment i temat (obsługa, jedzenie, czas oczekiwania, cena), a przy każdej generuje szkic odpowiedzi w tonie lokalu do akceptacji jednym kliknięciem. Raz w miesiącu Claude składa digest: 'goście chwalą desery, 6 skarg na czas podania w soboty — to wieczory z jednym kelnerem na sali', łącząc skargi z danymi grafiku.",
+  "wartosc": "Odpowiadanie na wszystkie opinie podnosi ocenę i pozycję w mapach Google (główne źródło nowych gości), a właściciel oszczędza 2-3 godziny tygodniowo na pisaniu odpowiedzi.",
+  "wysilek": "M",
+  "wyroznik": "Narzędzia do opinii istnieją osobno, ale tylko Lokalo może skrzyżować skargę 'długo czekaliśmy' z faktyczną obsadą z grafiku tego wieczoru i wskazać przyczynę, nie tylko objaw.",
+  "impact": 3.7,
+  "feasibility": 3.3,
+  "moat": 3,
+  "score": 3.33,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Łączenie skarg z grafikiem unikalne; API Google Reviews uciążliwe",
+   "Google Business Profile API wymaga zatwierdzenia; FB API niestabilne",
+   "łączenie skarg z danymi grafiku — tego nikt nie ma"
+  ]
+ },
+ {
+  "nr": 14,
+  "nazwa": "Strażnik cen dostawców z faktur",
+  "soczewka": "ai",
+  "opis": "Właściciel robi telefonem zdjęcie faktury od dostawcy (albo wrzuca PDF), Claude vision wyciąga pozycje, ceny i jednostki, a embeddingi dopasowują 'ser gouda blok 3kg' do tego samego produktu z poprzednich faktur mimo różnych nazw. System buduje indeks cen zakupowych i alarmuje: 'olej podrożał 18% od marca, dostawca X ma drożej niż Y o 11%'.",
+  "wartosc": "Właściciel widzi pełzające podwyżki, które normalnie zauważa dopiero, gdy miesiąc wychodzi na minusie — jedna wyłapana podwyżka lub zmiana dostawcy to setki złotych miesięcznie.",
+  "wysilek": "M",
+  "wyroznik": "Systemy foodcost każą ręcznie wklepywać magazyn i receptury (dlatego nikt ich nie używa) — Lokalo wchodzi od strony zdjęcia faktury, czyli 10 sekund pracy zamiast godziny.",
+  "impact": 4,
+  "feasibility": 3,
+  "moat": 3,
+  "score": 3.33,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Nakłada się z #25/#41; dopasowanie produktów embeddingami bywa kruche",
+   "Duplikat idei #25/#41; dopasowanie produktów wymaga ciągłej korekty",
+   "pokrywa się z #25; KSeF (#41) częściowo to zastąpi"
+  ]
+ },
+ {
+  "nr": 20,
+  "nazwa": "Automaty okazji: urodziny i win-back",
+  "soczewka": "goscie",
+  "opis": "Dwa gotowe automaty na danych CRM: (1) tydzień przed urodzinami gościa wychodzi wiadomość z ofertą urodzinową, (2) gość, który nie był 90 dni, dostaje 'tęsknimy' z kodem rabatowym. Właściciel włącza suwakiem, ustawia treść i rabat — reszta dzieje się sama, z poszanowaniem zgód RODO.",
+  "wartosc": "Urodziny to rezerwacje na 4-8 osób, a odzyskanie choćby co dziesiątego 'zaginionego' gościa to dodatkowe stoliki co tydzień — zero pracy managera po włączeniu.",
+  "wysilek": "M",
+  "wyroznik": "To marketing-automation bez agencji i bez Mailchimpa — dane wizyt Lokalo już ma, konkurencyjne systemy rezerwacyjne każą to klikać ręcznie.",
+  "impact": 3.3,
+  "feasibility": 4.3,
+  "moat": 2.3,
+  "score": 3.33,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Konkretny ROI, łatwa sprzedaż jako add-on do CRM",
+   "Koszt SMS przerzucany na klienta; zgody RODO kluczowe"
+  ]
+ },
+ {
+  "nr": 50,
+  "nazwa": "Lokalo Benchmark: lokal na tle rynku",
+  "soczewka": "skala",
+  "opis": "Instancje (za zgodą, opt-in) wysyłają do centralnego serwisu zanonimizowane wskaźniki: koszt pracy %, obłożenie rezerwacji, no-show, średni napiwek, rotacja załogi. Właściciel widzi w pulpicie swoją pozycję na tle mediany lokali tego samego typu i regionu, np. 'twój no-show 12% vs 6% w podobnych domach weselnych'.",
+  "wartosc": "Odpowiada na pytanie, które zadaje sobie każdy gastronomik — 'czy u innych też tak jest?' — i pokazuje konkretnie, gdzie ucieka marża.",
+  "wysilek": "L",
+  "wyroznik": "Zagregowane dane to fosa nie do skopiowania — konkurent bez masy klientów nie pokaże benchmarków, a dla Lokalo to twardy argument za pakietem Pro/Premium.",
+  "impact": 2,
+  "feasibility": 3.3,
+  "moat": 4.7,
+  "score": 3.33,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Efekt sieciowy, ale bezwartościowy przy obecnej małej bazie klientów",
+   "Bezwartościowe bez masy krytycznej klientów; moat rośnie z czasem",
+   "wymaga masy krytycznej klientów; problem jajka i kury"
+  ]
+ },
+ {
+  "nr": 64,
+  "nazwa": "Strona 'Dołącz do zespołu' i szybkie zatrudnienie",
+  "soczewka": "konkurencja",
+  "opis": "White-labelowa podstrona rekrutacyjna lokalu (jak widget rezerwacji): ogłoszenie na stanowisko z braków obsady, prosty formularz kandydata z telefonu, tablica kandydatów dla managera. Jeden klik zamienia kandydata w pracownika z checklistą wdrożenia i miejscem w grafiku.",
+  "wartosc": "Skrócenie drogi od 'brakuje mi kelnera na weekend' do pierwszej zmiany z 2-3 tygodni do kilku dni, bez płacenia portalom ogłoszeniowym za każde ogłoszenie.",
+  "wysilek": "M",
+  "wyroznik": "Żaden polski system grafikowy nie domyka pętli rekrutacyjnej — Lokalo wie z prognozy obsady KOGO brakuje i może samo zaproponować publikację ogłoszenia.",
+  "impact": 3,
+  "feasibility": 4,
+  "moat": 3,
+  "score": 3.33,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #8",
+   "Duplikat #8; wzorzec publicznego widgetu już przetarty",
+   "duplikat #8"
+  ]
+ },
+ {
+  "nr": 5,
+  "nazwa": "Kampanie do własnych gości",
+  "soczewka": "monetyzacja",
+  "opis": "Add-on marketingowy zbudowany na istniejącym CRM gości: gotowe segmenty (np. \"byli 3+ razy, nie widziani od 2 miesięcy\"), szablony wiadomości i wysyłka SMS/e-mail z linkiem prosto do rezerwacji. Rozliczenie paczkami wiadomości (np. 500 SMS za 59 zł) z marżą Lokalo na każdej wysyłce.",
+  "wartosc": "Zapełnianie martwych wtorków gośćmi, którzy już znają lokal, za ~12 gr od SMS-a — zamiast płacenia portalom prowizji za \"nowych\" klientów, którzy i tak by przyszli.",
+  "wysilek": "M",
+  "wyroznik": "Historia wizyt i scoring no-show już siedzą w systemie, więc segmentacja jest automatyczna — zewnętrzne narzędzia mailingowe musiałyby te dane dopiero skądś dostać.",
+  "impact": 3.3,
+  "feasibility": 4,
+  "moat": 2.3,
+  "score": 3.22,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Klasyczny upsell z marżą na SMS; konkurencja duża, ale CRM już jest",
+   "SMSAPI proste; pilnować zgód marketingowych RODO"
+  ]
+ },
+ {
+  "nr": 6,
+  "nazwa": "Bilety na wydarzenia lokalu",
+  "soczewka": "monetyzacja",
+  "opis": "Sprzedaż biletów na sylwestra, andrzejki, degustacje czy koncerty: pula miejsc, płatność online, bilet z kodem QR i check-in skanerem na wejściu. Lokalo pobiera 3-5% od biletu, a sprzedane wejściówki od razu zasilają prognozę ruchu i wymagania obsady w grafiku.",
+  "wartosc": "Sylwester na 120 osób po 350 zł to 42 tys. zł zebrane z góry bez obdzwaniania i zeszytu wpłat — i zero sporów, kto zapłacił, a kto tylko obiecał.",
+  "wysilek": "M",
+  "wyroznik": "Portale biletowe biorą 6-8% i nic nie wiedzą o obsłudze — tu sprzedane bilety same przeliczają się na potrzebną liczbę kelnerów i ludzi w kuchni.",
+  "impact": 3.3,
+  "feasibility": 3.3,
+  "moat": 3,
+  "score": 3.22,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #23; zasilanie prognozy obsady to wyróżnik",
+   "Sprzężenie biletów z prognozą obsady to unikalny smaczek",
+   "duplikat #23; zasilanie prognozy obsady to plus"
+  ]
+ },
+ {
+  "nr": 23,
+  "nazwa": "Bilety na wydarzenia w lokalu",
+  "soczewka": "goscie",
+  "opis": "Publiczna strona wydarzenia (degustacja, wieczór z muzyką, andrzejki, sylwester) z limitem miejsc, przedpłatą i listą uczestników. Buduje na module imprez i zadatkach: gość kupuje miejsce online, dostaje potwierdzenie z QR, obsługa odhacza wejścia, kasa spina się z rozliczeniem imprezy.",
+  "wartosc": "Wydarzenia biletowane wypełniają najsłabsze dni tygodnia gwarantowanym przychodem z góry — sylwester czy degustacja sprzedana online to zero obdzwaniania i zero 'zapisałem się, ale nie przyjdę'.",
+  "wysilek": "L",
+  "wyroznik": "Lokal nie musi płacić prowizji portalom biletowym ani zbierać zapisów na Messengerze — wszystko w tej samej kasie i CRM co reszta lokalu.",
+  "impact": 3.3,
+  "feasibility": 3.3,
+  "moat": 3,
+  "score": 3.22,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #6",
+   "Duplikat #6",
+   "duplikat #6"
+  ]
+ },
+ {
+  "nr": 25,
+  "nazwa": "Skaner faktur od dostawców",
+  "soczewka": "kuchnia",
+  "opis": "Robisz telefonem zdjęcie faktury z Makro/Selgros/hurtowni (albo wrzucasz PDF z maila), a Lokalo samo wyciąga pozycje, ceny i ilości — aktualizuje stany magazynu i cennik składników. Silnik: parsowanie przez Claude API (vision) z ręczną korektą przy pierwszym mapowaniu produktu, potem już leci automatem.",
+  "wartosc": "Właściciel ma aktualne ceny składników i stan magazynu bez wpisywania czegokolwiek ręcznie — 2 minuty na fakturę zamiast 40, a to jedyny sposób, żeby food-cost w małym lokalu w ogóle żył.",
+  "wysilek": "L",
+  "wyroznik": "Konkurencyjne systemy magazynowe (np. moduły POS) wymagają ręcznego wklepywania dostaw — tu magazyn karmi się sam, co czyni resztę modułu food-cost realną dla lokalu bez księgowej na etacie.",
+  "impact": 4,
+  "feasibility": 2.7,
+  "moat": 3,
+  "score": 3.22,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Fundament pod #26/#27; food cost to top-pain 2026",
+   "Ukryta zależność: moduł magazynu i baza składników nie istnieją",
+   "pokrywa się z #14; KSeF zmniejszy potrzebę fotografowania"
+  ]
+ },
+ {
+  "nr": 34,
+  "nazwa": "Ścieżka wdrożenia nowego pracownika",
+  "soczewka": "hr",
+  "opis": "Szablon onboardingu per stanowisko (kelner, barman, kucharz): checklista pierwszego dnia/tygodnia, przypisany opiekun (buddy) z załogi i specjalne 'zmiany szkoleniowe' w grafiku, które nie liczą się do pełnej obsady w prognozie. Manager widzi pasek postępu wdrożenia każdego nowego, a nowy dostaje w telefonie prostą listę: co ma umieć i kto mu pokaże.",
+  "wartosc": "Nowy jest samodzielny w 2 tygodnie zamiast 4-6 i rzadziej odchodzi w pierwszym miesiącu — a właśnie tam gastro traci najwięcej ludzi i pieniędzy na rekrutację.",
+  "wysilek": "M",
+  "wyroznik": "Onboarding wpięty w grafik i prognozę obsady (nowy nie 'udaje' pełnego kelnera na papierze) — tego nie ma żaden polski grafikowy SaaS.",
+  "impact": 3,
+  "feasibility": 3.7,
+  "moat": 3,
+  "score": 3.22,
+  "glosyTop5": 0,
+  "uwagi": []
+ },
+ {
+  "nr": 51,
+  "nazwa": "Marketplace gotowych konfiguracji lokalu",
+  "soczewka": "skala",
+  "opis": "Biblioteka paczek 'typ lokalu pod klucz': dom weselny, pizzeria, kawiarnia — każda z gotowymi stanowiskami i rolami, szablonem grafiku, planem sali, checklistami sprzątania i cennikiem imprez. Paczki tworzy autor oraz zweryfikowani partnerzy (doradcy gastro), a klient importuje je jednym kliknięciem w istniejącym kreatorze onboardingu.",
+  "wartosc": "Nowy klient przechodzi od rejestracji do działającego grafiku w godzinę zamiast w tydzień — mniej porzuconych onboardingów i mniej zgłoszeń do supportu.",
+  "wysilek": "M",
+  "wyroznik": "Zamienia wiedzę branżową doradców w treść produktu: konkurencja sprzedaje puste narzędzie, Lokalo sprzedaje 'gotowy lokal'.",
+  "impact": 2.7,
+  "feasibility": 4,
+  "moat": 3,
+  "score": 3.22,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Skraca onboarding = wyższa konwersja trialu",
+   "Przyspiesza onboarding i sprzedaż; technicznie eksport/import configu",
+   "wartość dla nowych klientów Lokalo, nie dla obecnych"
+  ]
+ },
+ {
+  "nr": 1,
+  "nazwa": "Vouchery podarunkowe z prowizją",
+  "soczewka": "monetyzacja",
+  "opis": "Publiczny widget (analogiczny do widgetu rezerwacji) do sprzedaży bonów podarunkowych: gość kupuje online przez BLIK/P24, dostaje PDF z kodem QR, a obsługa skanuje kod przy realizacji. Lokalo pobiera 4-5% prowizji od każdej sprzedaży, reszta od razu trafia do lokalu, a realizacje widać w rozliczeniu dnia.",
+  "wartosc": "Gotówka z góry bez wydania ani jednego talerza, a do tego średnio 10-15% bonów nigdy nie zostaje zrealizowanych — to czysty zysk lokalu.",
+  "wysilek": "M",
+  "wyroznik": "Polskie systemy gastro koncentrują się na dowozach i POS — sprzedaży bonów z realizacją QR wpiętą w kasę dnia praktycznie nikt nie oferuje małym lokalom.",
+  "impact": 4,
+  "feasibility": 3.3,
+  "moat": 2,
+  "score": 3.11,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #17/#62; model prowizyjny wymaga rozliczeń typu marketplace (ryzyko regulacyjne)",
+   "Model prowizyjny wymaga PSP typu marketplace (KYC lokali, ryzyko statusu MIP)",
+   "duplikat #17/#62; prowizja 4-5% wysoka jak na rynek"
+  ]
+ },
+ {
+  "nr": 10,
+  "nazwa": "Prognoza prep dla kuchni",
+  "soczewka": "ai",
+  "opis": "Prosty model statystyczny (dzień tygodnia, pogoda, rezerwacje, imprezy, historia sprzedaży pozycji z POS przez istniejącego agenta Gastro) przewiduje, ile porcji każdego dania sprzeda się jutro. Szef kuchni dostaje rano w swoim widoku (SzefKuchniView już istnieje) listę: 'rosół 40 porcji, schabowy 55, pierogi 30' z widełkami niepewności.",
+  "wartosc": "Mniej wyrzuconego jedzenia i mniej 'przepraszam, skończyło się' — przy typowych 5-10% strat surowca to kilkaset do kilku tysięcy złotych miesięcznie zostających w kieszeni.",
+  "wysilek": "M",
+  "wyroznik": "Lokalo już ma prognozę ruchu i dane sprzedażowe z POS, więc jako jedyne może zejść poziom niżej — z 'ilu gości przyjdzie' na 'ile czego ugotować', czego nie robi żaden system grafikowy ani POS na rynku PL.",
+  "impact": 3,
+  "feasibility": 3,
+  "moat": 3.3,
+  "score": 3.11,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Wymaga danych sprzedaży pozycji z POS; kucharze sceptyczni",
+   "Jakość danych POS per pozycja decyduje o zaufaniu do prognoz",
+   "szefowie kuchni nieufni wobec prognoz, wolą własne czucie"
+  ]
+ },
+ {
+  "nr": 26,
+  "nazwa": "Strażnik marży dania",
+  "soczewka": "kuchnia",
+  "opis": "Receptury z gramaturami raz wpisane, a ceny składników płyną same ze skanera faktur. Gdy masło albo kurczak drożeje i marża schabowego spada poniżej ustawionego progu, właściciel dostaje push: 'Pierogi ruskie: marża spadła z 68% do 51% — podnieś cenę o 4 zł albo zmień dostawcę mąki'.",
+  "wartosc": "Właściciel nie odkrywa po kwartale, że sprzedawał hitowe danie pod kreską — reaguje w tygodniu, w którym cena skoczyła, co przy inflacji składników potrafi uratować kilka punktów procentowych marży całego lokalu.",
+  "wysilek": "M",
+  "wyroznik": "To nie raport food-cost do samodzielnego czytania, tylko alarm który sam pilnuje — nikt na polskim rynku nie łączy żywych cen z faktur z automatycznym alertem cenowym per danie.",
+  "impact": 4,
+  "feasibility": 2.3,
+  "moat": 3,
+  "score": 3.11,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Wymaga receptur i skanera faktur (#25) jako warunku wstępnego",
+   "Łańcuch zależności: receptury + skaner faktur (#25) muszą być pierwsze",
+   "bariera: ktoś musi wpisać receptury z gramaturami"
+  ]
+ },
+ {
+  "nr": 45,
+  "nazwa": "Rozliczenia platform dostawowych",
+  "soczewka": "integracje",
+  "opis": "Import raportów sprzedaży i wypłat z Pyszne.pl, Glovo, Wolt i Bolt Food (na start pliki rozliczeniowe, docelowo API). Lokalo dopasowuje wypłaty platform do zamówień, rozbija prowizje, refundy i korekty, i podnosi alarm — tą samą maszynką anomalii, która już pilnuje kasy — gdy platforma potrąciła więcej niż zwykle. Sprzedaż z dostaw zasila też istniejącą prognozę ruchu i obsady.",
+  "wartosc": "Właściciel wreszcie wie, ile naprawdę zarabia na dostawach po prowizjach (często 25-30% znika) i czy przelew z Glovo zgadza się z zamówieniami co do złotówki.",
+  "wysilek": "M",
+  "wyroznik": "Integratorzy typu Restimo zarządzają menu i zamówieniami, ale nikt nie robi kontroli finansowej wypłat platform — Lokalo staje po stronie portfela restauratora, nie kuriera.",
+  "impact": 3,
+  "feasibility": 3.3,
+  "moat": 3,
+  "score": 3.11,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Parsowanie raportów kruche; ICP weselne mało dostawowe",
+   "Formaty raportów 4 platform zmieniają się bez ostrzeżenia — wieczne utrzymanie",
+   "wartość tylko dla lokali mocno w dostawach"
+  ]
+ },
+ {
+  "nr": 46,
+  "nazwa": "NIP-autofill i Biała lista",
+  "soczewka": "integracje",
+  "opis": "W umowie na imprezę, karcie kontrahenta czy fakturze wpisujesz sam NIP, a Lokalo dociąga pełne dane firmy z API GUS/REGON. Przed przelewem dla dostawcy lub zwrotem zadatku firmowego system automatycznie sprawdza rachunek na Białej liście podatników VAT i ostrzega, jeśli konta tam nie ma.",
+  "wartosc": "Zero ręcznego przepisywania danych do umów weselnych i ochrona przed odpowiedzialnością solidarną za VAT przy płatnościach powyżej 15 tys. zł na niezgłoszone konto.",
+  "wysilek": "S",
+  "wyroznik": "Drobiazg, który księgowi znają z systemów fakturowych, ale w systemach do zarządzania lokalem i imprezami praktycznie nie występuje — a buduje zaufanie, że Lokalo zna polskie realia.",
+  "impact": 3,
+  "feasibility": 5,
+  "moat": 1.3,
+  "score": 3.11,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Tani quick-win, standard rynkowy przy fakturowaniu",
+   "Darmowe publiczne API GUS/MF; quick win, ale zero moatu",
+   "tani quality-of-life, sam bym nie zapłacił ekstra"
+  ]
+ },
+ {
+  "nr": 52,
+  "nazwa": "Klonowanie lokalu: drugi punkt w kwadrans",
+  "soczewka": "skala",
+  "opis": "Przycisk 'Otwórz kolejny lokal' — provisioning nowej instancji z kopią konfiguracji obecnej: stanowiska, role, szablony grafików, plan sali, ustawienia rezerwacji i rozliczeń, ale bez danych osobowych i historii. Technicznie to rozszerzenie istniejącego skryptu new_client o eksport/import konfiguracji.",
+  "wartosc": "Właściciel otwierający drugi punkt nie wyklikuje wszystkiego od zera, a Lokalo w tym samym momencie sprzedaje drugi abonament bez żadnego wysiłku handlowego.",
+  "wysilek": "S",
+  "wyroznik": "Najtańsza możliwa ścieżka wzrostu przychodu: najlepszy (rosnący) klient dostaje najniższy próg dokupienia kolejnej licencji.",
+  "impact": 2.3,
+  "feasibility": 5,
+  "moat": 2,
+  "score": 3.11,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Tanie rozszerzenie new_client; wartość tylko dla multi-lokali",
+   "Tanie rozszerzenie new_client, ale mało klientów multi-lokal dziś",
+   "otwarcie nowego lokalu to rzadkie zdarzenie"
+  ]
+ },
+ {
+  "nr": 17,
+  "nazwa": "Bony podarunkowe sprzedawane online",
+  "soczewka": "goscie",
+  "opis": "Publiczna strona (obok widgetu rezerwacji), gdzie gość kupuje bon podarunkowy na kwotę lub pakiet (kolacja dla dwojga, voucher weselny). System generuje unikalny kod, pilnuje terminu ważności, a realizację bonu kelner odhacza w istniejącym rozliczeniu dnia — saldo bonów widać w zeszycie kasowym.",
+  "wartosc": "Gotówka z góry i nowi goście z prezentów — typowy lokal sprzedaje bony za kilka-kilkanaście tysięcy zł przed świętami, a 10-20% bonów nigdy nie wraca (czysty zysk).",
+  "wysilek": "M",
+  "wyroznik": "Konkurencyjne systemy bonów to osobne narzędzia — w Lokalo bon domyka się w kasie lokalu i w CRM gościa, bez ręcznego zszywania.",
+  "impact": 3.7,
+  "feasibility": 3.3,
+  "moat": 2,
+  "score": 3,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #1/#62",
+   "Duplikat #1 i #62",
+   "duplikat #1/#62"
+  ]
+ },
+ {
+  "nr": 27,
+  "nazwa": "Inwentaryzacja telefonem z wykrywaniem strat",
+  "soczewka": "kuchnia",
+  "opis": "Tryb remanentu w PWA: dwie osoby liczą równolegle (bar i kuchnia), wpisują stany na telefonie zamiast na kartce. Lokalo porównuje wynik z zużyciem teoretycznym (sprzedaż z POS przez agenta Gastro × receptury) i pokazuje rozjazdy: 'wódka: brakuje 2,3 l, ser: brakuje 4 kg — to 380 zł w tym miesiącu'.",
+  "wartosc": "Remanent w godzinę zamiast całej niedzielnej nocy, a właściciel po raz pierwszy widzi w złotówkach, ile znika przez przelewanie, złe porcjowanie albo 'poczęstunki' — typowo 2-4% obrotu do odzyskania.",
+  "wysilek": "L",
+  "wyroznik": "Agent lokalny już czyta sprzedaż z Gastro POS, więc zużycie teoretyczne liczy się samo — konkurencja każe importować sprzedaż ręcznie albo w ogóle nie porównuje.",
+  "impact": 4,
+  "feasibility": 2,
+  "moat": 3,
+  "score": 3,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Długi łańcuch zależności: receptury + magazyn + pozycje POS",
+   "Wymaga pełnego food-cost stacku: receptury+magazyn+zużycie teoretyczne",
+   "wymaga receptur i żelaznej dyscypliny remanentów"
+  ]
+ },
+ {
+  "nr": 35,
+  "nazwa": "Akademia menu i alergenów",
+  "soczewka": "hr",
+  "opis": "Mikro-szkolenia w telefonie pracownika: karty dań, alergeny (obowiązek informacyjny z rozporządzenia UE 1169/2011), procedury HACCP i standardy serwisu — każde zakończone krótkim quizem. Zdany quiz automatycznie odblokowuje lub podbija kwalifikację w istniejącym silniku auto-grafiku (np. 'zna kartę zimową' → może brać zmiany solo).",
+  "wartosc": "Kelnerzy znają skład i alergeny każdego dania — mniej zwrotów, wyższa dosprzedaż i brak kary z sanepidu za błędną informację alergenową.",
+  "wysilek": "L",
+  "wyroznik": "Konkurencja szkoleniowa (LMS-y) nie zna grafiku, a grafikowa nie ma szkoleń — u Lokalo zdany quiz fizycznie zmienia to, na jakie zmiany system człowieka wystawia.",
+  "impact": 2.7,
+  "feasibility": 2.7,
+  "moat": 3.7,
+  "score": 3,
+  "glosyTop5": 0,
+  "uwagi": [
+   "LMS w małej gastro ma niską skłonność do zapłaty",
+   "Quiz odblokowujący kwalifikacje auto-grafiku — nikt tego nie ma",
+   "quiz→kwalifikacja w grafiku ciekawe, ale załoga nie robi quizów"
+  ]
+ },
+ {
+  "nr": 53,
+  "nazwa": "Tryb franczyzy: standardy i zgodność",
+  "soczewka": "skala",
+  "opis": "Centrala definiuje standardy sieci: minimalna obsada na zmianę, checklisty otwarcia/zamknięcia, widełki kosztu pracy, wymagane kwalifikacje na stanowiskach. Lokale nie raportują nic ręcznie — wskaźniki zgodności liczą się same z danych, które już są w systemie (grafik, RCP, rozliczenia dnia), a centrala widzi tablicę compliance z alertami odchyleń.",
+  "wartosc": "Franczyzodawca wie bez wizytacji, który lokal łamie standard obsady albo zamyka kasę z brakami — zanim zrobi się z tego skarga gościa albo dziura w kasie.",
+  "wysilek": "L",
+  "wyroznik": "Otwiera segment franczyz i grup gastro, gdzie jeden deal to 10+ licencji naraz i płaci centrala, a nie pojedynczy lokal.",
+  "impact": 2.7,
+  "feasibility": 2.3,
+  "moat": 4,
+  "score": 3,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Wysoki ARPU, ale znikomy pipeline franczyz dla solo-deva",
+   "Agregacja cross-instance wbrew architekturze; etap późniejszy",
+   "nisza franczyzowa; nie mój przypadek, mały rynek w PL"
+  ]
+ },
+ {
+  "nr": 62,
+  "nazwa": "Vouchery podarunkowe sprzedawane online",
+  "soczewka": "konkurencja",
+  "opis": "Publiczny widget (jak istniejący widget rezerwacji) do sprzedaży voucherów kwotowych i na kolację/pobyt, z płatnością online i kodem do realizacji. Realizacja skanowana przy wizycie, saldo i przeterminowania widoczne w rozliczeniu dnia i zeszycie kasowym.",
+  "wartosc": "Gotówka z góry w martwe miesiące — przed świętami lokal potrafi sprzedać vouchery za kilka-kilkanaście tysięcy zł, a część nigdy nie zostaje zrealizowana (czysta marża).",
+  "wysilek": "M",
+  "wyroznik": "W Polsce vouchery dla małej gastro to osobne platformy z prowizją — u Lokalo 0% prowizji, własna marka lokalu i automatyczne spięcie z kasą dnia.",
+  "impact": 3.7,
+  "feasibility": 3.3,
+  "moat": 2,
+  "score": 3,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #1/#17",
+   "Duplikat #1 i #17",
+   "duplikat #1/#17"
+  ]
+ },
+ {
+  "nr": 7,
+  "nazwa": "Strona WWW lokalu w abonamencie",
+  "soczewka": "monetyzacja",
+  "opis": "Strona lokalu generowana wprost z danych Lokalo: menu, galeria, godziny otwarcia, aktualności oraz wbudowane widgety rezerwacji, voucherów i biletów — edytowana prostym panelem i hostowana na infrastrukturze Lokalo (Caddy już obsługuje domeny). Add-on za 39-59 zł/mc plus podpięcie własnej domeny.",
+  "wartosc": "Właściciel pozbywa się \"informatyka od strony\" za 1500 zł i wiecznie nieaktualnego menu w PDF — co zmieni w Lokalo, samo pojawia się na WWW.",
+  "wysilek": "M",
+  "wyroznik": "To nie wizytówka, tylko kanał sprzedaży spięty z rezerwacjami, bonami i biletami z jednego systemu — kreatory stron w rodzaju WordPressa tego nie łączą.",
+  "impact": 3,
+  "feasibility": 3.3,
+  "moat": 2.3,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Nakłada się z #24; kreator stron to pozornie mały zakres",
+   "Ukryty koszt: dożywotni support stron klientów",
+   "duplikat #24; wartość w sticky integracji, nie samej stronie"
+  ]
+ },
+ {
+  "nr": 16,
+  "nazwa": "Ściąga kelnera: alergeny i menu",
+  "soczewka": "ai",
+  "opis": "Lokal wgrywa raz menu z recepturami i procedury (albo Lokalo zaciąga pozycje z POS), system indeksuje je embeddingami, a kelner w swojej strefie PWA pyta: 'czy żurek ma gluten? co polecić weganinowi? jak nabić rabat urodzinowy?' i dostaje natychmiastową odpowiedź opartą wyłącznie na danych lokalu.",
+  "wartosc": "Nowy kelner jest samodzielny w 2 dni zamiast 2 tygodni, a lokal spełnia obowiązek informowania o alergenach (rozporządzenie UE 1169/2011) bez wertowania segregatora przy stoliku.",
+  "wysilek": "M",
+  "wyroznik": "Konkurencja robi grafiki albo POS-y, ale nikt nie daje pracownikowi gastro kieszonkowej bazy wiedzy o jego własnym lokalu — a przy rotacji w branży onboarding boli każdego właściciela co miesiąc.",
+  "impact": 2.3,
+  "feasibility": 4,
+  "moat": 2.3,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Nice-to-have, niska skłonność do dopłaty",
+   "Halucynacja przy alergenach = realna odpowiedzialność",
+   "ryzyko prawne błędnej odpowiedzi AI o alergenach"
+  ]
+ },
+ {
+  "nr": 24,
+  "nazwa": "Mini-strona lokalu pod klucz",
+  "soczewka": "goscie",
+  "opis": "Auto-generowana wizytówka www lokalu: menu (z edytora QR), godziny otwarcia, zdjęcia, mapka, oferta imprez i wpięty widget rezerwacji plus najlepsze opinie z lejka. Właściciel wybiera kolory i logo w kreatorze, Lokalo hostuje na subdomenie lub podpina własną domenę.",
+  "wartosc": "Duża część małej gastronomii nie ma strony albo płaci kilkaset złotych rocznie za martwą wizytówkę — tu strona robi się sama z danych, które lokal i tak prowadzi w Lokalo.",
+  "wysilek": "M",
+  "wyroznik": "Strona nigdy nie jest nieaktualna, bo karmi się żywymi danymi z panelu (menu, godziny, wydarzenia) — to zamyka gościa w pętli Lokalo od Google aż po rezerwację.",
+  "impact": 3,
+  "feasibility": 3.3,
+  "moat": 2.3,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Duplikat #7",
+   "Duplikat #7",
+   "duplikat #7"
+  ]
+ },
+ {
+  "nr": 30,
+  "nazwa": "Zeszyt strat kuchni",
+  "soczewka": "kuchnia",
+  "opis": "Kafelek na telefonie kuchni: 'wyrzucone / spalone / zwrot gościa / przeterminowane' — wybierasz pozycję z receptur albo składnik, ilość, gotowe w 10 sekund. Lokalo wycenia stratę po koszcie recepturowym i pokazuje tygodniowy raport: co, ile razy, za ile złotych i na czyjej zmianie.",
+  "wartosc": "Straty przestają być niewidzialne — właściciel widzi, że sam 'zupa dnia wylewana w czwartki' kosztuje 600 zł miesięcznie, i może zmniejszyć gar zamiast podnosić ceny.",
+  "wysilek": "S",
+  "wyroznik": "Wpis w 10 sekund z telefonu na kuchni to poziom tarcia, przy którym kucharze faktycznie raportują — a wycena bierze się z tych samych receptur co food-cost, bez podwójnej roboty.",
+  "impact": 3,
+  "feasibility": 3.7,
+  "moat": 2,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Wycena strat wymaga receptur; można startować uproszczoną wersją",
+   "Start z ręczną wyceną, receptury dołożyć później",
+   "tani w budowie, ale kuchnia szybko przestaje wpisywać"
+  ]
+ },
+ {
+  "nr": 32,
+  "nazwa": "Tabela alergenów z receptur",
+  "soczewka": "kuchnia",
+  "opis": "Każdy składnik w bazie ma oznaczone alergeny (14 z rozporządzenia UE 1169/2011), więc lista alergenów per danie generuje się sama z receptur. Jeden klik daje wydruk do menu i publiczną stronę/QR dla gości; zmiana receptury automatycznie aktualizuje tabelę.",
+  "wartosc": "Właściciel spełnia twardy obowiązek prawny (informacja o alergenach grozi karą sanepidu i realnym pozwem po wstrząsie anafilaktycznym gościa) bez ręcznego pilnowania tabelki w Excelu, która zawsze jest nieaktualna.",
+  "wysilek": "S",
+  "wyroznik": "Tani w budowie 'compliance jednym klikiem', który daje handlowy pretekst do wdrożenia receptur — a receptury to brama do całego modułu food-cost.",
+  "impact": 3,
+  "feasibility": 3.7,
+  "moat": 2,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Obowiązek prawny UE 1169/2011 = łatwy argument; wymaga receptur",
+   "Proste, ale zakłada istnienie bazy receptur/składników",
+   "obowiązek prawny; tani dodatek jeśli są receptury"
+  ]
+ },
+ {
+  "nr": 37,
+  "nazwa": "Puls załogi po zmianie",
+  "soczewka": "hr",
+  "opis": "Po odbiciu wyjścia w RCP pracownik dostaje jedno pytanie-emotkę: 'Jak dziś było?' plus opcjonalny anonimowy komentarz. Właściciel widzi trend nastroju per zespół, stanowisko i dzień tygodnia oraz alert, gdy morale nurkuje (np. po zmianie managera albo ciężkim weekendzie imprez).",
+  "wartosc": "Właściciel dowiaduje się o konflikcie na kuchni czy przeciążeniu w 2 dni, a nie z trzeciego wypowiedzenia w miesiącu.",
+  "wysilek": "S",
+  "wyroznik": "Ankieta zaszyta w moment odbicia RCP daje 60-80% odpowiedzi zamiast typowych 10% z maila — nikt na polskim rynku gastro tego tak nie wpina.",
+  "impact": 2,
+  "feasibility": 4.7,
+  "moat": 2,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Miłe, ale nie jest powodem zakupu",
+   "po tygodniu klikają byle co albo wcale"
+  ]
+ },
+ {
+  "nr": 47,
+  "nazwa": "Strażnik skrzynki e-Doręczeń",
+  "soczewka": "integracje",
+  "opis": "Od 1 października 2026 każda firma, także JDG restauratora, musi mieć skrzynkę e-Doręczeń — a pismo z sanepidu czy skarbówki doręczone elektronicznie biegnie terminami, nawet gdy nikt go nie otworzył. Lokalo monitoruje skrzynkę przez API i istniejącym kanałem Web Push alarmuje właściciela: przyszło pismo urzędowe, masz X dni na odpowiedź.",
+  "wartosc": "Restaurator, który żyje na kuchni i sali, nie przegapi wezwania z 7-dniowym terminem tylko dlatego, że nie loguje się codziennie na edoreczenia.gov.pl.",
+  "wysilek": "M",
+  "wyroznik": "Obowiązek jest świeży i masowo ignorowany — żaden system gastro nie pilnuje urzędowej poczty, a Lokalo może być tym, który uratował komuś odwołanie od kary.",
+  "impact": 3,
+  "feasibility": 2.7,
+  "moat": 3,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Poza core produktu; integracja e-Doręczeń z certyfikatami uciążliwa",
+   "Certyfikaty/pełnomocnictwa do cudzej skrzynki + odpowiedzialność za przegapiony alert",
+   "dostęp API do e-Doręczeń przez firmę trzecią niepewny"
+  ]
+ },
+ {
+  "nr": 55,
+  "nazwa": "Sieciowy CRM gości i wspólny widget",
+  "soczewka": "skala",
+  "opis": "Lokale jednej sieci współdzielą kartotekę gości: scoring no-show, preferencje i historia wizyt podążają za gościem między lokalami. Do tego jeden publiczny widget rezerwacji dla całej marki — gość wybiera lokal i termin, a gdy w jednym brakuje stolika, widget proponuje siostrzany lokal obok zamiast odprawiać gościa z kwitkiem.",
+  "wartosc": "Sieć przestaje tracić rezerwacje na 'brak miejsc' — gość zostaje w rodzinie lokali, a stały bywalec jest VIP-em wszędzie, nie tylko tam, gdzie akurat go znają.",
+  "wysilek": "M",
+  "wyroznik": "Portale rezerwacyjne biorą prowizję od każdego gościa — Lokalo daje sieci własny kanał sieciowy bez prowizji, czego nie oferuje żaden krajowy system rezerwacji.",
+  "impact": 2.3,
+  "feasibility": 3,
+  "moat": 3.3,
+  "score": 2.89,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Nisza sieci; RODO przy współdzieleniu kartotek gości",
+   "RODO: współadministrowanie danych gości między lokalami",
+   "wspólny scoring no-show między moimi lokalami przydatny"
+  ]
+ },
+ {
+  "nr": 21,
+  "nazwa": "Oferty last-minute na martwe godziny",
+  "soczewka": "goscie",
+  "opis": "Lokalo zna prognozę ruchu i obłożenie rezerwacji na dziś/jutro. Gdy zapowiada się pusty wtorkowy wieczór, manager jednym klikiem (albo automat progiem) publikuje ofertę last-minute — np. -15% na stolik 17-19 — do bazy gości (e-mail/Web Push) i na stronę widgetu rezerwacji.",
+  "wartosc": "Pusty stolik to koszt, który już poniosłeś — zapełnienie 2-3 stolików w martwe godziny to kilkaset złotych dziennie, których wcześniej nie było.",
+  "wysilek": "L",
+  "wyroznik": "Nikt na polskim rynku nie łączy prognozy ruchu z automatyczną promocją — u konkurencji promocje ustawia się w ciemno, Lokalo wie KIEDY będzie pusto.",
+  "impact": 2.3,
+  "feasibility": 3,
+  "moat": 3,
+  "score": 2.78,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Wymaga bazy odbiorców, inaczej oferta trafia w próżnię",
+   "Niska realizacja ofert last-minute w polskiej gastro poza dużymi miastami",
+   "mała baza gości = mały efekt; działa w dużych miastach"
+  ]
+ },
+ {
+  "nr": 31,
+  "nazwa": "Auto-zamówienia do dostawców",
+  "soczewka": "kuchnia",
+  "opis": "Stany minimalne per składnik plus istniejąca prognoza ruchu (mocny weekend = większe zamówienie) generują propozycję zamówienia pogrupowaną per dostawca. Manager przegląda, koryguje i wysyła jednym klikiem e-mailem/SMS-em do przedstawiciela; przyjęcie dostawy odhacza się telefonem i od razu ląduje na magazynie.",
+  "wartosc": "Koniec wieczornych telefonów 'zapisz mi na kartce co się kończy' i sobót bez frytek — zamówienie na cały tydzień robi się w 5 minut i skaluje samo pod prognozowany ruch.",
+  "wysilek": "M",
+  "wyroznik": "Zamówienie karmione prognozą ruchu, którą Lokalo już liczy do obsady grafiku — ta sama prognoza planuje ludzi I towar, czego nie robi żaden system dla małej gastronomii.",
+  "impact": 3,
+  "feasibility": 2.3,
+  "moat": 3,
+  "score": 2.78,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Wymaga najpierw modułu magazynu",
+   "Wymaga stanów magazynowych, których system nie prowadzi",
+   "szef kuchni zamawia telefonem z przyzwyczajenia"
+  ]
+ },
+ {
+  "nr": 38,
+  "nazwa": "Liga zmianowa — odznaki i punkty",
+  "soczewka": "hr",
+  "opis": "Punkty za rzeczy, które Lokalo już mierzy: punktualność z RCP, ratowanie dziur braniem zmian z giełdy, zdane quizy z Akademii, pełny miesiąc bez nieobecności. Odznaki, miesięczna tablica wyników i nagrody definiowane przez właściciela — od premii po przywilej pierwszeństwa wyboru zmian w kolejnym grafiku.",
+  "wartosc": "Motywacja i frekwencja rosną bez podwyżek — nagroda 'wybierasz zmiany pierwszy' kosztuje właściciela zero złotych, a dla studenta jest bezcenna.",
+  "wysilek": "M",
+  "wyroznik": "Gamifikacja karmiona twardymi danymi z RCP i giełdy zmian, nie ręcznym klikaniem managera — punkty naliczają się same, więc system żyje, a nie umiera po miesiącu.",
+  "impact": 2,
+  "feasibility": 3.7,
+  "moat": 2.7,
+  "score": 2.78,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Gamifikacja rzadko sprzedaje abonamenty B2B",
+   "Gamifikacja bywa demotywująca; niski priorytet",
+   "gamifikacja potrafi popsuć atmosferę w zespole"
+  ]
+ },
+ {
+  "nr": 3,
+  "nazwa": "Zamówienia na wynos bez pośredników",
+  "soczewka": "monetyzacja",
+  "opis": "Menu online z koszykiem i płatnością na własnej stronie lokalu plus prosty ekran przyjmowania zamówień dla kuchni z czasem odbioru. Lokalo pobiera 2-3% prowizji od zamówienia — zamiast ~30%, które biorą Glovo, Pyszne.pl czy Uber Eats — a dane klientów zostają u właściciela.",
+  "wartosc": "Lokal robiący 10 tys. zł miesięcznie na wynosie oszczędza około 2,7 tys. zł prowizji portali co miesiąc i buduje własną bazę klientów.",
+  "wysilek": "L",
+  "wyroznik": "Argument sprzedażowy broni się sam (\"3% zamiast 30%\"), a prowizja skaluje przychód Lokalo razem z sukcesem klienta zamiast sztywnego abonamentu.",
+  "impact": 3.7,
+  "feasibility": 2.3,
+  "moat": 2,
+  "score": 2.67,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Tłoczny rynek (Restaumatic, UpMenu); zakres L za duży na solo-dev",
+   "Ogromny zakres (koszyk, płatności, KDS) i wieczne utrzymanie dla 1 dev",
+   "sam widget nie ściągnie ruchu z Glovo; UpMenu/Restaumatic już to robią"
+  ]
+ },
+ {
+  "nr": 19,
+  "nazwa": "Cyfrowa karta pieczątek lojalnościowych",
+  "soczewka": "goscie",
+  "opis": "Gość identyfikowany numerem telefonu (już jest w CRM) zbiera 'pieczątki' za wizyty — zamknięta rezerwacja lub szybkie odhaczenie przez obsługę QR-kodem. Po N wizytach system sam wystawia nagrodę (np. deser gratis, -20%), którą kelner realizuje kodem. Właściciel ustawia próg i nagrodę sam.",
+  "wartosc": "Stały gość wydaje w roku kilkukrotnie więcej niż jednorazowy — karta pieczątek podnosi częstotliwość powrotów bez drukowania kartoników, które goście gubią.",
+  "wysilek": "L",
+  "wyroznik": "Lojalność siedzi na tym samym CRM co rezerwacje i scoring no-show, więc właściciel widzi pełny obraz gościa — apki lojalnościowe z rynku nie wiedzą nic o rezerwacjach.",
+  "impact": 3,
+  "feasibility": 3,
+  "moat": 2,
+  "score": 2.67,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Dużo gotowych apek lojalnościowych; L-wysiłek za duży na wartość",
+   "gotowe apki lojalnościowe istnieją; nieistotne dla wesel"
+  ]
+ },
+ {
+  "nr": 56,
+  "nazwa": "Barometr Gastro: publiczny raport rynkowy",
+  "soczewka": "skala",
+  "opis": "Kwartalny publiczny raport generowany automatycznie z zanonimizowanych danych Lokalo Benchmark: średnie obłożenie, koszty pracy, napiwki i no-show w polskiej gastronomii, w podziale na typ lokalu i województwo. Landing page z wykresami plus PDF do pobrania za adres e-mail.",
+  "wartosc": "Właściciel dostaje za darmo wiedzę rynkową, której nigdzie indziej nie ma, a Lokalo — darmowy PR w mediach branżowych i leady bez budżetu na reklamę.",
+  "wysilek": "S",
+  "wyroznik": "Media branżowe cytują tego, kto ma dane: jeden raport pozwala małemu graczowi wyglądać jak lider rynku i napędza dopływ nowych lokali do benchmarku.",
+  "impact": 2,
+  "feasibility": 3,
+  "moat": 3,
+  "score": 2.67,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Lead-gen, nie feature; wymaga najpierw danych z #50",
+   "Zależy od #50 i masy danych — 'S' tylko na papierze",
+   "marketing Lokalo, nie wartość operacyjna dla lokalu"
+  ]
+ },
+ {
+  "nr": 22,
+  "nazwa": "Menu online z kodami QR",
+  "soczewka": "goscie",
+  "opis": "Edytor menu w panelu (kategorie, ceny, alergeny, zdjęcia, 'danie dnia') publikowany jako lekka strona mobilna na subdomenie lokalu, z generatorem kodów QR na stoliki i witrynę. Zmiana ceny czy zdjęcie pozycji '86' widoczne u gościa od razu — bez drukowania.",
+  "wartosc": "Koniec z drukowaniem kart po każdej zmianie cen (realne setki złotych rocznie) i z gośćmi zamawiającymi pozycje, których nie ma — plus menu w Google zamiast rozmazanego zdjęcia karty.",
+  "wysilek": "M",
+  "wyroznik": "Menu żyje w tym samym panelu co grafik i rezerwacje — white-label na subdomenie lokalu, a docelowo pozycje menu zasilą foodcost z backlogu.",
+  "impact": 2.7,
+  "feasibility": 4,
+  "moat": 1,
+  "score": 2.56,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Komodyt z darmowymi alternatywami; potrzebny jako fundament #24",
+   "Komodyt — mnóstwo darmowych narzędzi menu QR",
+   "darmowe alternatywy wszędzie, to tylko higiena produktu"
+  ]
+ },
+ {
+  "nr": 43,
+  "nazwa": "Moduł systemu kaucyjnego HoReCa",
+  "soczewka": "integracje",
+  "opis": "Od stycznia 2026 system kaucyjny działa w pełnym zakresie i dotyczy też gastronomii: 50 gr od PET-a i puszki, 1 zł od butelki zwrotnej, obowiązek przyjmowania zwrotów i groźba kar z WIOŚ. Lokalo dolicza kaucję jako osobną pozycję w rozliczeniu dnia, prowadzi ewidencję przyjętych i wydanych opakowań per sala/bar i generuje raport do rozliczenia z operatorem systemu.",
+  "wartosc": "Lokal ma papier na każdą kontrolę WIOŚ i nie dopłaca z własnej kieszeni do kaucji, która przy barze robiącym 200 butelek dziennie to ponad 3 000 zł miesięcznie w obrocie kaucyjnym.",
+  "wysilek": "M",
+  "wyroznik": "Przepis wszedł kilka miesięcy temu i praktycznie żaden system gastro w Polsce nie ma dedykowanej ewidencji kaucji — okno na bycie pierwszym jest otwarte teraz.",
+  "impact": 2,
+  "feasibility": 3.3,
+  "moat": 2.3,
+  "score": 2.56,
+  "glosyTop5": 0,
+  "uwagi": [
+   "Compliance-checkbox, nie powód zakupu abonamentu",
+   "Zakres obowiązków gastro niejasny — ryzyko budowy pod martwy wymóg",
+   "gastro w dużej mierze zwolniona przy konsumpcji na miejscu"
+  ]
+ }
+]

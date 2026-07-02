@@ -1,163 +1,119 @@
-# Roadmapa produktu: Lokalo → SaaS dla gastronomii
+# Roadmapa produktu Lokalo → SaaS dla gastronomii (v2 · lipiec 2026)
 
-*Wersja 1.0 · dla właściciela (Oskar) · czerwiec 2026*
-
-> Dokument powstał z wieloagentowej analizy zakotwiczonej w realnym kodzie (6 soczewek pomysłów
-> + głęboki projekt systemu rezerwacji). Każdy moduł stoi za flagą w `LokalConfig` (sprzedawalny
-> per lokal) i reużywa istniejące encje zamiast budować obok.
-
-## 1. Gdzie jesteśmy, dokąd idziemy
-
-Mamy działającą, bogatą w dane aplikację (FastAPI + React/PWA + lokalny agent RCP/Gastro), która domyka realny obieg gastronomii: grafiki z auto‑układaniem, RCP→wypłaty, rozliczenia kasowe dnia, imprezy/wesela i zadatki KP. Fundamenty komercjalizacji są już położone (fail‑fast sekretów, CORS secure‑by‑default, Alembic + baseline, rola/flagi na Stanowisku, encja `LokalConfig`, white‑label, 268 testów). **Brakuje jednego flagowego modułu, który zamieni produkt z „lepszego Excela" w sprzedawalny SaaS: dwukierunkowych rezerwacji.** Dziś rezerwacje to wyłącznie jednokierunkowy import liczb z Google Calendar (`backend/rezerwacje.py`, pracownik widzi tylko liczby). Kierunek: zbudować realny moduł rezerwacji stolików/sal/terminów **na istniejącej encji `Termin`** (nie obok niej), a wokół niego — warstwami — domknąć no‑show, zadatki online, plan sali i events. Wszystko za flagą w `LokalConfig`, sprzedawalne per lokal w abonamencie.
+> Metodologia: 64 pomysły wygenerowane przez 8 niezależnych „soczewek" (monetyzacja, AI,
+> goście, kuchnia, HR, integracje PL, skala/sieci, luki konkurencji — z researchem rynku),
+> ocenione przez panel 3 sędziów o różnych perspektywach (founder SaaS · pragmatyczny CTO
+> solo-dev · właściciel 2 restauracji i domu weselnego). Skale 1–5: **impact** (czy sprzedaje
+> abonamenty / realna wartość operacyjna), **feasibility** (czy solo-dev dowiezie),
+> **moat** (czy wyróżnia na rynku). Poprzednia wersja roadmapy: historia gita.
 
 ---
 
-## 2. Flagowy moduł: ROZBUDOWANY SYSTEM REZERWACJI
+## 1. Gdzie jesteśmy (stan na 07.2026)
 
-### Wizja
-Pełny cykl życia rezerwacji tworzonej **w aplikacji** (i opcjonalnie online przez gościa), zamiast biernego podglądu cudzego kalendarza: `rezerwacja → potwierdzona → odbyła / no_show / odwołana`, ze slotami, godzinami otwarcia, pojemnością stolików/sal, zadatkami i potwierdzeniami — spięty z grafikiem obsady i modułem imprez.
+Z poprzedniej roadmapy **zbudowane i działające**: rezerwacje stolików online (widget publiczny,
+plan sali drag&drop, CRM gości + scoring no-show), prognoza ruchu → prognoza obsady →
+auto-wymagania grafiku + alerty niedoboru, pulpit KPI + alerty anomalii kasowych, napiwki,
+giełda zmian, eksport wypłat XLSX, billing/licencje, samoobsługowy onboarding, RODO
+(szyfrowanie at-rest, audyt płac, rate-limit), Docker+Caddy, provisioning `new_client`,
+CI/CD, instalator desktop, branding **Lokalo** + design system **„Cicha scena"**.
 
-### Zasada przewodnia: budować NA istniejącym kodzie
-- **Rozszerzamy `Termin` (`backend/models.py`), nie tworzymy trzeciej równoległej encji.** `Termin` już ma datę, klienta, telefon, salę, liczbę osób, status (`rezerwacja|odbyla|odwolana`), zadatek, `ical_uid` i powiązanie z `KpZadatek`. To naturalny rdzeń.
-- **Dwa rozmiary rezerwacji, jedna encja:** lekka rezerwacja stolika („4 os., 18:00") vs ciężka impreza/sala (wesele). Rozróżnia je nowe pole `rodzaj`. Tylko `rodzaj=sala/impreza` generuje `Impreza`→obsadę (mechanizm `ical:{uid}` już działa); `rodzaj=stolik` **nigdy** nie tworzy `Impreza` (twarda, przetestowana reguła — inaczej zasypie grafik fałszywymi wymaganiami).
-- **Import Google/.ics zostaje jednym z kanałów** (`kanal=google|ical`), nie osobnym światem. Ekran „liczby na żywo" (`Rezerwacje.jsx`) zostaje jako widok ruchu dla pracownika (**tylko liczby — zero danych klienta, wymóg RODO**); nowy CRUD to widok admina/szefa.
-- **Cały moduł za nową flagą `LokalConfig.modul_rezerwacje`** (jeszcze nie istnieje — obok są `modul_rozliczenia/imprezy/pos/sprzatanie`). Wzorzec guardu jak `modul_imprezy`.
+Fundament jest. Ta roadmapa odpowiada na pytanie: **co zbudować, żeby Lokalo sprzedawało się
+samo** — i wygrywało z Kadromierzem/inEwi (grafiki), MojStolik/resOS (rezerwacje) i modułami POS.
 
-### Zakres MVP (konkret wdrożeniowy)
-| Element | Co dokładnie |
-|---|---|
-| Migracja Alembic **0003** | Rozszerzenie `Termin` + backfill: `ical_uid≠NULL → rodzaj=impreza`, inaczej `rodzaj=stolik`; statusy 1:1. Błąd backfillu rozjeżdża kalendarz imprez — testować pierwsze. |
-| Nowe pola `Termin` | `godz_od`, `godz_do` (Time), `kanal` (`reczna\|online\|google\|ical`), `rodzaj` (`stolik\|sala\|impreza`), `stolik_id` (FK→stoliki, SET NULL), `email`, `token_potwierdzenia`, `potwierdzono_at`, `odwolano_at` |
-| Rozszerzony enum statusu | `rezerwacja\|potwierdzona\|odbyla\|no_show\|odwolana` (wstecznie zgodny) |
-| Encja **Stolik** (nowa) | `nazwa/numer`, `strefa`, `pojemnosc`, `laczy_sie`, `aktywny`, `kolejnosc`. Sala jako string na start; pełna encja `Sala` później. |
-| Encja **GodzinyOtwarcia** (nowa) | `dzien_tygodnia` (0–6), `godz_od`, `godz_do`, `ostatni_zasiadek`, `dlugosc_slotu_min` (def. 120), `aktywny` |
-| Flaga `LokalConfig.modul_rezerwacje` | Boolean + guard w endpointach + warunkowa zakładka we froncie |
-| Endpointy | Reuse GET/POST/PUT/DELETE `/api/terminy` + filtry `rodzaj/status/stolik`; nowy `POST /api/terminy/{id}/status` (przejścia + timestampy); **walidacja overlap** stolika w oknie `[godz_od, godz_do]` i pojemności sali (w transakcji — ryzyko double‑bookingu) |
-| Frontend | Nowy widok „Rezerwacje (zarządzanie)" dla admina/szefa, styl reuse `KalendarzImprez.jsx/Imprezy.jsx`. Stary `Rezerwacje.jsx` karmiony też rekordami `Termin rodzaj=stolik`. |
-| Powiadomienia | Web Push do admina/szefa o nowej rezerwacji (reuse `push.py`) |
-| Testy | Rozszerzyć `test_rezerwacje.py`/`test_kalendarz.py`: pojemność, kolizje slotów, przejścia statusów, backfill 0003 |
+## 2. Trzy osie strategiczne (wnioski z rankingu)
 
-### Przepływy w pigułce
-1. **Admin → rezerwacja w aplikacji (MVP):** formularz (data, godz, stolik, osoby, klient, telefon) → `POST /api/terminy` `rodzaj=stolik, kanal=reczna` → walidacja pojemności + overlap → status `potwierdzona`.
-2. **Dzień rezerwacji:** gość przyszedł → `odbyla`; nie przyszedł → `no_show` (timestamp, opcj. przepadek zadatku).
-3. **Odwołanie:** gość (link/token) lub admin → `odwolana` → zwolnienie slotu + push.
-4. **Sprzężenie z grafikiem:** `rodzaj=sala/impreza` → `Impreza` → `algorithm.przelicz_imprezy_na_wymagania` → obsada (istnieje); `rodzaj=stolik` → **tylko** sygnał ruchu.
-5. **Online (za flagą `rezerwacje_online`, później):** widget bez logowania → silnik liczy wolne sloty → opcjonalny zadatek → `Termin kanal=online` + token + push.
+### Oś A — „Wesela i imprezy": wertykał, którego nikt nie obsługuje ⭐
+Najmocniejszy sygnał panelu. Systemy rezerwacyjne kończą na stolikach; systemy bankietowe
+obsługują managera, nie klienta. **Domy weselne i lokale eventowe w Polsce nie mają żadnego
+dedykowanego narzędzia** — a Lokalo już ma kalendarz imprez, zadatki, obsadę per goście
+i rozliczenia imprez. To nasz klin w rynek (beachhead): klient weselny płaci najwięcej,
+ból jest największy, konkurencja zerowa.
 
-### Ryzyka (z projektu modułu)
-- **RODO:** rezerwacje online wprowadzają dane osobowe gości — zgoda, retencja; ekran pracownika nadal TYLKO liczby.
-- **Double‑booking:** walidacja overlap w transakcji + constraint, inaczej overbooking.
-- **Migracja statusów/backfill 0003:** zachować istniejące wartości; błąd rozjeżdża kalendarz imprez.
-- **Strefy czasowe:** wprowadzenie godzin wymaga jednolitej obsługi TZ (dziś `.ics` świadomie ignoruje godziny).
-- **Przeskalowanie:** trzymać MVP przy rezerwacji stolika + statusy + pojemność; online/płatności/SMS jako wyraźne „później".
+### Oś B — „Zgodność i ochrona pieniędzy": funkcje, za które płaci się ze strachu
+Sanepid, PIP, koncesja alkoholowa, nadużycia kelnerskie, skokowe podwyżki cen dostawców.
+Kary idą w tysiące złotych, nadużycia to typowo 1–3% obrotu. Funkcje z tej osi mają
+najwyższą feasibility (budujemy na istniejącym: strażnik prawa pracy, Web Push, agent POS,
+zeszyt kasowy) i **argument sprzedażowy, który zamyka rozmowę**: „to się zwraca po pierwszej
+uniknionej karze / pierwszym wykrytym kombinatorze".
 
----
+### Oś C — „Załoga, która zostaje": retencja pracowników jako produkt
+Rotacja to plaga gastro. Lokalo już liczy zarobki co do minuty — pokazanie ich pracownikowi
+na żywo (+ zaliczki, + radar odejść dla managera) buduje lojalność załogi wobec lokalu
+**i lojalność lokalu wobec Lokalo** (dane, których nie zabierze się do konkurencji).
 
-## 3. Backlog pomysłów (epiki posortowane wg wartości)
+## 3. Roadmapa fazowa
 
-### EPIK A — REZERWACJE i OBSŁUGA GOŚCI *(priorytet właściciela)*
-| Pomysł | Wartość | Nakład |
+### TERAZ — najbliższa fala *(szybkie zwycięstwa + otwarcie osi weselnej)*
+
+| # | Funkcja | Co robi | Sędziowie (i/f/m) | Wysiłek |
+|---|---|---|---|---|
+| 1 | **Moduł „Zgodność lokalu"** (fuzja pomysłów: terminarz zgodności + strażnik badań i sanepidu) | Cyfrowa teczka: badania sanepidowskie, medycyna pracy, BHP per pracownik + „papiery lokalu" (koncesja alkoholowa i jej raty 31.01/31.05/30.09, gaśnice, wentylacja). Alerty push 30/14/3 dni; **auto-grafik blokuje/flaguje osobę z przeterminowanymi badaniami** — tego nie ma nikt. | 4.0 / 4.7–5.0 / 3.5 | **S+M** |
+| 2 | **Skrzynka zapytań o imprezy z AI** ⭐ TOP 1 rankingu | Właściciel wkleja mail „szukamy sali na wesele, ~120 osób, sierpień 2027, 250 zł/os" → Claude (tool-use) wyciąga parametry, sprawdza kalendarz imprez, proponuje wolne terminy i **generuje szkic odpowiedzi + kartę imprezy do zatwierdzenia 1 kliknięciem**. Pary rezerwują u tego, kto odpisze pierwszy — każda godzina zwłoki to utracone 20–50 tys. zł. | 4.3 / 4.0 / 4.0 | **M** |
+| 3 | **Radar odejść pracowników** | Sygnały z danych, które już są: spadek dyspozycyjności, oddawanie zmian na giełdzie, malejące godziny → cichy alert dla managera „porozmawiaj z Anią, zanim złoży wypowiedzenie". | 3.0 / 5.0 / 3.3 | **S** |
+
+### NASTĘPNE — kwartał po „TERAZ" *(monetyzacja osi weselnej + ochrona pieniędzy)*
+
+| # | Funkcja | Co robi | Sędziowie | Wysiłek |
+|---|---|---|---|---|
+| 4 | **Portal klienta imprezy** (etap 1, w abonamencie) | Tokenowa strona dla pary młodej/organizatora (jak istniejący widget rezerwacji): liczba gości, wybory menu, harmonogram wpłat, ustalenia z pisemnym śladem. Zmiany wpadają do karty imprezy i prognozy obsady. Koniec „to ile w końcu będzie tych gości?". | 4.7 / 4.0 / 4.3 | **M** |
+| 5 | **Portal Pary Młodej** (etap 2, płatny add-on 149–199 zł/mc) | Rozbudowa etapu 1: para **sama rozsadza gości na planie sali** (drag&drop już jest!), płaci raty online (P24/BLIK), wybiera menu z wariantami. Dom weselny robiący 40 wesel/rok płaci 2–3× wyższy abonament — i nigdy nie odejdzie. | 4.7 / 3.3 / 4.3 | **L** |
+| 6 | **Antyfraud POS: storna i rabaty** ⭐ TOP 3 | Agent lokalny czyta z Gastro storna/anulacje/rabaty per kelner; model statystyczny porównuje do zespołu (z poprawką na ruch), Claude pisze po polsku tygodniowe podsumowanie: „Marek stornuje 3× częściej, głównie napoje po 22:00". Komunikowane jako *flagi do rozmowy*, nie oskarżenia. | 4.3 / 3.7 / 4.0 | **M** |
+| 7 | **Portfel pracownika na żywo** | Licznik „zarobiłeś już X zł w tym miesiącu" (RCP już to liczy) + symulacja „weź zmianę z giełdy = +180 zł" + wniosek o zaliczkę z limitem %, akceptacja 1 kliknięciem, auto-potrącenie z wypłaty. 80% wartości fintechów „wypłata na żądanie" — w cenie abonamentu. | 4.0 / 4.0 / 3.7 | **M** |
+
+### PÓŹNIEJ — druga połowa horyzontu *(ekosystem polski + kuchnia)*
+
+| # | Funkcja | Co robi | Sędziowie | Wysiłek |
+|---|---|---|---|---|
+| 8 | **Skrzynka kosztów z KSeF** | KSeF 2.0 (obowiązkowy!) → Lokalo samo pobiera faktury zakupowe, kategoryzuje koszty, **alarmuje o skokowych podwyżkach cen dostawców** („schab +18% vs poprzednia dostawa"), komplet miesiąca 1 kliknięciem do księgowej. Realne koszty na bieżąco, nie 20-go u księgowej. | 4.0 / 3.3 / 3.7 | **L** |
+| 9 | **HACCP w telefonie** | Checklisty temperatur/czystości na telefonie pracownika z podpisem i godziną; raport „pod kontrolę sanepidu" 1 kliknięciem. Naturalne domknięcie modułu Zgodność. | 4.0 / 4.0 / 3.3 | **M** |
+| 10 | **Lejek opinii Google** | Po wizycie (rezerwacja zamknięta) SMS/mail z prośbą o ocenę; niezadowoleni trafiają do formularza wewnętrznego zamiast do publicznej jedynki. Więcej gwiazdek = więcej gości. | 4.0 / 4.3 / 2.0 | **M** |
+| 11 | **Konektory POS chmurowych** (Dotykačka / GoPOS / POSbistro) | Adapter na wzór istniejącego agenta Gastro — otwiera rynek lokali, które nie mają Gastro (większość nowych). Warunek skali. | 4.3 / 3.0 / 3.7 | **L** |
+| 12 | **Faktury weselne → KSeF** | Wystawianie faktur za imprezy (zadatki/raty już są w systemie) prosto do KSeF — bez przepisywania do programu księgowego. | 4.0 / 3.3 / 3.3 | **M** |
+| 13 | **Panel partnera dla księgowych** | Księgowa obsługująca 15 lokali widzi swoje lokale w jednym panelu (eksporty, faktury kosztowe, wypłaty) → **księgowi stają się kanałem sprzedaży Lokalo**. | 3.7 / 3.3 / 3.7 | **M** |
+
+### ZAKŁADY (big bets) — wysoki moat, wymagają masy krytycznej klientów
+
+| Funkcja | Dlaczego zakład | Moat |
 |---|---|---|
-| Rdzeń: Stolik/Sala/Slot + dwukierunkowy `Termin` | wysoka | L |
-| Godziny otwarcia + sloty + dostępność live | wysoka | L |
-| Widget rezerwacji online (publiczny POST) | wysoka | XL |
-| Potwierdzenia/przypomnienia SMS/e‑mail (link potwierdź/odwołaj) | wysoka | L |
-| Zadatki online (P24/Stripe) → zeszyt kasowy + KP | wysoka | XL |
-| Obsługa no‑show: oznaczanie, auto‑zwolnienie, polityki | średnia | M |
-| Lista oczekujących (waitlist) z auto‑propozycją | średnia | M |
-| Interaktywny plan sali (drag&drop) + live `StanStolow` | wysoka | XL |
-| Rezerwacje grupowe/eventy spięte z kalendarzem imprez | średnia | L |
-| Karty gości / CRM rezerwacyjny (historia, VIP, no‑show) | średnia | M |
+| **Wypożyczalnia pracowników między lokalami** | Kelner z lokalu A bierze zmianę w lokalu B (oba na Lokalo) — giełda zmian ponad lokalami. Efekt sieciowy: im więcej lokali, tym większa wartość. Wymaga zaufania i masy krytycznej w jednym mieście. | 4.3 |
+| **Lokalo Benchmark** | Anonimowe benchmarki: „Twój food-cost/koszt pracy/obłożenie vs podobne lokale w regionie". Dane jako produkt — nie do skopiowania przez konkurencję bez bazy klientów. | **4.7** |
+| **Tryb franczyzy** | Standardy sieci (checklisty, receptury, ceny) narzucane centralnie + audyt zgodności per punkt. Otwiera segment Enterprise. | 4.0 |
+| **Stolik widoczny w Google** (Reserve with Google) | Rezerwacja prosto z Map Google do widgetu Lokalo. Duży zasięg, ale proces certyfikacji Google — podjąć, gdy będzie >20 płacących lokali. | 3.3 |
 
-### EPIK B — INTEGRACJE i EKOSYSTEM
-| Pomysł | Wartość | Nakład |
-|---|---|---|
-| Per‑tenant secret store (fundament bezpieczeństwa) | wysoka | M |
-| Płatności online zadatków (P24/Stripe/BLIK) | wysoka | L |
-| Generyczna warstwa konektorów POS (adapter) | wysoka | L |
-| Dwukierunkowa sync kalendarzy (Google/Outlook/CalDAV) | wysoka | XL |
-| Bramki SMS + transakcyjny e‑mail | wysoka | M |
-| Publiczne API + webhooki (in/out) | wysoka | L |
-| Konektory portali rezerwacji (MojStolik/Resmio…) | wysoka | L |
-| Eksport do księgowości (KSeF/JPK/wFirma/Fakturownia) | średnia | L |
+## 4. Czego świadomie NIE robimy (i dlaczego)
 
-### EPIK C — FINANSE, RAPORTY, ANALITYKA
-| Pomysł | Wartość | Nakład |
-|---|---|---|
-| Pulpit właściciela (KPI cockpit) | wysoka | L |
-| Alerty anomalii kasowych | wysoka | M |
-| Eksport do księgowości | wysoka | L |
-| Foodcost i marża | wysoka | XL |
-| Moduł napiwków (ewidencja, podział, rozliczenie) | średnia | L |
-| Raporty porównawcze okresów (PoP) | średnia | M |
-| Prognoza przychodów (trend + sezonowość) | średnia | L |
-
-### EPIK D — GRAFIK i KADRY
-| Pomysł | Wartość | Nakład |
-|---|---|---|
-| Szablony grafików (tygodnie wzorcowe) | wysoka | M |
-| Prognoza obsady wg ruchu i rezerwacji | wysoka | L |
-| Wymiana/oddawanie zmian (giełda zmian) | wysoka | L |
-| Koszt pracy na żywo vs budżet | wysoka | L |
-| Strażnik zgodności z prawem pracy (PIP) | wysoka | M |
-| Ścieżki akceptacji (wnioski→szef→admin) | średnia | M |
-| Powiadomienia o delcie grafiku po publikacji | średnia | M |
-| Auto‑układanie z fair‑rozkładem weekendów/świąt | średnia | M |
-
-### EPIK E — PLATFORMA SaaS i MULTI‑LOKAL
-| Pomysł | Wartość | Nakład |
-|---|---|---|
-| Panel super‑admina nad wszystkimi lokalami | wysoka | L |
-| Granularne role/uprawnienia (RBAC) | wysoka | L |
-| Samoobsługowy onboarding (kreator lokalu) | wysoka | L |
-| Billing i subskrypcje (abonament per lokal) | wysoka | L |
-| Dziennik audytu wrażliwych operacji | wysoka | M |
-| Encja Sieć/Organizacja (multi‑lokal) | wysoka | XL |
-| Centralny serwis powiadomień (push+mail+SMS) | średnia | M |
-| Aplikacja mobilna pracownika (PWA‑first) | średnia | L |
-
-### EPIK F — AI i AUTOMATYZACJA
-| Pomysł | Wartość | Nakład |
-|---|---|---|
-| Prognoza ruchu per dzień/pasmo (bez LLM) | wysoka | M |
-| Auto‑grafik wspierany prognozą | wysoka | L |
-| Auto‑przypomnienia/potwierdzenia rezerwacji | wysoka | M |
-| Scoring no‑show + dynamiczny zadatek | wysoka | L |
-| Podsumowanie dnia dla managera | średnia | M |
-| Chat‑asystent nad danymi lokalu (Claude API + tool‑use) | średnia | XL |
-| Asystent tekstów/komunikacji (Claude API) | niska | M |
-
----
-
-## 4. Roadmapa fazowa
-
-### TERAZ (najbliższa fala) — *rdzeń rezerwacji + fundament bezpieczeństwa*
-- **Rezerwacje MVP** (Epik A, rdzeń): migracja 0003, encje `Stolik`/`GodzinyOtwarcia`, flaga `modul_rezerwacje`, CRUD admina, walidacja pojemności/overlap, widok zarządzania, push o nowej rezerwacji. **Pierwszy duży moduł po fundamentach.**
-- **Per‑tenant secret store** (Epik B): tani, zrobić *zanim* narosną integracje.
-- **Pulpit właściciela** (Epik C): agregacja istniejących danych, zero nowych tabel — szybki argument sprzedażowy.
-
-### NASTĘPNE — *redukcja no‑show + monetyzacja*
-- Potwierdzenia/przypomnienia SMS+e‑mail · Płatności online zadatków P24/Stripe · Obsługa no‑show + waitlista · Alerty anomalii kasowych + eksport do księgowości · RBAC + panel super‑admina.
-
-### PÓŹNIEJ — *platforma i przewaga konkurencyjna*
-- Widget rezerwacji online + dwukierunkowa sync kalendarzy · Interaktywny plan sali z live `StanStolow` · Billing/subskrypcje + samoobsługowy onboarding · Prognoza ruchu → auto‑grafik, szablony grafików, koszt vs budżet, strażnik prawa pracy · Foodcost/marża, napiwki, raporty PoP.
-
-### WIZJA — *otwarty ekosystem + AI*
-- Encja Sieć/Organizacja (multi‑lokal/franczyzy) · Publiczne API + webhooki, konektory portali i wielu POS · Chat‑asystent nad danymi, scoring no‑show z modelem uczonym, KSeF e‑faktury zadatkowe.
-
----
+- **Menu QR / strona www lokalu** (ocena 2.6–2.9, moat 1.0–2.3) — rynek zaorany przez darmowe
+  narzędzia; zero wyróżnika. Wracamy najwyżej jako dodatek do Lejka opinii.
+- **Zamówienia na wynos bez pośredników** (2.67) — wojna z Pyszne/Glovo wymaga marketingu
+  konsumenckiego, którego solo-dev nie wygra. Zamiast tego: *rozliczenia* platform (pomysł #41 rankingu).
+- **Karta lojalnościowa na pieczątki** (2.67) — commodity, niska wartość bez aplikacji konsumenckiej.
+- **Moduł systemu kaucyjnego** (2.56) — czekamy, aż regulacje HoReCa się ustabilizują.
+- **Gamifikacja załogi („Liga zmianowa")** (2.78) — ryzyko efektu cringe; wartość retencyjną
+  dostarcza Portfel pracownika.
 
 ## 5. Rekomendowane „następne 3 rzeczy do zbudowania"
 
-1. **Rezerwacje MVP — rdzeń** (migracja 0003 + `Stolik`/`GodzinyOtwarcia` + flaga `modul_rezerwacje` + CRUD admina z walidacją overlap/pojemności).
-   *Dlaczego:* bezpośredni priorytet właściciela i fundament najcenniejszej soczewki. Buduje na `Termin` i mechanizmie `Impreza→obsada`. Pierwsze testy: backfill 0003 i reguła `rodzaj=stolik` ⇒ NIE tworzy `Impreza`. Twardo: overlap w transakcji + `Rezerwacje.jsx` nadal tylko liczby (RODO).
+1. **Moduł „Zgodność lokalu"** — najtańszy compliance-win (S+M, feasibility 4.7–5.0),
+   buduje wyłącznie na istniejącym (Web Push, strażnik grafiku, teczka pracownika),
+   a przy kontroli sanepidu sprzedaje się sam.
+2. **Skrzynka zapytań o imprezy z AI** — TOP 1 panelu (5.01), średni wysiłek, otwiera oś
+   weselną i jest **najlepszym demo sprzedażowym**: „wklej maila → zobacz gotową odpowiedź
+   z wolnymi terminami" robi efekt *wow* w 30 sekund.
+3. **Portal klienta imprezy (etap 1)** — TOP 2 (4.93), M, domyka pętlę: zapytanie (AI) →
+   karta imprezy → portal klienta → zadatki → obsada → rozliczenie. Po nim naturalnie
+   etap 2 (Portal Pary Młodej) jako pierwszy **płatny add-on** Lokalo.
 
-2. **Pulpit właściciela (KPI cockpit)** — `GET /api/pulpit?start&end`.
-   *Dlaczego:* najwyższy stosunek wartości do nakładu — czysta agregacja danych z `raporty`, `zeszyt`, `rozliczenia`, `StolikiHistoria`. Zero nowych tabel, natychmiastowy argument sprzedażowy.
+## 6. Zasady wykonania (niezmienne)
 
-3. **Per‑tenant secret store + flaga modułowa jako wzorzec.**
-   *Dlaczego:* warunek brzegowy KAŻDEJ przyszłej integracji (płatności, SMS, OAuth). Tani teraz, drogi później. Spójnie z fail‑fast `settings.py` (brak/zły sekret = integracja wyłączona z jasnym komunikatem, nie crash).
+- **Budujemy NA istniejącym kodzie** — każdy pomysł wyżej wskazuje istniejący moduł-fundament;
+  żadnych przepisywań od zera.
+- **Jeden pas ruchu**: jedna funkcja na raz, w pełni + testy zielone + commit/push, potem następna.
+- **Design system „Cicha scena"** (DESIGN.md) obowiązuje każdy nowy ekran.
+- **Multi-tenant przed sprzedażą masową**: fundamenty (per-tenant sekrety, izolacja) trzymają
+  priorytet z STRATEGIA-KOMERCJALIZACJI.md — funkcje z tej roadmapy nie mogą ich wyprzedzić
+  kosztem bezpieczeństwa.
 
 ---
 
-*Zasada nadrzędna: każdy nowy moduł stoi za flagą w `LokalConfig` (sprzedawalny per lokal) i reużywa istniejące encje/mechanizmy zamiast budować obok. Pieniądz online (zadatki) i dwukierunkowe rezerwacje to dwa ruchy, które odróżniają produkt od arkusza Excela — i one decydują o cenie abonamentu.*
+*Pełny ranking 64 pomysłów z ocenami panelu: artefakt sesyjny (ranking.json) — do wglądu na życzenie.*
