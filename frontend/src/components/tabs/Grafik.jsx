@@ -380,7 +380,7 @@ export default function Grafik() {
         const { wd, dm } = dayLabel(modal.dt)
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setModal(null)}>
-            <div className="w-full max-w-sm rounded-2xl border border-line bg-bg-2 p-5 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
+            <div className="material w-full max-w-sm p-5 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
               <div className="mb-3 flex items-start justify-between">
                 <div>
                   <div className="font-display text-lg font-bold text-ink">{modal.p.imie} {modal.p.nazwisko}</div>

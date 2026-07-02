@@ -275,6 +275,7 @@ export default function Produkt() {
 
   return (
     <div ref={root} data-anim={anim ? 'on' : undefined} className="lp relative min-h-dvh bg-bg text-ink">
+      <div aria-hidden className="scena-swiatlo pointer-events-none fixed inset-0" />
       <style>{`
         .lp { --e: cubic-bezier(.22,1,.36,1); }
         .lp [data-rv] { opacity: 1; }
@@ -302,7 +303,7 @@ export default function Produkt() {
       `}</style>
 
       {/* Nawigacja */}
-      <header className="sticky top-0 z-40 border-b border-line bg-bg/70 backdrop-blur-md">
+      <header className="sticky top-0 z-40 border-b border-white/[0.06] bg-bg/60 backdrop-blur-xl">
         <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
           <a href="?produkt" className="flex items-center gap-2.5">
             <Logo className="h-8" variant="gradient" />

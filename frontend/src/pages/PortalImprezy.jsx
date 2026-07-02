@@ -85,8 +85,9 @@ export default function PortalImprezy() {
   const fld = 'rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted/50 focus:border-mint/60 focus:ring-2 focus:ring-mint/20'
 
   return (
-    <div className="min-h-dvh bg-bg px-4 py-8">
-      <div className="mx-auto w-full max-w-2xl space-y-5">
+    <div className="relative min-h-dvh bg-bg px-4 py-8">
+      <div aria-hidden className="scena-swiatlo pointer-events-none fixed inset-0" />
+      <div className="relative z-10 mx-auto w-full max-w-2xl space-y-5">
         <header className="flex items-center gap-3">
           <Logo className="h-9" />
           <div>

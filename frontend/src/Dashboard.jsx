@@ -94,12 +94,15 @@ export default function Dashboard() {
 
   return (
     <div className="relative flex h-dvh overflow-hidden bg-bg">
+      {/* Światło sceny (Cicha scena v2): statyczne, monochromatyczne — nadaje szkłu głębię. */}
+      <div aria-hidden className="scena-swiatlo pointer-events-none fixed inset-0" />
+
       {/* Tło pod szufladę (mobile) */}
       {mobileOpen && <div className="fixed inset-0 z-30 animate-overlay-in bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 transform flex-col border-r border-line bg-bg-2/95 backdrop-blur transition-transform duration-300 ease-drawer lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 transform flex-col border-r border-white/[0.06] bg-bg/70 backdrop-blur-2xl transition-transform duration-300 ease-drawer lg:static lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -147,7 +150,7 @@ export default function Dashboard() {
 
       {/* Główna kolumna */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
-        <header className="flex shrink-0 items-center justify-between border-b border-line bg-bg-2/60 px-5 pt-[calc(env(safe-area-inset-top)+0.9rem)] pb-[0.9rem] backdrop-blur md:px-8">
+        <header className="flex shrink-0 items-center justify-between border-b border-white/[0.06] bg-bg/55 px-5 pt-[calc(env(safe-area-inset-top)+0.9rem)] pb-[0.9rem] backdrop-blur-xl md:px-8">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setMobileOpen(true)}

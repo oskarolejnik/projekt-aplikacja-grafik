@@ -60,6 +60,7 @@ export default function RezerwacjaWidget() {
 
   return (
     <div className="relative min-h-dvh bg-bg px-4 py-10">
+      <div aria-hidden className="scena-swiatlo pointer-events-none fixed inset-0" />
       <div className="relative z-10 mx-auto w-full max-w-lg">
         <div className="mb-6 flex items-center gap-3">
           <Logo className="h-9" variant="gradient" />

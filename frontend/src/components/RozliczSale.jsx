@@ -66,7 +66,7 @@ export default function RozliczSale({ data, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => onClose(false)}>
-      <div className="max-h-[90dvh] w-full max-w-sm overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="material max-h-[90dvh] w-full max-w-sm overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between">
           <div>
             <div className="font-display text-lg font-bold text-ink">Rozlicz się</div>

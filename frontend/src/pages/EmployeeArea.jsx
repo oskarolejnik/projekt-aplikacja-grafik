@@ -72,7 +72,8 @@ export default function EmployeeArea() {
 
   return (
     <div className="relative min-h-dvh bg-bg">
-      <header className="relative z-10 flex items-center justify-between border-b border-line bg-bg-2/60 px-safe pt-[calc(env(safe-area-inset-top)+0.9rem)] pb-[0.9rem] backdrop-blur">
+      <div aria-hidden className="scena-swiatlo pointer-events-none fixed inset-0" />
+      <header className="relative z-10 flex items-center justify-between border-b border-white/[0.06] bg-bg/60 px-safe pt-[calc(env(safe-area-inset-top)+0.9rem)] pb-[0.9rem] backdrop-blur-xl">
         <div className="flex items-center gap-3">
           <Logo className="h-8" variant="gradient" />
           <div>

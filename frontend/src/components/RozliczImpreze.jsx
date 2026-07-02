@@ -50,7 +50,7 @@ export default function RozliczImpreze({ data, rewir, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => onClose(false)}>
-      <div className="w-full max-w-md rounded-2xl border border-line bg-bg-2 p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="material w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-3 flex items-start justify-between">
           <div>
             <div className="font-display text-lg font-bold text-ink">Rozlicz imprezę</div>

@@ -6,8 +6,8 @@ const VARIANTS = {
   accent: 'bg-mint text-bg hover:brightness-105',
   success: 'bg-success text-bg hover:brightness-105',
   danger: 'bg-danger text-white hover:brightness-110',
-  // Subtelny, obrysowany — akcje drugorzędne
-  ghost: 'border border-line bg-white/[0.04] text-ink hover:bg-white/[0.08]',
+  // Subtelny, obrysowany — akcje drugorzędne (szkło: rozjaśnienie obrysu na hover)
+  ghost: 'border border-white/[0.10] bg-white/[0.04] text-ink hover:border-white/[0.16] hover:bg-white/[0.08]',
   subtle: 'bg-white/[0.04] text-muted hover:text-ink hover:bg-white/[0.08]',
 }
 

@@ -166,19 +166,36 @@ i sekcji oraz momenty marki (logowanie, landing). Hierarchię buduje **waga i wi
 **Reguła Spokojnej Wagi.** Kontrolki (przyciski, taby, segmenty) mają `font-semibold` — nigdy bold.
 Bold zarezerwowany dla nagłówków display/headline. Duży tekst nigdy nie jest uppercase.
 
-## 4. Elevation
+## 4. Elevation — „szkło i światło" (v2.1)
 
-Głębia = **rampa tonalna + dyskretny cień**. Żadnych kolorowych poświat.
+Głębia = **szkło + monochromatyczne światło sceny + dyskretny cień**. Żadnych kolorowych poświat.
+Ewolucja v2.1 (07.2026, na życzenie właściciela wg referencji noir-glass): powierzchnie treści
+stały się szkłem, chrome i modale — materiałem z prawdziwym rozmyciem, a scena dostała statyczne,
+białe światło, które nadaje szkłu rację bytu.
+
+### Materiały (index.css)
+- **`.card` — szkło treści**: obrys `white/8%`, mgiełka `white/3%`, wewnętrzna kreska światła
+  `inset 0 1px 0 white/6%` + cień soft. **Celowo BEZ backdrop-blur** — dziesiątki rozmywających
+  kart na ekranie kosztowałyby GPU; szkło czyta się z obrysu, mgiełki i kreski światła.
+- **`.material` — materiał chrome/modali**: jak `.card`, ale z prawdziwym `backdrop-blur(20px)`
+  i głębszym cieniem. Wyłącznie: paski (header/sidebar — tam wariant `bg-bg/55–70 + blur-xl/2xl`),
+  modale, toasty, elementy pływające, sekcja cennika na landingu. Dokładnie jak materiały Apple.
+- **`.scena-swiatlo` — światło sceny**: dwa statyczne radialne rozjaśnienia bieli (≤4%), fixed,
+  bez animacji. To JEDYNY usankcjonowany „gradient" systemu — światło, nie kolor.
 
 ### Shadow Vocabulary
 - **Soft** (`0 1px 2px rgba(0,0,0,0.28), 0 12px 32px -16px rgba(0,0,0,0.55)`): dwuwarstwowy —
-  krótki cień kontaktowy + miękkie otoczenie. Karty, modale, popovery.
+  krótki cień kontaktowy + miękkie otoczenie (wbudowany w `.card`).
 - **Cta** (`0 2px 12px -4px rgba(0,0,0,0.45)`): drobne uniesienie wskaźnika segmented control.
+- Hover pogłębia cień przez **offset/blur, nigdy przez ciemność** (alfa zostaje 0.55).
 
 ### Named Rules
 **Reguła Bez Poświat.** Kolorowy `box-shadow` (glow) nie istnieje w systemie. Stan komunikują:
-tinta tła (selekcja), obrys (fokus), waga tekstu (aktywność). Przezroczystość + `backdrop-blur`
-dozwolone tylko na chrome (nagłówek, sidebar, overlay modala) — jak w natywnych paskach iOS/macOS.
+tinta tła (selekcja), obrys (fokus), waga tekstu (aktywność).
+**Reguła Materiału.** Prawdziwe rozmycie (`backdrop-blur`) tylko tam, gdzie coś realnie „pod spodem"
+się przewija lub prześwituje: chrome, modale, pływające pigułki. Treść = `.card` bez blur.
+**Reguła Światła.** Światło sceny jest monochromatyczne, statyczne i ≤4% bieli. Kolorowe/duszące
+bloby i animowane poświaty pozostają zakazane.
 
 ## 5. Components
 
@@ -192,8 +209,8 @@ dozwolone tylko na chrome (nagłówek, sidebar, overlay modala) — jak w natywn
 - Stany: default, hover, focus-visible (szałwiowy obrys), active, disabled (opacity 50) — komplet.
 
 ### Cards / Containers
-- **Corner Style:** 16px. **Background:** `bg-elevated`→ledwo zauważalna objętość (`surface-grad`
-  o amplitudzie 2%). **Shadow:** `soft`. **Border:** 1px `line`.
+- **Corner Style:** 16px. **Materiał:** `.card` (szkło: obrys white/8%, mgiełka white/3%,
+  kreska światła 1px inset, cień soft — bez blur). Modale/pływające: `.material` (z blur).
 - **Padding:** 24–32px. **Nigdy karta w karcie.**
 
 ### Inputs / Fields
