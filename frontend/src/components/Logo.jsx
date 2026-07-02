@@ -42,14 +42,15 @@ export function Logo({ className = 'h-5', variant = 'ink' }) {
   )
 }
 
-// „Animowany" znak na ekranie głównym — neutralny mark z delikatnym unoszeniem (bez wiatraka).
+// Duży znak na ekranie głównym — statyczny (Cicha scena: ruch komunikuje stan, nie dekoruje).
+// Prop `spin` zachowany dla zgodności API, celowo ignorowany.
 export function AnimatedLogo({ className = 'h-24', spin = true }) {
   const { logo_url, nazwa_lokalu } = useBranding()
   if (logo_url) {
     return <img src={logo_url} alt={nazwa_lokalu} className={`inline-block w-auto object-contain ${className}`} />
   }
   return (
-    <span className={`inline-block aspect-square ${spin ? 'animate-float motion-reduce:animate-none' : ''} ${className}`}>
+    <span className={`inline-block aspect-square ${className}`}>
       <Mark idSuffix="-a" title={nazwa_lokalu} />
     </span>
   )

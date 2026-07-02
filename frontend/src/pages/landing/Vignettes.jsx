@@ -39,7 +39,7 @@ export function GrafikVignette({ className = '' }) {
       <div className="p-4 sm:p-5">
         <div className="mb-3 flex items-center justify-between">
           <div className="font-display text-sm font-bold text-ink">Grafik · ten tydzień</div>
-          <span className="inline-flex items-center gap-1 rounded-full bg-mint/15 px-2 py-0.5 text-[10px] font-bold text-mint">
+          <span className="inline-flex items-center gap-1 rounded-full bg-mint/15 px-2 py-0.5 text-[10px] font-semibold text-mint">
             <Icon name="sparkles" className="h-3 w-3" /> auto
           </span>
         </div>
@@ -85,7 +85,7 @@ export function PulpitVignette({ className = '' }) {
         </div>
         <div className="mt-4 flex h-16 items-end gap-1.5">
           {SLUPKI.map((s, i) => (
-            <div key={i} className="flex-1 rounded-t bg-accent-gradient" style={{ height: `${Math.round((s / max) * 100)}%`, opacity: 0.55 + (s / max) * 0.45 }} />
+            <div key={i} className="flex-1 rounded-t bg-mint" style={{ height: `${Math.round((s / max) * 100)}%`, opacity: 0.55 + (s / max) * 0.45 }} />
           ))}
         </div>
         <div className="mt-1.5 flex justify-between text-[9px] text-muted">
@@ -105,7 +105,7 @@ export function RezerwacjaVignette({ className = '' }) {
         <div className="mb-3 font-display text-sm font-bold text-ink">Zarezerwuj stolik</div>
         <div className="mb-2 flex gap-1.5">
           {['Pt 12', 'Sob 13', 'Ndz 14'].map((d, i) => (
-            <div key={d} className={`flex-1 rounded-lg border px-2 py-1.5 text-center text-[11px] font-semibold ${i === 1 ? 'border-transparent bg-accent-gradient text-bg' : 'border-line text-muted'}`}>{d}</div>
+            <div key={d} className={`flex-1 rounded-lg border px-2 py-1.5 text-center text-[11px] font-semibold ${i === 1 ? 'border-transparent bg-mint text-bg' : 'border-line text-muted'}`}>{d}</div>
           ))}
         </div>
         <div className="mb-3 flex gap-1.5">
@@ -121,7 +121,7 @@ export function RezerwacjaVignette({ className = '' }) {
             <span className="grid h-5 w-5 place-items-center rounded-full border border-line text-xs">+</span>
           </span>
         </div>
-        <div className="rounded-lg bg-cream py-2 text-center text-[11px] font-bold text-bg">Rezerwuję</div>
+        <div className="rounded-lg bg-cream py-2 text-center text-[11px] font-semibold text-bg">Rezerwuję</div>
         <div className="mt-2 flex items-center justify-center gap-1.5 text-[10px] text-mint">
           <Icon name="check" className="h-3 w-3" /> Potwierdzenie SMS + e-mail
         </div>

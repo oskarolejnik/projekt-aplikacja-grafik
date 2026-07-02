@@ -134,11 +134,11 @@ export default function SzefKuchniGrafik() {
                 <button
                   key={dt}
                   onClick={() => { setSelDay(dt); setDodaj(null); setEdycja(null) }}
-                  className={`flex shrink-0 flex-col items-center rounded-xl border px-3.5 py-2 transition active:scale-[0.95] ${sel ? 'border-transparent bg-accent-gradient text-bg shadow-glow' : 'border-line bg-white/[0.03]'}`}
+                  className={`flex shrink-0 flex-col items-center rounded-xl border px-3.5 py-2 transition active:scale-[0.98] ${sel ? 'border-transparent bg-mint text-bg' : 'border-line bg-white/[0.03]'}`}
                   style={{ WebkitTapHighlightColor: 'transparent' }}
                 >
-                  <span className={`text-[10px] font-bold uppercase tracking-wide ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-muted'}`}>{wd}</span>
-                  <span className={`text-sm font-bold ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-ink'}`}>{dm}</span>
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-muted'}`}>{wd}</span>
+                  <span className={`text-sm font-semibold ${sel ? 'text-bg' : isW ? 'text-blush' : 'text-ink'}`}>{dm}</span>
                 </button>
               )
             })}
@@ -170,7 +170,7 @@ export default function SzefKuchniGrafik() {
                           {edytuje && (
                             <div className="mt-2 flex flex-col gap-1.5 border-t border-line pt-2">
                               <input type="time" value={edycja.godz_od} onChange={(ev) => setEdycja((x) => ({ ...x, godz_od: ev.target.value }))} className="rounded-md border border-line bg-surface p-1.5 text-ink outline-none" />
-                              <button onClick={() => zapiszEdycje(a)} className="rounded-md bg-mint/20 py-1 font-bold text-mint transition hover:bg-mint/30">Zapisz</button>
+                              <button onClick={() => zapiszEdycje(a)} className="rounded-md bg-mint/20 py-1 font-semibold text-mint transition hover:bg-mint/30">Zapisz</button>
                             </div>
                           )}
                         </div>
@@ -181,7 +181,7 @@ export default function SzefKuchniGrafik() {
                       <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-mint/40 bg-surface-2 p-2 text-xs">
                         <input type="time" value={dodaj.godz_od} onChange={(ev) => setDodaj((d) => ({ ...d, godz_od: ev.target.value }))} className="rounded-md border border-line bg-surface p-1.5 text-ink outline-none" />
                         <div className="flex gap-1.5">
-                          <button onClick={() => dodajZmiane(p.id)} className="flex-1 rounded-md bg-mint/20 py-1 font-bold text-mint transition hover:bg-mint/30">Dodaj</button>
+                          <button onClick={() => dodajZmiane(p.id)} className="flex-1 rounded-md bg-mint/20 py-1 font-semibold text-mint transition hover:bg-mint/30">Dodaj</button>
                           <button onClick={() => setDodaj(null)} className="rounded-md border border-line px-2 py-1 text-muted transition hover:text-ink">Anuluj</button>
                         </div>
                       </div>

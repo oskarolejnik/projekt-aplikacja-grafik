@@ -197,7 +197,7 @@ export default function RezerwacjeStolik() {
       {/* Modal rezerwacji */}
       {modal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setModal(null)}>
-          <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5 shadow-glow" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5 shadow-soft" onClick={(e) => e.stopPropagation()}>
             <div className="mb-3 flex items-start justify-between">
               <div className="font-display text-lg font-bold text-ink">{modal.id ? 'Edytuj rezerwację' : 'Nowa rezerwacja'}</div>
               <button onClick={() => setModal(null)} className="text-muted hover:text-ink"><Icon name="close" className="h-5 w-5" /></button>
@@ -238,7 +238,7 @@ export default function RezerwacjeStolik() {
       {/* Modal stolików */}
       {stolikModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setStolikModal(false)}>
-          <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5 shadow-glow" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5 shadow-soft" onClick={(e) => e.stopPropagation()}>
             <div className="mb-3 flex items-start justify-between">
               <div className="font-display text-lg font-bold text-ink">Stoliki</div>
               <button onClick={() => setStolikModal(false)} className="text-muted hover:text-ink"><Icon name="close" className="h-5 w-5" /></button>
@@ -257,7 +257,7 @@ export default function RezerwacjeStolik() {
               <input value={nowyStolik.strefa} onChange={(e) => setNowyStolik((s) => ({ ...s, strefa: e.target.value }))} placeholder="Strefa" className={`${fld} col-span-3`} />
               <input type="number" min="1" value={nowyStolik.pojemnosc} onChange={(e) => setNowyStolik((s) => ({ ...s, pojemnosc: e.target.value }))} placeholder="Os." className={`${fld} col-span-2`} />
               <input type="number" min="1" value={nowyStolik.rewir_nr} onChange={(e) => setNowyStolik((s) => ({ ...s, rewir_nr: e.target.value }))} placeholder="Rewir POS (opc.)" title="Numer rewiru z POS/Gastro — live obłożenie na planie sali" className={`${fld} col-span-3`} />
-              <button onClick={dodajStolik} className="col-span-1 grid place-items-center rounded-lg bg-accent-gradient text-bg"><Icon name="plus" className="h-4 w-4" /></button>
+              <button onClick={dodajStolik} className="col-span-1 grid place-items-center rounded-lg bg-mint text-bg"><Icon name="plus" className="h-4 w-4" /></button>
             </div>
           </div>
         </div>
@@ -266,7 +266,7 @@ export default function RezerwacjeStolik() {
       {/* Modal listy oczekujących */}
       {listaModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setListaModal(false)}>
-          <div className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5 shadow-glow" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-bg-2 p-5 shadow-soft" onClick={(e) => e.stopPropagation()}>
             <div className="mb-3 flex items-start justify-between">
               <div className="font-display text-lg font-bold text-ink">Lista oczekujących · {data}</div>
               <button onClick={() => setListaModal(false)} className="text-muted hover:text-ink"><Icon name="close" className="h-5 w-5" /></button>
@@ -307,7 +307,7 @@ export default function RezerwacjeStolik() {
               <input type="time" value={nowyOcz.godz_od} onChange={(e) => setNowyOcz((s) => ({ ...s, godz_od: e.target.value }))} className={`${fld} col-span-3`} />
               <input type="number" min="1" value={nowyOcz.liczba_osob} onChange={(e) => setNowyOcz((s) => ({ ...s, liczba_osob: e.target.value }))} placeholder="Os." className={`${fld} col-span-2`} />
               <input value={nowyOcz.telefon} onChange={(e) => setNowyOcz((s) => ({ ...s, telefon: e.target.value }))} placeholder="Tel." className={`${fld} col-span-2`} />
-              <button onClick={dodajOczekujacego} className="col-span-1 grid place-items-center rounded-lg bg-accent-gradient text-bg"><Icon name="plus" className="h-4 w-4" /></button>
+              <button onClick={dodajOczekujacego} className="col-span-1 grid place-items-center rounded-lg bg-mint text-bg"><Icon name="plus" className="h-4 w-4" /></button>
             </div>
           </div>
         </div>

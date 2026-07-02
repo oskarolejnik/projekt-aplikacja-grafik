@@ -71,7 +71,7 @@ export default function Pulpit() {
             <Kpi label="Rezerwacje" value={p.rezerwacje.razem} sub={`${p.rezerwacje.goscie} gości`} icon="calendar" />
             <Kpi label={`Koszt pracy (${String(p.koszt_pracy_miesiac.miesiac).padStart(2, '0')}.${p.koszt_pracy_miesiac.rok})`} value={zl(p.koszt_pracy_miesiac.kwota)} icon="users" />
             <Kpi label="Alerty kasowe" value={p.alerty_kasowe.dni_z_anomalia}
-                 sub={p.alerty_kasowe.suma_braki < 0 ? `braki ${zl(p.alerty_kasowe.suma_braki)}` : 'brak braków'}
+                 sub={p.alerty_kasowe.suma_braki < 0 ? `braki ${zl(p.alerty_kasowe.suma_braki)}` : 'wszystko się zgadza'}
                  icon="warning" accent={p.alerty_kasowe.dni_z_anomalia > 0 ? 'text-danger' : 'text-ink'} />
           </div>
 
@@ -90,7 +90,7 @@ export default function Pulpit() {
               <div className="flex h-40 items-end gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-3">
                 {p.przychod.dzienny.map((d) => (
                   <div key={d.data} className="flex min-w-[8px] flex-1 flex-col items-center" title={`${d.data}: ${zl(d.przychod)}`}>
-                    <div className="w-full rounded-t bg-accent-gradient" style={{ height: `${Math.round((d.przychod / maxPrzychod) * 100)}%`, minHeight: d.przychod > 0 ? '4px' : '0' }} />
+                    <div className="w-full rounded-t bg-mint" style={{ height: `${Math.round((d.przychod / maxPrzychod) * 100)}%`, minHeight: d.przychod > 0 ? '4px' : '0' }} />
                   </div>
                 ))}
               </div>

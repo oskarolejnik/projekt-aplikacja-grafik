@@ -77,7 +77,7 @@ function KuchniaGodziny() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => przesunMiesiac(-1)}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-95"
+            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
             aria-label="Poprzedni miesiąc"
           >
             <Icon name="chevronDown" className="h-4 w-4 rotate-90" />
@@ -86,7 +86,7 @@ function KuchniaGodziny() {
           <button
             onClick={() => przesunMiesiac(1)}
             disabled={naPrzyszlosc}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-95 disabled:opacity-30"
+            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
             aria-label="Następny miesiąc"
           >
             <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
@@ -125,7 +125,7 @@ function KuchniaGodziny() {
           <div className="mb-6 flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border border-line bg-white/[0.02] px-5 py-4">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Łącznie (kuchnia)</div>
-              <div className="font-display text-2xl font-bold text-gradient tabular-nums">{godzinyHM(sumaGodzin)}</div>
+              <div className="font-display text-2xl font-bold text-ink tabular-nums">{godzinyHM(sumaGodzin)}</div>
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Pracownicy z godzinami</div>
@@ -152,7 +152,7 @@ function KuchniaGodziny() {
                         <div key={s.stanowisko} className="flex items-center gap-3">
                           <span className="w-28 shrink-0 truncate text-xs text-muted" title={s.stanowisko}>{s.stanowisko}</span>
                           <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-                            <div className="h-full rounded-full bg-accent-gradient" style={{ width: `${(s.godziny / maxG) * 100}%` }} />
+                            <div className="h-full rounded-full bg-mint" style={{ width: `${(s.godziny / maxG) * 100}%` }} />
                           </div>
                           <span className="w-12 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
                         </div>
@@ -179,8 +179,6 @@ export default function SzefKuchniView() {
 
   return (
     <div className="relative min-h-dvh bg-bg">
-      <div aria-hidden className="pointer-events-none absolute -right-40 -top-40 h-96 w-96 rounded-full bg-page-glow opacity-[0.07] blur-2xl transform-gpu" />
-
       <header className="relative z-10 flex items-center justify-between border-b border-line bg-bg-2/60 px-safe pt-[calc(env(safe-area-inset-top)+0.9rem)] pb-[0.9rem] backdrop-blur">
         <div className="flex items-center gap-3">
           <Logo className="h-8" variant="gradient" />
@@ -208,8 +206,8 @@ export default function SzefKuchniView() {
             <button
               key={t.value}
               onClick={() => setWidok(t.value)}
-              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-bold transition active:scale-[0.97] ${
-                widok === t.value ? 'bg-accent-gradient text-bg shadow-glow' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
+              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
+                widok === t.value ? 'bg-mint text-bg' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
               }`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >

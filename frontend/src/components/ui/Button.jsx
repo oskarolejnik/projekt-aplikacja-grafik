@@ -1,14 +1,14 @@
-// Przycisk w stylu "Creativity" — pigułki z miękkim cieniem i naciśnięciem (scale).
+// Przycisk systemu „Cicha scena" — spokojne, natywne warianty bez poświat i gradientów.
 const VARIANTS = {
-  // Główne CTA: kremowa pigułka na ciemnym tle (jak "TICKETS" z referencji)
-  primary: 'bg-cream text-bg hover:shadow-cta hover:brightness-[1.03]',
-  // Akcent gradientowy (rzadziej, dla wyróżnionych akcji)
-  accent: 'bg-accent-gradient text-bg hover:brightness-105',
+  // Główne CTA: neutralna jasna pigułka na ciemnym tle (jedna nadrzędna akcja na widok)
+  primary: 'bg-cream text-bg hover:bg-white',
+  // Akcent szałwiowy — wyróżnione, brandowe akcje (rzadko)
+  accent: 'bg-mint text-bg hover:brightness-105',
   success: 'bg-success text-bg hover:brightness-105',
   danger: 'bg-danger text-white hover:brightness-110',
   // Subtelny, obrysowany — akcje drugorzędne
-  ghost: 'border border-line bg-white/[0.04] text-ink hover:bg-white/[0.09]',
-  subtle: 'bg-white/[0.04] text-muted hover:text-ink hover:bg-white/[0.09]',
+  ghost: 'border border-line bg-white/[0.04] text-ink hover:bg-white/[0.08]',
+  subtle: 'bg-white/[0.04] text-muted hover:text-ink hover:bg-white/[0.08]',
 }
 
 const SIZES = {
@@ -22,7 +22,7 @@ export function Button({ variant = 'primary', size = 'md', className = '', child
     <button
       {...props}
       className={`inline-flex items-center justify-center gap-2 rounded-xl font-semibold tracking-tight
-        transition duration-150 ease-snap active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50
+        transition duration-150 ease-snap active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50
         ${VARIANTS[variant]} ${SIZES[size]} ${className}`}
     >
       {children}

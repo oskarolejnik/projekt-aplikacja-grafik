@@ -22,7 +22,7 @@ const fld = 'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm t
 function Toggle({ on, onChange }) {
   return (
     <button type="button" onClick={() => onChange(!on)} role="switch" aria-checked={on}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition ${on ? 'bg-accent-gradient' : 'bg-white/10'}`}>
+      className={`relative h-6 w-11 shrink-0 rounded-full transition ${on ? 'bg-mint' : 'bg-white/10'}`}>
       <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-bg shadow transition-all ${on ? 'left-[1.375rem]' : 'left-0.5'}`} />
     </button>
   )

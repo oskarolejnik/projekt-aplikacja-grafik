@@ -98,7 +98,7 @@ export default function PrognozaObsady() {
                   <th className="py-2 pr-3 font-semibold">Dzień</th>
                   <th className="py-2 pr-3 font-semibold">Data</th>
                   <th className="py-2 pr-3 text-right font-semibold">Prognoza ruchu</th>
-                  <th className="py-2 pr-3 font-semibold">Obciążenie</th>
+                  <th className="py-2 pl-8 pr-3 font-semibold">Obciążenie</th>
                   <th className="py-2 pr-3 text-right font-semibold">Sugerowana obsada</th>
                 </tr>
               </thead>
@@ -110,11 +110,11 @@ export default function PrognozaObsady() {
                     <td className="py-2.5 pr-3 text-right text-ink">{p.prognoza}</td>
                     <td className="py-2.5 pr-3">
                       <div className="h-2 w-full min-w-[80px] rounded-full bg-surface">
-                        <div className="h-2 rounded-full bg-accent-gradient" style={{ width: `${Math.round((p.prognoza / maxProg) * 100)}%` }} />
+                        <div className="h-2 rounded-full bg-mint" style={{ width: `${Math.round((p.prognoza / maxProg) * 100)}%` }} />
                       </div>
                     </td>
                     <td className="py-2.5 pr-3 text-right">
-                      <span className="rounded-full bg-mint/15 px-2.5 py-1 font-display font-bold text-mint">{p.sugerowana_obsada}</span>
+                      <span className="rounded-full bg-mint/15 px-2.5 py-1 font-display font-semibold text-mint">{p.sugerowana_obsada}</span>
                     </td>
                   </tr>
                 ))}
@@ -133,7 +133,7 @@ export default function PrognozaObsady() {
               {stanowiska.map((s) => <option key={s.id} value={s.id}>{s.nazwa}</option>)}
             </select>
             <button onClick={zastosuj} disabled={busy || !stanId}
-                    className="rounded-xl bg-accent-gradient px-4 py-2 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
+                    className="rounded-xl bg-mint px-4 py-2 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
               {busy ? 'Stosuję…' : 'Zastosuj do wymagań'}
             </button>
           </div>

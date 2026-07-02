@@ -53,7 +53,7 @@ export default function CrmGoscie() {
                 <tr key={g.klucz} className="border-b border-line/60">
                   <td className="py-2.5 pr-3">
                     <span className="font-semibold text-ink">{g.nazwisko || '—'}</span>
-                    {g.vip && <span className="ml-2 rounded-full bg-accent-gradient px-2 py-0.5 text-[10px] font-bold text-bg">VIP</span>}
+                    {g.vip && <span className="ml-2 rounded-full bg-mint px-2 py-0.5 text-[10px] font-semibold text-bg">VIP</span>}
                   </td>
                   <td className="py-2.5 pr-3 text-muted">{g.telefon || g.email || '—'}</td>
                   <td className="py-2.5 pr-3 text-right text-ink">{g.wizyt}</td>

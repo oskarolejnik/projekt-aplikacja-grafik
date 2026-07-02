@@ -75,7 +75,7 @@ export default function Rezerwacje() {
         <div className="text-right">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Jeszcze dziś</div>
           <div className="flex items-baseline justify-end gap-2">
-            <span className="font-display text-3xl font-bold text-gradient tabular-nums">{dzisRez}</span>
+            <span className="font-display text-3xl font-bold text-ink tabular-nums">{dzisRez}</span>
             <span className="text-sm font-semibold text-muted">rez.</span>
             <span className="text-sm text-muted">· {dzisOsob} os.</span>
           </div>
@@ -107,7 +107,7 @@ export default function Rezerwacje() {
                   <div className="flex min-w-0 items-baseline gap-2">
                     <span className={`truncate font-semibold capitalize ${isW ? 'text-blush' : 'text-ink'}`}>{NAZWY_DNI[new Date(d.data).getDay()]}</span>
                     <span className="shrink-0 text-xs text-muted">{ddmmyyyy(d.data).slice(0, 5)}</span>
-                    {d.data === today && <span className="shrink-0 rounded-md bg-accent-gradient px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-bg">dziś</span>}
+                    {d.data === today && <span className="shrink-0 rounded-md bg-mint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-bg">dziś</span>}
                   </div>
                   <span className="ml-auto flex shrink-0 items-baseline gap-1.5">
                     <span className="text-lg font-bold tabular-nums text-ink">{d.liczba}</span>

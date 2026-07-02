@@ -1,6 +1,6 @@
 ---
 name: Lokalo
-description: System operacyjny dla lokalu gastro — pastelowy neon na czerni
+description: System operacyjny dla lokalu gastro — „Cicha scena" (ciemny premium)
 colors:
   ink: "#F4F4F5"
   muted: "#A1A1AA"
@@ -9,26 +9,25 @@ colors:
   surface: "#2A2A2D"
   surface-raised: "#323236"
   line: "#FFFFFF14"
-  cream: "#F5F0E6"
-  mint: "#A7D7C5"
-  lemon: "#F4E2A0"
-  blush: "#F2B8CB"
-  coral: "#F2A2A2"
-  success: "#86E0B0"
+  cream: "#F4F4F5"
+  mint: "#9DC4B1"
+  lemon: "#E8D9A8"
+  coral: "#DFA9A2"
+  success: "#8AD3AC"
   danger: "#F26D6D"
-  info: "#8FBCFF"
+  info: "#9BBBE3"
 typography:
   display:
     fontFamily: "\"Space Grotesk\", \"Space Grotesk Fallback\", ui-sans-serif, system-ui, sans-serif"
-    fontSize: "clamp(2.5rem, 6vw, 5rem)"
+    fontSize: "clamp(2.25rem, 5vw, 4rem)"
     fontWeight: 700
-    lineHeight: 1.02
+    lineHeight: 1.05
     letterSpacing: "-0.03em"
   headline:
     fontFamily: "\"Space Grotesk\", \"Space Grotesk Fallback\", sans-serif"
-    fontSize: "clamp(1.75rem, 3vw, 2.5rem)"
-    fontWeight: 700
-    lineHeight: 1.1
+    fontSize: "clamp(1.5rem, 2.5vw, 2rem)"
+    fontWeight: 600
+    lineHeight: 1.15
     letterSpacing: "-0.02em"
   title:
     fontFamily: "\"Space Grotesk\", \"Space Grotesk Fallback\", sans-serif"
@@ -70,7 +69,7 @@ components:
     rounded: "{rounded.md}"
     padding: "10px 20px"
   card:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "{colors.bg-elevated}"
     textColor: "{colors.ink}"
     rounded: "{rounded.lg}"
     padding: "24px"
@@ -88,119 +87,161 @@ components:
 
 ## 1. Overview
 
-**Creative North Star: „Pastelowy neon na czerni"**
+**Creative North Star: „Cicha scena"**
 
-Interfejs żyje na prawie-czarnym tle (`#1C1C1E`) i świeci pastelem. Cała tożsamość opiera się na jednym gescie: **miękkie, cukierkowe akcenty — mięta, cytryna, róż, krem — jarzą się na głębokiej czerni jak neon widziany po zamknięciu lokalu.** To nie jest „ciemny motyw, bo tak wygodnie". Ciemność jest sceną; pastel jest światłem. Ta polaryzacja — spokojna czerń, ciepłe pastele — daje efekt premium bez zimna korporacji i bez krzykliwości startupu.
+Interfejs żyje na prawie-czarnej scenie (`#1C1C1E` — ta sama baza co systemowy ciemny motyw
+Apple) i mówi **typografią, światłem i rytmem — nie kolorem**. Poprzednia tożsamość („pastelowy
+neon na czerni") została świadomie wyciszona: klasa nie bierze się z tego, co dodane, tylko z tego,
+co odjęte. Zero gradientów w UI. Zero poświat. Zero dekoracyjnego ruchu. Jeden spokojny akcent —
+**szałwiowa mięta** wyprowadzona z logo Lokalo — używany wyłącznie tam, gdzie niesie znaczenie:
+selekcja, fokus, akcja brandowa.
 
-Gęstość jest **komfortowa, nie ściśnięta**: dużo przestrzeni, wyraźny rytm, karty realnie uniesione nad tło. Komponenty są **dopracowane i spokojne** — miękkie pigułki, subtelny feedback przy naciśnięciu (scale 0.97), mocne krzywe ease-out zamiast odbić. Nic nie krzyczy; klasa bierze się z precyzji i powściągliwości, nie z liczby ozdób.
+Filtr każdej decyzji projektowej: **„Czy Apple by to shipnęło?"** Jeśli element czegoś nie
+komunikuje — znika. Jeśli krzyczy — cichnie. Jeśli da się to samo osiągnąć hierarchią typografii
+zamiast kolorem — wybieramy typografię. Narzędzie ma zniknąć w zadaniu; premium poznaje się po tym,
+że nic nie zgrzyta.
 
-System **odrzuca** wprost: generyczny szablon SaaS 2026 (kremowe/beżowe tło, hero-metric, identyczne karty ikona+nagłówek, uppercase-eyebrow nad każdą sekcją, numerki 01/02/03), zimny ton korporacyjny (stockowe garnitury, puste hasła) oraz zabawowość startupu (tęczowe gradienty, emoji-driven, „🚀"). To narzędzie do zarządzania pieniędzmi i ludźmi realnego lokalu — powaga bez sztywności.
+Gradient marki (mięta→cytryna→koral) żyje **wyłącznie w znaku logo** — jak kolorowa ikona
+aplikacji na spokojnym pulpicie macOS. Nigdy w komponentach.
 
 **Key Characteristics:**
-- Prawie-czarne tło jako scena; pastele jako jedyne światło.
-- Pastel używany **oszczędnie** — akcent, nie wypełnienie ekranu.
-- Karty realnie uniesione (miękki cień), spokojna głębia.
-- Typografia: grotesk display + neutralny sans body, mocny kontrast osi.
-- Ruch celowy, mocny ease-out, zawsze z wariantem reduced-motion.
+- Prawie-czarna scena; głębia budowana warstwami powierzchni i dyskretnym cieniem.
+- Jeden akcent (szałwia `#9DC4B1`) — tylko selekcja, fokus, akcje brandowe.
+- Primary CTA neutralne: jasna „papierowa" pigułka (`#F4F4F5`) z ciemnym tekstem.
+- Typografia-first: hierarchia wagą i wielkością, nie kolorem i dekoracją.
+- Ruch komunikuje stan (150–300 ms, ease-out, zero odbić); nigdy nie dekoruje.
 
 ## 2. Colors
 
-Ciemna, prawie-monochromatyczna baza z pięcioma pastelowymi akcentami, które są jedynym źródłem koloru — użyte rzadko i celowo.
+Prawie-monochromatyczna rampa ciemności + jeden akcent + semantyka. Kolor jest informacją;
+wszystko, co nie informuje, jest neutralne.
 
 ### Primary
-- **Krem** (`#F5F0E6`): kolor głównego CTA. Kremowa pigułka na czerni to najmocniejszy przycisk „zrób to teraz" (jak „TICKETS" z referencji). Zarezerwowany dla akcji nadrzędnej na ekranie.
-- **Mięta** (`#A7D7C5`): kolor stanu i uwagi systemu — focus (obrys 2px), poświata aktywnych elementów, sygnał „to jest interaktywne / OK". Nasza barwa sygnałowa.
-
-### Secondary
-- **Cytryna** (`#F4E2A0`): pierwszy akcent gradientu, ostrzeżenia miękkie, wyróżnienia liczb/kwot dodatnich.
-- **Róż** (`#F2B8CB`): trzeci akcent gradientu, akcent dekoracyjny i „delight", znaczniki premium/VIP.
-- **Koral** (`#F2A2A2`): cieplejszy akcent ostrzegawczy, odróżnia się od twardego `danger`.
+- **Paper** (`#F4F4F5`): kolor głównego CTA — jasna pigułka na ciemnej scenie. Jedna nadrzędna
+  akcja na widok. To także `ink` (tekst podstawowy) — jedna neutralna oś światła.
+- **Szałwia** (`#9DC4B1`): jedyny niesemantyczny kolor systemu. Fokus (obrys 2px), aktywna pozycja
+  nawigacji (tinta 12% + tekst szałwiowy), akcje brandowe. Kontrast na `bg` ~8.5:1.
 
 ### Neutral
-- **Ink** (`#F4F4F5`): tekst podstawowy. Prawie-biały, kontrast na `bg` ~16:1.
-- **Muted** (`#A1A1AA`): tekst drugorzędny, etykiety, metadane. Nigdy dla treści krytycznej — kontrast ~7:1 na `bg`, wystarczający, ale to jest tekst pomocniczy.
-- **Line** (`#FFFFFF14`, biel 8%): jedyny obrys/dzielnik. Delikatny, nigdy pełny biały.
-- **Bg / Bg-elevated / Surface / Surface-raised** (`#1C1C1E` → `#232326` → `#2A2A2D` → `#323236`): czterostopniowa rampa ciemności budująca warstwy. Im wyżej w hierarchii, tym jaśniejsza powierzchnia.
+- **Ink** (`#F4F4F5`): tekst podstawowy, kontrast ~15:1.
+- **Muted** (`#A1A1AA`): tekst drugorzędny, etykiety, metadane (~7:1). Nigdy dla treści krytycznej.
+- **Line** (`#FFFFFF14`, biel 8%): jedyny obrys/dzielnik — włoskowaty, nigdy pełna biel.
+- **Bg → Bg-elevated → Surface → Surface-raised** (`#1C1C1E` → `#232326` → `#2A2A2D` → `#323236`):
+  czterostopniowa rampa warstw. Im bliżej użytkownika, tym jaśniej — jak w ciemnym trybie iOS.
 
-### Tertiary (semantyka)
-- **Success** (`#86E0B0`), **Danger** (`#F26D6D`), **Info** (`#8FBCFF`): stany komunikatów. Danger jest jedynym „głośnym" kolorem — używany wyłącznie dla błędów i zniszczeń.
+### Tertiary (semantyka — wyciszona)
+- **Success** (`#8AD3AC`), **Danger** (`#F26D6D`), **Info** (`#9BBBE3`): stany komunikatów.
+  Danger jest jedynym „głośnym" kolorem — wyłącznie błędy i akcje destrukcyjne.
+- **Lemon** (`#E8D9A8`), **Coral** (`#DFA9A2`): miękkie ostrzeżenia i dane (kwoty, statusy
+  w tabelach). Nigdy dekoracja.
 
 ### Named Rules
-**Reguła Jednego Światła.** Pastel to światło na scenie — na dowolnym ekranie akcenty (krem/mięta/cytryna/róż/koral łącznie) pokrywają ≤15% powierzchni. Ich rzadkość jest sensem. Ekran w większości jest czernią i tekstem; pastel prowadzi wzrok do jednej-dwóch rzeczy.
+**Reguła Jednego Akcentu.** Szałwia to jedyny kolor „od marki" w UI. Na dowolnym ekranie kolor
+niesemantyczny pokrywa ≤5% powierzchni. Jeśli element nie jest wybrany, aktywny albo fokusowany —
+nie ma koloru.
 
-**Reguła Gradientu-Akcentu.** Gradient `accent-gradient` (cytryna→mięta→róż) jest tożsamością marki (logo, aktywne elementy, wyróżnione CTA). Nigdy jako `background-clip: text` na zwykłych nagłówkach treści i nigdy jako duże tło sekcji — to znak rozpoznawczy, nie tapeta.
+**Reguła Gradientu-w-Logo.** Gradient marki istnieje tylko w znaku logo (SVG ikony). W komponentach,
+tłach, tekstach i wskaźnikach — nigdy. Klasy `accent-gradient`/`text-gradient` istnieją wyłącznie
+jako zneutralizowana siatka bezpieczeństwa (jednolita szałwia / jednolity ink).
 
 ## 3. Typography
 
-**Display Font:** Space Grotesk (z „Space Grotesk Fallback" o dopasowanych metrykach — zero CLS)
-**Body Font:** Inter (z „Inter Fallback")
+**Display Font:** Space Grotesk (fallback o dopasowanych metrykach — zero CLS)
+**Body Font:** Inter (fallback jw.)
 
-**Character:** Kontrast na osi charakteru, nie tylko wielkości. Space Grotesk — grotesk o lekko technicznym, „zaprojektowanym" sznycie — niesie nagłówki i markę. Inter — neutralny, humanistyczny, znakomicie czytelny — niesie całą treść i UI. Para działa, bo faktury są różne (grotesk vs. neutralny sans), nie dwa podobne geometryczne sansy.
+**Character:** Inter niesie całe UI — to najbliższy wolny odpowiednik SF Pro: neutralny,
+znakomicie czytelny, natywny w odbiorze. Space Grotesk pojawia się oszczędnie: nagłówki stron
+i sekcji oraz momenty marki (logowanie, landing). Hierarchię buduje **waga i wielkość**, nie kolor.
 
 ### Hierarchy
-- **Display** (700, `clamp(2.5rem, 6vw, 5rem)`, line-height 1.02, tracking -0.03em): hero landingu i wielkie liczby. Sufit ~5rem — strona ma projektować, nie krzyczeć.
-- **Headline** (700, `clamp(1.75rem, 3vw, 2.5rem)`, 1.1, -0.02em): tytuły sekcji.
-- **Title** (600, 1.25rem, 1.25): nagłówki kart i bloków (`font-display`).
-- **Body** (400, 1rem, 1.6): treść. Długość wiersza ograniczona do 65–75ch dla czytelności.
-- **Label** (600, 0.75rem, tracking 0.06em, UPPERCASE): etykiety pól, drobne metadane. Uppercase TYLKO tutaj — jako mikro-etykieta funkcjonalna, nigdy jako dekoracyjny eyebrow nad sekcją.
+- **Display** (700, `clamp(2.25rem, 5vw, 4rem)`, 1.05, -0.03em): wyłącznie hero landingu.
+- **Headline** (600, `clamp(1.5rem, 2.5vw, 2rem)`, 1.15, -0.02em): tytuły sekcji landingu.
+- **Title** (600, 1.25rem): nagłówki widoków w aplikacji (`font-display`).
+- **Section** (600, 1.125–1.25rem, tracking -0.01em): nagłówki kart (SectionHeader).
+- **Body** (400, 1rem, 1.6): treść; wiersz ≤72ch.
+- **Label** (600, 0.75rem, tracking 0.06em, uppercase): etykiety pól i nagłówki grup w nawigacji —
+  natywny wzorzec sekcji iOS. Uppercase TYLKO w tej roli, nigdy na przyciskach.
 
 ### Named Rules
-**Reguła Dwóch Faktur.** Nagłówek zawsze Space Grotesk, treść zawsze Inter. Nie mieszać w obrębie jednej roli. `text-wrap: balance` na nagłówkach, `text-wrap: pretty` na dłuższej prozie.
+**Reguła Spokojnej Wagi.** Kontrolki (przyciski, taby, segmenty) mają `font-semibold` — nigdy bold.
+Bold zarezerwowany dla nagłówków display/headline. Duży tekst nigdy nie jest uppercase.
 
 ## 4. Elevation
 
-System jest **ciemny i realnie warstwowy** — „uniesione karty". Głębię budują dwa mechanizmy naraz: (1) rampa tonalna powierzchni (`bg` → `surface` → `surface-raised`) unosi elementy tonalnie, i (2) miękki cień pod kartami daje im fizyczne uniesienie nad tłem. Na wierzchu tego pastelowa **poświata** służy wyłącznie jako reakcja na akcent/stan (CTA, focus, aktywność) — świecenie, nie cień.
+Głębia = **rampa tonalna + dyskretny cień**. Żadnych kolorowych poświat.
 
 ### Shadow Vocabulary
-- **Soft** (`box-shadow: 0 10px 40px -12px rgba(0,0,0,0.55)`): domyślne uniesienie kart i modali nad ciemne tło. Głęboki, rozmyty, nisko osadzony.
-- **Glow / mięta** (`box-shadow: 0 0 60px -10px rgba(167,215,197,0.25)`): poświata pod aktywnym/akcentowym elementem (mięta). Sygnał „to żyje".
-- **CTA / krem** (`box-shadow: 0 8px 30px -8px rgba(245,240,230,0.35)`): ciepła poświata pod głównym kremowym CTA na hover.
+- **Soft** (`0 1px 2px rgba(0,0,0,0.28), 0 12px 32px -16px rgba(0,0,0,0.55)`): dwuwarstwowy —
+  krótki cień kontaktowy + miękkie otoczenie. Karty, modale, popovery.
+- **Cta** (`0 2px 12px -4px rgba(0,0,0,0.45)`): drobne uniesienie wskaźnika segmented control.
 
 ### Named Rules
-**Reguła Cień-vs-Poświata.** Czarny cień = fizyczne uniesienie (karty, modale). Kolorowa poświata = sygnał stanu/akcentu (CTA, focus, aktywne). Nie mieszać ról: karta w spoczynku nie świeci, CTA nie rzuca czarnego cienia.
+**Reguła Bez Poświat.** Kolorowy `box-shadow` (glow) nie istnieje w systemie. Stan komunikują:
+tinta tła (selekcja), obrys (fokus), waga tekstu (aktywność). Przezroczystość + `backdrop-blur`
+dozwolone tylko na chrome (nagłówek, sidebar, overlay modala) — jak w natywnych paskach iOS/macOS.
 
 ## 5. Components
 
 ### Buttons
-- **Shape:** miękka pigułka, promień 12px (`rounded-xl`), `font-semibold tracking-tight`, `transition ease-snap`, `active:scale-[0.97]`.
-- **Primary:** kremowe wypełnienie (`#F5F0E6`) + ciemny tekst (`#1C1C1E`), padding `10px 20px` (md). Hover: ciepła poświata CTA + subtelny `brightness(1.03)`. Najmocniejszy przycisk — jeden nadrzędny na widok.
-- **Accent (rzadko):** wypełnienie `accent-gradient` (cytryna→mięta→róż) + ciemny tekst — dla wyróżnionych, brandowych akcji.
-- **Ghost / Subtle:** obrys `line` + tło `rgba(255,255,255,0.04)`, tekst `ink`/`muted`; hover rozjaśnia tło. Akcje drugorzędne.
-- **Danger:** wypełnienie `#F26D6D` + biały tekst — tylko akcje destrukcyjne.
+- **Shape:** promień 12px, `font-semibold`, sentence case, `transition ease-snap`,
+  `active:scale-[0.98]` (dyskretny docisk).
+- **Primary (paper):** `#F4F4F5` + ciemny tekst; hover → czysta biel. Jedna nadrzędna akcja na widok.
+- **Accent (szałwia, rzadko):** `bg-mint` + ciemny tekst — akcje brandowe.
+- **Ghost / Subtle:** obrys `line` + tło `white/4%`; hover `white/8%`. Akcje drugorzędne.
+- **Danger:** `#F26D6D` + biały tekst — tylko destrukcja.
+- Stany: default, hover, focus-visible (szałwiowy obrys), active, disabled (opacity 50) — komplet.
 
 ### Cards / Containers
-- **Corner Style:** 16px (`rounded-2xl`).
-- **Background:** subtelny pionowy gradient powierzchni (`surface-grad`: `#2A2A2D` → `#202022`) — daje karcie miękką objętość zamiast płaskiej płyty.
-- **Shadow Strategy:** `soft` w spoczynku (uniesienie). Patrz Elevation.
-- **Border:** 1px `line` (biel 8%).
-- **Internal Padding:** 24–32px (`p-6`/`p-8`). **Nigdy nie zagnieżdżać kart w kartach.**
+- **Corner Style:** 16px. **Background:** `bg-elevated`→ledwo zauważalna objętość (`surface-grad`
+  o amplitudzie 2%). **Shadow:** `soft`. **Border:** 1px `line`.
+- **Padding:** 24–32px. **Nigdy karta w karcie.**
 
 ### Inputs / Fields
-- **Style:** tło `surface-raised` (`#323236`), obrys `line`, promień 12px, padding `10px 16px`, tekst `ink`, placeholder `muted/50`.
-- **Focus:** obrys przechodzi na miętę (`mint/60`) + pierścień `ring-2 ring-mint/20`. Spokojny, wyraźny.
-- **Label:** `label` (uppercase, 0.75rem, tracking 0.06em, `muted`) nad polem.
+- Tło `surface-raised`, obrys `line`, promień 12px, tekst `ink`, placeholder `muted/50`.
+- **Focus:** obrys szałwiowy (`mint/60`) + pierścień `ring-2 ring-mint/20`. Spokojny, wyraźny.
+- **Label:** uppercase 0.75rem `muted` nad polem (wzorzec formularzy iOS).
 
-### Navigation
-- **Styl:** przewijany pasek pigułek. Aktywna zakładka: wypełnienie `accent-gradient` + ciemny tekst + `shadow-glow`. Nieaktywna: obrys `line`, tło `white/3%`, tekst `muted` → `ink` na hover.
-- **Mobile:** poziomy scroll zakładek; dotykowe cele ≥44px.
+### Navigation (sidebar)
+- Pozycja aktywna: **tinta szałwii 12% + szałwiowy tekst + font-semibold** — jak selekcja
+  w sidebarze iPadOS. Nieaktywna: `muted`, hover `white/5%` + `ink`.
+- Nagłówki grup: label uppercase `muted/70`.
+- Chrome (sidebar, header) na `bg-2` z `backdrop-blur` — translucentny pasek natywny.
+
+### Segmented control (PillSwitch)
+- Kontener: obrys `line`, tło `white/3%`. Wskaźnik: `surface-raised` + cień `cta`,
+  przesuw `transform` 280 ms krzywą szuflady iOS (bez odbicia). Aktywny tekst: `ink`.
 
 ### Focus (globalnie)
-- **`:focus-visible`:** obrys 2px mięta, offset 2px, promień 8px. Nieusuwalny — dostępność klawiaturowa jest wymogiem.
+- **`:focus-visible`:** obrys 2px szałwia, offset 2px. Nieusuwalny.
 
-## 6. Do's and Don'ts
+## 6. Motion
+
+Filozofia: **ruch = komunikat o stanie.** Wejście treści, feedback dotyku, przesunięcie wskaźnika,
+pojawienie modala/toastu. Nic poza tym — żadnych dryfujących blobów, unoszenia, animowanych
+gradientów, orbit.
+
+- Czasy 150–300 ms; wejścia zakładek 240 ms; krzywe `ease-snap` (silny ease-out) i `ease-drawer`
+  (szuflada iOS). **Zero bounce/elastic** — sprężyny Framer Motion z `bounce: 0–0.05`.
+- Feedback dotyku: `active:scale-[0.98]` — docisk, nie zabawka.
+- Każda animacja ma wariant `prefers-reduced-motion: reduce` (globalny reset w index.css).
+- Landing (powierzchnia marki) może mieć choreografię scrolla (reveals, Lenis) — ale tym samym
+  słownikiem: fade+translate, bez neonu.
+
+## 7. Do's and Don'ts
 
 ### Do:
-- **Do** trzymaj prawie-czarne tło (`#1C1C1E`) jako scenę i używaj pasteli jako światła — akcenty łącznie ≤15% powierzchni ekranu (Reguła Jednego Światła).
-- **Do** rezerwuj kremowe CTA (`#F5F0E6`) dla JEDNEJ nadrzędnej akcji na widok; reszta to ghost/subtle.
-- **Do** unoś karty realnie: `surface-grad` + cień `soft` + obrys `line` 1px.
-- **Do** paruj Space Grotesk (nagłówki) z Inter (treść) — dwie różne faktury, nie dwa podobne sansy.
-- **Do** dawaj każdej animacji wariant `@media (prefers-reduced-motion: reduce)` i mocny ease-out (`cubic-bezier(0.23,1,0.32,1)`), nie bounce.
-- **Do** trzymaj focus miętowy (2px, offset 2px) na każdym elemencie interaktywnym.
+- **Do** buduj hierarchię typografią (waga, wielkość, `muted` vs `ink`) zanim sięgniesz po kolor.
+- **Do** trzymaj szałwię wyłącznie na selekcji, fokusie i akcjach brandowych (≤5% ekranu).
+- **Do** rezerwuj papierowe CTA dla JEDNEJ nadrzędnej akcji na widok; reszta ghost/subtle.
+- **Do** unoś karty rampą tonalną + cieniem `soft` + obrysem `line` 1px.
+- **Do** używaj translucentnego chrome (`bg-2` + blur) na paskach — natywne, nie „szklane karty".
+- **Do** dawaj każdemu ruchowi powód (stan) i wariant reduced-motion.
 
 ### Don't:
-- **Don't** rób generycznego szablonu SaaS 2026: żadnego kremowego/beżowego TŁA, hero-metric (wielka liczba + label), identycznych kart ikona+nagłówek w kółko, ani drobnego uppercase-eyebrow nad każdą sekcją, ani numerków 01/02/03 jako scaffoldu.
-- **Don't** wpadaj w zimny ton korporacyjny — żadnych stockowych garniturów i pustych haseł („synergia", „empowering businesses"). Mów językiem kogoś, kto prowadził salę.
-- **Don't** rób zabawki/startupu — żadnych tęczowych jaskrawych gradientów, emoji-driven nagłówków, „🚀".
-- **Don't** używaj `background-clip: text` z gradientem na zwykłych nagłówkach treści — gradient akcentowy to znak marki (logo, aktywne), nie tapeta.
-- **Don't** zagnieżdżaj kart w kartach i nie używaj kolorowych pasków `border-left`/`border-right` >1px jako akcentu.
-- **Don't** rozlewaj pastelu na duże płaszczyzny — traci sens „neonu" i robi się cukierkowo.
+- **Don't** używaj gradientów w UI — ani w tle, ani w tekście, ani we wskaźnikach. Gradient żyje w logo.
+- **Don't** dodawaj kolorowych poświat (`glow`) — elewacja tylko czarnym, dyskretnym cieniem.
+- **Don't** pisz uppercase na przyciskach ani rozstrzelonych nagłówkach — uppercase tylko w mikro-etykietach.
+- **Don't** animuj dekoracyjnie (dryf, float, orbity, animowane gradienty) — ruch bez komunikatu to szum.
+- **Don't** zagnieżdżaj kart w kartach; nie używaj pasków `border-left/right` >1px jako akcentu.
+- **Don't** stosuj bounce/overshoot — krzywe wyłącznie ease-out; „premium" osiada, nie odbija się.
+- **Don't** wracaj do neonu: pastelowe akcenty rozlane po ekranie to poprzednia epoka tego produktu.

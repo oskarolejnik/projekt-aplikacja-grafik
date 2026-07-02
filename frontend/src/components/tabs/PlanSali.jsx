@@ -97,12 +97,12 @@ export default function PlanSali() {
           <div className="inline-flex rounded-lg border border-line bg-surface-2 p-0.5">
             {[['podglad', 'Podgląd'], ['edycja', 'Edycja']].map(([k, l]) => (
               <button key={k} onClick={() => zmienTryb(k)}
-                className={`rounded-md px-3 py-1 text-sm font-semibold transition ${tryb === k ? 'bg-accent-gradient text-bg' : 'text-muted hover:text-ink'}`}>{l}</button>
+                className={`rounded-md px-3 py-1 text-sm font-semibold transition ${tryb === k ? 'bg-mint text-bg' : 'text-muted hover:text-ink'}`}>{l}</button>
             ))}
           </div>
           {tryb === 'edycja' && (
             <button onClick={zapisz} disabled={busy || !brudne}
-              className="rounded-lg bg-cream px-3 py-1.5 text-sm font-bold text-bg transition hover:brightness-[1.03] disabled:opacity-50">
+              className="rounded-lg bg-cream px-3 py-1.5 text-sm font-semibold text-bg transition hover:bg-white disabled:opacity-50">
               {busy ? 'Zapisuję…' : 'Zapisz układ'}
             </button>
           )}
@@ -149,16 +149,16 @@ export default function PlanSali() {
                   onPointerDown={(e) => onDown(e, s.id)}
                   onPointerMove={tryb === 'edycja' ? onMove : undefined}
                   onPointerUp={() => setDragId(null)}
-                  className={`absolute grid place-items-center rounded-2xl border text-center transition-[border-color,background-color] ${st.bg} ${tryb === 'edycja' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${wybrany === s.id ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : ''} ${dragId === s.id ? 'z-20 scale-105 shadow-glow' : 'z-10'}`}
+                  className={`absolute grid place-items-center rounded-2xl border text-center transition-[border-color,background-color] ${st.bg} ${tryb === 'edycja' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${wybrany === s.id ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : ''} ${dragId === s.id ? 'z-20 scale-105' : 'z-10'}`}
                   style={{ left: `${p.x}%`, top: `${p.y}%`, width: rozmiar, height: rozmiar, transform: 'translate(-50%,-50%)', touchAction: 'none' }}
                   title={`${s.nazwa} · ${s.pojemnosc} os. · ${st.label}`}
                 >
-                  <span className="font-display text-xs font-bold leading-none text-ink">{s.nazwa}</span>
+                  <span className="font-display text-xs font-semibold leading-none text-ink">{s.nazwa}</span>
                   <span className="mt-0.5 flex items-center gap-0.5 text-[10px] leading-none text-muted">
                     <Icon name="users" className="h-2.5 w-2.5" />{s.pojemnosc}
                   </span>
                   {s.rezerwacje.length > 0 && (
-                    <span className={`absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[9px] font-bold text-bg ${st.dot}`}>{s.rezerwacje.length}</span>
+                    <span className={`absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[9px] font-semibold text-bg ${st.dot}`}>{s.rezerwacje.length}</span>
                   )}
                   {s.live?.zajete && (
                     <span className="absolute -left-1 -top-1 flex h-3 w-3" title={`Zajęty na żywo (POS): ${s.live.otwarte} otwartych rachunków`}>

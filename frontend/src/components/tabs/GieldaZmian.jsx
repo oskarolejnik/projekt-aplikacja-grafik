@@ -41,7 +41,7 @@ export default function GieldaZmian() {
         <div className="flex flex-wrap items-center gap-1.5">
           {FILTRY.map(([v, l]) => (
             <button key={v} onClick={() => setFiltr(v)}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${filtr === v ? 'bg-accent-gradient text-bg' : 'border border-line text-muted hover:text-ink'}`}>
+                    className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${filtr === v ? 'bg-mint text-bg' : 'border border-line text-muted hover:text-ink'}`}>
               {l}
             </button>
           ))}
@@ -84,7 +84,7 @@ export default function GieldaZmian() {
                     {o.status === 'zajeta' ? (
                       <div className="flex justify-end gap-2">
                         <button onClick={() => decyzja(o.id, 'akceptuj', 'Zmiana przepięta na przejmującego.')} disabled={busy}
-                                className="rounded-lg bg-mint/20 px-3 py-1.5 text-xs font-bold text-mint transition hover:bg-mint/30 disabled:opacity-50">
+                                className="rounded-lg bg-mint/20 px-3 py-1.5 text-xs font-semibold text-mint transition hover:bg-mint/30 disabled:opacity-50">
                           Akceptuj
                         </button>
                         <button onClick={() => decyzja(o.id, 'odrzuc', 'Przejęcie odrzucone — oferta wróciła na giełdę.')} disabled={busy}

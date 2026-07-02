@@ -43,7 +43,7 @@ function HistoriaView({ dni }) {
                 <div className="text-xs text-muted">{ddmmyyyy(d.data)}</div>
               </div>
               <div className="h-3 flex-1 overflow-hidden rounded-full bg-white/[0.04]">
-                <div className="h-full rounded-full bg-accent-gradient transition-all" style={{ width: `${Math.max(3, Math.round((d.liczba / maxL) * 100))}%` }} />
+                <div className="h-full rounded-full bg-mint transition-all" style={{ width: `${Math.max(3, Math.round((d.liczba / maxL) * 100))}%` }} />
               </div>
               <span className="w-9 shrink-0 text-right font-mono font-bold tabular-nums text-ink">{d.liczba}</span>
             </div>
@@ -109,7 +109,7 @@ export default function StolyLive() {
             <button
               key={v}
               onClick={() => setTryb(v)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-bold transition active:scale-[0.97] ${tryb === v ? 'bg-accent-gradient text-bg shadow-glow' : 'text-muted hover:text-ink'}`}
+              className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition active:scale-[0.98] ${tryb === v ? 'bg-mint text-bg' : 'text-muted hover:text-ink'}`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
               {l}
@@ -123,7 +123,7 @@ export default function StolyLive() {
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-mint" />
             </span>
             <span className="text-sm font-semibold text-muted">zajęte teraz</span>
-            <span className="font-display text-3xl font-bold text-gradient tabular-nums">{razem}</span>
+            <span className="font-display text-3xl font-bold text-ink tabular-nums">{razem}</span>
           </div>
         )}
       </div>

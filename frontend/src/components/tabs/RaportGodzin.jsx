@@ -169,7 +169,7 @@ export default function RaportGodzin() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => przesunMiesiac(-1)}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-95"
+            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
             aria-label="Poprzedni miesiąc"
           >
             <Icon name="chevronDown" className="h-4 w-4 rotate-90" />
@@ -178,7 +178,7 @@ export default function RaportGodzin() {
           <button
             onClick={() => przesunMiesiac(1)}
             disabled={naPrzyszlosc}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-95 disabled:opacity-30"
+            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
             aria-label="Następny miesiąc"
           >
             <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
@@ -207,7 +207,7 @@ export default function RaportGodzin() {
                   <span key={i} className="inline-flex items-center gap-2 rounded-lg border border-line bg-white/[0.03] px-2.5 py-1 text-xs">
                     <span className="font-semibold text-ink">{z.pracownik}</span>
                     <span className="font-mono text-muted">od {z.wejscie.slice(11, 16)}</span>
-                    {!z.dopasowany && <span className="rounded bg-lemon/15 px-1 text-[10px] font-bold text-lemon">niedopasowany</span>}
+                    {!z.dopasowany && <span className="rounded bg-lemon/15 px-1 text-[10px] font-semibold text-lemon">niedopasowany</span>}
                   </span>
                 ))}
               </div>
@@ -218,7 +218,7 @@ export default function RaportGodzin() {
           <div className="mb-6 flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border border-line bg-white/[0.02] px-5 py-4">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Łącznie (wszyscy)</div>
-              <div className="font-display text-2xl font-bold text-gradient tabular-nums">
+              <div className="font-display text-2xl font-bold text-ink tabular-nums">
                 {godzinyHM(sumaWszystkich)}
               </div>
             </div>

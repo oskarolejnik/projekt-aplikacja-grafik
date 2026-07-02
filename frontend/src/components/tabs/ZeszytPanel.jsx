@@ -8,8 +8,8 @@ export default function ZeszytPanel() {
   const btn = (v, l) => (
     <button
       onClick={() => setTryb(v)}
-      className={`rounded-xl px-4 py-2 text-sm font-bold transition ${
-        tryb === v ? 'bg-accent-gradient text-bg shadow-glow' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
+      className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+        tryb === v ? 'bg-mint text-bg' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
       }`}
     >
       {l}

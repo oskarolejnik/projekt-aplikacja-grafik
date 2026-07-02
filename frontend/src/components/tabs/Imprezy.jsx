@@ -163,7 +163,7 @@ export default function Imprezy() {
               </div>
               <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                 {!pusta(imp.sala) && (
-                  <span className="inline-flex items-center gap-1 rounded-lg border border-mint/20 bg-mint/10 px-2.5 py-1 font-mono font-bold text-mint">
+                  <span className="inline-flex items-center gap-1 rounded-lg border border-mint/20 bg-mint/10 px-2.5 py-1 font-mono font-semibold text-mint">
                     <Icon name="pin" className="h-3 w-3" /> {imp.sala}
                   </span>
                 )}

@@ -75,7 +75,7 @@ export default function EmployeeHours() {
       <div className="flex items-center justify-between">
         <button
           onClick={() => przesunMiesiac(-1)}
-          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-95"
+          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
           aria-label="Poprzedni miesiąc"
         >
           <Icon name="chevronDown" className="h-4 w-4 rotate-90" />
@@ -84,7 +84,7 @@ export default function EmployeeHours() {
         <button
           onClick={() => przesunMiesiac(1)}
           disabled={naPrzyszlosc}
-          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-95 disabled:opacity-30"
+          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
           aria-label="Następny miesiąc"
         >
           <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
@@ -117,7 +117,7 @@ export default function EmployeeHours() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Card className="p-6 text-center">
               <div className="text-xs font-semibold uppercase tracking-wider text-muted">Łącznie w miesiącu</div>
-              <div className="mt-1 font-display text-4xl font-bold text-gradient tabular-nums sm:text-5xl">
+              <div className="mt-1 font-display text-4xl font-bold text-ink tabular-nums sm:text-5xl">
                 {godzinyHM(dane?.suma_godzin)}
               </div>
             </Card>

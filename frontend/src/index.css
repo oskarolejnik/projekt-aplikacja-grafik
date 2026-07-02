@@ -74,9 +74,10 @@
 }
 
 @layer components {
-  /* Wielokolorowy gradientowy tekst (nagłówek hero, aktywne elementy) */
+  /* Historyczny „gradientowy tekst" — w systemie „Cicha scena" zawsze jednolity ink.
+     Klasa zostaje jako siatka bezpieczeństwa dla przeoczonych użyć. */
   .text-gradient {
-    @apply bg-accent-gradient bg-clip-text text-transparent;
+    @apply text-ink;
   }
 
   /* Bazowa karta w ciemnym, szklistym stylu */

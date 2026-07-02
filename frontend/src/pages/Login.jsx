@@ -160,7 +160,7 @@ export default function Login({ onClose }) {
                 type="checkbox"
                 checked={zapamietaj}
                 onChange={(e) => setZapamietaj(e.target.checked)}
-                className="h-4 w-4 rounded border-line bg-transparent accent-cream"
+                className="h-4 w-4 rounded border-line bg-transparent accent-mint"
               />
               Zapamiętaj mnie na tym urządzeniu
             </label>
@@ -169,7 +169,7 @@ export default function Login({ onClose }) {
           <button
             type="submit"
             disabled={busy}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3 text-sm font-bold uppercase tracking-[0.15em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.98] disabled:opacity-60"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98] disabled:opacity-60"
           >
             {busy ? <Spinner className="h-4 w-4" /> : <Icon name="logout" className="h-4 w-4 rotate-180" />}
             {busy ? 'Chwila…' : rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}

@@ -107,7 +107,7 @@ export default function Sprzatanie() {
                       <button
                         onClick={() => wybor[d] && korekta(d, wybor[d], 'dodaj')}
                         disabled={!wybor[d]}
-                        className="rounded-lg border border-line bg-white/[0.04] px-2.5 text-sm font-bold text-mint transition hover:bg-white/[0.08] disabled:opacity-40"
+                        className="rounded-lg border border-line bg-white/[0.04] px-2.5 text-sm font-semibold text-mint transition hover:bg-white/[0.08] disabled:opacity-40"
                         aria-label="Dodaj salę"
                       >
                         <Icon name="plus" className="h-4 w-4" />

@@ -110,7 +110,6 @@ export default function Onboarding() {
 
   return (
     <div className="relative min-h-dvh bg-bg px-4 py-10">
-      <div aria-hidden className="pointer-events-none fixed -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.12] blur-3xl" />
       <div className="relative z-10 mx-auto w-full max-w-3xl">
         <div className="mb-6 flex items-center gap-3">
           <Logo className="h-9" variant="gradient" />
@@ -135,7 +134,7 @@ export default function Onboarding() {
                   <input type="password" value={form.haslo} onChange={(e) => set('haslo', e.target.value)} className={fld} placeholder="min. 8 znaków: litera + cyfra + znak specjalny" /></label>
               </div>
               <button onClick={zalozKonto} disabled={busy}
-                className="mt-5 w-full rounded-xl bg-accent-gradient px-4 py-3 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 active:scale-[0.99] disabled:opacity-60">
+                className="mt-5 w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.99] disabled:opacity-60">
                 {busy ? 'Zakładam…' : 'Dalej — wybór typu lokalu'}
               </button>
               <p className="mt-3 text-center text-xs text-muted/70">Ten kreator pojawia się tylko na nowej, pustej instancji.</p>
@@ -155,9 +154,9 @@ export default function Onboarding() {
                     <span className="grid h-10 w-10 place-items-center rounded-xl bg-surface-2 text-mint transition group-hover:bg-mint/15">
                       <Icon name={t.ikona} className="h-5 w-5" />
                     </span>
-                    {t.popularny && <span className="rounded-full bg-mint/15 px-2 py-0.5 text-[10px] font-bold text-mint">Częsty wybór</span>}
+                    {t.popularny && <span className="rounded-full bg-mint/15 px-2 py-0.5 text-[10px] font-semibold text-mint">Częsty wybór</span>}
                   </div>
-                  <h3 className="mt-3 font-display text-base font-bold text-ink">{t.nazwa}</h3>
+                  <h3 className="mt-3 font-display text-base font-semibold text-ink">{t.nazwa}</h3>
                   <p className="mt-1 flex-1 text-xs leading-relaxed text-muted">{t.opis}</p>
                   <PresetPreview moduly={t.moduly} />
                 </button>
@@ -166,7 +165,7 @@ export default function Onboarding() {
               <button onClick={() => wybierzTyp('inny')}
                 className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-surface-2/30 p-4 text-center transition hover:border-mint/50 hover:text-ink">
                 <span className="grid h-10 w-10 place-items-center rounded-xl bg-surface-2 text-muted"><Icon name="plus" className="h-5 w-5" /></span>
-                <h3 className="mt-3 font-display text-base font-bold text-ink">Inny / od zera</h3>
+                <h3 className="mt-3 font-display text-base font-semibold text-ink">Inny / od zera</h3>
                 <p className="mt-1 text-xs text-muted">Zacznij od uniwersalnego presetu i ustaw wszystko po swojemu.</p>
               </button>
             </div>
@@ -223,7 +222,7 @@ export default function Onboarding() {
                 ← Zmień typ
               </button>
               <button onClick={zakoncz} disabled={busy}
-                className="rounded-xl bg-accent-gradient px-6 py-2.5 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
+                className="rounded-xl bg-mint px-6 py-2.5 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
                 {busy ? 'Zapisuję…' : 'Zapisz i wejdź do panelu'}
               </button>
             </div>

@@ -59,7 +59,7 @@ export default function Napiwki() {
         <div className="inline-flex rounded-lg border border-line bg-surface-2 p-0.5">
           {[['godziny', 'Wg godzin'], ['rowno', 'Po równo']].map(([k, l]) => (
             <button key={k} onClick={() => setSposob(k)}
-              className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${sposob === k ? 'bg-accent-gradient text-bg' : 'text-muted hover:text-ink'}`}>{l}</button>
+              className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${sposob === k ? 'bg-mint text-bg' : 'text-muted hover:text-ink'}`}>{l}</button>
           ))}
         </div>
         <Button onClick={zapisz} disabled={busy}>{busy ? 'Zapisuję…' : 'Zapisz podział'}</Button>

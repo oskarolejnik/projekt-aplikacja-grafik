@@ -27,7 +27,7 @@ function LiveClock() {
   const { data, czas } = usePolandClock()
   return (
     <>
-      <div className="font-display text-6xl font-bold leading-none tracking-tight tabular-nums sm:text-7xl md:text-8xl bg-accent-flow bg-[length:250%_100%] bg-clip-text text-transparent animate-gradient-flow">
+      <div className="font-display text-6xl font-bold leading-none tracking-tight tabular-nums sm:text-7xl md:text-8xl text-ink">
         {czas}
       </div>
       <div className="mt-4 text-base font-medium capitalize text-muted sm:text-lg">{data}</div>
@@ -41,10 +41,6 @@ export default function Landing() {
 
   return (
     <div className="relative flex min-h-dvh flex-col overflow-hidden bg-bg">
-      {/* Subtelne pastelowe poświaty w tle */}
-      <div aria-hidden className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.16] blur-2xl will-change-transform animate-drift-a" />
-      <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-32 h-96 w-96 rounded-full bg-mint opacity-[0.11] blur-2xl will-change-transform animate-drift-b" />
-
       {/* Sekcja główna: logo lokalu + zegar + jedyna akcja.
           pt-safe/pb-safe odsuwa treść od notcha iPhone (status bar black-translucent). */}
       <main className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pb-safe pt-safe text-center">
@@ -61,7 +57,7 @@ export default function Landing() {
 
         <button
           onClick={openLogin}
-          className="mt-12 animate-fade-up rounded-full bg-cream px-12 py-4 text-sm font-bold uppercase tracking-[0.2em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.97]"
+          className="mt-12 animate-fade-up rounded-full bg-cream px-12 py-4 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98]"
           style={{ animationDelay: '200ms' }}
         >
           Zaloguj się

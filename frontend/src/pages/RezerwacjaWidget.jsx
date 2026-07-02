@@ -60,7 +60,6 @@ export default function RezerwacjaWidget() {
 
   return (
     <div className="relative min-h-dvh bg-bg px-4 py-10">
-      <div aria-hidden className="pointer-events-none fixed -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-page-glow opacity-[0.12] blur-2xl" />
       <div className="relative z-10 mx-auto w-full max-w-lg">
         <div className="mb-6 flex items-center gap-3">
           <Logo className="h-9" variant="gradient" />
@@ -81,7 +80,7 @@ export default function RezerwacjaWidget() {
                   <input type="number" min="1" max="20" value={osoby} onChange={(e) => { setOsoby(e.target.value); setSloty(null) }} className={fld} /></label>
               </div>
               <button onClick={szukaj} disabled={loading}
-                className="mt-4 w-full rounded-xl bg-accent-gradient px-4 py-3 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 disabled:opacity-60">
+                className="mt-4 w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 disabled:opacity-60">
                 {loading ? 'Szukam…' : 'Sprawdź dostępność'}
               </button>
 
@@ -136,7 +135,7 @@ export default function RezerwacjaWidget() {
                   <textarea rows={2} value={form.notatka} onChange={(e) => setForm((s) => ({ ...s, notatka: e.target.value }))} className={fld} /></label>
               </div>
               <button onClick={rezerwuj} disabled={busy}
-                className="mt-5 w-full rounded-xl bg-accent-gradient px-4 py-3 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 disabled:opacity-60">
+                className="mt-5 w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 disabled:opacity-60">
                 {busy ? 'Rezerwuję…' : 'Zarezerwuj stolik'}
               </button>
             </>

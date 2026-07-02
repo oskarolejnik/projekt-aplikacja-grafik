@@ -50,7 +50,7 @@ export default function RozliczImpreze({ data, rewir, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => onClose(false)}>
-      <div className="w-full max-w-md rounded-2xl border border-line bg-bg-2 p-5 shadow-glow" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-md rounded-2xl border border-line bg-bg-2 p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-3 flex items-start justify-between">
           <div>
             <div className="font-display text-lg font-bold text-ink">Rozlicz imprezę</div>
@@ -87,7 +87,7 @@ export default function RozliczImpreze({ data, rewir, onClose }) {
         </button>
 
         <div className="mt-4 flex gap-2">
-          <button onClick={zapisz} disabled={busy} className="flex-1 rounded-xl bg-cream py-2.5 text-sm font-bold uppercase tracking-[0.15em] text-bg transition hover:brightness-[1.03] disabled:opacity-50">Zapisz rozliczenie</button>
+          <button onClick={zapisz} disabled={busy} className="flex-1 rounded-xl bg-cream py-2.5 text-sm font-semibold text-bg transition hover:bg-white disabled:opacity-50">Zapisz rozliczenie</button>
         </div>
       </div>
     </div>

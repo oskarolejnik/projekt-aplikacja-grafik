@@ -1,7 +1,9 @@
 import { Icon } from '../../lib/icons'
 
 const STYLES = {
-  info: 'border-info/30 bg-info/10 text-info',
+  // Info neutralne (jak w iOS) — jedyny kolorowy akcent systemu to szałwia;
+  // niebieski zostaje wyłącznie dla danych, nie dla komunikatów.
+  info: 'border-line bg-white/[0.04] text-muted',
   warn: 'border-lemon/30 bg-lemon/10 text-lemon',
   success: 'border-success/30 bg-success/10 text-success',
   danger: 'border-danger/30 bg-danger/10 text-danger',

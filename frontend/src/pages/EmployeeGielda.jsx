@@ -78,7 +78,7 @@ export default function EmployeeGielda() {
               <div key={p.przydzial_id} className="flex items-center justify-between gap-3 rounded-xl border border-line bg-white/[0.03] px-3 py-2.5">
                 <Zmiana p={p} />
                 <button onClick={() => wystaw(p.przydzial_id)} disabled={busy}
-                        className="shrink-0 rounded-lg bg-accent-gradient px-3 py-1.5 text-sm font-bold text-bg transition active:scale-95 disabled:opacity-50">
+                        className="shrink-0 rounded-lg bg-mint px-3 py-1.5 text-sm font-semibold text-bg transition active:scale-[0.98] disabled:opacity-50">
                   Wystaw
                 </button>
               </div>
@@ -103,7 +103,7 @@ export default function EmployeeGielda() {
                   <div className="mt-0.5 text-xs text-muted">Oddaje: {o.wystawiajacy}{o.powod ? ` — „${o.powod}”` : ''}</div>
                 </div>
                 <button onClick={() => przejmij(o.id)} disabled={busy}
-                        className="shrink-0 rounded-lg bg-accent-gradient px-3 py-1.5 text-sm font-bold text-bg transition active:scale-95 disabled:opacity-50">
+                        className="shrink-0 rounded-lg bg-mint px-3 py-1.5 text-sm font-semibold text-bg transition active:scale-[0.98] disabled:opacity-50">
                   Przejmij
                 </button>
               </div>

@@ -6,7 +6,7 @@ import { useReveal, useSmoothAnchors, animacjeWlaczone, prefersReducedMotion } f
 
 // Publiczny landing sprzedażowy „Lokalo". Renderowany pod ?produkt ORAZ jako publiczne /
 // dla niezalogowanego gościa (App.jsx). Bez kontekstów instancji — działa samodzielnie.
-// North Star (DESIGN.md): „pastelowy neon na czerni". Ruch: wyraziste reveals + hover + cennik.
+// North Star (DESIGN.md): „Cicha scena". Ruch: reveals + hover + cennik — bez neonu.
 
 const MAIL = 'mailto:kontakt@grafikpracy.pl'
 
@@ -89,7 +89,7 @@ function Cennik() {
               key={k}
               onClick={() => setOkres(k)}
               aria-pressed={okres === k}
-              className={`rounded-full px-4 py-1.5 font-semibold transition ${okres === k ? 'bg-cream text-bg shadow-cta' : 'text-muted hover:text-ink'}`}
+              className={`rounded-full px-4 py-1.5 font-semibold transition ${okres === k ? 'bg-mint text-bg' : 'text-muted hover:text-ink'}`}
             >
               {l}
               {k === 'rok' && <span className={`ml-1.5 text-xs ${okres === k ? 'text-bg/70' : 'text-mint'}`}>−2 mies.</span>}
@@ -108,11 +108,11 @@ function Cennik() {
             <div
               key={p.nazwa}
               data-rv=""
-              className={`lift rv-scale relative flex flex-col rounded-2xl border bg-surface-grad p-5 shadow-soft ${p.flagowy ? 'border-mint/50 lg:-my-3 lg:shadow-glow' : 'border-line'}`}
+              className={`lift rv-scale relative flex flex-col rounded-2xl border bg-surface-grad p-5 shadow-soft ${p.flagowy ? 'border-mint/50 lg:-my-3' : 'border-line'}`}
               style={{ '--i': idx }}
             >
               {p.flagowy && (
-                <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-accent-gradient px-3 py-0.5 text-[11px] font-bold text-bg">
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-mint px-3 py-0.5 text-[11px] font-semibold text-bg">
                   Najczęściej wybierany
                 </span>
               )}
@@ -142,7 +142,7 @@ function Cennik() {
 
               <a
                 href={darmowy ? '?login' : enterprise ? `${MAIL}?subject=Enterprise` : `${MAIL}?subject=Plan%20${encodeURIComponent(p.nazwa)}`}
-                className={`mt-6 rounded-xl px-4 py-2.5 text-center text-sm font-bold transition active:scale-[0.97] ${p.flagowy ? 'bg-accent-gradient text-bg hover:brightness-105' : darmowy ? 'bg-cream text-bg hover:brightness-[1.03]' : 'border border-line text-ink hover:bg-white/[0.06]'}`}
+                className={`mt-6 rounded-xl px-4 py-2.5 text-center text-sm font-semibold transition active:scale-[0.98] ${p.flagowy ? 'bg-mint text-bg hover:brightness-105' : darmowy ? 'bg-cream text-bg hover:bg-white' : 'border border-line text-ink hover:bg-white/[0.06]'}`}
               >
                 {darmowy ? 'Zacznij za darmo' : enterprise ? 'Zapytaj o wycenę' : `Wybieram ${p.nazwa}`}
               </a>
@@ -227,10 +227,6 @@ export default function Produkt() {
         }
       `}</style>
 
-      {/* Poświaty tła — pastelowy neon na czerni */}
-      <div aria-hidden className="pointer-events-none absolute -left-52 -top-40 h-[34rem] w-[34rem] rounded-full bg-page-glow opacity-[0.12] blur-3xl" />
-      <div aria-hidden className="pointer-events-none absolute right-[-16rem] top-[38rem] h-[30rem] w-[30rem] rounded-full bg-mint opacity-[0.06] blur-3xl" />
-
       {/* Nawigacja */}
       <header className="sticky top-0 z-40 border-b border-line bg-bg/70 backdrop-blur-md">
         <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
@@ -245,7 +241,7 @@ export default function Produkt() {
           </div>
           <div className="flex items-center gap-2.5">
             <a href="?login" className="rounded-xl px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink">Zaloguj</a>
-            <a href="#cennik" className="rounded-xl bg-cream px-4 py-2 text-sm font-bold text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.97]">Wybierz pakiet</a>
+            <a href="#cennik" className="rounded-xl bg-mint px-4 py-2 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">Wybierz pakiet</a>
           </div>
         </nav>
       </header>
@@ -266,15 +262,15 @@ export default function Produkt() {
               Zbudowane przez kogoś, kto sam prowadził salę w piątkowy wieczór.
             </p>
             <div data-rv="" style={{ '--i': 3 }} className="mt-8 flex flex-wrap gap-3">
-              <a href="#cennik" className="rounded-xl bg-accent-gradient px-6 py-3 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 active:scale-[0.97]">Zobacz pakiety</a>
-              <a href={`${MAIL}?subject=Demo%20Grafik%20Pracy`} className="rounded-xl border border-line px-6 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.97]">Umów demo</a>
+              <a href="#cennik" className="rounded-xl bg-mint px-6 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">Zobacz pakiety</a>
+              <a href={`${MAIL}?subject=Demo%20Grafik%20Pracy`} className="rounded-xl border border-line px-6 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
             </div>
             <p data-rv="" style={{ '--i': 4 }} className="mt-5 text-xs text-muted">Start w kilka minut · plan darmowy bez karty · web (PWA) i desktop</p>
           </div>
 
           <div data-rv="" style={{ '--i': 2 }} className="relative mx-auto w-full max-w-md lg:max-w-none">
             <GrafikVignette />
-            <WyplataVignette className="absolute -bottom-8 -right-3 w-40 animate-float sm:-right-6 sm:w-48" />
+            <WyplataVignette className="absolute -bottom-8 -right-3 w-40 sm:-right-6 sm:w-48" />
           </div>
         </section>
 
@@ -384,12 +380,12 @@ export default function Produkt() {
         </section>
 
         {/* CTA końcowe */}
-        <section data-rv="" className="rv-scale my-14 overflow-hidden rounded-3xl border border-mint/30 bg-surface-grad p-10 text-center shadow-glow sm:p-14">
+        <section data-rv="" className="rv-scale my-14 overflow-hidden rounded-3xl border border-mint/30 bg-surface-grad p-10 text-center sm:p-14">
           <h2 className="mx-auto max-w-2xl font-display text-3xl font-bold sm:text-4xl" style={{ textWrap: 'balance' }}>Gotowy uporządkować lokal?</h2>
           <p className="mx-auto mt-3 max-w-xl text-base text-muted">Załóż konto w kilka minut albo umów demo — pokażemy, jak przenieść grafik, wypłaty i rezerwacje w jedno miejsce.</p>
           <div className="mt-7 flex flex-wrap justify-center gap-3">
-            <a href="?login" className="rounded-xl bg-accent-gradient px-7 py-3 text-sm font-bold text-bg shadow-cta transition hover:brightness-105 active:scale-[0.97]">Zacznij za darmo</a>
-            <a href={`${MAIL}?subject=Demo%20Grafik%20Pracy`} className="rounded-xl border border-line px-7 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.97]">Umów demo</a>
+            <a href="?login" className="rounded-xl bg-mint px-7 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">Zacznij za darmo</a>
+            <a href={`${MAIL}?subject=Demo%20Grafik%20Pracy`} className="rounded-xl border border-line px-7 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
           </div>
         </section>
       </main>

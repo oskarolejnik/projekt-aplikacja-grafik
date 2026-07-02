@@ -229,8 +229,8 @@ export default function Grafik() {
           <button
             key={v}
             onClick={() => { setDzial(v); setModal(null) }}
-            className={`rounded-xl px-4 py-2 text-sm font-bold transition active:scale-[0.97] ${
-              dzial === v ? 'bg-accent-gradient text-bg shadow-glow' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
+              dzial === v ? 'bg-mint text-bg' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
             }`}
           >
             {label}
@@ -242,7 +242,7 @@ export default function Grafik() {
         <WeekSelect />
         <div className="flex flex-wrap items-center gap-3">
           {!jestKuchnia && (
-            <Button variant="success" onClick={autoAssign} disabled={processing}>
+            <Button variant="ghost" onClick={autoAssign} disabled={processing}>
               {processing ? <Spinner className="h-4 w-4" /> : <Icon name="robot" className="h-5 w-5" />}
               Auto-przydział AI
             </Button>
@@ -287,12 +287,12 @@ export default function Grafik() {
         </Banner>
       ) : (
         <>
-          <p className="mb-2 text-xs text-muted">Cały tydzień na raz. Kliknij pole, aby dodać lub zmienić zmianę. Tło: <span className="font-bold text-success">zielone</span> = dostępny (✓), <span className="font-bold text-danger">czerwone</span> = nie (✗). 🔑 = zamyka lokal. <span className="font-bold text-mint">Miętowo</span> = rewir (Sala/Bar).</p>
+          <p className="mb-2 text-xs text-muted">Cały tydzień na raz. Kliknij pole, aby dodać lub zmienić zmianę. Tło: <span className="font-semibold text-success">zielone</span> = dostępny (✓), <span className="font-semibold text-danger">czerwone</span> = nie (✗). 🔑 = zamyka lokal. <span className="font-semibold text-mint">Miętowo</span> = rewir (Sala/Bar).</p>
           <div className="card overflow-auto p-0" style={{ maxHeight: '74vh' }}>
             <table className="w-full table-fixed border-separate border-spacing-0">
               <thead>
                 <tr>
-                  <th className="sticky left-0 top-0 z-30 w-14 border-b border-r border-line bg-surface-2 p-1 text-center text-muted">
+                  <th className="sticky left-0 top-0 z-30 w-24 border-b border-r border-line bg-surface-2 p-1 text-center text-muted">
                     <Icon name="users" className="mx-auto h-3.5 w-3.5" />
                   </th>
                   {dates.map((dt) => {
@@ -310,7 +310,7 @@ export default function Grafik() {
               <tbody>
                 {aktywni.map((p) => (
                   <tr key={p.id}>
-                    <td className="sticky left-0 z-10 w-14 border-b border-r border-line p-1 text-[10px] font-semibold leading-tight text-ink" style={{ background: tloKoloru(p.kolor) }} title={`${p.imie} ${p.nazwisko}`}>
+                    <td className="sticky left-0 z-10 w-24 border-b border-r border-line px-2 py-1 text-[11px] font-semibold leading-tight text-ink" style={{ background: tloKoloru(p.kolor) }} title={`${p.imie} ${p.nazwisko}`}>
                       <div className="truncate">{p.imie} {p.nazwisko ? p.nazwisko[0] + '.' : ''}</div>
                     </td>
                     {dates.map((dt) => {
@@ -379,7 +379,7 @@ export default function Grafik() {
                 <button onClick={() => setModal(null)} className="text-muted transition hover:text-ink" aria-label="Zamknij"><Icon name="close" className="h-5 w-5" /></button>
               </div>
               {!jestKuchnia && (
-                <div className={`mb-3 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-bold ${!dys ? 'bg-white/[0.06] text-muted' : dys.dostepnosc ? 'bg-success text-bg' : 'bg-danger text-white'}`}>
+                <div className={`mb-3 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold ${!dys ? 'bg-white/[0.06] text-muted' : dys.dostepnosc ? 'bg-success text-bg' : 'bg-danger text-white'}`}>
                   {!dys ? '? brak zgłoszonej dostępności' : dys.dostepnosc ? <><Icon name="check" className="h-3.5 w-3.5" strokeWidth={3} /> Dostępny{dys.godz_od ? ` od ${hhmm(dys.godz_od)}` : ''}</> : <><Icon name="close" className="h-3.5 w-3.5" strokeWidth={3} /> Niedostępny</>}
                 </div>
               )}
@@ -410,8 +410,8 @@ export default function Grafik() {
                 )}
               </div>
               <div className="mt-4 flex items-center gap-2">
-                <button onClick={zapiszModal} className="flex-1 rounded-xl bg-cream py-2.5 text-sm font-bold uppercase tracking-[0.15em] text-bg transition hover:brightness-[1.03] active:scale-[0.98]">Zapisz</button>
-                {a && <button onClick={usunModal} className="rounded-xl border border-danger/40 px-4 py-2.5 text-sm font-bold text-danger transition hover:bg-danger/10">Usuń</button>}
+                <button onClick={zapiszModal} className="flex-1 rounded-xl bg-cream py-2.5 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98]">Zapisz</button>
+                {a && <button onClick={usunModal} className="rounded-xl border border-danger/40 px-4 py-2.5 text-sm font-semibold text-danger transition hover:bg-danger/10">Usuń</button>}
               </div>
             </div>
           </div>

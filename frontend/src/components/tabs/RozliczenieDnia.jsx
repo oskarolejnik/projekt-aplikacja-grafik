@@ -15,9 +15,9 @@ const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigi
 
 // kolory różnic — czytelne pod daltonizm (etykieta + znak, nie tylko kolor)
 function Roznica({ wartosc, etykieta }) {
-  if (Math.abs(wartosc) < 0.005) return <span className="text-xs font-bold text-success">zgodne</span>
+  if (Math.abs(wartosc) < 0.005) return <span className="text-xs font-semibold text-success">zgodne</span>
   return (
-    <span className={`rounded-md px-2 py-0.5 text-xs font-bold ${wartosc < 0 ? 'bg-danger text-white' : 'bg-success text-bg'}`}>
+    <span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${wartosc < 0 ? 'bg-danger text-white' : 'bg-success text-bg'}`}>
       {etykieta} {zl(Math.abs(wartosc))}
     </span>
   )
@@ -88,8 +88,8 @@ export default function RozliczenieDnia() {
         <div className="flex items-center gap-2">
           <input type="date" value={data} onChange={(e) => setData(e.target.value)} className="field" />
           {roz?.status === 'u_szefa'
-            ? <span className="rounded-md bg-success/15 px-2 py-1 text-xs font-bold text-success">u szefa</span>
-            : <span className="rounded-md bg-white/[0.06] px-2 py-1 text-xs font-bold text-muted">robocze</span>}
+            ? <span className="rounded-md bg-success/15 px-2 py-1 text-xs font-semibold text-success">u szefa</span>
+            : <span className="rounded-md bg-white/[0.06] px-2 py-1 text-xs font-semibold text-muted">robocze</span>}
         </div>
       </div>
 

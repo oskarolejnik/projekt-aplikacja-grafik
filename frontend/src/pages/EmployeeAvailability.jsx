@@ -250,7 +250,7 @@ export default function EmployeeAvailability() {
           <button
             onClick={zapisz}
             disabled={saving || loading}
-            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3.5 text-sm font-bold uppercase tracking-[0.15em] text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.98] disabled:opacity-60"
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3.5 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98] disabled:opacity-60"
           >
             {saving ? <Spinner className="h-4 w-4" /> : <Icon name="check" className="h-4 w-4" />}
             {saving ? 'Zapisywanie…' : 'Zapisz dyspozycyjność'}

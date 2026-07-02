@@ -50,7 +50,7 @@ function DzialPicker({ value, onChange }) {
             key={v}
             type="button"
             onClick={() => onChange(v)}
-            className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${
+            className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
               value === v ? 'border-mint bg-mint/15 text-mint' : 'border-line bg-surface-2 text-muted hover:text-ink'
             }`}
           >

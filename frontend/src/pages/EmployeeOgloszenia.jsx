@@ -60,7 +60,7 @@ export default function EmployeeOgloszenia({ onZmiana }) {
               </span>
             ) : (
               <button onClick={() => potwierdz(o)} disabled={busy === o.id}
-                className="rounded-xl bg-accent-gradient px-4 py-2 text-sm font-bold text-bg shadow-glow transition active:scale-[0.97] disabled:opacity-60">
+                className="rounded-xl bg-mint px-4 py-2 text-sm font-semibold text-bg transition active:scale-[0.98] disabled:opacity-60">
                 {busy === o.id ? 'Zapisuję…' : 'Potwierdzam przeczytanie'}
               </button>
             )}

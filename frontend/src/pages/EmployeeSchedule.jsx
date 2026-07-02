@@ -77,7 +77,7 @@ export default function EmployeeSchedule({ onSeen }) {
           <div className="flex flex-wrap gap-2">
             {stan.rozliczenia_oczekujace.map((d) => (
               <button key={d} onClick={() => setRozliczSala({ data: d })}
-                className="flex items-center gap-2 rounded-lg bg-coral/15 px-3 py-2 text-sm font-bold text-coral transition hover:bg-coral/25">
+                className="flex items-center gap-2 rounded-lg bg-coral/15 px-3 py-2 text-sm font-semibold text-coral transition hover:bg-coral/25">
                 <Icon name="clipboard" className="h-4 w-4" /> Rozlicz się — {ddmmyyyy(d)}
               </button>
             ))}
@@ -117,19 +117,19 @@ export default function EmployeeSchedule({ onSeen }) {
                         <span className="font-bold text-ink">{z.stanowisko}</span>
                         {z.rewir && <span className="text-sm font-semibold text-mint">{z.rewir}</span>}
                         {z.zamyka && (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-lemon/15 px-2 py-0.5 text-xs font-bold text-lemon">
+                          <span className="inline-flex items-center gap-1 rounded-md bg-lemon/15 px-2 py-0.5 text-xs font-semibold text-lemon">
                             <Icon name="key" className="h-3 w-3" /> Zamykasz
                           </span>
                         )}
                         {z.zamyka_rewir && (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-mint/15 px-2 py-0.5 text-xs font-bold text-mint">
+                          <span className="inline-flex items-center gap-1 rounded-md bg-mint/15 px-2 py-0.5 text-xs font-semibold text-mint">
                             <Icon name="key" className="h-3 w-3" /> Zamykasz rewir
                           </span>
                         )}
                         {z.rozlicza_imprize && (
                           <button
                             onClick={() => setRozliczImp({ data: z.data, rewir: z.rewir })}
-                            className="inline-flex items-center gap-1 rounded-md bg-coral/15 px-2 py-0.5 text-xs font-bold text-coral transition hover:bg-coral/25"
+                            className="inline-flex items-center gap-1 rounded-md bg-coral/15 px-2 py-0.5 text-xs font-semibold text-coral transition hover:bg-coral/25"
                           >
                             <Icon name="clipboard" className="h-3 w-3" /> Rozlicz imprezę
                           </button>

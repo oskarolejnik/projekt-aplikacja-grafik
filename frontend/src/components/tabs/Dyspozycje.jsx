@@ -251,7 +251,7 @@ export default function Dyspozycje() {
                     role="switch"
                     aria-checked={calyDzien}
                     onClick={() => setEdit((st) => (calyDzien ? { ...st, od: '08:00', do: '' } : { ...st, od: '', do: '' }))}
-                    className="flex items-center gap-2 self-start text-sm font-semibold text-muted transition active:scale-[0.97]"
+                    className="flex items-center gap-2 self-start text-sm font-semibold text-muted transition active:scale-[0.98]"
                     style={{ WebkitTapHighlightColor: 'transparent' }}
                   >
                     <span className={`relative inline-flex h-6 w-11 items-center rounded-full px-0.5 transition-colors duration-200 ${calyDzien ? 'bg-success' : 'bg-white/15'}`}>
@@ -297,14 +297,14 @@ export default function Dyspozycje() {
                   <button
                     onClick={zamknij}
                     disabled={saving}
-                    className="rounded-xl border border-line bg-white/[0.04] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-white/[0.09] active:scale-[0.97]"
+                    className="rounded-xl border border-line bg-white/[0.04] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-white/[0.09] active:scale-[0.98]"
                   >
                     Anuluj
                   </button>
                   <button
                     onClick={zapisz}
                     disabled={saving}
-                    className="flex items-center gap-2 rounded-xl bg-cream px-4 py-2 text-sm font-bold text-bg shadow-cta transition hover:brightness-[1.03] active:scale-[0.97] disabled:opacity-60"
+                    className="flex items-center gap-2 rounded-xl bg-cream px-4 py-2 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98] disabled:opacity-60"
                   >
                     {saving ? <Spinner className="h-4 w-4" /> : <Icon name="check" className="h-4 w-4" />}
                     Zapisz

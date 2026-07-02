@@ -88,10 +88,6 @@ export default function Dashboard() {
 
   return (
     <div className="relative flex h-dvh overflow-hidden bg-bg">
-      {/* Dekoracyjna pastelowa poświata w tle (subtelna) */}
-      <div aria-hidden className="pointer-events-none fixed -right-40 -top-40 h-96 w-96 rounded-full bg-page-glow opacity-[0.07] blur-2xl transform-gpu" />
-      <div aria-hidden className="pointer-events-none fixed -bottom-40 left-40 h-80 w-80 rounded-full bg-mint opacity-[0.05] blur-2xl transform-gpu" />
-
       {/* Tło pod szufladę (mobile) */}
       {mobileOpen && <div className="fixed inset-0 z-30 animate-overlay-in bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
 
@@ -111,7 +107,7 @@ export default function Dashboard() {
         <nav className="flex-1 space-y-6 overflow-y-auto px-4 py-6">
           {GROUPS.map((group) => (
             <div key={group}>
-              <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider text-muted/70">{group}</div>
+              <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted/70">{group}</div>
               <div className="space-y-1">
                 {visibleTabs.filter((t) => t.group === group).map((t) => {
                   const on = t.id === active
@@ -120,11 +116,11 @@ export default function Dashboard() {
                       key={t.id}
                       onClick={() => select(t.id)}
                       aria-current={on ? 'page' : undefined}
-                      className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition ${
-                        on ? 'bg-accent-gradient text-bg shadow-glow' : 'text-muted hover:bg-white/[0.05] hover:text-ink'
+                      className={`flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
+                        on ? 'bg-mint/[0.12] font-semibold text-mint' : 'text-muted hover:bg-white/[0.05] hover:text-ink'
                       }`}
                     >
-                      <Icon name={t.icon} className="h-5 w-5" strokeWidth={on ? 2.2 : 2} />
+                      <Icon name={t.icon} className="h-5 w-5" strokeWidth={2} />
                       {t.label}
                     </button>
                   )
