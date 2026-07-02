@@ -629,3 +629,22 @@ class OgloszeniePotwierdzenie(Base):
     __table_args__ = (UniqueConstraint("ogloszenie_id", "pracownik_id", name="uq_ogloszenie_pracownik"),)
 
     ogloszenie = relationship("Ogloszenie", back_populates="potwierdzenia")
+
+class DokumentZgodnosci(Base):
+    """Dokument zgodności — jedna tabela na dwa byty rozróżniane po pracownik_id:
+    (a) dokument PRACOWNIKA (badania sanitarno-epidemiologiczne, medycyna pracy, BHP) — pracownik_id ustawione;
+    (b) termin LOKALU (koncesja alkoholowa i jej raty, przeglądy gaśnic/wentylacji) — pracownik_id NULL.
+    `blokuje_grafik=True` + data_waznosci w przeszłości ⇒ auto-przydział pomija pracownika
+    (przeterminowane badania = nie wchodzi na zmianę), a UI grafiku pokazuje ostrzeżenie."""
+    __tablename__ = "dokumenty_zgodnosci"
+    id             = Column(Integer, primary_key=True, index=True)
+    pracownik_id   = Column(Integer, ForeignKey("pracownicy.id", ondelete="CASCADE"), nullable=True, index=True)
+    typ            = Column(String(32), nullable=False, default="inne")
+    # typy: badania_sanepid | medycyna_pracy | szkolenie_bhp | koncesja | przeglad | inne
+    nazwa          = Column(String(160), nullable=False)
+    data_waznosci  = Column(Date, nullable=False, index=True)
+    notatka        = Column(String, nullable=True)
+    blokuje_grafik = Column(Boolean, nullable=False, default=False)
+    utworzono_at   = Column(DateTime, nullable=False)
+
+    pracownik = relationship("Pracownik")

@@ -39,6 +39,7 @@ from routers.crm import router as crm_router
 from routers.gielda import router as gielda_router
 from routers.plan_sali import router as plan_sali_router
 from routers.ogloszenia import router as ogloszenia_router
+from routers.zgodnosc import router as zgodnosc_router
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -49,6 +50,7 @@ app.include_router(crm_router)         # CRM gości / scoring no-show (roadmapa 
 app.include_router(gielda_router)      # giełda wymiany zmian (roadmapa v1.5)
 app.include_router(plan_sali_router)   # plan sali — rozmieszczenie stolików + status (roadmapa v1.5)
 app.include_router(ogloszenia_router)  # ogłoszenia zespołowe — tablica manager→pracownicy (roadmapa v1.5)
+app.include_router(zgodnosc_router)    # zgodność lokalu — badania załogi + terminy (roadmapa v2, oś B)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().

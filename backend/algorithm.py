@@ -42,6 +42,21 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
             urlop_dni.add((u.pracownik_id, d))
             d += timedelta(days=1)
 
+    # Zgodność (roadmapa v2): przeterminowany dokument z blokuje_grafik=True wyklucza pracownika
+    # z AUTO-przydziału od dnia PO dacie ważności (przeterminowane badania = nie wchodzi na zmianę).
+    # Ręczny wpis pozostaje możliwy — UI grafiku pokazuje ostrzeżenie (GET /api/zgodnosc/blokady).
+    blokady_dni = set()
+    dok_blokujace = db.query(models.DokumentZgodnosci).filter(
+        models.DokumentZgodnosci.pracownik_id.isnot(None),
+        models.DokumentZgodnosci.blokuje_grafik == True,  # noqa: E712
+        models.DokumentZgodnosci.data_waznosci < end,
+    ).all()
+    for dk in dok_blokujace:
+        d = max(dk.data_waznosci + timedelta(days=1), start)
+        while d <= end:
+            blokady_dni.add((dk.pracownik_id, d))
+            d += timedelta(days=1)
+
     # Mapowanie danych dla szybszego dostępu
     dys_map = {(d.pracownik_id, d.data): d for d in dyspozycje}
     kwal_map = {p.id: {s.id for s in p.kwalifikacje} for p in pracownicy}
@@ -70,6 +85,8 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
     def is_time_compatible(p_id, check_date, req_od: time) -> bool:
         if (p_id, check_date) in urlop_dni:
             return False  # zaakceptowany urlop — auto-przydział pomija ten dzień
+        if (p_id, check_date) in blokady_dni:
+            return False  # przeterminowany dokument zgodności (badania) — pomijamy
         dys = dys_map.get((p_id, check_date))
         if dys is None or not dys.dostepnosc:
             return False

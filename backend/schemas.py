@@ -408,3 +408,13 @@ class OnlineRezerwacjaIn(BaseModel):
     telefon: Optional[str] = None
     email: Optional[str] = None
     notatka: Optional[str] = None
+
+# --- ZGODNOŚĆ LOKALU (badania pracowników + terminy lokalu) ---
+
+class DokumentZgodnosciIn(BaseModel):
+    pracownik_id: Optional[int] = None   # None = termin lokalu (koncesja/przegląd)
+    typ: str = "inne"
+    nazwa: str
+    data_waznosci: date
+    notatka: Optional[str] = None
+    blokuje_grafik: bool = False

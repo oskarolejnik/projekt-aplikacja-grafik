@@ -66,6 +66,12 @@ export default function Grafik() {
     api('/grafik/kuchnia-stanowisko').then((r) => setKuchniaId(r.id)).catch(() => {})
   }, [])
 
+  // Zgodność: pracownicy z przeterminowanymi dokumentami blokującymi grafik (⚠ przy nazwisku).
+  const [blokady, setBlokady] = useState({})
+  useEffect(() => {
+    api('/zgodnosc/blokady').then(setBlokady).catch(() => {})
+  }, [])
+
   const [s, e] = week.split('|')
   const dates = useMemo(() => zakresDni(s, e), [s, e])
   const stanMap = useMemo(() => Object.fromEntries(stanowiska.map((x) => [x.id, x])), [stanowiska])
@@ -310,8 +316,12 @@ export default function Grafik() {
               <tbody>
                 {aktywni.map((p) => (
                   <tr key={p.id}>
-                    <td className="sticky left-0 z-10 w-24 border-b border-r border-line px-2 py-1 text-[11px] font-semibold leading-tight text-ink" style={{ background: tloKoloru(p.kolor) }} title={`${p.imie} ${p.nazwisko}`}>
-                      <div className="truncate">{p.imie} {p.nazwisko ? p.nazwisko[0] + '.' : ''}</div>
+                    <td className="sticky left-0 z-10 w-24 border-b border-r border-line px-2 py-1 text-[11px] font-semibold leading-tight text-ink" style={{ background: tloKoloru(p.kolor) }}
+                        title={blokady[p.id] ? `${p.imie} ${p.nazwisko} — po terminie: ${blokady[p.id].join(', ')} (auto-przydział pomija)` : `${p.imie} ${p.nazwisko}`}>
+                      <div className="flex items-center gap-1">
+                        <span className="truncate">{p.imie} {p.nazwisko ? p.nazwisko[0] + '.' : ''}</span>
+                        {blokady[p.id] && <Icon name="warning" className="h-3 w-3 shrink-0 text-danger" />}
+                      </div>
                     </td>
                     {dates.map((dt) => {
                       const a = (przyMap[`${dt}_${p.id}`] || [])[0]
