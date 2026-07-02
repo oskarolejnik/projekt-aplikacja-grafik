@@ -135,6 +135,69 @@ export default function PortalImprezy() {
           </div>
         </div>
 
+        {dane.oferty_menu?.length > 0 && (
+          <div className="card p-6">
+            <h3 className="font-display text-base font-semibold text-ink">Menu</h3>
+            <p className="mt-1 text-xs text-muted">Wybierz wariant — lokal zobaczy Twój wybór od razu.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {dane.oferty_menu.map((o) => {
+                const wybrane = dane.menu_oferta_id === o.id
+                return (
+                  <button
+                    key={o.id}
+                    type="button"
+                    disabled={!t.edycja_gosci || busy}
+                    onClick={async () => {
+                      setBusy(true)
+                      try {
+                        await api(`/online/imprezy/${token}/menu`, 'POST', { oferta_id: o.id })
+                        toast(`Wybrano: ${o.nazwa}.`, 'success')
+                        await load()
+                      } catch (err) { toast(err.message, 'error') } finally { setBusy(false) }
+                    }}
+                    className={`rounded-xl border p-4 text-left transition active:scale-[0.99] ${
+                      wybrane ? 'border-mint/60 bg-mint/[0.10]' : 'border-line bg-white/[0.02] hover:bg-white/[0.05]'
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-semibold text-ink">{o.nazwa}</span>
+                      {wybrane && <Icon name="check" className="h-4 w-4 shrink-0 text-mint" />}
+                    </div>
+                    {o.opis && <p className="mt-1 text-xs leading-relaxed text-muted">{o.opis}</p>}
+                    <p className="mt-2 text-sm font-semibold tabular-nums text-ink">{zl(o.cena_od_osoby)} <span className="font-normal text-muted">/ os.</span></p>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {dane.raty?.length > 0 && (
+          <div className="card p-6">
+            <h3 className="font-display text-base font-semibold text-ink">Harmonogram wpłat</h3>
+            <div className="mt-3">
+              {dane.raty.map((r) => {
+                const poTerminie = !r.zaplacona && r.termin_platnosci && r.termin_platnosci < new Date().toISOString().slice(0, 10)
+                return (
+                  <div key={r.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line py-3 last:border-b-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-ink">{r.nazwa}</div>
+                      {r.termin_platnosci && <div className="text-xs text-muted">do {r.termin_platnosci}</div>}
+                    </div>
+                    <span className="text-sm font-semibold tabular-nums text-ink">{zl(r.kwota)}</span>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      r.zaplacona ? 'bg-success/15 text-success'
+                      : poTerminie ? 'bg-danger/15 text-danger' : 'bg-white/[0.04] text-muted'}`}>
+                      {r.zaplacona ? 'zapłacona' : poTerminie ? 'po terminie' : 'oczekuje'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+            <p className="mt-3 text-xs text-muted">Wpłaty księguje lokal — status zmienia się po zaksięgowaniu.</p>
+          </div>
+        )}
+
         <div className="card p-6">
           <h3 className="font-display text-base font-semibold text-ink">Ustalenia</h3>
           <p className="mt-1 text-xs text-muted">Wszystko na piśmie — bez telefonów i „kto co obiecał".</p>

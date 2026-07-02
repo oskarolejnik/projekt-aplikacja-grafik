@@ -146,3 +146,93 @@ def test_limit_ip_na_publicznych_postach(admin_client, anon, db, monkeypatch):
                          json={"tresc": "ping"}).status_code == 201
     assert anon.post(f"/api/online/imprezy/{tok}/wiadomosci",
                      json={"tresc": "ping"}).status_code == 429
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ETAP 2: menu + raty
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _oferta(admin_client, **over):
+    dane = dict(nazwa="Menu Klasyczne", opis="3 dania + bufet", cena_od_osoby=250.0, aktywna=True)
+    dane.update(over)
+    return admin_client.post("/api/oferty-menu", json=dane)
+
+
+def test_oferty_menu_crud(admin_client):
+    o = _oferta(admin_client).json()
+    assert o["cena_od_osoby"] == 250.0 and o["aktywna"] is True
+    r = admin_client.put(f"/api/oferty-menu/{o['id']}", json={
+        "nazwa": "Menu Premium", "opis": "", "cena_od_osoby": 320, "aktywna": False})
+    assert r.json()["nazwa"] == "Menu Premium" and r.json()["aktywna"] is False
+    assert admin_client.delete(f"/api/oferty-menu/{o['id']}").status_code == 204
+    assert admin_client.get("/api/oferty-menu").json() == []
+    assert _oferta(admin_client, nazwa="  ").status_code == 400
+
+
+def test_portal_pokazuje_tylko_aktywne_oferty(admin_client, anon, db):
+    t = _termin(db)
+    tok = _portal(admin_client, t.id)["token"]
+    aktywna = _oferta(admin_client).json()
+    _oferta(admin_client, nazwa="Wycofane", aktywna=False)
+    body = anon.get(f"/api/online/imprezy/{tok}").json()
+    assert [o["id"] for o in body["oferty_menu"]] == [aktywna["id"]]
+    assert body["menu_oferta_id"] is None
+
+
+def test_klient_wybiera_menu_z_notka(admin_client, anon, db):
+    t = _termin(db)
+    tok = _portal(admin_client, t.id)["token"]
+    o = _oferta(admin_client).json()
+    r = anon.post(f"/api/online/imprezy/{tok}/menu", json={"oferta_id": o["id"]})
+    assert r.status_code == 200 and r.json()["menu_oferta_id"] == o["id"]
+    body = anon.get(f"/api/online/imprezy/{tok}").json()
+    assert body["menu_oferta_id"] == o["id"]
+    assert any(w["autor"] == "system" and "Menu Klasyczne" in w["tresc"] for w in body["wiadomosci"])
+
+
+def test_wybor_menu_walidacje(admin_client, anon, db):
+    t = _termin(db)
+    tok = _portal(admin_client, t.id)["token"]
+    nieaktywna = _oferta(admin_client, aktywna=False).json()
+    assert anon.post(f"/api/online/imprezy/{tok}/menu", json={"oferta_id": 999}).status_code == 404
+    assert anon.post(f"/api/online/imprezy/{tok}/menu", json={"oferta_id": nieaktywna["id"]}).status_code == 404
+    t2 = _termin(db, status="odwolana")
+    tok2 = _portal(admin_client, t2.id)["token"]
+    o = _oferta(admin_client).json()
+    assert anon.post(f"/api/online/imprezy/{tok2}/menu", json={"oferta_id": o["id"]}).status_code == 409
+
+
+def test_usuniecie_oferty_odpina_wybory(admin_client, anon, db):
+    t = _termin(db)
+    tok = _portal(admin_client, t.id)["token"]
+    o = _oferta(admin_client).json()
+    anon.post(f"/api/online/imprezy/{tok}/menu", json={"oferta_id": o["id"]})
+    admin_client.delete(f"/api/oferty-menu/{o['id']}")
+    assert anon.get(f"/api/online/imprezy/{tok}").json()["menu_oferta_id"] is None
+
+
+def test_raty_crud_i_portal(admin_client, anon, db):
+    t = _termin(db)
+    tok = _portal(admin_client, t.id)["token"]
+    r1 = admin_client.post(f"/api/terminy/{t.id}/raty", json={
+        "nazwa": "Zadatek", "kwota": 1000, "termin_platnosci": str(JUTRO - timedelta(days=20))}).json()
+    admin_client.post(f"/api/terminy/{t.id}/raty", json={
+        "nazwa": "II rata", "kwota": 3000, "termin_platnosci": str(JUTRO - timedelta(days=5))})
+    body = anon.get(f"/api/online/imprezy/{tok}").json()
+    assert [x["nazwa"] for x in body["raty"]] == ["Zadatek", "II rata"]   # sortowanie po terminie
+    # lokal oznacza zapłaconą → notka systemowa w portalu
+    admin_client.put(f"/api/raty/{r1['id']}", json={
+        "nazwa": "Zadatek", "kwota": 1000, "termin_platnosci": str(JUTRO - timedelta(days=20)),
+        "zaplacona": True})
+    body = anon.get(f"/api/online/imprezy/{tok}").json()
+    assert body["raty"][0]["zaplacona"] is True and body["raty"][0]["zaplacona_at"]
+    assert any(w["autor"] == "system" and "Zadatek" in w["tresc"] and "zapłaconą" in w["tresc"]
+               for w in body["wiadomosci"])
+    assert admin_client.delete(f"/api/raty/{r1['id']}").status_code == 204
+    assert len(admin_client.get(f"/api/terminy/{t.id}/raty").json()) == 1
+
+
+def test_raty_admin_only(anon, db):
+    t = _termin(db)
+    assert anon.get(f"/api/terminy/{t.id}/raty").status_code == 401
+    assert anon.post(f"/api/terminy/{t.id}/raty", json={"nazwa": "X"}).status_code == 401

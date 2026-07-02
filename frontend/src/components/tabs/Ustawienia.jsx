@@ -48,6 +48,31 @@ export default function Ustawienia() {
   const set = (k, v) => setCfg((s) => ({ ...s, [k]: v }))
   const setS = (k, v) => setSub((s) => ({ ...s, [k]: v }))
 
+  // Menu imprez (portal Pary Młodej): katalog ofert wybieralnych przez klienta w portalu.
+  const [oferty, setOferty] = useState([])
+  const [nowaOferta, setNowaOferta] = useState({ nazwa: '', cena_od_osoby: '', opis: '' })
+  useEffect(() => { api('/oferty-menu').then(setOferty).catch(() => {}) }, [])
+  const odswiezOferty = async () => setOferty(await api('/oferty-menu'))
+  const dodajOferte = async () => {
+    if (!nowaOferta.nazwa.trim()) { toast('Podaj nazwę oferty.', 'error'); return }
+    try {
+      await api('/oferty-menu', 'POST', {
+        nazwa: nowaOferta.nazwa.trim(), opis: nowaOferta.opis.trim(),
+        cena_od_osoby: parseFloat(nowaOferta.cena_od_osoby) || 0, aktywna: true,
+      })
+      setNowaOferta({ nazwa: '', cena_od_osoby: '', opis: '' })
+      await odswiezOferty(); toast('Dodano ofertę menu.', 'success')
+    } catch (e) { toast(e.message, 'error') }
+  }
+  const przelaczOferte = async (o) => {
+    try { await api(`/oferty-menu/${o.id}`, 'PUT', { ...o, aktywna: !o.aktywna }); await odswiezOferty() }
+    catch (e) { toast(e.message, 'error') }
+  }
+  const usunOferte = async (o) => {
+    try { await api(`/oferty-menu/${o.id}`, 'DELETE'); await odswiezOferty(); toast('Usunięto ofertę.', 'success') }
+    catch (e) { toast(e.message, 'error') }
+  }
+
   const zapiszSub = async () => {
     setBusy(true)
     try {
@@ -143,6 +168,37 @@ export default function Ustawienia() {
             <input value={cfg.impreza_najwczesniej ?? '10:00'} onChange={(e) => set('impreza_najwczesniej', e.target.value)} placeholder="10:00" className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Sale z minimum 2 obsady (po przecinku)
             <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="R2Piw,R2G" className={fld} /></label>
+        </div>
+      </Card>
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Menu imprez (portal klienta)" subtitle="Warianty menu, które para młoda / organizator wybiera w portalu imprezy. Nieaktywne znikają z portalu, wybory zostają." />
+        <div className="space-y-2">
+          {oferty.length === 0 && <p className="py-3 text-sm text-muted">Brak ofert — dodaj pierwszą, a pojawi się w portalu klienta.</p>}
+          {oferty.map((o) => (
+            <div key={o.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line bg-white/[0.02] px-4 py-2.5">
+              <button onClick={() => przelaczOferte(o)}
+                      className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold transition ${
+                        o.aktywna ? 'bg-mint/15 text-mint' : 'bg-white/[0.06] text-muted hover:text-ink'}`}>
+                {o.aktywna ? 'aktywna' : 'wyłączona'}
+              </button>
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-semibold text-ink">{o.nazwa}</span>
+                {o.opis && <span className="ml-2 text-xs text-muted">{o.opis}</span>}
+              </div>
+              <span className="text-sm tabular-nums text-ink">{(o.cena_od_osoby || 0).toLocaleString('pl-PL')} zł/os.</span>
+              <button onClick={() => usunOferte(o)} className="text-muted transition hover:text-danger" aria-label="Usuń ofertę">✕</button>
+            </div>
+          ))}
+          <div className="grid gap-2 pt-1 sm:grid-cols-[1fr_7rem_1fr_auto]">
+            <input value={nowaOferta.nazwa} onChange={(e) => setNowaOferta((s) => ({ ...s, nazwa: e.target.value }))}
+                   className={fld} placeholder="np. Menu Klasyczne" />
+            <input type="number" value={nowaOferta.cena_od_osoby} onChange={(e) => setNowaOferta((s) => ({ ...s, cena_od_osoby: e.target.value }))}
+                   className={fld} placeholder="zł/os." />
+            <input value={nowaOferta.opis} onChange={(e) => setNowaOferta((s) => ({ ...s, opis: e.target.value }))}
+                   className={fld} placeholder="opis (np. 3 dania + bufet)" />
+            <Button variant="ghost" onClick={dodajOferte}>Dodaj</Button>
+          </div>
         </div>
       </Card>
 

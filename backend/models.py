@@ -300,6 +300,8 @@ class Termin(Base):
     # Portal klienta imprezy (roadmapa v2): sekretny token publicznego linku (/?impreza=TOKEN).
     # NULL = portal nie wygenerowany. Regeneracja unieważnia stary link.
     portal_token = Column(String(64), nullable=True, unique=True, index=True)
+    # Portal Pary Młodej (etap 2): oferta menu wybrana przez klienta w portalu.
+    menu_oferta_id = Column(Integer, ForeignKey("oferty_menu.id", ondelete="SET NULL"), nullable=True)
     # --- Moduł rezerwacji (stolik/sala/impreza w jednej encji) ---
     godz_od      = Column(Time, nullable=True)   # start rezerwacji (stolik); impreza może mieć NULL
     godz_do      = Column(Time, nullable=True)   # koniec/przewidywany koniec zasiadku
@@ -682,3 +684,30 @@ class StornoGastro(Base):
     opis              = Column(String, nullable=True)
     godzina           = Column(Time, nullable=True)
     zaktualizowano_at = Column(DateTime, nullable=False)
+
+
+class OfertaMenu(Base):
+    """Katalog ofert menu imprez (portal Pary Młodej) — definiowany per lokal w Ustawieniach.
+    Klient wybiera ofertę w portalu; wybór zapisuje się na Terminie (menu_oferta_id)."""
+    __tablename__ = "oferty_menu"
+    id            = Column(Integer, primary_key=True, index=True)
+    nazwa         = Column(String(120), nullable=False)
+    opis          = Column(String, nullable=True)
+    cena_od_osoby = Column(Float, nullable=False, default=0.0)
+    aktywna       = Column(Boolean, nullable=False, default=True)
+    kolejnosc     = Column(Integer, nullable=False, default=0)
+
+
+class RataImprezy(Base):
+    """Harmonogram wpłat imprezy (portal): rata z terminem płatności i statusem.
+    „Zapłaconą" oznacza LOKAL (kasa/przelew weryfikowane po stronie lokalu) — portal
+    tylko pokazuje statusy; płatności online to osobny etap."""
+    __tablename__ = "raty_imprez"
+    id               = Column(Integer, primary_key=True, index=True)
+    termin_id        = Column(Integer, ForeignKey("terminy.id", ondelete="CASCADE"),
+                              nullable=False, index=True)
+    nazwa            = Column(String(120), nullable=False)
+    kwota            = Column(Float, nullable=False, default=0.0)
+    termin_platnosci = Column(Date, nullable=True)
+    zaplacona        = Column(Boolean, nullable=False, default=False)
+    zaplacona_at     = Column(DateTime, nullable=True)

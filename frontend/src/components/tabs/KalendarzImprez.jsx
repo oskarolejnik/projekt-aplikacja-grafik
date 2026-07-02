@@ -80,6 +80,38 @@ export default function KalendarzImprez() {
     catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
+  // Raty imprezy (portal etap 2): edytor harmonogramu wpłat w modalu terminu.
+  const [raty, setRaty] = useState([])
+  const [nowaRata, setNowaRata] = useState({ nazwa: '', kwota: '', termin_platnosci: '' })
+  useEffect(() => {
+    if (modal?.id) api(`/terminy/${modal.id}/raty`).then(setRaty).catch(() => setRaty([]))
+    else setRaty([])
+  }, [modal?.id])
+
+  const dodajRate = async () => {
+    if (!nowaRata.nazwa.trim()) { toast('Podaj nazwę raty.', 'error'); return }
+    try {
+      await api(`/terminy/${modal.id}/raty`, 'POST', {
+        nazwa: nowaRata.nazwa.trim(), kwota: num(nowaRata.kwota) || 0,
+        termin_platnosci: nowaRata.termin_platnosci || null,
+      })
+      setNowaRata({ nazwa: '', kwota: '', termin_platnosci: '' })
+      setRaty(await api(`/terminy/${modal.id}/raty`))
+    } catch (e) { toast(e.message, 'error') }
+  }
+  const przelaczRate = async (r) => {
+    try {
+      await api(`/raty/${r.id}`, 'PUT', { ...r, zaplacona: !r.zaplacona })
+      setRaty(await api(`/terminy/${modal.id}/raty`))
+    } catch (e) { toast(e.message, 'error') }
+  }
+  const usunRate = async (r) => {
+    try {
+      await api(`/raty/${r.id}`, 'DELETE')
+      setRaty(await api(`/terminy/${modal.id}/raty`))
+    } catch (e) { toast(e.message, 'error') }
+  }
+
   // Portal klienta (roadmapa v2): generuje/REGENERUJE tokenowy link i kopiuje go do schowka.
   const portalKlienta = async () => {
     if (!modal.id) return
@@ -207,6 +239,38 @@ export default function KalendarzImprez() {
               <Button onClick={zapisz} disabled={busy} className="flex-1"><Icon name="check" className="h-4 w-4" /> Zapisz</Button>
               {modal.id && <button onClick={usun} disabled={busy} className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm font-semibold text-danger"><Icon name="trash" className="h-4 w-4" /></button>}
             </div>
+            {modal.id && (
+              <div className="mt-4 border-t border-line pt-3">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Raty (portal klienta)</div>
+                {raty.map((r) => (
+                  <div key={r.id} className="mb-1.5 flex items-center gap-2 text-sm">
+                    <button onClick={() => przelaczRate(r)}
+                            title={r.zaplacona ? 'Oznacz jako niezapłaconą' : 'Oznacz jako zapłaconą'}
+                            className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold transition ${
+                              r.zaplacona ? 'bg-success/15 text-success' : 'bg-white/[0.06] text-muted hover:text-ink'}`}>
+                      {r.zaplacona ? 'zapłacona' : 'oczekuje'}
+                    </button>
+                    <span className="min-w-0 flex-1 truncate text-ink">{r.nazwa}</span>
+                    <span className="tabular-nums text-muted">{zl(r.kwota)}</span>
+                    {r.termin_platnosci && <span className="text-xs text-muted/70">{r.termin_platnosci}</span>}
+                    <button onClick={() => usunRate(r)} className="text-muted transition hover:text-danger" aria-label="Usuń ratę">
+                      <Icon name="close" className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <div className="mt-2 grid grid-cols-[1fr_5.5rem_8rem_auto] items-center gap-1.5">
+                  <input value={nowaRata.nazwa} onChange={(e) => setNowaRata((s) => ({ ...s, nazwa: e.target.value }))}
+                         className={fld} placeholder="np. II rata" />
+                  <input type="number" value={nowaRata.kwota} onChange={(e) => setNowaRata((s) => ({ ...s, kwota: e.target.value }))}
+                         className={fld} placeholder="zł" />
+                  <input type="date" value={nowaRata.termin_platnosci}
+                         onChange={(e) => setNowaRata((s) => ({ ...s, termin_platnosci: e.target.value }))} className={fld} />
+                  <button onClick={dodajRate} className="rounded-lg border border-line px-2.5 py-2 text-sm font-semibold text-muted transition hover:text-ink" aria-label="Dodaj ratę">
+                    <Icon name="plus" className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
             {modal.id && (
               <button onClick={portalKlienta} disabled={busy}
                       title="Tokenowy link dla klienta: liczba gości, wpłaty, wątek ustaleń. Ponowne kliknięcie generuje NOWY link (stary przestaje działać)."

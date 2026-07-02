@@ -14,6 +14,7 @@ treści przycinane, zero PII ponad to, co klient i tak zna (własna impreza).
 import logging
 import secrets
 from datetime import date
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -151,6 +152,11 @@ def portal_dane(token: str, db: Session = Depends(get_db)):
             "edycja_gosci": t.status in STATUSY_AKTYWNE,
         },
         "wiadomosci": _watek(db, t.id),
+        "oferty_menu": [_oferta_out(o) for o in db.query(models.OfertaMenu)
+                        .filter(models.OfertaMenu.aktywna == True)  # noqa: E712
+                        .order_by(models.OfertaMenu.kolejnosc.asc(), models.OfertaMenu.id.asc()).all()],
+        "menu_oferta_id": t.menu_oferta_id,
+        "raty": _raty(db, t.id),
     }
 
 
@@ -187,3 +193,157 @@ def portal_wiadomosc(token: str, dane: WiadomoscIn, request: Request, db: Sessio
     w = _dodaj_wiadomosc(db, t.id, "klient", tresc)
     db.commit(); db.refresh(w)
     return _wiadomosc_out(w)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ETAP 2 (Portal Pary Młodej): katalog ofert menu + harmonogram rat
+# ═════════════════════════════════════════════════════════════════════════════
+
+class OfertaMenuIn(BaseModel):
+    nazwa: str
+    opis: str = ""
+    cena_od_osoby: float = 0.0
+    aktywna: bool = True
+
+
+class RataIn(BaseModel):
+    nazwa: str
+    kwota: float = 0.0
+    termin_platnosci: Optional[date] = None
+    zaplacona: bool = False
+
+
+def _oferta_out(o: models.OfertaMenu) -> dict:
+    return {"id": o.id, "nazwa": o.nazwa, "opis": o.opis or "",
+            "cena_od_osoby": float(o.cena_od_osoby or 0), "aktywna": bool(o.aktywna)}
+
+
+def _rata_out(r: models.RataImprezy) -> dict:
+    return {"id": r.id, "nazwa": r.nazwa, "kwota": float(r.kwota or 0),
+            "termin_platnosci": str(r.termin_platnosci) if r.termin_platnosci else None,
+            "zaplacona": bool(r.zaplacona),
+            "zaplacona_at": r.zaplacona_at.isoformat() if r.zaplacona_at else None}
+
+
+def _raty(db: Session, termin_id: int) -> list:
+    rows = db.query(models.RataImprezy).filter(models.RataImprezy.termin_id == termin_id) \
+        .order_by(models.RataImprezy.termin_platnosci.asc().nullslast(), models.RataImprezy.id.asc()).all()
+    return [_rata_out(r) for r in rows]
+
+
+# ── Admin: katalog ofert menu (Ustawienia) ────────────────────────────────────
+@router.get("/api/oferty-menu")
+def oferty_menu_lista(_admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    rows = db.query(models.OfertaMenu).order_by(models.OfertaMenu.kolejnosc.asc(),
+                                                models.OfertaMenu.id.asc()).all()
+    return [_oferta_out(o) for o in rows]
+
+
+@router.post("/api/oferty-menu", status_code=201)
+def oferta_menu_dodaj(dane: OfertaMenuIn, _admin: models.User = Depends(require_admin),
+                      db: Session = Depends(get_db)):
+    if not dane.nazwa.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Podaj nazwę oferty.")
+    o = models.OfertaMenu(nazwa=dane.nazwa.strip(), opis=dane.opis.strip() or None,
+                          cena_od_osoby=max(0.0, float(dane.cena_od_osoby or 0)),
+                          aktywna=bool(dane.aktywna))
+    db.add(o); db.commit(); db.refresh(o)
+    return _oferta_out(o)
+
+
+@router.put("/api/oferty-menu/{oid}")
+def oferta_menu_edytuj(oid: int, dane: OfertaMenuIn, _admin: models.User = Depends(require_admin),
+                       db: Session = Depends(get_db)):
+    o = db.get(models.OfertaMenu, oid)
+    if o is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Oferta nie istnieje.")
+    if not dane.nazwa.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Podaj nazwę oferty.")
+    o.nazwa = dane.nazwa.strip(); o.opis = dane.opis.strip() or None
+    o.cena_od_osoby = max(0.0, float(dane.cena_od_osoby or 0)); o.aktywna = bool(dane.aktywna)
+    db.commit(); db.refresh(o)
+    return _oferta_out(o)
+
+
+@router.delete("/api/oferty-menu/{oid}", status_code=204)
+def oferta_menu_usun(oid: int, _admin: models.User = Depends(require_admin),
+                     db: Session = Depends(get_db)):
+    o = db.get(models.OfertaMenu, oid)
+    if o is not None:
+        # odpinamy wybory klientów (SET NULL po stronie ORM — SQLite nie egzekwuje FK)
+        for t in db.query(models.Termin).filter(models.Termin.menu_oferta_id == oid).all():
+            t.menu_oferta_id = None
+        db.delete(o); db.commit()
+
+
+# ── Admin: raty terminu (Kalendarz imprez) ────────────────────────────────────
+@router.get("/api/terminy/{termin_id}/raty")
+def raty_lista(termin_id: int, _admin: models.User = Depends(require_admin),
+               db: Session = Depends(get_db)):
+    if db.get(models.Termin, termin_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Termin nie istnieje.")
+    return _raty(db, termin_id)
+
+
+@router.post("/api/terminy/{termin_id}/raty", status_code=201)
+def rata_dodaj(termin_id: int, dane: RataIn, _admin: models.User = Depends(require_admin),
+               db: Session = Depends(get_db)):
+    if db.get(models.Termin, termin_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Termin nie istnieje.")
+    if not dane.nazwa.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Podaj nazwę raty (np. „II rata — 30 dni przed”).")
+    r = models.RataImprezy(termin_id=termin_id, nazwa=dane.nazwa.strip(),
+                           kwota=max(0.0, float(dane.kwota or 0)),
+                           termin_platnosci=dane.termin_platnosci,
+                           zaplacona=bool(dane.zaplacona),
+                           zaplacona_at=utcnow_naive() if dane.zaplacona else None)
+    db.add(r); db.commit(); db.refresh(r)
+    return _rata_out(r)
+
+
+@router.put("/api/raty/{rid}")
+def rata_edytuj(rid: int, dane: RataIn, _admin: models.User = Depends(require_admin),
+                db: Session = Depends(get_db)):
+    r = db.get(models.RataImprezy, rid)
+    if r is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rata nie istnieje.")
+    r.nazwa = dane.nazwa.strip() or r.nazwa
+    r.kwota = max(0.0, float(dane.kwota or 0))
+    r.termin_platnosci = dane.termin_platnosci
+    if bool(dane.zaplacona) != bool(r.zaplacona):
+        r.zaplacona = bool(dane.zaplacona)
+        r.zaplacona_at = utcnow_naive() if r.zaplacona else None
+        _dodaj_wiadomosc(db, r.termin_id, "system",
+                         f"Lokal oznaczył ratę „{r.nazwa}” jako {'zapłaconą' if r.zaplacona else 'niezapłaconą'} ({r.kwota:.0f} zł).")
+    db.commit(); db.refresh(r)
+    return _rata_out(r)
+
+
+@router.delete("/api/raty/{rid}", status_code=204)
+def rata_usun(rid: int, _admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    r = db.get(models.RataImprezy, rid)
+    if r is not None:
+        db.delete(r); db.commit()
+
+
+# ── Publiczne: wybór menu przez klienta ───────────────────────────────────────
+class WyborMenuIn(BaseModel):
+    oferta_id: int
+
+
+@router.post("/api/online/imprezy/{token}/menu")
+def portal_wybor_menu(token: str, dane: WyborMenuIn, request: Request,
+                      db: Session = Depends(get_db)):
+    _limit_ip(request)
+    t = _termin_po_tokenie(token, db)
+    if t.status not in STATUSY_AKTYWNE:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Impreza nie jest już aktywna — skontaktuj się z lokalem.")
+    o = db.get(models.OfertaMenu, dane.oferta_id)
+    if o is None or not o.aktywna:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Ta oferta menu nie jest dostępna.")
+    t.menu_oferta_id = o.id
+    _dodaj_wiadomosc(db, t.id, "system",
+                     f"Klient wybrał menu: „{o.nazwa}” ({o.cena_od_osoby:.0f} zł/os.).")
+    db.commit()
+    return {"menu_oferta_id": o.id}
