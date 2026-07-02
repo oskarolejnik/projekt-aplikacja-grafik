@@ -47,6 +47,31 @@ export default function EmployeeHours() {
     load()
   }, [load])
 
+  // Portfel (roadmapa v2): zarobek na żywo + zaliczki dla wybranego miesiąca.
+  const [portfel, setPortfel] = useState(null)
+  const [kwotaZal, setKwotaZal] = useState('')
+  const [busyZal, setBusyZal] = useState(false)
+  const loadPortfel = useCallback(() => {
+    api(`/me/portfel?rok=${rok}&miesiac=${miesiac}`).then(setPortfel).catch(() => setPortfel(null))
+  }, [rok, miesiac])
+  useEffect(() => { loadPortfel() }, [loadPortfel])
+  const biezacyMiesiac = rok === dzis.getFullYear() && miesiac === dzis.getMonth() + 1
+
+  const zlozWniosek = async () => {
+    const kwota = parseFloat(kwotaZal)
+    if (!kwota || kwota <= 0) { toast('Podaj kwotę zaliczki.', 'error'); return }
+    setBusyZal(true)
+    try {
+      await api('/me/portfel/zaliczki', 'POST', { kwota })
+      toast('Wniosek wysłany — manager dostał powiadomienie.', 'success')
+      setKwotaZal(''); loadPortfel()
+    } catch (e) { toast(e.message, 'error') } finally { setBusyZal(false) }
+  }
+  const wycofajWniosek = async (z) => {
+    try { await api(`/me/portfel/zaliczki/${z.id}`, 'DELETE'); loadPortfel() }
+    catch (e) { toast(e.message, 'error') }
+  }
+
   // Live: ciche odświeżanie co 20 s (bez spinnera), tylko gdy karta jest widoczna.
   useEffect(() => {
     const id = setInterval(() => {
@@ -110,6 +135,58 @@ export default function EmployeeHours() {
                   Rozpoczęta o {dane.aktywna_zmiana.wejscie.slice(11, 16)} — godziny doliczą się po wybiciu wyjścia.
                 </div>
               </div>
+            </Card>
+          )}
+
+          {/* Portfel: zarobek na żywo + zaliczki (roadmapa v2) */}
+          {portfel && (
+            <Card className="p-6">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-muted">Zarobiłeś już w tym miesiącu</div>
+                  <div className="mt-1 font-display text-3xl font-bold tabular-nums text-mint">{zl(portfel.zarobek)}</div>
+                </div>
+                {biezacyMiesiac && (
+                  <div className="text-right text-xs text-muted">
+                    Dostępna zaliczka: <span className="font-semibold text-ink">{zl(portfel.dostepna_zaliczka)}</span>
+                    <span className="block text-muted/70">(do {portfel.limit_procent}% dotychczasowego zarobku)</span>
+                  </div>
+                )}
+              </div>
+              {biezacyMiesiac && portfel.dostepna_zaliczka > 0 && (
+                <div className="mt-4 flex gap-2">
+                  <input
+                    type="number" min="1" value={kwotaZal} onChange={(e) => setKwotaZal(e.target.value)}
+                    placeholder="kwota zaliczki (zł)"
+                    className="w-full min-w-0 flex-1 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted/50 focus:border-mint/60 focus:ring-2 focus:ring-mint/20"
+                  />
+                  <button onClick={zlozWniosek} disabled={busyZal}
+                          className="shrink-0 rounded-xl bg-mint px-4 py-2.5 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-50">
+                    Poproś o zaliczkę
+                  </button>
+                </div>
+              )}
+              {portfel.zaliczki.length > 0 && (
+                <div className="mt-4 space-y-1.5">
+                  {portfel.zaliczki.map((z) => (
+                    <div key={z.id} className="flex items-center gap-3 text-sm">
+                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                        z.status === 'zaakceptowana' ? 'bg-success/15 text-success'
+                        : z.status === 'odrzucona' ? 'bg-danger/15 text-danger' : 'bg-white/[0.06] text-muted'}`}>
+                        {z.status}
+                      </span>
+                      <span className="tabular-nums text-ink">{zl(z.kwota)}</span>
+                      <span className="flex-1 text-xs text-muted">{(z.wniosek_at || '').slice(0, 10)}</span>
+                      {z.status === 'oczekuje' && (
+                        <button onClick={() => wycofajWniosek(z)} className="text-xs text-muted underline-offset-2 transition hover:text-ink hover:underline">
+                          wycofaj
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <p className="pt-1 text-xs text-muted/70">Zaakceptowane zaliczki są potrącane z wypłaty tego miesiąca.</p>
+                </div>
+              )}
             </Card>
           )}
 

@@ -303,6 +303,18 @@ def raport_godzin_miesiac(db, rok: int, miesiac: int, odbicia=None, tylko_pracow
             })
     pracownicy_out.sort(key=lambda x: (-x["do_wyplaty"], x["pracownik"]))  # malejąco wg wypłaty
 
+    # Portfel pracownika (roadmapa v2): zaakceptowane zaliczki miesiąca POMNIEJSZAJĄ wypłatę.
+    # Pola dodane wstecznie-zgodnie (nowe klucze, istniejące bez zmian).
+    zaliczki_mapa = {}
+    mies = f"{rok}-{miesiac:02d}"
+    for z in db.query(models.Zaliczka).filter(models.Zaliczka.miesiac == mies,
+                                              models.Zaliczka.status == "zaakceptowana").all():
+        zaliczki_mapa[z.pracownik_id] = zaliczki_mapa.get(z.pracownik_id, 0.0) + float(z.kwota or 0)
+    for w in pracownicy_out:
+        zal = round(zaliczki_mapa.get(w["pracownik_id"], 0.0), 2)
+        w["zaliczki_kwota"] = zal
+        w["do_wyplaty_po_zaliczkach"] = round(w["do_wyplaty"] - zal, 2)
+
     return {
         "rok": rok,
         "miesiac": miesiac,

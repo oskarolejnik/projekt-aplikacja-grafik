@@ -51,6 +51,22 @@ export default function RaportGodzin() {
     return () => clearInterval(id)
   }, [load])
 
+  // Zaliczki (portfel pracownika, roadmapa v2): wnioski miesiąca + decyzje 1 kliknięciem.
+  const [zaliczki, setZaliczki] = useState([])
+  const loadZaliczki = useCallback(() => {
+    if (!isAdmin) return
+    api(`/zaliczki?rok=${rok}&miesiac=${miesiac}`).then(setZaliczki).catch(() => setZaliczki([]))
+  }, [isAdmin, rok, miesiac])
+  useEffect(() => { loadZaliczki() }, [loadZaliczki])
+  const decyzjaZaliczki = async (z, status) => {
+    try {
+      await api(`/zaliczki/${z.id}`, 'PUT', { status })
+      toast(`Zaliczka ${z.pracownik}: ${status}.`, 'success')
+      loadZaliczki(); load(true)    // odśwież też potrącenia w raporcie
+    } catch (e) { toast(e.message, 'error') }
+  }
+  const oczekujace = zaliczki.filter((z) => z.status === 'oczekuje')
+
   const przesunMiesiac = (delta) => {
     let m = miesiac + delta
     let r = rok
@@ -90,7 +106,16 @@ export default function RaportGodzin() {
           <span className="min-w-0 truncate font-semibold text-ink">{p.pracownik}</span>
           <div className="flex shrink-0 items-baseline gap-3">
             <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
-            <span className="font-display font-bold tabular-nums text-mint">{zl(p.do_wyplaty)}</span>
+            <span className="text-right">
+              <span className="font-display font-bold tabular-nums text-mint">
+                {zl((p.zaliczki_kwota || 0) > 0 ? p.do_wyplaty_po_zaliczkach : p.do_wyplaty)}
+              </span>
+              {(p.zaliczki_kwota || 0) > 0 && (
+                <span className="block text-[10px] text-muted" title={`Wypłata ${zl(p.do_wyplaty)} minus zaakceptowane zaliczki`}>
+                  po zaliczce −{zl(p.zaliczki_kwota)}
+                </span>
+              )}
+            </span>
           </div>
         </div>
         <div className="space-y-2">
@@ -185,6 +210,29 @@ export default function RaportGodzin() {
           </button>
         </div>
       </div>
+
+      {isAdmin && oczekujace.length > 0 && (
+        <div className="mb-6 rounded-xl border border-lemon/30 bg-lemon/[0.06] p-4">
+          <div className="text-xs font-semibold uppercase tracking-wider text-lemon">Wnioski o zaliczki</div>
+          <div className="mt-2 space-y-2">
+            {oczekujace.map((z) => (
+              <div key={z.id} className="flex flex-wrap items-center gap-3 text-sm">
+                <span className="min-w-0 flex-1 font-semibold text-ink">{z.pracownik}</span>
+                <span className="tabular-nums text-ink">{zl(z.kwota)}</span>
+                <button onClick={() => decyzjaZaliczki(z, 'zaakceptowana')}
+                        className="rounded-lg bg-mint px-3 py-1.5 text-xs font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">
+                  Akceptuj
+                </button>
+                <button onClick={() => decyzjaZaliczki(z, 'odrzucona')}
+                        className="rounded-lg border border-line bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-muted transition hover:text-danger">
+                  Odrzuć
+                </button>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-muted">Zaakceptowane potrącają się z wypłaty tego miesiąca (raport i eksport).</p>
+        </div>
+      )}
 
       {loading ? (
         <div className="grid place-items-center py-16">

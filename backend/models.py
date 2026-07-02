@@ -711,3 +711,22 @@ class RataImprezy(Base):
     termin_platnosci = Column(Date, nullable=True)
     zaplacona        = Column(Boolean, nullable=False, default=False)
     zaplacona_at     = Column(DateTime, nullable=True)
+
+
+class Zaliczka(Base):
+    """Wniosek o zaliczkę (Portfel pracownika, roadmapa v2). Pracownik wnioskuje do limitu
+    procentu bieżącego zarobku; admin akceptuje/odrzuca (rozliczalność: kto+kiedy);
+    zaakceptowane zaliczki miesiąca są POTRĄCANE w raporcie wypłat i eksporcie XLSX.
+    To workflow potrącenia, NIE kredytowanie — wypłata środków po stronie lokalu (kasa)."""
+    __tablename__ = "zaliczki"
+    id            = Column(Integer, primary_key=True, index=True)
+    pracownik_id  = Column(Integer, ForeignKey("pracownicy.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    miesiac       = Column(String(7), nullable=False, index=True)   # 'YYYY-MM' (miesiąc potrącenia)
+    kwota         = Column(Float, nullable=False, default=0.0)
+    status        = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|zaakceptowana|odrzucona
+    wniosek_at    = Column(DateTime, nullable=False)
+    decyzja_at    = Column(DateTime, nullable=True)
+    decyzja_login = Column(String, nullable=True)
+
+    pracownik = relationship("Pracownik")

@@ -43,6 +43,7 @@ from routers.zgodnosc import router as zgodnosc_router
 from routers.imprezy_ai import router as imprezy_ai_router
 from routers.portal_imprezy import router as portal_imprezy_router
 from routers.antyfraud import router as antyfraud_router
+from routers.portfel import router as portfel_router
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -57,6 +58,7 @@ app.include_router(zgodnosc_router)    # zgodność lokalu — badania załogi +
 app.include_router(imprezy_ai_router)  # skrzynka zapytań o imprezy — ekstrakcja+dostępność+szkic (roadmapa v2, oś A)
 app.include_router(portal_imprezy_router)  # portal klienta imprezy — tokenowa strona + wątek ustaleń (roadmapa v2, oś A)
 app.include_router(antyfraud_router)   # antyfraud POS — storna/rabaty per kelner + flagi (roadmapa v2, oś B)
+app.include_router(portfel_router)     # portfel pracownika — zarobek na żywo + zaliczki (roadmapa v2, oś C)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
