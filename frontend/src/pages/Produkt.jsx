@@ -80,80 +80,147 @@ function PriceNum({ value }) {
 
 function Cennik() {
   const [okres, setOkres] = useState('rok') // 'mies' | 'rok'
+  const glowne = CENNIK.filter((p) => p.mies != null && p.mies > 0)          // Basic · Pro · Premium
+  const boczne = CENNIK.filter((p) => p.mies === 0 || p.mies == null)        // Darmowy · Enterprise
+
+  const statusRozliczenia = (p) => {
+    const oszczedza = okres === 'rok' && p.mies > p.rok
+    return oszczedza
+      ? <>rozliczane rocznie · <span className="text-muted/60 line-through">{zl(p.mies)} zł/mc</span></>
+      : 'rozliczane co miesiąc'
+  }
+
+  const Cecha = ({ dziecko, featured }) => (
+    <li className="flex items-start gap-2.5 text-sm">
+      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.07]">
+        <Icon name="check" className={`h-3 w-3 ${featured ? 'text-mint' : 'text-ink'}`} />
+      </span>
+      <span className="leading-snug text-muted">{dziecko}</span>
+    </li>
+  )
+
   return (
-    <>
-      <div className="mt-7 flex justify-center">
-        <div className="inline-flex items-center gap-1 rounded-full border border-line bg-surface-2 p-1 text-sm">
+    <div className="relative">
+      {/* Gigantyczne słowo-tło: karty szkła rozmywają je swoim backdrop-blur — kino, nie dekoracja-tapeta.
+          Czysto wizualne (aria-hidden); tytuł sekcji niesie <h2 class="sr-only"> we wrapperze. */}
+      <div
+        aria-hidden
+        className="pointer-events-none select-none text-center font-display text-[clamp(4rem,14vw,10.5rem)] font-bold leading-[0.85] tracking-tight text-ink"
+      >
+        Cennik
+      </div>
+
+      {/* Przełącznik okresu — szklana pigułka z przesuwnym kciukiem (krzywa szuflady iOS). */}
+      <div data-rv="" className="relative z-10 -mt-[clamp(0.9rem,3vw,2.1rem)] flex justify-center">
+        <div className="relative inline-flex rounded-full border border-white/[0.08] bg-white/[0.05] p-1 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
+          <span
+            aria-hidden
+            className="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-full border border-white/[0.12] bg-white/[0.09] transition-transform duration-300 ease-drawer"
+            style={{ transform: okres === 'rok' ? 'translateX(100%)' : 'translateX(0)' }}
+          />
           {[['mies', 'Miesięcznie'], ['rok', 'Rocznie']].map(([k, l]) => (
             <button
               key={k}
               onClick={() => setOkres(k)}
               aria-pressed={okres === k}
-              className={`rounded-full px-4 py-1.5 font-semibold transition ${okres === k ? 'bg-mint text-bg' : 'text-muted hover:text-ink'}`}
+              className={`relative z-10 flex min-w-[8.5rem] items-center justify-center gap-1.5 rounded-full px-4 py-2 font-semibold transition-colors duration-200 ${okres === k ? 'text-ink' : 'text-muted hover:text-ink'}`}
             >
               {l}
-              {k === 'rok' && <span className={`ml-1.5 text-xs ${okres === k ? 'text-bg/70' : 'text-mint'}`}>−2 mies.</span>}
+              {k === 'rok' && <span className="rounded-full bg-mint/15 px-1.5 py-0.5 text-[10px] font-semibold text-mint">−2 mies.</span>}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="mt-9 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        {CENNIK.map((p, idx) => {
+      {/* Trzy plany główne — pływające szkło; flagowy Pro uniesiony, z papierowym CTA. */}
+      <div className="relative z-10 mx-auto mt-10 grid max-w-5xl gap-5 lg:grid-cols-3 lg:items-stretch lg:gap-6 lg:pt-6">
+        {glowne.map((p, idx) => {
           const cena = okres === 'rok' ? p.rok : p.mies
-          const darmowy = p.mies === 0
-          const enterprise = p.mies == null
-          const oszczedza = okres === 'rok' && !darmowy && !enterprise && p.mies > p.rok
           return (
-            <div
+            <article
               key={p.nazwa}
               data-rv=""
-              className={`lift rv-scale relative flex flex-col rounded-2xl border bg-surface-grad p-5 shadow-soft ${p.flagowy ? 'border-mint/50 lg:-my-3' : 'border-line'}`}
               style={{ '--i': idx }}
+              className={`glass lift rv-scale relative flex flex-col rounded-3xl p-6 sm:p-7 ${
+                p.flagowy ? 'z-10 border-white/[0.15] bg-white/[0.06] max-lg:-order-1 lg:-my-6 lg:px-8' : ''
+              }`}
             >
               {p.flagowy && (
-                <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-mint px-3 py-0.5 text-[11px] font-semibold text-bg">
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-cream px-3 py-1 text-[11px] font-semibold text-bg shadow-cta">
                   Najczęściej wybierany
                 </span>
               )}
-              <h3 className="font-display text-lg font-bold text-ink">{p.nazwa}</h3>
+              <h3 className="font-display text-base font-semibold text-ink">{p.nazwa}</h3>
               <p className="mt-0.5 text-xs text-muted">{p.opis}</p>
 
-              <div className="mt-4 flex items-end gap-1">
-                <span className="font-display text-4xl font-bold tabular-nums text-ink">
-                  {enterprise ? 'wycena' : <PriceNum value={cena} />}
+              <div className="mt-5 flex items-baseline gap-1.5">
+                <span className={`font-display font-bold tabular-nums tracking-tight text-ink ${p.flagowy ? 'text-5xl sm:text-6xl' : 'text-5xl'}`}>
+                  <PriceNum value={cena} />
                 </span>
-                {!enterprise && <span className="mb-1 text-sm text-muted">{darmowy ? '' : 'zł/mc'}</span>}
+                <span className="text-sm text-muted">zł/mc</span>
               </div>
-              <div className="mt-1 h-4 text-xs text-muted">
-                {enterprise ? 'indywidualnie' : darmowy ? 'na zawsze' : oszczedza
-                  ? <>rozliczane rocznie · <span className="text-muted/60 line-through">{zl(p.mies)} zł/mc</span></>
-                  : 'rozliczane co miesiąc'}
-              </div>
+              <div className="mt-1.5 h-4 text-xs text-muted">{statusRozliczenia(p)}</div>
 
-              <ul className="mt-5 flex-1 space-y-2.5">
-                {p.cechy.map((c) => (
-                  <li key={c} className="flex items-start gap-2 text-sm text-ink">
-                    <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-mint" />
-                    <span className="text-muted">{c}</span>
-                  </li>
-                ))}
+              <ul className="mt-6 flex-1 space-y-3 border-t border-white/[0.06] pt-6">
+                {p.cechy.map((c) => <Cecha key={c} dziecko={c} featured={p.flagowy} />)}
               </ul>
 
               <a
-                href={darmowy ? '?login' : enterprise ? `${MAIL}?subject=Enterprise` : `${MAIL}?subject=Plan%20${encodeURIComponent(p.nazwa)}`}
-                className={`mt-6 rounded-xl px-4 py-2.5 text-center text-sm font-semibold transition active:scale-[0.98] ${p.flagowy ? 'bg-mint text-bg hover:brightness-105' : darmowy ? 'bg-cream text-bg hover:bg-white' : 'border border-line text-ink hover:bg-white/[0.06]'}`}
+                href={`${MAIL}?subject=Plan%20${encodeURIComponent(p.nazwa)}`}
+                className={`mt-7 rounded-xl px-4 py-3 text-center text-sm font-semibold transition duration-200 active:scale-[0.98] ${
+                  p.flagowy
+                    ? 'bg-cream text-bg hover:bg-white'
+                    : 'border border-white/[0.10] bg-white/[0.04] text-ink hover:border-white/[0.16] hover:bg-white/[0.08]'
+                }`}
               >
-                {darmowy ? 'Zacznij za darmo' : enterprise ? 'Zapytaj o wycenę' : `Wybieram ${p.nazwa}`}
+                Wybieram {p.nazwa}
               </a>
-            </div>
+            </article>
           )
         })}
       </div>
-      <p className="mt-6 text-center text-xs text-muted">
+
+      {/* Skrzydła: wejście bez ryzyka (Darmowy) i wyjście w skalę (Enterprise) — celowo ciszej. */}
+      <div className="relative z-10 mx-auto mt-6 grid max-w-5xl gap-5 sm:grid-cols-2 lg:gap-6">
+        {boczne.map((p, idx) => {
+          const darmowy = p.mies === 0
+          return (
+            <article
+              key={p.nazwa}
+              data-rv=""
+              style={{ '--i': idx + 3 }}
+              className="glass lift rv-scale flex flex-col justify-between gap-4 rounded-3xl p-6 sm:flex-row sm:items-center"
+            >
+              <div className="min-w-0">
+                <div className="flex items-baseline gap-3">
+                  <h3 className="font-display text-base font-semibold text-ink">{p.nazwa}</h3>
+                  <span className="font-display text-xl font-bold tabular-nums text-ink">
+                    {darmowy ? '0 zł' : 'wycena'}
+                  </span>
+                  <span className="text-xs text-muted">{darmowy ? 'na zawsze' : 'indywidualnie'}</span>
+                </div>
+                <p className="mt-0.5 text-xs text-muted">{p.opis}</p>
+                <p className="mt-2 text-xs leading-relaxed text-muted/80">{p.cechy.join(' · ')}</p>
+              </div>
+              <a
+                href={darmowy ? '?login' : `${MAIL}?subject=Enterprise`}
+                className={`shrink-0 rounded-xl px-5 py-2.5 text-center text-sm font-semibold transition duration-200 active:scale-[0.98] ${
+                  darmowy
+                    ? 'bg-mint text-bg hover:brightness-105'
+                    : 'border border-white/[0.10] bg-white/[0.04] text-ink hover:border-white/[0.16] hover:bg-white/[0.08]'
+                }`}
+              >
+                {darmowy ? 'Zacznij za darmo' : 'Zapytaj o wycenę'}
+              </a>
+            </article>
+          )
+        })}
+      </div>
+
+      <p className="relative z-10 mt-7 text-center text-xs text-muted">
         Ceny netto. Dodatek integracji POS: <span className="text-ink">+149 zł/mc</span>. Płacisz za lokal, nie za osobę.
       </p>
-    </>
+    </div>
   )
 }
 
@@ -216,8 +283,15 @@ export default function Produkt() {
         .lp[data-anim="on"] [data-rv].rv-r { transform: translateX(42px); }
         .lp[data-anim="on"] [data-rv].rv-scale { transform: translateY(22px) scale(.965); }
         .lp[data-anim="on"] [data-rv].in { opacity: 1; transform: none; }
-        .lp .lift { transition: transform .22s var(--e), border-color .22s var(--e), box-shadow .22s var(--e); }
+        .lp .lift { transition: transform .22s var(--e), border-color .22s var(--e), box-shadow .22s var(--e), background-color .22s var(--e); }
         .lp .lift:hover { transform: translateY(-4px); }
+        /* Szkło (sekcja cennika): monochromatyczne, rozmywa gigantyczne słowo-tło pod spodem.
+           Wierzchnia kreska światła = wewnętrzny cień 1px (nie gradient — Cicha scena). */
+        .lp .glass { border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03);
+          backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 24px 48px -24px rgba(0,0,0,0.55); }
+        .lp .glass:hover { border-color: rgba(255,255,255,0.16); background: rgba(255,255,255,0.055);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 32px 60px -24px rgba(0,0,0,0.55); }
         .lp .faq-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s var(--e); }
         .lp .faq-body.open { grid-template-rows: 1fr; }
         .lp .faq-body > div { overflow: hidden; min-height: 0; }
@@ -347,8 +421,8 @@ export default function Produkt() {
         </section>
 
         {/* Cennik */}
-        <section id="cennik" className="scroll-mt-20 py-16">
-          <h2 data-rv="" className="text-center font-display text-3xl font-bold sm:text-4xl" style={{ textWrap: 'balance' }}>Prosty cennik — płacisz za lokal, nie za osobę</h2>
+        <section id="cennik" className="scroll-mt-20 py-16 sm:py-24">
+          <h2 className="sr-only">Prosty cennik — płacisz za lokal, nie za osobę</h2>
           <p data-rv="" style={{ '--i': 1 }} className="mx-auto mt-3 max-w-xl text-center text-base text-muted">Zacznij za darmo. Rośnij, kiedy chcesz — moduły włączasz jednym kliknięciem.</p>
           <Cennik />
         </section>
