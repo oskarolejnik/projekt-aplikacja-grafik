@@ -11,14 +11,17 @@ import EmployeeArea from './pages/EmployeeArea'
 import SzefView from './pages/SzefView'
 import SzefKuchniView from './pages/SzefKuchniView'
 import RezerwacjaWidget from './pages/RezerwacjaWidget'
+import PortalImprezy from './pages/PortalImprezy'
 import Onboarding from './pages/Onboarding'
 import Produkt from './pages/Produkt'
 import { api } from './lib/api'
 
 // Publiczne „trasy" wykrywane po query param (bez logowania, poza AuthProvider):
-//   ?rezerwuj → widget rezerwacji gościa,  ?produkt → strona produktu/cennik (marketing).
+//   ?rezerwuj → widget rezerwacji gościa,  ?produkt → strona produktu/cennik (marketing),
+//   ?impreza=TOKEN → portal klienta imprezy (para młoda / organizator).
 const _params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
 const isWidget = _params.has('rezerwuj')
+const isPortalImprezy = _params.has('impreza')
 const isProdukt = _params.has('produkt')
 const isLogin = _params.has('login')   // ?login → ekran logowania (landing marketingowy prowadzi tu z „Zaloguj")
 
@@ -70,6 +73,17 @@ export default function App() {
         <BrandingProvider>
           <ToastProvider>
             <RezerwacjaWidget />
+          </ToastProvider>
+        </BrandingProvider>
+      </MotionConfig>
+    )
+  }
+  if (isPortalImprezy) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <BrandingProvider>
+          <ToastProvider>
+            <PortalImprezy />
           </ToastProvider>
         </BrandingProvider>
       </MotionConfig>

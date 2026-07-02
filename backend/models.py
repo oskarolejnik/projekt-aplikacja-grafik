@@ -297,6 +297,9 @@ class Termin(Base):
     zadatek      = Column(Float, nullable=False, default=0.0)  # przypisany zadatek (z KP / ręcznie)
     utworzono_at = Column(DateTime, nullable=True)
     ical_uid     = Column(String, nullable=True, index=True)   # UID wydarzenia z iCloud (.ics) — klucz dedupu importu; NULL dla wpisów ręcznych
+    # Portal klienta imprezy (roadmapa v2): sekretny token publicznego linku (/?impreza=TOKEN).
+    # NULL = portal nie wygenerowany. Regeneracja unieważnia stary link.
+    portal_token = Column(String(64), nullable=True, unique=True, index=True)
     # --- Moduł rezerwacji (stolik/sala/impreza w jednej encji) ---
     godz_od      = Column(Time, nullable=True)   # start rezerwacji (stolik); impreza może mieć NULL
     godz_do      = Column(Time, nullable=True)   # koniec/przewidywany koniec zasiadku
@@ -648,3 +651,17 @@ class DokumentZgodnosci(Base):
     utworzono_at   = Column(DateTime, nullable=False)
 
     pracownik = relationship("Pracownik")
+
+
+class WiadomoscImprezy(Base):
+    """Wątek ustaleń przy imprezie (portal klienta ↔ lokal). Pisemny ślad zamiast
+    dziesiątek telefonów; autor: 'klient' (z portalu) | 'lokal' (admin) | 'system'
+    (auto-notka np. o zmianie liczby gości)."""
+    __tablename__ = "wiadomosci_imprez"
+    id           = Column(Integer, primary_key=True, index=True)
+    termin_id    = Column(Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=False, index=True)
+    autor        = Column(String(16), nullable=False, default="klient")
+    tresc        = Column(String, nullable=False)
+    utworzono_at = Column(DateTime, nullable=False)
+
+    termin = relationship("Termin")

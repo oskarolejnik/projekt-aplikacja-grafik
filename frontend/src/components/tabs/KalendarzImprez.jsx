@@ -80,6 +80,18 @@ export default function KalendarzImprez() {
     catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
+  // Portal klienta (roadmapa v2): generuje/REGENERUJE tokenowy link i kopiuje go do schowka.
+  const portalKlienta = async () => {
+    if (!modal.id) return
+    setBusy(true)
+    try {
+      const r = await api(`/terminy/${modal.id}/portal`, 'POST')
+      const url = `${window.location.origin}${r.url}`
+      try { await navigator.clipboard.writeText(url) } catch { /* schowek niedostępny — pokaż w toaście */ }
+      toast(`Link portalu skopiowany — wyślij klientowi: ${url}`, 'success')
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+
   // Import imprez z pliku .ics (eksport z iCloud). Plik czytamy w przeglądarce i wysyłamy
   // jako tekst — backend tworzy terminy + obsadę. „iCloud tylko dodaje": istniejące pomija.
   const onImportFile = async (e) => {
@@ -195,6 +207,13 @@ export default function KalendarzImprez() {
               <Button onClick={zapisz} disabled={busy} className="flex-1"><Icon name="check" className="h-4 w-4" /> Zapisz</Button>
               {modal.id && <button onClick={usun} disabled={busy} className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm font-semibold text-danger"><Icon name="trash" className="h-4 w-4" /></button>}
             </div>
+            {modal.id && (
+              <button onClick={portalKlienta} disabled={busy}
+                      title="Tokenowy link dla klienta: liczba gości, wpłaty, wątek ustaleń. Ponowne kliknięcie generuje NOWY link (stary przestaje działać)."
+                      className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-ink transition hover:bg-white/[0.08] active:scale-[0.98]">
+                <Icon name="key" className="h-4 w-4" /> Portal klienta — kopiuj link
+              </button>
+            )}
           </div>
         </div>
       )}
