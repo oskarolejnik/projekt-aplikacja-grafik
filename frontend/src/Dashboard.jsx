@@ -35,6 +35,7 @@ import Ogloszenia from './components/tabs/Ogloszenia'
 import Napiwki from './components/tabs/Napiwki'
 import Zgodnosc from './components/tabs/Zgodnosc'
 import ZapytaniaImprez from './components/tabs/ZapytaniaImprez'
+import AntyfraudPos from './components/tabs/AntyfraudPos'
 
 const TABS = [
   { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', group: 'Pulpit', title: 'Pulpit właściciela', Comp: Pulpit },
@@ -61,6 +62,7 @@ const TABS = [
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', group: 'Operacje', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad, modul: 'modul_rozliczenia' },
   { id: 'napiwki', label: 'Napiwki', icon: 'sparkles', group: 'Operacje', title: 'Napiwki — podział między obsługę', Comp: Napiwki },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', group: 'Operacje', title: 'Zajętość stołów na żywo', Comp: StolyLive, modul: 'modul_pos' },
+  { id: 'antyfraud', label: 'Antyfraud POS', icon: 'warning', group: 'Operacje', title: 'Antyfraud POS — storna i rabaty', Comp: AntyfraudPos, modul: 'modul_pos' },
   { id: 'rezerwacje', label: 'Rezerwacje (ruch)', icon: 'calendar', group: 'Operacje', title: 'Rezerwacje — ruch (30 dni)', Comp: Rezerwacje },
   { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', group: 'Operacje', title: 'Rezerwacje stolików', Comp: RezerwacjeStolik, modul: 'modul_rezerwacje' },
   { id: 'plan-sali', label: 'Plan sali', icon: 'office', group: 'Operacje', title: 'Plan sali — rozmieszczenie stolików', Comp: PlanSali, modul: 'modul_rezerwacje' },

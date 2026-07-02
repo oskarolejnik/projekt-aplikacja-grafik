@@ -229,6 +229,20 @@ function Invoke-Cykl($cfg, [int]$oknoDni) {
         }
         catch { Write-Log ('Blad zadatkow (pomijam): {0}' -f $_.Exception.Message) }
     }
+
+    # 6) STORNA/RABATY/ANULACJE (antyfraud) - tylko jesli skonfigurowane
+    if ($cfg.ContainsKey('STORNA_SQL') -and $cfg['STORNA_SQL'] -and $cfg.ContainsKey('VPS_STORNA_URL') -and $cfg['VPS_STORNA_URL']) {
+        try {
+            $end = (Get-Date).Date
+            $start = $end.AddDays(-$oknoDni)
+            $st = Get-Storna $cfg $start $end
+            if ($st.Count -gt 0) {
+                Send-Storna $cfg $st | Out-Null
+                Write-Log ('Storna (antyfraud): wyslano {0} pozycji -> VPS.' -f $st.Count)
+            }
+        }
+        catch { Write-Log ('Blad storn (pomijam): {0}' -f $_.Exception.Message) }
+    }
 }
 
 # -- ROZLICZENIA KELNEROW (opcjonalne, OSOBNA sciezka - RCP nietkniete) ---------
@@ -312,6 +326,52 @@ function Send-Zadatki($cfg, $zadatki) {
     $payload = @{ zadatki = @($zadatki) } | ConvertTo-Json -Depth 5
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
     return Invoke-RestMethod -Uri $cfg.VPS_ZADATKI_URL -Method Post `
+        -Headers @{ 'X-RCP-Token' = $cfg.RCP_INGEST_TOKEN } `
+        -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
+}
+
+# -- STORNA/RABATY/ANULACJE (antyfraud, opcjonalne - RCP nietkniete) ------------
+# Kolumny wymagane przez STORNA_SQL: id (GUID pozycji), data (DATE), imie_nazwisko,
+# typ ('storno'|'rabat'|'anulacja'), kwota, opis (opcjonalna), godzina (opcjonalna TIME).
+# Schemat storn ROZNI SIE miedzy wersjami Gastro - zweryfikuj zapytanie narzedziem
+# odkryj_schemat.ps1 przed wlaczeniem (patrz agent_rcp.env.example, sekcja 9).
+function Get-Storna($cfg, [datetime]$start, [datetime]$end) {
+    $out = New-Object System.Collections.ArrayList
+    $conn = New-Object System.Data.SqlClient.SqlConnection $cfg.RCP_CONNECTION_STRING
+    try {
+        $conn.Open()
+        $c0 = $conn.CreateCommand()
+        $c0.CommandText = 'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED'
+        [void]$c0.ExecuteNonQuery()
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $cfg.STORNA_SQL
+        $cmd.CommandTimeout = 30
+        $ps = $cmd.Parameters.Add('@start', [System.Data.SqlDbType]::Date); $ps.Value = $start.Date
+        $pe = $cmd.Parameters.Add('@end', [System.Data.SqlDbType]::Date);   $pe.Value = $end.Date
+        $r = $cmd.ExecuteReader()
+        try {
+            while ($r.Read()) {
+                [void]$out.Add([ordered]@{
+                        id            = [string]$r['id']
+                        data          = ([datetime]$r['data']).ToString('yyyy-MM-dd', $Inv)
+                        imie_nazwisko = if ($r['imie_nazwisko'] -is [DBNull]) { $null } else { ([string]$r['imie_nazwisko']).Trim() }
+                        typ           = if ($r['typ'] -is [DBNull]) { 'storno' } else { ([string]$r['typ']).Trim().ToLower() }
+                        kwota         = [decimal]$r['kwota']
+                        opis          = if ($r['opis'] -is [DBNull]) { $null } else { ([string]$r['opis']).Trim() }
+                        godzina       = if ($r['godzina'] -is [DBNull]) { $null } else { ([datetime]$r['godzina']).ToString('HH:mm:ss', $Inv) }
+                    })
+            }
+        }
+        finally { $r.Close() }
+    }
+    finally { $conn.Close() }
+    return $out
+}
+
+function Send-Storna($cfg, $storna) {
+    $payload = @{ storna = @($storna) } | ConvertTo-Json -Depth 5
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    return Invoke-RestMethod -Uri $cfg.VPS_STORNA_URL -Method Post `
         -Headers @{ 'X-RCP-Token' = $cfg.RCP_INGEST_TOKEN } `
         -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
 }

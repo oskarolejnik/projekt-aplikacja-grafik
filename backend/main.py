@@ -42,6 +42,7 @@ from routers.ogloszenia import router as ogloszenia_router
 from routers.zgodnosc import router as zgodnosc_router
 from routers.imprezy_ai import router as imprezy_ai_router
 from routers.portal_imprezy import router as portal_imprezy_router
+from routers.antyfraud import router as antyfraud_router
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -55,6 +56,7 @@ app.include_router(ogloszenia_router)  # ogłoszenia zespołowe — tablica mana
 app.include_router(zgodnosc_router)    # zgodność lokalu — badania załogi + terminy (roadmapa v2, oś B)
 app.include_router(imprezy_ai_router)  # skrzynka zapytań o imprezy — ekstrakcja+dostępność+szkic (roadmapa v2, oś A)
 app.include_router(portal_imprezy_router)  # portal klienta imprezy — tokenowa strona + wątek ustaleń (roadmapa v2, oś A)
+app.include_router(antyfraud_router)   # antyfraud POS — storna/rabaty per kelner + flagi (roadmapa v2, oś B)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -132,7 +134,7 @@ async def role_guard(request: Request, call_next):
         finally:
             _db.close()
     # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and not path.startswith("/api/online/") and not path.startswith("/api/onboarding/") and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST"):
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and not path.startswith("/api/online/") and not path.startswith("/api/onboarding/") and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST") and not (path == "/api/gastro/storna" and request.method == "POST"):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
         try:

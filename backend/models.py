@@ -665,3 +665,20 @@ class WiadomoscImprezy(Base):
     utworzono_at = Column(DateTime, nullable=False)
 
     termin = relationship("Termin")
+
+
+class StornoGastro(Base):
+    """Storno / rabat / anulacja z POS Gastro (antyfraud) — wypychane przez agenta lokalnego
+    (odczyt NOLOCK, jednokierunkowo). Upsert po id (GUID pozycji/dokumentu POS).
+    Mapowanie kelnera po znormalizowanym imieniu i nazwisku — jak odbicia RCP."""
+    __tablename__ = "storna_gastro"
+    id                = Column(String(36), primary_key=True)
+    data              = Column(Date, index=True, nullable=False)
+    imie_nazwisko     = Column(String(128), nullable=True)
+    pracownik_id      = Column(Integer, ForeignKey("pracownicy.id", ondelete="SET NULL"),
+                               nullable=True, index=True)
+    typ               = Column(String(16), nullable=False, default="storno")   # storno|rabat|anulacja
+    kwota             = Column(Float, nullable=False, default=0.0)
+    opis              = Column(String, nullable=True)
+    godzina           = Column(Time, nullable=True)
+    zaktualizowano_at = Column(DateTime, nullable=False)
