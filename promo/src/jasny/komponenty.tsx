@@ -5,32 +5,40 @@ import type { CSSProperties, FC, ReactNode } from 'react'
 import { AbsoluteFill } from 'remotion'
 import { F } from '../theme'
 
-// Paleta jasnej sceny (odwrotność noir — celowo poza tokenami produktu).
+// Paleta teasera na CZERNI (feedback: „wszystko na czarnym tle"). Jasne karty
+// (powiadomienia, karteczka) świecą na czerni jak bannery iOS w trybie nocnym.
 export const J = {
-  tlo: '#F6F7FA',
-  blekit: 'rgba(150,180,255,0.20)',
-  roz: 'rgba(242,170,215,0.18)',
-  ink: '#17181C',
-  muted: '#6B6F76',
+  tlo: '#0C0C0E',
+  ink: '#17181C',        // tekst na jasnych kartach
+  muted: '#6B6F76',      // tekst drugorzędny na jasnych kartach
+  jasnyInk: '#F4F4F5',   // tekst na czerni
+  jasnyMuted: '#9A9CA3',
   karta: '#FFFFFF',
   zolty: '#F5C84C',
 }
 
-// Duży miękki cień „pływającej" karty — znak rozpoznawczy stylu.
-export const CIEN = '0 30px 70px -18px rgba(23,24,28,0.28), 0 8px 24px -12px rgba(23,24,28,0.14)'
+// Cień „pływającej" karty + delikatna kreska światła (na czerni cień robi
+// głębię tylko przy poświacie tła; kreska odcina kartę od tła).
+export const CIEN = '0 30px 70px -18px rgba(0,0,0,0.7), 0 8px 24px -12px rgba(0,0,0,0.5)'
 
-export const JasnaScena: FC<{ children: ReactNode }> = ({ children }) => (
+export const CiemnaScena: FC<{ children: ReactNode }> = ({ children }) => (
   <AbsoluteFill style={{ background: J.tlo }}>
     <AbsoluteFill
       style={{
         background: `
-          radial-gradient(900px 620px at 12% 8%, ${J.blekit}, transparent 62%),
-          radial-gradient(820px 560px at 88% 86%, ${J.roz}, transparent 62%),
-          radial-gradient(700px 500px at 78% 14%, rgba(255,255,255,0.9), transparent 60%)
+          radial-gradient(820px 620px at 50% -4%, rgba(255,255,255,0.05), transparent 62%),
+          radial-gradient(700px 520px at 88% 88%, rgba(150,170,255,0.05), transparent 62%),
+          radial-gradient(640px 480px at 8% 70%, rgba(242,170,215,0.04), transparent 60%)
         `,
       }}
     />
     {children}
+    <AbsoluteFill
+      style={{
+        pointerEvents: 'none',
+        background: 'radial-gradient(115% 100% at 50% 50%, transparent 66%, rgba(0,0,0,0.5) 100%)',
+      }}
+    />
   </AbsoluteFill>
 )
 
