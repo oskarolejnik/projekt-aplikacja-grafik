@@ -1,8 +1,7 @@
-// [16–18 s] Finał: logo, hasło przewagi operacyjnej, złote CTA z przebiegiem
-// światła (sheen) — mocne, minimalne zakończenie.
+// [22–25 s] Finał: logo, hasło, złote CTA z łagodnym przebiegiem światła.
 import type { FC } from 'react'
 import { AbsoluteFill, interpolate, useCurrentFrame } from 'remotion'
-import { en, lerp, SMOOTH } from '../helpers/anim'
+import { en, pojaw, SMOOTH } from '../helpers/anim'
 import { Kinetic } from '../components/Kinetic'
 import { LogoMark } from '../components/LogoMark'
 import { C, F } from '../theme'
@@ -10,29 +9,18 @@ import { Scena } from './Scena'
 
 export const S5Cta: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
-  const logo = en(frame, 0, 16)
-  const cta = en(frame, 26, 14)
-  // Sheen: pasek światła przejeżdża przez złoty przycisk
-  const sheen = interpolate(frame, [34, 52], [-120, 420], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: SMOOTH })
+  const sheen = interpolate(frame, [50, 76], [-120, 420], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: SMOOTH })
   return (
-    <Scena dur={dur} odSkali={1} doSkali={1.05}>
+    <Scena dur={dur}>
       <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', gap: 40 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 24,
-            transform: `scale(${lerp(logo, 0.7, 1)})`,
-            opacity: logo,
-          }}
-        >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 24, ...pojaw(frame, 2, 24) }}>
           <LogoMark size={104} />
           <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: 76, color: C.ink, letterSpacing: '-0.03em' }}>Lokalo</span>
         </div>
         <div style={{ textAlign: 'center' }}>
-          <Kinetic text="Zbuduj przewagę operacyjną" size={76} delay={10} stagger={3} />
+          <Kinetic text="Zbuduj przewagę operacyjną" size={76} delay={16} stagger={4} />
           <div style={{ height: 8 }} />
-          <Kinetic text="swojego lokalu." size={76} delay={20} stagger={3} color={C.zloto2} />
+          <Kinetic text="swojego lokalu." size={76} delay={30} stagger={4} color={C.zloto2} />
         </div>
         <div
           style={{
@@ -41,8 +29,7 @@ export const S5Cta: FC<{ dur: number }> = ({ dur }) => {
             borderRadius: 20,
             background: C.zloto,
             padding: '22px 64px',
-            transform: `translateY(${lerp(cta, 60, 0)}px)`,
-            opacity: cta,
+            ...pojaw(frame, 42, 20, 0.96),
           }}
         >
           <span style={{ fontFamily: F.body, fontWeight: 700, fontSize: 32, color: C.noc }}>Zacznij za darmo</span>
@@ -53,12 +40,12 @@ export const S5Cta: FC<{ dur: number }> = ({ dur }) => {
               bottom: 0,
               width: 90,
               left: sheen,
-              background: 'linear-gradient(105deg, transparent, rgba(255,255,255,0.55), transparent)',
+              background: 'linear-gradient(105deg, transparent, rgba(255,255,255,0.5), transparent)',
               transform: 'skewX(-18deg)',
             }}
           />
         </div>
-        <span style={{ fontFamily: F.body, fontWeight: 600, fontSize: 22, color: C.muted, opacity: en(frame, 40, 12) }}>
+        <span style={{ fontFamily: F.body, fontWeight: 600, fontSize: 22, color: C.muted, opacity: en(frame, 58, 16) }}>
           plan darmowy bez karty · start w kilka minut
         </span>
       </AbsoluteFill>

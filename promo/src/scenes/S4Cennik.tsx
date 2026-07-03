@@ -1,8 +1,8 @@
-// [13.2–16 s] Cennik + zaufanie: trzy karty ze staggerem, Pro uniesione ze złotą
-// odznaką, ceny odliczają; na dole pasek uczciwych liczb produktu.
+// [18–22 s] Cennik + zaufanie: trzy karty pojawiają się NA MIEJSCU (fade+scale),
+// wszystkie w pełni widoczne; Pro delikatnie uniesione ze złotą odznaką.
 import type { FC } from 'react'
 import { AbsoluteFill, useCurrentFrame } from 'remotion'
-import { en, lerp, wjazd } from '../helpers/anim'
+import { en, lerp, pojaw } from '../helpers/anim'
 import { Licznik } from '../components/Licznik'
 import { Kinetic } from '../components/Kinetic'
 import { C, F } from '../theme'
@@ -16,8 +16,8 @@ const PLANY = [
 
 const Karta: FC<{ plan: (typeof PLANY)[number]; i: number }> = ({ plan, i }) => {
   const frame = useCurrentFrame()
-  const start = 8 + i * 6
-  const t = en(frame, start, 18)
+  const start = 14 + i * 8
+  const t = en(frame, start, 24)
   const flag = !!plan.flagowy
   return (
     <div
@@ -28,9 +28,8 @@ const Karta: FC<{ plan: (typeof PLANY)[number]; i: number }> = ({ plan, i }) => 
         background: flag ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)',
         padding: '34px 36px',
         position: 'relative',
-        transform: `translateY(${lerp(t, 140, flag ? -26 : 0)}px) scale(${flag ? lerp(t, 0.95, 1.04) : 1})`,
+        transform: `translateY(${flag ? -26 : 0}px) scale(${lerp(t, 0.94, flag ? 1.04 : 1)})`,
         opacity: t,
-        filter: t < 0.9 ? `blur(${((1 - t) * 8).toFixed(1)}px)` : undefined,
         boxShadow: '0 40px 100px -40px rgba(0,0,0,0.8)',
       }}
     >
@@ -49,7 +48,7 @@ const Karta: FC<{ plan: (typeof PLANY)[number]; i: number }> = ({ plan, i }) => 
             padding: '7px 20px',
             borderRadius: 99,
             whiteSpace: 'nowrap',
-            opacity: en(frame, start + 12, 10),
+            opacity: en(frame, start + 16, 14),
           }}
         >
           Najczęściej wybierany
@@ -59,7 +58,7 @@ const Karta: FC<{ plan: (typeof PLANY)[number]; i: number }> = ({ plan, i }) => 
       <div style={{ fontFamily: F.body, fontSize: 17, color: C.muted, marginTop: 2 }}>{plan.opis}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 22 }}>
         <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: 74, color: C.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em' }}>
-          <Licznik do_={plan.cena} start={start + 6} dur={22} />
+          <Licznik do_={plan.cena} start={start + 8} dur={30} />
         </span>
         <span style={{ fontFamily: F.body, fontSize: 20, color: C.muted }}>zł/mc</span>
       </div>
@@ -73,9 +72,9 @@ const TRUST = ['25+ modułów', '500+ testów automatycznych', '0% prowizji od r
 export const S4Cennik: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
   return (
-    <Scena dur={dur} odSkali={1.03} doSkali={1.08}>
+    <Scena dur={dur}>
       <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', gap: 54, paddingTop: 20 }}>
-        <Kinetic text="Zacznij za darmo. Rośnij, kiedy chcesz." size={54} delay={0} stagger={2} />
+        <Kinetic text="Zacznij za darmo. Rośnij, kiedy chcesz." size={54} delay={0} stagger={3} />
         <div style={{ display: 'flex', gap: 30, alignItems: 'center' }}>
           {PLANY.map((p, i) => (
             <Karta key={p.naz} plan={p} i={i} />
@@ -83,7 +82,7 @@ export const S4Cennik: FC<{ dur: number }> = ({ dur }) => {
         </div>
         <div style={{ display: 'flex', gap: 54, alignItems: 'center' }}>
           {TRUST.map((t, i) => (
-            <span key={t} style={{ display: 'flex', alignItems: 'center', gap: 54, ...wjazd(frame, 40 + i * 6, 14, 'up', 36) }}>
+            <span key={t} style={{ display: 'flex', alignItems: 'center', gap: 54, ...pojaw(frame, 62 + i * 8, 18, 0.98) }}>
               {i > 0 && <span style={{ color: C.zloto, fontSize: 26 }}>·</span>}
               <span style={{ fontFamily: F.body, fontWeight: 700, fontSize: 27, color: C.ink }}>{t}</span>
             </span>

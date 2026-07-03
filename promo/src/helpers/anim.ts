@@ -21,6 +21,7 @@ export const lerp = (t: number, a: number, b: number) => a + (b - a) * t
 type Kierunek = 'up' | 'down' | 'left' | 'right' | 'zoom'
 
 // Styl wejścia elementu: przesunięcie + opacity + kierunkowe rozmycie ruchu.
+// (Historyczne — sceny spotu używają `pojaw`; zostaje dla ewentualnych wstawek.)
 export const wjazd = (
   frame: number,
   start: number,
@@ -45,14 +46,24 @@ export const wjazd = (
   }
 }
 
-// Wyjście sceny: szybki zoom + fade w ostatnich klatkach sekwencji.
-export const wyjscie = (frame: number, dur: number, ile = 8): CSSProperties => {
+// JEDEN język wejścia (Apple-like): element POWIĘKSZA się na miejscu —
+// fade + scale 0.95→1, bez latania z boków, z ledwo zauważalnym rozmyciem.
+export const pojaw = (frame: number, start: number, dur = 22, odSkali = 0.95): CSSProperties => {
+  const t = en(frame, start, dur)
+  return {
+    opacity: t,
+    transform: `scale(${lerp(t, odSkali, 1)})`,
+    filter: t < 0.85 ? `blur(${((1 - t) * 4).toFixed(1)}px)` : undefined,
+  }
+}
+
+// Wyjście sceny: czysty dissolve (fade + minimalne powiększenie), bez punchu.
+export const wyjscie = (frame: number, dur: number, ile = 12): CSSProperties => {
   const t = en(frame, dur - ile, ile, SMOOTH)
   if (t <= 0) return {}
   return {
     opacity: 1 - t,
-    transform: `scale(${lerp(t, 1, 1.06)})`,
-    filter: `blur(${(t * 8).toFixed(1)}px)`,
+    transform: `scale(${lerp(t, 1, 1.015)})`,
   }
 }
 

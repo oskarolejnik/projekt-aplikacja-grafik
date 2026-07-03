@@ -22,7 +22,7 @@ export const Kinetic: FC<Props> = ({
   size,
   delay = 0,
   stagger = 3,
-  dur = 16,
+  dur = 22,
   weight = 700,
   color = C.ink,
   font = F.display,
@@ -43,23 +43,23 @@ export const Kinetic: FC<Props> = ({
       {slowa.map((s, i) => {
         const t = en(frame, delay + i * stagger, dur)
         return (
-          <span key={i} style={{ overflow: 'hidden', display: 'inline-block', paddingBottom: size * 0.08 }}>
-            <span
-              style={{
-                display: 'inline-block',
-                fontFamily: font,
-                fontWeight: weight,
-                fontSize: size,
-                lineHeight: 1.04,
-                letterSpacing: '-0.025em',
-                color,
-                transform: `translateY(${lerp(t, size * 1.15, 0)}px)`,
-                opacity: Math.min(1, t * 1.6),
-                filter: t < 0.9 ? `blur(${((1 - t) * 6).toFixed(1)}px)` : undefined,
-              }}
-            >
-              {s}
-            </span>
+          <span
+            key={i}
+            style={{
+              display: 'inline-block',
+              fontFamily: font,
+              fontWeight: weight,
+              fontSize: size,
+              lineHeight: 1.06,
+              letterSpacing: '-0.025em',
+              color,
+              // Apple-like: łagodny unos + fade, bez wyskoku spod maski
+              transform: `translateY(${lerp(t, size * 0.22, 0)}px)`,
+              opacity: t,
+              filter: t < 0.8 ? `blur(${((1 - t) * 4).toFixed(1)}px)` : undefined,
+            }}
+          >
+            {s}
           </span>
         )
       })}

@@ -1,43 +1,22 @@
-// Montaż wersji SOCIAL 9:16 (450 klatek @ 30 fps = 15 s, 1080×1920).
-// Szybciej niż wersja kinowa: hook w 1. sekundzie, beat co ~0,5–1 s, cięcia
-// z mikro-błyskiem (punch), kamera zawsze w ruchu w osi Y.
+// Montaż wersji SOCIAL 9:16 (600 klatek @ 30 fps = 20 s, 1080×1920).
+// Tempo spokojne (feedback): sceny 2,5–3,7 s, cięcia jako czysty dissolve —
+// bez błysków; jeden język ruchu: elementy powiększają się na miejscu.
 import type { FC } from 'react'
-import { AbsoluteFill, Sequence, interpolate, useCurrentFrame } from 'remotion'
+import { AbsoluteFill, Sequence } from 'remotion'
 import { C } from './theme'
 import { V1Hook, V2Grafik, V3Wyplaty, V4Rezerwacje, V5Pulpit, V6Cennik, V7Cta } from './social/scenyV'
 
 const PLAN = [
-  { od: 0, dur: 55, El: V1Hook },        // ból → logo → obietnica
-  { od: 55, dur: 70, El: V2Grafik },     // grafik układa się sam
-  { od: 125, dur: 65, El: V3Wyplaty },   // wypłaty co do minuty
-  { od: 190, dur: 65, El: V4Rezerwacje },// rezerwacje 0%
-  { od: 255, dur: 65, El: V5Pulpit },    // liczby na żywo
-  { od: 320, dur: 70, El: V6Cennik },    // talia cen + zaufanie
-  { od: 390, dur: 60, El: V7Cta },       // CTA
+  { od: 0, dur: 110, El: V1Hook },        // ból → logo → obietnica
+  { od: 110, dur: 90, El: V2Grafik },     // grafik układa się sam
+  { od: 200, dur: 85, El: V3Wyplaty },    // wypłaty co do minuty
+  { od: 285, dur: 85, El: V4Rezerwacje }, // rezerwacje 0%
+  { od: 370, dur: 80, El: V5Pulpit },     // liczby na żywo
+  { od: 450, dur: 90, El: V6Cennik },     // kolumna cen + zaufanie
+  { od: 540, dur: 60, El: V7Cta },        // CTA
 ]
 
-export const DLUGOSC_SOCIAL = 450
-
-// Mikro-błysk w klatce cięcia — „punch" znany z edycji social, ale wyciszony
-// (maks. 14% bieli, 5 klatek) — premium, nie strobo.
-const Blysk: FC = () => {
-  const frame = useCurrentFrame()
-  const ciecia = PLAN.slice(1).map((p) => p.od)
-  const moc = Math.max(
-    ...ciecia.map((c) =>
-      interpolate(frame, [c - 2, c, c + 3], [0, 0.14, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }),
-    ),
-  )
-  if (moc <= 0) return null
-  return (
-    <AbsoluteFill
-      style={{
-        pointerEvents: 'none',
-        background: `radial-gradient(70% 55% at 50% 46%, rgba(255,248,235,${moc}), transparent 75%)`,
-      }}
-    />
-  )
-}
+export const DLUGOSC_SOCIAL = 600
 
 export const LokaloAdSocial: FC = () => (
   <AbsoluteFill style={{ background: C.noc }}>
@@ -56,7 +35,6 @@ export const LokaloAdSocial: FC = () => (
         <El dur={dur} />
       </Sequence>
     ))}
-    <Blysk />
     {/* Winieta — delikatniejsza niż w kinowej (małe ekrany i tak przyciemniają) */}
     <AbsoluteFill
       style={{

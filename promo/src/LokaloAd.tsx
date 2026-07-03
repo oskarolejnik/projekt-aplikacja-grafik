@@ -10,18 +10,18 @@ import { S3Pulpit, S3Rezerwacje, S3Wyplaty } from './scenes/S3Cechy'
 import { S4Cennik } from './scenes/S4Cennik'
 import { S5Cta } from './scenes/S5Cta'
 
-// Plan montażowy (klatki):
+// Plan montażowy (klatki) — 25 s, spokojne tempo (feedback: „za szybko"):
 const PLAN = [
-  { od: 0, dur: 75, El: S1Hook },        // hook + logo + hasło
-  { od: 75, dur: 95, El: S2Produkt },    // produkt: grafik + portfel
-  { od: 170, dur: 85, El: S3Pulpit },    // liczby na żywo
-  { od: 255, dur: 75, El: S3Rezerwacje },// rezerwacje 0%
-  { od: 330, dur: 65, El: S3Wyplaty },   // wypłaty co do minuty
-  { od: 395, dur: 85, El: S4Cennik },    // cennik + trust
-  { od: 480, dur: 60, El: S5Cta },       // CTA + logo
+  { od: 0, dur: 105, El: S1Hook },        // otwarcie + logo + hasło
+  { od: 105, dur: 120, El: S2Produkt },   // produkt: grafik + portfel
+  { od: 225, dur: 105, El: S3Pulpit },    // liczby na żywo
+  { od: 330, dur: 105, El: S3Rezerwacje },// rezerwacje 0%
+  { od: 435, dur: 105, El: S3Wyplaty },   // wypłaty co do minuty
+  { od: 540, dur: 120, El: S4Cennik },    // cennik + trust
+  { od: 660, dur: 90, El: S5Cta },        // CTA + logo
 ]
 
-export const DLUGOSC = 540
+export const DLUGOSC = 750
 
 export const LokaloAd: FC = () => (
   <AbsoluteFill style={{ background: C.noc }}>

@@ -13,10 +13,10 @@ type Props = {
   children: ReactNode
 }
 
-export const Scena: FC<Props> = ({ dur, odSkali = 1.02, doSkali = 1.08, panX = 0, panY = 0, children }) => {
+export const Scena: FC<Props> = ({ dur, odSkali = 1.0, doSkali = 1.045, panX = 0, panY = 0, children }) => {
   const frame = useCurrentFrame()
   return (
-    <AbsoluteFill style={wyjscie(frame, dur)}>
+    <AbsoluteFill style={wyjscie(frame, dur, 12)}>
       <AbsoluteFill style={kamera(frame, dur, odSkali, doSkali, panX, panY)}>{children}</AbsoluteFill>
     </AbsoluteFill>
   )
