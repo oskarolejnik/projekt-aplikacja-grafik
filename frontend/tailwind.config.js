@@ -23,10 +23,21 @@ export default {
         success: '#8AD3AC',
         danger: '#F26D6D',
         info: '#9BBBE3',
+        // Rejestr BRAND „Lokalo Noir" (landing; DESIGN.md §8) — ciepła czerń + złota nitka.
+        noc: '#141312',
+        wegiel: '#1C1A18',
+        zloto: '#C9A96A',
+        'zloto-2': '#E7CF9B',
+        fiolet: '#8B7CF7',
+        lazur: '#5EA8FF',
       },
       fontFamily: {
         display: ['"Space Grotesk"', '"Space Grotesk Fallback"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         sans: ['Inter', '"Inter Fallback"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        // Rejestr BRAND (landing): grotesk charakterny + serif redakcyjny + neutralny body.
+        brand: ['"Clash Display"', '"Space Grotesk"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        editorial: ['Erode', 'Georgia', 'Cambria', 'serif'],
+        switzer: ['Switzer', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
         // Dwuwarstwowy, dyskretny cień (kontakt + otoczenie) — zamiast dramatycznego halo.

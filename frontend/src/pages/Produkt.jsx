@@ -1,26 +1,24 @@
 import { useState, useRef, useEffect } from 'react'
 import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
-import { GrafikVignette, PulpitVignette, RezerwacjaVignette, WyplataVignette } from './landing/Vignettes'
 import { useReveal, useSmoothAnchors, animacjeWlaczone, prefersReducedMotion } from './landing/motion'
+import HeroEkosystem from './landing/HeroEkosystem'
+import SekcjaPokazy from './landing/SekcjaPokazy'
+import SekcjaRole from './landing/SekcjaRole'
+import SekcjaPlatformy from './landing/SekcjaPlatformy'
+import SekcjaWhiteLabel from './landing/SekcjaWhiteLabel'
+import SekcjaZaufanie from './landing/SekcjaZaufanie'
+import Porownywarka from './landing/Porownywarka'
 
 // Publiczny landing sprzedażowy „Lokalo". Renderowany pod ?produkt ORAZ jako publiczne /
 // dla niezalogowanego gościa (App.jsx). Bez kontekstów instancji — działa samodzielnie.
-// North Star (DESIGN.md): „Cicha scena". Ruch: reveals + hover + cennik — bez neonu.
+// Rejestr BRAND „Lokalo Noir" (DESIGN.md §8): ciepła czerń + złota nitka; ekrany produktu
+// w winietach mówią językiem produktu (Cicha scena, mięta) — noir to rama, nie treść.
 
 const MAIL = 'mailto:kontakt@grafikpracy.pl'
 
-// „Reszta możliwości" — wiersze (nie jednakowe karty). Pokazuje pełną głębię produktu.
-const MOZLIWOSCI = [
-  ['calendar', 'Auto-grafik z kwalifikacji', 'Algorytm układa zmiany z dyspozycyjności, kwalifikacji i urlopów. Publikacja jednym kliknięciem.'],
-  ['sparkles', 'Imprezy i wesela + zadatki', 'Kalendarz wydarzeń, obsada per liczba gości, zadatki z POS, rozliczanie imprez i sal.'],
-  ['key', 'White-label + role (RBAC)', 'Twoja marka i logo. Włączasz tylko potrzebne moduły. Granularne uprawnienia i prywatność płac.'],
-  ['check', 'Strażnik prawa pracy', 'Pilnuje odpoczynku między zmianami i limitów dni w tygodniu/miesiącu przy układaniu grafiku.'],
-  ['users', 'Prognoza obsady', 'Z historii ruchu podpowiada, ile osób wystawić na zmianę — koniec „na oko".'],
-  ['refresh', 'Giełda wymiany zmian', 'Pracownik oddaje zmianę, kolega przejmuje, manager akceptuje — bez telefonów po nocy.'],
-]
-
 // Cecha planu: string albo { t, nowe: true } — „nowość" dostaje chip (świeżość produktu sprzedaje).
+// `szczegoly` — rozwijana architektura wartości planu: dla kogo, scenariusz, rachunek, role, automatyzacja.
 const CENNIK = [
   { nazwa: 'Darmowy', mies: 0, rok: 0, opis: '1 lokal, do ~8 osób', cechy: [
     'Grafik + dyspozycyjność zespołu', 'Publikacja grafiku + role i uprawnienia',
@@ -29,18 +27,39 @@ const CENNIK = [
     'Wszystko z Darmowego', 'Ewidencja czasu pracy (RCP)',
     'Raporty godzin → wypłaty co do minuty', 'Eksport wypłat do Excela dla księgowej',
     { t: 'Portfel pracownika: zarobki na żywo + zaliczki', nowe: true },
-    'Strażnik prawa pracy (odpoczynek, limity dni)'] },
+    'Strażnik prawa pracy (odpoczynek, limity dni)'],
+    szczegoly: [
+      ['Dla kogo', 'Kawiarnia, bistro, pub z zespołem 5–15 osób rozliczanym godzinowo.'],
+      ['Scenariusz', 'Koniec miesiąca bez kalkulatora: odbicia RCP spinają się z grafikiem i stawkami, a księgowa dostaje gotowy eksport.'],
+      ['Rachunek wartości', '2–3 godziny liczenia wypłat i jeden błąd stawki miesięcznie kosztują więcej niż abonament.'],
+      ['Role w cenie', 'Właściciel, manager i pracownicy — każdy z własnym widokiem godzin i portfela.'],
+      ['Automatyzacja', 'Wypłaty, strażnik prawa pracy i powiadomienia liczą się same; grafik układasz Ty.'],
+    ] },
   { nazwa: 'Pro', mies: 249, rok: 199, flagowy: true, opis: 'Standard dla restauracji', cechy: [
     'Wszystko z Basic', 'Rozliczenia kasowe dnia + zeszyt kasowy',
     'Alerty anomalii kasowych', 'Rezerwacje stolików + interaktywny plan sali',
     'CRM gości ze scoringiem no-show', 'Pulpit KPI + prognoza ruchu i obsady',
-    { t: 'Zgodność: badania sanepid + terminy lokalu', nowe: true }] },
+    { t: 'Zgodność: badania sanepid + terminy lokalu', nowe: true }],
+    szczegoly: [
+      ['Dla kogo', 'Restauracja z rezerwacjami i kasą, 15–40 osób na zmianach, manager na etacie.'],
+      ['Scenariusz', 'Piątkowy wieczór: rezerwacje spływają same, rozliczenie dnia zgadza się z kasą, a różnice podświetlają się, zanim urosną.'],
+      ['Rachunek wartości', 'Jedna wychwycona różnica kasowa tygodniowo i pełny obraz kosztu pracy zwykle pokrywają abonament z nawiązką.'],
+      ['Role w cenie', 'Wszystkie z Basic + szef kuchni, bar i kasa z rozliczeniem dnia.'],
+      ['Automatyzacja', 'Auto-grafik z kwalifikacji, prognoza ruchu i obsady, alerty kasowe — system podpowiada, Ty zatwierdzasz.'],
+    ] },
   { nazwa: 'Premium', mies: 439, rok: 349, opis: 'Domy weselne i eventowe', cechy: [
     'Wszystko z Pro', 'Imprezy i wesela + zadatki z kasy',
     { t: 'Skrzynka zapytań o imprezy (AI)', nowe: true },
     { t: 'Portal Pary Młodej: goście, menu, wpłaty', nowe: true },
     'Rezerwacje online bez prowizji', 'Napiwki: uczciwy podział puli',
-    'White-label — Twoja marka i logo'] },
+    'White-label — Twoja marka i logo'],
+    szczegoly: [
+      ['Dla kogo', 'Dom weselny, lokal eventowy, restauracja z salami — imprezy to istotny przychód.'],
+      ['Scenariusz', 'Zapytanie o wesele: AI szykuje szkic odpowiedzi z ofertą, zadatek spina się z kasą, a Para Młoda prowadzi listę gości we własnym portalu.'],
+      ['Rachunek wartości', 'Jedna szybciej domknięta impreza w miesiącu to wielokrotność abonamentu — odpowiadasz w minuty, nie w dni.'],
+      ['Role w cenie', 'Wszystkie z Pro + portal gościa (Para Młoda) i white-label dla Twojej marki.'],
+      ['Automatyzacja', 'Najwyższa: szkice ofert AI, raty zadatków, rezerwacje online i podział napiwków liczą się same.'],
+    ] },
   { nazwa: 'Enterprise', mies: null, rok: null, opis: 'Sieci i franczyzy', cechy: [
     'Multi-lokal i konsolidacja raportów', 'SSO + panel super-admina',
     'Antyfraud POS: storna per kelner', 'SLA + umowa powierzenia (DPA)',
@@ -62,16 +81,28 @@ const FAQ = [
   ['Ile trwa wdrożenie?', 'Konto stawiasz sam w kilka minut — kreator prowadzi krok po kroku. Przy Enterprise dokładamy dedykowany onboarding i migrację.'],
 ]
 
-const TRUST = [
-  ['robot', 'Zbudowane przez managera lokalu'],
-  ['key', 'RODO-first: szyfrowanie + audyt'],
-  ['users', 'Role i uprawnienia (RBAC)'],
-  ['sparkles', 'White-label — Twoja marka'],
-  ['download', 'PWA + desktop'],
-  ['check', 'Bez prowizji od rezerwacji'],
-]
-
 const zl = (n) => n.toLocaleString('pl-PL')
+
+// Magnetyczne CTA: przycisk lekko podąża za kursorem (≤ ~7px), wraca po zejściu.
+// Czysty transform ze zmiennych CSS — zero re-renderów; reduced-motion → wyłączone.
+function Magnes({ href, className = '', children }) {
+  const anim = animacjeWlaczone()
+  const move = (e) => {
+    const el = e.currentTarget
+    const r = el.getBoundingClientRect()
+    el.style.setProperty('--tx', `${((e.clientX - r.left - r.width / 2) * 0.14).toFixed(1)}px`)
+    el.style.setProperty('--ty', `${((e.clientY - r.top - r.height / 2) * 0.22).toFixed(1)}px`)
+  }
+  const leave = (e) => {
+    e.currentTarget.style.setProperty('--tx', '0px')
+    e.currentTarget.style.setProperty('--ty', '0px')
+  }
+  return (
+    <a href={href} onPointerMove={anim ? move : undefined} onPointerLeave={anim ? leave : undefined} className={`magnes ${className}`}>
+      {children}
+    </a>
+  )
+}
 
 // Animowana liczba ceny (odliczanie przy zmianie okresu). Reduced-motion → skok.
 function PriceNum({ value }) {
@@ -95,6 +126,35 @@ function PriceNum({ value }) {
     return () => cancelAnimationFrame(raf.current)
   }, [value])
   return <>{value == null ? 'wycena' : zl(disp)}</>
+}
+
+// Rozwijane szczegóły planu (dla kogo / scenariusz / rachunek / role / automatyzacja).
+function SzczegolyPlanu({ wiersze }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-5 border-t border-white/[0.06] pt-4">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 text-left text-sm font-semibold text-muted transition hover:text-ink"
+      >
+        Dla kogo i co zyskujesz
+        <Icon name="chevronDown" className={`h-4 w-4 shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      <div className={`faq-body ${open ? 'open' : ''}`}>
+        <div>
+          <dl className="space-y-3 pt-4">
+            {wiersze.map(([l, t]) => (
+              <div key={l}>
+                <dt className="text-[11px] font-semibold uppercase tracking-wider text-zloto/80">{l}</dt>
+                <dd className="mt-0.5 text-sm leading-relaxed text-muted">{t}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function Cennik() {
@@ -128,7 +188,7 @@ function Cennik() {
   }, [])
 
   // Tilt 3D + wodzące światło na kartach głównych: kursor ustawia zmienne CSS (rotacja ≤2.5°,
-  // radialne białe światło w punkcie wskaźnika). Transform-only, zero re-renderów Reacta.
+  // radialne światło w punkcie wskaźnika). Transform-only, zero re-renderów Reacta.
   const anim = animacjeWlaczone()
   const tiltMove = (e) => {
     const el = e.currentTarget
@@ -159,7 +219,7 @@ function Cennik() {
     return (
       <li className="cecha flex items-start gap-2.5 text-sm" style={{ '--j': j }}>
         <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.07]">
-          <Icon name="check" className={`h-3 w-3 ${featured ? 'text-mint' : 'text-ink'}`} />
+          <Icon name="check" className={`h-3 w-3 ${featured ? 'text-zloto' : 'text-ink'}`} />
         </span>
         <span className="leading-snug text-muted">
           {tekst}
@@ -176,7 +236,7 @@ function Cennik() {
       <div ref={slowoWrapRef} aria-hidden className="pointer-events-none select-none">
         <div
           ref={slowoRef}
-          className="text-center font-display text-[clamp(4rem,14vw,10.5rem)] font-bold leading-[0.85] tracking-tight text-ink will-change-transform"
+          className="text-center font-brand text-[clamp(4rem,14vw,10.5rem)] font-bold leading-[0.85] tracking-tight text-ink will-change-transform"
         >
           Cennik
         </div>
@@ -198,13 +258,13 @@ function Cennik() {
               className={`relative z-10 flex min-w-[8.5rem] items-center justify-center gap-1.5 rounded-full px-4 py-2 font-semibold transition-colors duration-200 ${okres === k ? 'text-ink' : 'text-muted hover:text-ink'}`}
             >
               {l}
-              {k === 'rok' && <span className="rounded-full bg-mint/15 px-1.5 py-0.5 text-[10px] font-semibold text-mint">−2 mies.</span>}
+              {k === 'rok' && <span className="rounded-full bg-zloto/15 px-1.5 py-0.5 text-[10px] font-semibold text-zloto">−2 mies.</span>}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Trzy plany główne — pływające szkło; flagowy Pro uniesiony, z papierowym CTA. */}
+      {/* Trzy plany główne — pływające szkło; flagowy Pro uniesiony, ze złotym CTA. */}
       <div className="relative z-10 mx-auto mt-10 grid max-w-5xl gap-5 lg:grid-cols-3 lg:items-stretch lg:gap-6 lg:pt-6">
         {glowne.map((p, idx) => {
           const cena = okres === 'rok' ? p.rok : p.mies
@@ -216,19 +276,19 @@ function Cennik() {
               onPointerMove={anim ? tiltMove : undefined}
               onPointerLeave={anim ? tiltReset : undefined}
               className={`glass tilt rv-scale relative flex flex-col rounded-3xl p-6 sm:p-7 ${
-                p.flagowy ? 'z-10 border-white/[0.15] bg-white/[0.06] max-lg:-order-1 lg:-my-6 lg:px-8' : ''
+                p.flagowy ? 'z-10 border-zloto/25 bg-white/[0.05] max-lg:-order-1 lg:-my-6 lg:px-8' : ''
               }`}
             >
               {p.flagowy && (
-                <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-cream px-3 py-1 text-[11px] font-semibold text-bg shadow-cta">
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-zloto px-3 py-1 text-[11px] font-semibold text-noc shadow-cta">
                   Najczęściej wybierany
                 </span>
               )}
-              <h3 className="font-display text-base font-semibold text-ink">{p.nazwa}</h3>
+              <h3 className="font-brand text-base font-semibold text-ink">{p.nazwa}</h3>
               <p className="mt-0.5 text-xs text-muted">{p.opis}</p>
 
               <div className="mt-5 flex items-baseline gap-1.5">
-                <span className={`font-display font-bold tabular-nums tracking-tight text-ink ${p.flagowy ? 'text-5xl sm:text-6xl' : 'text-5xl'}`}>
+                <span className={`font-brand font-bold tabular-nums tracking-tight text-ink ${p.flagowy ? 'text-5xl sm:text-6xl' : 'text-5xl'}`}>
                   <PriceNum value={cena} />
                 </span>
                 <span className="text-sm text-muted">zł/mc</span>
@@ -239,11 +299,13 @@ function Cennik() {
                 {p.cechy.map((c, j) => <Cecha key={typeof c === 'string' ? c : c.t} dziecko={c} featured={p.flagowy} j={j} />)}
               </ul>
 
+              {p.szczegoly && <SzczegolyPlanu wiersze={p.szczegoly} />}
+
               <a
                 href={`${MAIL}?subject=Plan%20${encodeURIComponent(p.nazwa)}`}
-                className={`mt-7 rounded-xl px-4 py-3 text-center text-sm font-semibold transition duration-200 active:scale-[0.98] ${
+                className={`mt-6 rounded-xl px-4 py-3 text-center text-sm font-semibold transition duration-200 active:scale-[0.98] ${
                   p.flagowy
-                    ? 'bg-cream text-bg hover:bg-white'
+                    ? 'bg-zloto text-noc hover:bg-zloto-2'
                     : 'border border-white/[0.10] bg-white/[0.04] text-ink hover:border-white/[0.16] hover:bg-white/[0.08]'
                 }`}
               >
@@ -267,8 +329,8 @@ function Cennik() {
             >
               <div className="min-w-0">
                 <div className="flex items-baseline gap-3">
-                  <h3 className="font-display text-base font-semibold text-ink">{p.nazwa}</h3>
-                  <span className="font-display text-xl font-bold tabular-nums text-ink">
+                  <h3 className="font-brand text-base font-semibold text-ink">{p.nazwa}</h3>
+                  <span className="font-brand text-xl font-bold tabular-nums text-ink">
                     {darmowy ? '0 zł' : 'wycena'}
                   </span>
                   <span className="text-xs text-muted">{darmowy ? 'na zawsze' : 'indywidualnie'}</span>
@@ -297,6 +359,8 @@ function Cennik() {
         Ceny netto. Dodatek integracji POS: <span className="text-ink">+149 zł/mc</span>. Płacisz za lokal, nie za osobę.
         <span className="mt-1 block text-muted/70">Plan zmieniasz lub anulujesz w każdej chwili — moduły włączasz jednym kliknięciem.</span>
       </p>
+
+      <Porownywarka />
     </div>
   )
 }
@@ -304,13 +368,13 @@ function Cennik() {
 function FaqItem({ q, a }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className="border-b border-line">
+    <div className="border-b border-white/[0.08]">
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-4 py-4 text-left transition hover:text-ink"
       >
-        <span className="font-display text-base font-bold text-ink">{q}</span>
+        <span className="font-brand text-base font-semibold text-ink">{q}</span>
         <Icon name="chevronDown" className={`h-5 w-5 shrink-0 text-muted transition-transform duration-300 ${open ? 'rotate-180' : ''}`} />
       </button>
       <div className={`faq-body ${open ? 'open' : ''}`}>
@@ -322,28 +386,6 @@ function FaqItem({ q, a }) {
   )
 }
 
-function Showcase({ eyebrowIcon, tytul, opis, punkty, children, odwrotnie }) {
-  return (
-    <div className="grid items-center gap-8 lg:grid-cols-2 lg:gap-14">
-      <div data-rv="" className={odwrotnie ? 'rv-r lg:order-2' : 'rv-l'}>
-        <div className="inline-grid h-11 w-11 place-items-center rounded-xl bg-surface-2 text-mint">
-          <Icon name={eyebrowIcon} className="h-5 w-5" />
-        </div>
-        <h3 className="mt-4 font-display text-2xl font-bold text-ink sm:text-3xl" style={{ textWrap: 'balance' }}>{tytul}</h3>
-        <p className="mt-3 max-w-md text-base leading-relaxed text-muted">{opis}</p>
-        <ul className="mt-5 space-y-2.5">
-          {punkty.map((p) => (
-            <li key={p} className="flex items-start gap-2.5 text-sm text-ink">
-              <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-mint" /> <span>{p}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div data-rv="" className={`${odwrotnie ? 'rv-l lg:order-1' : 'rv-r'} mx-auto w-full max-w-md`}>{children}</div>
-    </div>
-  )
-}
-
 export default function Produkt() {
   const root = useRef(null)
   useReveal(root)
@@ -351,10 +393,14 @@ export default function Produkt() {
   const anim = animacjeWlaczone()
 
   return (
-    <div ref={root} data-anim={anim ? 'on' : undefined} className="lp relative min-h-dvh bg-bg text-ink">
-      <div aria-hidden className="scena-swiatlo pointer-events-none fixed inset-0" />
+    <div ref={root} data-anim={anim ? 'on' : undefined} className="lp relative min-h-dvh bg-noc font-switzer text-ink">
+      <div aria-hidden className="swiatlo-noir pointer-events-none fixed inset-0" />
       <style>{`
         .lp { --e: cubic-bezier(.22,1,.36,1); }
+        /* Światło sceny noir: ciepły, statyczny poblask złota (≤5%) + zimna kontra — nie gradient marki. */
+        .lp .swiatlo-noir { background:
+          radial-gradient(64rem 42rem at 16% -8%, rgba(201,169,106,0.05), transparent 62%),
+          radial-gradient(48rem 32rem at 88% 4%, rgba(255,255,255,0.03), transparent 60%); }
         .lp [data-rv] { opacity: 1; }
         .lp[data-anim="on"] [data-rv] { opacity: 0; transform: translateY(30px); transition: opacity .6s var(--e), transform .6s var(--e); transition-delay: calc(var(--i,0) * 80ms); }
         .lp[data-anim="on"] [data-rv].rv-l { transform: translateX(-42px); }
@@ -363,30 +409,32 @@ export default function Produkt() {
         .lp[data-anim="on"] [data-rv].in { opacity: 1; transform: none; }
         .lp .lift { transition: transform .22s var(--e), border-color .22s var(--e), box-shadow .22s var(--e), background-color .22s var(--e); }
         .lp .lift:hover { transform: translateY(-4px); }
-        /* Szkło (sekcja cennika): monochromatyczne, rozmywa gigantyczne słowo-tło pod spodem.
-           Wierzchnia kreska światła = wewnętrzny cień 1px (nie gradient — Cicha scena). */
+        /* Szkło noir: monochromatyczne, rozmywa scenę pod spodem.
+           Wierzchnia kreska światła = wewnętrzny cień 1px (nie gradient). */
         .lp .glass { border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03);
           backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 24px 48px -24px rgba(0,0,0,0.55); }
         .lp .glass:hover { border-color: rgba(255,255,255,0.16); background: rgba(255,255,255,0.055);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 32px 60px -24px rgba(0,0,0,0.55); }
-        /* Tilt 3D kart cennika: rotacja ze zmiennych CSS ustawianych kursorem (≤2.5°),
+        /* Tilt 3D kart: rotacja ze zmiennych CSS ustawianych kursorem (≤2.5°),
            uniesienie na hover w tym samym transformie (bez konfliktu z reveal). */
         .lp .tilt { transition: transform .25s var(--e), border-color .22s var(--e),
           background-color .22s var(--e), box-shadow .22s var(--e); transform-style: preserve-3d; }
         .lp[data-anim="on"] [data-rv].tilt.in, .lp:not([data-anim="on"]) .tilt {
           transform: perspective(950px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateY(var(--ty, 0)); }
         .lp .tilt:hover { --ty: -5px; }
-        /* Wodzące światło: monochromatyczny, radialny rozbłysk w punkcie kursora (język .scena-swiatlo). */
+        /* Wodzące światło: radialny rozbłysk w punkcie kursora — na noir lekko złoty. */
         .lp .tilt::after { content: ''; position: absolute; inset: 0; border-radius: inherit;
           pointer-events: none; opacity: 0; transition: opacity .35s var(--e);
-          background: radial-gradient(26rem 26rem at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,0.06), transparent 62%); }
+          background: radial-gradient(26rem 26rem at var(--mx, 50%) var(--my, 50%), rgba(231,207,155,0.05), transparent 62%); }
         .lp .tilt:hover::after { opacity: 1; }
         /* Kaskada cech: po wylądowaniu karty (.in) wiersze wjeżdżają kolejno z lewej. */
         .lp[data-anim="on"] .glass .cecha { opacity: 0; transform: translateX(-8px);
           transition: opacity .5s var(--e), transform .5s var(--e);
           transition-delay: calc(180ms + var(--j, 0) * 55ms); }
         .lp[data-anim="on"] .glass.in .cecha { opacity: 1; transform: none; }
+        /* Magnetyczne CTA: podąża za kursorem przez zmienne CSS; leniwa transition = miękki magnes. */
+        .lp .magnes { transform: translate(var(--tx, 0px), var(--ty, 0px)); transition: transform .35s var(--e); will-change: transform; }
         .lp .faq-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s var(--e); }
         .lp .faq-body.open { grid-template-rows: 1fr; }
         .lp .faq-body > div { overflow: hidden; min-height: 0; }
@@ -395,147 +443,102 @@ export default function Produkt() {
           .lp .lift:hover { transform: none; }
           .lp .tilt, .lp .tilt:hover { transform: none !important; }
           .lp .tilt::after { display: none; }
+          .lp .magnes { transform: none !important; transition: none !important; }
           .lp[data-anim="on"] .glass .cecha { opacity: 1 !important; transform: none !important; transition: none !important; }
         }
       `}</style>
 
       {/* Nawigacja */}
-      <header className="sticky top-0 z-40 border-b border-white/[0.06] bg-bg/60 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 border-b border-white/[0.06] bg-noc/70 backdrop-blur-xl">
         <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
           <a href="?produkt" className="flex items-center gap-2.5">
             <Logo className="h-8" variant="gradient" />
-            <span className="font-display text-lg font-bold">Lokalo</span>
+            <span className="font-brand text-lg font-bold">Lokalo</span>
           </a>
           <div className="hidden items-center gap-7 text-sm font-semibold text-muted md:flex">
             <a href="#mozliwosci" className="transition hover:text-ink">Możliwości</a>
+            <a href="#role" className="transition hover:text-ink">Role</a>
             <a href="#cennik" className="transition hover:text-ink">Cennik</a>
             <a href="#faq" className="transition hover:text-ink">FAQ</a>
           </div>
           <div className="flex items-center gap-2.5">
             <a href="?login" className="rounded-xl px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink">Zaloguj</a>
-            <a href="#cennik" className="rounded-xl bg-mint px-4 py-2 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">Wybierz pakiet</a>
+            <a href="#cennik" className="rounded-xl bg-zloto px-4 py-2 text-sm font-semibold text-noc transition hover:bg-zloto-2 active:scale-[0.98]">Wybierz pakiet</a>
           </div>
         </nav>
       </header>
 
       <main className="relative z-10 mx-auto w-full max-w-6xl px-4 sm:px-6">
-        {/* Hero */}
-        <section className="grid items-center gap-10 py-14 lg:grid-cols-[1.05fr_1fr] lg:gap-8 lg:py-24">
+        {/* Hero — opowieść + ekosystem urządzeń */}
+        <section className="grid items-center gap-12 py-14 lg:grid-cols-[1.05fr_1fr] lg:gap-10 lg:py-24">
           <div>
-            <p data-rv="" style={{ '--i': 0 }} className="inline-flex items-center gap-2 rounded-full border border-line bg-surface-2/70 px-3 py-1 text-xs font-semibold text-muted">
-              <span className="h-1.5 w-1.5 rounded-full bg-mint" /> System operacyjny dla lokalu gastro
+            <p data-rv="" style={{ '--i': 0 }} className="inline-flex items-center gap-2 rounded-full border border-white/[0.10] bg-white/[0.03] px-3 py-1 text-xs font-semibold text-muted">
+              <span className="h-1.5 w-1.5 rounded-full bg-zloto" /> System operacyjny lokalu gastronomicznego
             </p>
-            <h1 data-rv="" style={{ '--i': 1 }} className="mt-5 font-display text-4xl font-bold leading-[1.05] sm:text-5xl lg:text-6xl" >
-              Cały lokal w <span className="text-mint">jednym systemie</span>.
+            <h1 data-rv="" style={{ '--i': 1 }} className="mt-5 font-brand text-4xl font-bold leading-[1.04] tracking-tight sm:text-5xl lg:text-6xl">
+              Cały lokal w <em className="font-editorial font-medium italic text-zloto-2">jednym systemie</em>.
               <span className="block text-muted">Zamiast Excela, papieru i pięciu apek.</span>
             </h1>
             <p data-rv="" style={{ '--i': 2 }} className="mt-6 max-w-xl text-lg leading-relaxed text-muted">
-              Grafik, ewidencja czasu i wypłaty, rozliczenia kasowe, rezerwacje i wesela — w jednym miejscu.
-              Zbudowane przez kogoś, kto sam prowadził salę w piątkowy wieczór.
+              Piątek, 19:40 — pełna sala. Grafik ułożony, kasa się zgadza, rezerwacje potwierdzają się
+              same, a każdy z zespołu wie, gdzie ma być. Lokalo prowadzi operacje. Ty prowadzisz lokal.
             </p>
             <div data-rv="" style={{ '--i': 3 }} className="mt-8 flex flex-wrap gap-3">
-              <a href="#cennik" className="rounded-xl bg-mint px-6 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">Zobacz pakiety</a>
-              <a href={`${MAIL}?subject=Demo%20Grafik%20Pracy`} className="rounded-xl border border-line px-6 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
+              <Magnes href="?login" className="rounded-xl bg-zloto px-6 py-3 text-sm font-semibold text-noc transition-colors hover:bg-zloto-2">Zacznij za darmo</Magnes>
+              <a href={`${MAIL}?subject=Demo%20Lokalo`} className="rounded-xl border border-white/[0.12] px-6 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
             </div>
-            <p data-rv="" style={{ '--i': 4 }} className="mt-5 text-xs text-muted">Start w kilka minut · plan darmowy bez karty · web (PWA) i desktop</p>
+            <p data-rv="" style={{ '--i': 4 }} className="mt-5 text-xs text-muted">Plan darmowy bez karty · start w kilka minut · telefon, tablet i desktop</p>
           </div>
 
-          <div data-rv="" style={{ '--i': 2 }} className="relative mx-auto w-full max-w-md lg:max-w-none">
-            <GrafikVignette />
-            <WyplataVignette className="absolute -bottom-8 -right-3 w-40 sm:-right-6 sm:w-48" />
+          <div data-rv="" style={{ '--i': 2 }} className="rv-r">
+            <HeroEkosystem />
           </div>
         </section>
 
         {/* Ból → rozwiązanie */}
-        <section data-rv="" className="rv-scale my-6 rounded-3xl border border-line bg-surface-2/40 px-6 py-10 text-center sm:px-10">
-          <h2 className="mx-auto max-w-2xl font-display text-2xl font-bold sm:text-3xl" style={{ textWrap: 'balance' }}>
+        <section data-rv="" className="rv-scale my-8 rounded-3xl border border-white/[0.08] bg-white/[0.02] px-6 py-10 text-center sm:px-10">
+          <h2 className="mx-auto max-w-2xl font-brand text-2xl font-semibold sm:text-3xl" style={{ textWrap: 'balance' }}>
             Grafik w niedzielny wieczór. Wypłaty na kalkulatorze. Rezerwacje na trzech kartkach.
           </h2>
-          <p className="mx-auto mt-3 max-w-xl text-base text-muted">To znika. Jeden system prowadzi obieg całego lokalu — a Ty zajmujesz się gośćmi.</p>
+          <p className="mx-auto mt-3 max-w-xl text-base text-muted">
+            <em className="font-editorial italic text-zloto-2">To znika.</em> Jeden system prowadzi obieg całego lokalu — a Ty zajmujesz się gośćmi.
+          </p>
         </section>
+      </main>
 
-        {/* Showcase 1 — Pulpit */}
-        <section className="py-14 sm:py-20">
-          <Showcase
-            eyebrowIcon="clipboard"
-            tytul="Wiesz, co się dzieje — bez zaglądania w pięć miejsc"
-            opis="Pulpit właściciela zbiera przychód, ruch, koszt pracy i rezerwacje w jednym widoku. Anomalie w kasie podświetlają się same."
-            punkty={['Przychód, rozchód i saldo kasy narastająco', 'Koszt pracy z RCP × stawki', 'Alerty różnic w rozliczeniu dnia']}
-          >
-            <PulpitVignette className="lift" />
-          </Showcase>
-        </section>
+      {/* Sekcje pełnej szerokości (własne kontenery w środku) */}
+      <div className="relative z-10">
+        <SekcjaPokazy />
+        <SekcjaRole />
+        <SekcjaPlatformy />
+        <SekcjaWhiteLabel />
+      </div>
 
-        {/* Showcase 2 — Rezerwacje */}
-        <section className="py-14 sm:py-20">
-          <Showcase
-            odwrotnie
-            eyebrowIcon="pin"
-            tytul="Własny kanał rezerwacji — bez prowizji portali"
-            opis="Widget rezerwacji online na Twojej stronie. Gość rezerwuje w kilka sekund, dostaje potwierdzenie SMS i e-mail, a Ty masz komplet w panelu."
-            punkty={['Rezerwacje stolików + lista oczekujących', 'Potwierdzenia SMS/e-mail i CRM gościa', 'Scoring no-show z historii wizyt']}
-          >
-            <RezerwacjaVignette className="lift" />
-          </Showcase>
-        </section>
-
-        {/* Showcase 3 — Wypłaty */}
-        <section className="py-14 sm:py-20">
-          <Showcase
-            eyebrowIcon="clock"
-            tytul="Godziny z RCP → wypłaty co do minuty"
-            opis="Odbicia z rejestracji czasu pracy spinają się z grafikiem i stawkami. Każdy widzi swoje godziny i kwotę — mniej sporów, zero przepisywania."
-            punkty={['Godziny per stanowisko i dzień', 'Naliczanie wg stawek pracownika', 'Pracownik sprawdza wypłatę z telefonu']}
-          >
-            <WyplataVignette className="lift" />
-          </Showcase>
-        </section>
-
-        {/* Reszta możliwości */}
-        <section id="mozliwosci" className="scroll-mt-20 py-10">
-          <h2 data-rv="" className="text-center font-display text-2xl font-bold sm:text-3xl">Wszystko, czego lokal potrzebuje — pod jednym logowaniem</h2>
-          <div className="mt-9 grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
-            {MOZLIWOSCI.map(([ico, t, o], i) => (
-              <div key={t} data-rv="" style={{ '--i': i % 3 }} className="flex gap-3.5 rounded-2xl border border-line bg-surface-2/30 p-5">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-mint">
-                  <Icon name={ico} className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="font-display text-base font-bold text-ink">{t}</h3>
-                  <p className="mt-1 text-sm leading-relaxed text-muted">{o}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Zaufanie */}
-        <section data-rv="" className="my-8 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 rounded-2xl border border-line bg-surface-2/30 px-6 py-5">
-          {TRUST.map(([ico, t]) => (
-            <span key={t} className="inline-flex items-center gap-2 text-sm text-muted">
-              <Icon name={ico} className="h-4 w-4 text-mint" /> {t}
-            </span>
-          ))}
-        </section>
-
-        {/* Cennik */}
+      <main className="relative z-10 mx-auto w-full max-w-6xl px-4 sm:px-6">
+        {/* Cennik + porównywarka */}
         <section id="cennik" className="scroll-mt-20 py-16 sm:py-24">
           <h2 className="sr-only">Prosty cennik — płacisz za lokal, nie za osobę</h2>
           <p data-rv="" style={{ '--i': 1 }} className="mx-auto mt-3 max-w-xl text-center text-base text-muted">Zacznij za darmo. Rośnij, kiedy chcesz — moduły włączasz jednym kliknięciem.</p>
           <Cennik />
         </section>
+      </main>
 
+      <div className="relative z-10">
+        <SekcjaZaufanie />
+      </div>
+
+      <main className="relative z-10 mx-auto w-full max-w-6xl px-4 sm:px-6">
         {/* Dla kogo */}
         <section className="py-12">
-          <h2 data-rv="" className="text-center font-display text-2xl font-bold sm:text-3xl">Dla kogo</h2>
+          <h2 data-rv="" className="text-center font-brand text-2xl font-semibold sm:text-3xl">Dla kogo</h2>
           <div className="mt-8 grid gap-4 sm:grid-cols-2">
             {SEGMENTY.map(([ico, t, o], i) => (
-              <div key={t} data-rv="" style={{ '--i': i % 2 }} className="lift flex gap-3.5 rounded-2xl border border-line bg-surface-grad p-5 shadow-soft">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-mint">
+              <div key={t} data-rv="" style={{ '--i': i % 2 }} className="lift flex gap-3.5 rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/[0.06] text-zloto">
                   <Icon name={ico} className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="font-display text-base font-bold text-ink">{t}</h3>
+                  <h3 className="font-brand text-base font-semibold text-ink">{t}</h3>
                   <p className="mt-1 text-sm leading-relaxed text-muted">{o}</p>
                 </div>
               </div>
@@ -545,28 +548,30 @@ export default function Produkt() {
 
         {/* FAQ */}
         <section id="faq" className="scroll-mt-20 py-14">
-          <h2 data-rv="" className="text-center font-display text-2xl font-bold sm:text-3xl">Częste pytania</h2>
+          <h2 data-rv="" className="text-center font-brand text-2xl font-semibold sm:text-3xl">Częste pytania</h2>
           <div data-rv="" style={{ '--i': 1 }} className="mx-auto mt-8 max-w-2xl">
             {FAQ.map(([q, a]) => <FaqItem key={q} q={q} a={a} />)}
           </div>
         </section>
 
         {/* CTA końcowe */}
-        <section data-rv="" className="rv-scale my-14 overflow-hidden rounded-3xl border border-mint/30 bg-surface-grad p-10 text-center sm:p-14">
-          <h2 className="mx-auto max-w-2xl font-display text-3xl font-bold sm:text-4xl" style={{ textWrap: 'balance' }}>Gotowy uporządkować lokal?</h2>
+        <section data-rv="" className="rv-scale my-14 overflow-hidden rounded-3xl border border-zloto/25 bg-wegiel p-10 text-center sm:p-14">
+          <h2 className="mx-auto max-w-2xl font-brand text-3xl font-semibold sm:text-4xl" style={{ textWrap: 'balance' }}>
+            Zbuduj <em className="font-editorial font-medium italic text-zloto-2">przewagę operacyjną</em> swojego lokalu.
+          </h2>
           <p className="mx-auto mt-3 max-w-xl text-base text-muted">Załóż konto w kilka minut albo umów demo — pokażemy, jak przenieść grafik, wypłaty i rezerwacje w jedno miejsce.</p>
           <div className="mt-7 flex flex-wrap justify-center gap-3">
-            <a href="?login" className="rounded-xl bg-mint px-7 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">Zacznij za darmo</a>
-            <a href={`${MAIL}?subject=Demo%20Grafik%20Pracy`} className="rounded-xl border border-line px-7 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
+            <Magnes href="?login" className="rounded-xl bg-zloto px-7 py-3 text-sm font-semibold text-noc transition-colors hover:bg-zloto-2">Zacznij za darmo</Magnes>
+            <a href={`${MAIL}?subject=Demo%20Lokalo`} className="rounded-xl border border-white/[0.12] px-7 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
           </div>
         </section>
       </main>
 
-      <footer className="border-t border-line">
+      <footer className="relative z-10 border-t border-white/[0.06]">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-xs text-muted/70 sm:flex-row sm:px-6">
           <div className="flex items-center gap-2">
             <Logo className="h-6" variant="gradient" />
-            <span className="font-display font-bold text-muted">Lokalo</span>
+            <span className="font-brand font-bold text-muted">Lokalo</span>
           </div>
           <span>© Lokalo — oprogramowanie własnościowe. Wszelkie prawa zastrzeżone.</span>
         </div>

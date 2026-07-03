@@ -262,3 +262,78 @@ gradientów, orbit.
 - **Don't** zagnieżdżaj kart w kartach; nie używaj pasków `border-left/right` >1px jako akcentu.
 - **Don't** stosuj bounce/overshoot — krzywe wyłącznie ease-out; „premium" osiada, nie odbija się.
 - **Don't** wracaj do neonu: pastelowe akcenty rozlane po ekranie to poprzednia epoka tego produktu.
+
+---
+
+# 8. Rejestr BRAND: „Lokalo Noir" (landing / powierzchnie marketingowe)
+
+> v3, 07.2026 — na życzenie właściciela: landing dostaje WŁASNĄ, ekspresyjną tożsamość
+> („premium operating system dla lokalu" — Apple × Stripe × luksusowa gastronomia),
+> podczas gdy PANEL pozostaje w „Cichej scenie" (rejestr produktowy, sekcje 1–7).
+> Wspólny rdzeń obu rejestrów: ciemna scena, szkło, światło zamiast dekoracji, ruch bez odbić.
+
+## 8.1 Scena i kolor — „ciepła czerń i złoto"
+
+Landing schodzi z neutralnej czerni panelu do CIEPŁEJ czerni węgla (scena restauracji po
+zmroku, światło świec na szkle):
+
+- `noc`      #141312 — tło strony (warm black)
+- `wegiel`   #1C1A18 — powierzchnie uniesione (warm graphite)
+- `zloto`    #C9A96A — **akcent marki**: kluczowe słowa nagłówków, obrys planu flagowego,
+              detale premium. Przygaszone złoto = luksusowa gościnność, nie „crypto-gold".
+- `zloto-2`  #E7CF9B — rozjaśnienie złota (hover, kreski światła na złotych elementach)
+- `mint`     #9DC4B1 — most do produktu: akcje pozytywne, checki, sukces (wspólny z panelem)
+- `fiolet`   #8B7CF7 — WYŁĄCZNIE momenty AI (chip „AI", sekcja skrzynki zapytań)
+- `lazur`    #5EA8FF — WYŁĄCZNIE wizualizacje danych w mockupach (wykresy)
+
+**Reguła Złotej Nitki:** złoto to nić przewodnia, nie zalew — na ekranie ≤ 6% powierzchni
+(pojedyncze słowa, 1px obrysy, drobne znaczniki). Fiolet i lazur są kontekstowe (AI / dane)
+i nigdy nie występują jako dekoracja. Gradient nadal zakazany poza światłem sceny
+(`.scena-swiatlo` w wariancie ciepłym: biel → 4% złota).
+
+## 8.2 Typografia — „grotesk charakterny + serif redakcyjny"
+
+Koniec z parą Inter/Space Grotesk na landingu (pozostaje w PANELU jako rejestr produktowy):
+
+- **Display / nagłówki:** `Clash Display` (600/700) — neo-grotesk o mocnym, projektowym
+  sznycie; wielkie kompozycje do clamp(3rem, 8vw, 7rem), tracking -0.02…-0.04em.
+- **Editorial / narracja:** `Erode` (500 italic/600) — serif redakcyjny do pull-quote'ów,
+  liczb-opowieści i akcentów w nagłówkach („…to jest *system operacyjny* lokalu").
+  Serif NIGDY jako body — wyłącznie momenty (≤ 2 na sekcję).
+- **Body / UI landingu:** `Switzer` (400/500/600) — czytelny, neutralny, nie-Inter.
+- Liczby w hero/statystykach: Clash Display + `tabular-nums`.
+
+Ładowanie: Fontshare CDN (`api.fontshare.com`) z `display=swap` + systemowe fallbacki;
+w buildzie desktop (offline) działa fallback stack — świadomy kompromis.
+
+## 8.3 Motion language (za Emilem Kowalskim)
+
+- Krzywe: wyłącznie ease-out (`--e: cubic-bezier(.22,1,.36,1)`), szuflada iOS dla paneli.
+- **Staggered reveals** (istniejący system `[data-rv]` + `--i`), kaskady list (`--j`).
+- **Magnetic hover** na głównych CTA: przycisk podąża ≤6px za kursorem (transform-only,
+  rAF), puszcza z ease-out; wyłączone przy reduced-motion.
+- **Tilt + wodzące światło** na kartach-pokazach (istniejące `.tilt`).
+- **Soft parallax**: słowa-tła i mockupy płyną wolniej niż treść (0.08–0.14×).
+- Zero bounce, zero nieskończonych pętli, wszystko ma wariant `prefers-reduced-motion`.
+
+## 8.4 Architektura homepage (kolejność sekcji)
+
+1. **Hero-ekosystem** — narracja („Twój lokal. Jeden system operacyjny.") + kompozycja
+   urządzeń (telefon pracownika / tablet sali / desktop managera) zbudowana z żywych
+   winiet produktu; CTA: „Zobacz pakiety" (złote) + „Umów demo" (ghost).
+2. **Pasek zaufania** — uczciwe liczby produktu (moduły, testy automatyczne, PWA+desktop,
+   0% prowizji od rezerwacji) — bez zmyślonych klientów.
+3. **Pokazy produktu** — przełączane showcase'y (grafik / pulpit / rezerwacje / wypłaty).
+4. **System ról** — owner / manager / kelner / kuchnia / bar / technika: każdy widzi swoje.
+5. **Cross-platform** — „działa wszędzie": telefon, tablet, desktop, web (PWA).
+6. **White-label** — „Twoja aplikacja. Twoja marka." — interaktywny podgląd zmiany brandu.
+7. **Cennik** (noir-glass, złoty plan flagowy) + **porównywarka pakietów** (sticky nagłówek,
+   rozwijane grupy funkcji) + use case / dla kogo / ROI / role / automatyzacja per plan.
+8. **FAQ** i **finalne CTA** („Zbuduj przewagę operacyjną swojego lokalu.").
+
+## 8.5 Zakazy rejestru brand (poza banami globalnymi)
+
+- Zmyślone testimoniale/metryki klientów — trust budują wyłącznie prawdziwe liczby
+  produktu i historia founder-operatora.
+- Tęczowe gradienty, „AI-glow", stockowe zdjęcia ludzi w garniturach.
+- Więcej niż jedno złote CTA w kadrze; serif jako tekst ciągły; mono jako kostium.
