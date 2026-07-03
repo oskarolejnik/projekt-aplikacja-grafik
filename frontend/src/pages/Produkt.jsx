@@ -20,12 +20,31 @@ const MOZLIWOSCI = [
   ['refresh', 'Giełda wymiany zmian', 'Pracownik oddaje zmianę, kolega przejmuje, manager akceptuje — bez telefonów po nocy.'],
 ]
 
+// Cecha planu: string albo { t, nowe: true } — „nowość" dostaje chip (świeżość produktu sprzedaje).
 const CENNIK = [
-  { nazwa: 'Darmowy', mies: 0, rok: 0, opis: '1 lokal, do ~8 osób', cechy: ['Grafik + dyspozycyjność', 'Publikacja + role', 'Powiadomienia push'] },
-  { nazwa: 'Basic', mies: 129, rok: 99, opis: '1 lokal, bez limitu osób', cechy: ['Wszystko z Darmowego', 'Ewidencja czasu (RCP)', 'Raporty godzin → wypłaty'] },
-  { nazwa: 'Pro', mies: 249, rok: 199, flagowy: true, opis: 'Standard dla restauracji', cechy: ['Wszystko z Basic', 'Rozliczenia kasowe dnia', 'Rezerwacje stolików', 'Pulpit KPI + alerty'] },
-  { nazwa: 'Premium', mies: 439, rok: 349, opis: 'Domy weselne i eventowe', cechy: ['Wszystko z Pro', 'Imprezy/wesela + zadatki', 'Rezerwacje online', 'White-label'] },
-  { nazwa: 'Enterprise', mies: null, rok: null, opis: 'Sieci i franczyzy', cechy: ['Multi-lokal + konsolidacja', 'SSO + panel super-admina', 'SLA + umowa DPA', 'Dedykowany onboarding'] },
+  { nazwa: 'Darmowy', mies: 0, rok: 0, opis: '1 lokal, do ~8 osób', cechy: [
+    'Grafik + dyspozycyjność zespołu', 'Publikacja grafiku + role i uprawnienia',
+    'Giełda wymiany zmian', 'Powiadomienia push', 'Aplikacja na telefon (PWA)'] },
+  { nazwa: 'Basic', mies: 129, rok: 99, opis: '1 lokal, bez limitu osób', cechy: [
+    'Wszystko z Darmowego', 'Ewidencja czasu pracy (RCP)',
+    'Raporty godzin → wypłaty co do minuty', 'Eksport wypłat do Excela dla księgowej',
+    { t: 'Portfel pracownika: zarobki na żywo + zaliczki', nowe: true },
+    'Strażnik prawa pracy (odpoczynek, limity dni)'] },
+  { nazwa: 'Pro', mies: 249, rok: 199, flagowy: true, opis: 'Standard dla restauracji', cechy: [
+    'Wszystko z Basic', 'Rozliczenia kasowe dnia + zeszyt kasowy',
+    'Alerty anomalii kasowych', 'Rezerwacje stolików + interaktywny plan sali',
+    'CRM gości ze scoringiem no-show', 'Pulpit KPI + prognoza ruchu i obsady',
+    { t: 'Zgodność: badania sanepid + terminy lokalu', nowe: true }] },
+  { nazwa: 'Premium', mies: 439, rok: 349, opis: 'Domy weselne i eventowe', cechy: [
+    'Wszystko z Pro', 'Imprezy i wesela + zadatki z kasy',
+    { t: 'Skrzynka zapytań o imprezy (AI)', nowe: true },
+    { t: 'Portal Pary Młodej: goście, menu, wpłaty', nowe: true },
+    'Rezerwacje online bez prowizji', 'Napiwki: uczciwy podział puli',
+    'White-label — Twoja marka i logo'] },
+  { nazwa: 'Enterprise', mies: null, rok: null, opis: 'Sieci i franczyzy', cechy: [
+    'Multi-lokal i konsolidacja raportów', 'SSO + panel super-admina',
+    'Antyfraud POS: storna per kelner', 'SLA + umowa powierzenia (DPA)',
+    'Dedykowany onboarding i migracja'] },
 ]
 
 const SEGMENTY = [
@@ -80,8 +99,52 @@ function PriceNum({ value }) {
 
 function Cennik() {
   const [okres, setOkres] = useState('rok') // 'mies' | 'rok'
+  const slowoRef = useRef(null)
   const glowne = CENNIK.filter((p) => p.mies != null && p.mies > 0)          // Basic · Pro · Premium
   const boczne = CENNIK.filter((p) => p.mies === 0 || p.mies == null)        // Darmowy · Enterprise
+
+  // Paralaksa gigantycznego słowa: przy scrollu płynie wolniej niż treść (głębia sceny).
+  // POMIAR na wrapperze (nietransformowanym), TRANSFORM na dziecku — inaczej rect liczyłby
+  // pozycję już po przesunięciu i offset narastałby w pętli sprzężenia zwrotnego.
+  const slowoWrapRef = useRef(null)
+  useEffect(() => {
+    if (!animacjeWlaczone()) return
+    let raf = 0
+    const tick = () => {
+      raf = 0
+      const wrap = slowoWrapRef.current
+      const el = slowoRef.current
+      if (!wrap || !el) return
+      const r = wrap.getBoundingClientRect()
+      const odCentrum = r.top + r.height / 2 - window.innerHeight / 2
+      el.style.transform = `translateY(${(-odCentrum * 0.12).toFixed(1)}px)`
+    }
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(tick) }
+    // capture:true — na tej stronie przewija się BODY (overflow-x:hidden + height:100%
+    // czyni go scroll-kontenerem), a zdarzenie scroll nie bąbelkuje; capture łapie każdy scroller.
+    window.addEventListener('scroll', onScroll, { passive: true, capture: true })
+    tick()
+    return () => { window.removeEventListener('scroll', onScroll, { capture: true }); if (raf) cancelAnimationFrame(raf) }
+  }, [])
+
+  // Tilt 3D + wodzące światło na kartach głównych: kursor ustawia zmienne CSS (rotacja ≤2.5°,
+  // radialne białe światło w punkcie wskaźnika). Transform-only, zero re-renderów Reacta.
+  const anim = animacjeWlaczone()
+  const tiltMove = (e) => {
+    const el = e.currentTarget
+    const r = el.getBoundingClientRect()
+    const x = (e.clientX - r.left) / r.width
+    const y = (e.clientY - r.top) / r.height
+    el.style.setProperty('--mx', `${(x * 100).toFixed(1)}%`)
+    el.style.setProperty('--my', `${(y * 100).toFixed(1)}%`)
+    el.style.setProperty('--rx', `${((0.5 - y) * 3.5).toFixed(2)}deg`)
+    el.style.setProperty('--ry', `${((x - 0.5) * 4.5).toFixed(2)}deg`)
+  }
+  const tiltReset = (e) => {
+    const el = e.currentTarget
+    el.style.setProperty('--rx', '0deg')
+    el.style.setProperty('--ry', '0deg')
+  }
 
   const statusRozliczenia = (p) => {
     const oszczedza = okres === 'rok' && p.mies > p.rok
@@ -90,24 +153,33 @@ function Cennik() {
       : 'rozliczane co miesiąc'
   }
 
-  const Cecha = ({ dziecko, featured }) => (
-    <li className="flex items-start gap-2.5 text-sm">
-      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.07]">
-        <Icon name="check" className={`h-3 w-3 ${featured ? 'text-mint' : 'text-ink'}`} />
-      </span>
-      <span className="leading-snug text-muted">{dziecko}</span>
-    </li>
-  )
+  const Cecha = ({ dziecko, featured, j }) => {
+    const tekst = typeof dziecko === 'string' ? dziecko : dziecko.t
+    const nowe = typeof dziecko === 'object' && dziecko.nowe
+    return (
+      <li className="cecha flex items-start gap-2.5 text-sm" style={{ '--j': j }}>
+        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.07]">
+          <Icon name="check" className={`h-3 w-3 ${featured ? 'text-mint' : 'text-ink'}`} />
+        </span>
+        <span className="leading-snug text-muted">
+          {tekst}
+          {nowe && <span className="ml-1.5 inline-block rounded-full bg-mint/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold leading-none text-mint">nowość</span>}
+        </span>
+      </li>
+    )
+  }
 
   return (
     <div className="relative">
       {/* Gigantyczne słowo-tło: karty szkła rozmywają je swoim backdrop-blur — kino, nie dekoracja-tapeta.
           Czysto wizualne (aria-hidden); tytuł sekcji niesie <h2 class="sr-only"> we wrapperze. */}
-      <div
-        aria-hidden
-        className="pointer-events-none select-none text-center font-display text-[clamp(4rem,14vw,10.5rem)] font-bold leading-[0.85] tracking-tight text-ink"
-      >
-        Cennik
+      <div ref={slowoWrapRef} aria-hidden className="pointer-events-none select-none">
+        <div
+          ref={slowoRef}
+          className="text-center font-display text-[clamp(4rem,14vw,10.5rem)] font-bold leading-[0.85] tracking-tight text-ink will-change-transform"
+        >
+          Cennik
+        </div>
       </div>
 
       {/* Przełącznik okresu — szklana pigułka z przesuwnym kciukiem (krzywa szuflady iOS). */}
@@ -141,7 +213,9 @@ function Cennik() {
               key={p.nazwa}
               data-rv=""
               style={{ '--i': idx }}
-              className={`glass lift rv-scale relative flex flex-col rounded-3xl p-6 sm:p-7 ${
+              onPointerMove={anim ? tiltMove : undefined}
+              onPointerLeave={anim ? tiltReset : undefined}
+              className={`glass tilt rv-scale relative flex flex-col rounded-3xl p-6 sm:p-7 ${
                 p.flagowy ? 'z-10 border-white/[0.15] bg-white/[0.06] max-lg:-order-1 lg:-my-6 lg:px-8' : ''
               }`}
             >
@@ -162,7 +236,7 @@ function Cennik() {
               <div className="mt-1.5 h-4 text-xs text-muted">{statusRozliczenia(p)}</div>
 
               <ul className="mt-6 flex-1 space-y-3 border-t border-white/[0.06] pt-6">
-                {p.cechy.map((c) => <Cecha key={c} dziecko={c} featured={p.flagowy} />)}
+                {p.cechy.map((c, j) => <Cecha key={typeof c === 'string' ? c : c.t} dziecko={c} featured={p.flagowy} j={j} />)}
               </ul>
 
               <a
@@ -200,7 +274,9 @@ function Cennik() {
                   <span className="text-xs text-muted">{darmowy ? 'na zawsze' : 'indywidualnie'}</span>
                 </div>
                 <p className="mt-0.5 text-xs text-muted">{p.opis}</p>
-                <p className="mt-2 text-xs leading-relaxed text-muted/80">{p.cechy.join(' · ')}</p>
+                <p className="mt-2 text-xs leading-relaxed text-muted/80">
+                  {p.cechy.map((c) => (typeof c === 'string' ? c : c.t)).join(' · ')}
+                </p>
               </div>
               <a
                 href={darmowy ? '?login' : `${MAIL}?subject=Enterprise`}
@@ -219,6 +295,7 @@ function Cennik() {
 
       <p className="relative z-10 mt-7 text-center text-xs text-muted">
         Ceny netto. Dodatek integracji POS: <span className="text-ink">+149 zł/mc</span>. Płacisz za lokal, nie za osobę.
+        <span className="mt-1 block text-muted/70">Plan zmieniasz lub anulujesz w każdej chwili — moduły włączasz jednym kliknięciem.</span>
       </p>
     </div>
   )
@@ -293,12 +370,32 @@ export default function Produkt() {
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 24px 48px -24px rgba(0,0,0,0.55); }
         .lp .glass:hover { border-color: rgba(255,255,255,0.16); background: rgba(255,255,255,0.055);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 32px 60px -24px rgba(0,0,0,0.55); }
+        /* Tilt 3D kart cennika: rotacja ze zmiennych CSS ustawianych kursorem (≤2.5°),
+           uniesienie na hover w tym samym transformie (bez konfliktu z reveal). */
+        .lp .tilt { transition: transform .25s var(--e), border-color .22s var(--e),
+          background-color .22s var(--e), box-shadow .22s var(--e); transform-style: preserve-3d; }
+        .lp[data-anim="on"] [data-rv].tilt.in, .lp:not([data-anim="on"]) .tilt {
+          transform: perspective(950px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateY(var(--ty, 0)); }
+        .lp .tilt:hover { --ty: -5px; }
+        /* Wodzące światło: monochromatyczny, radialny rozbłysk w punkcie kursora (język .scena-swiatlo). */
+        .lp .tilt::after { content: ''; position: absolute; inset: 0; border-radius: inherit;
+          pointer-events: none; opacity: 0; transition: opacity .35s var(--e);
+          background: radial-gradient(26rem 26rem at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,0.06), transparent 62%); }
+        .lp .tilt:hover::after { opacity: 1; }
+        /* Kaskada cech: po wylądowaniu karty (.in) wiersze wjeżdżają kolejno z lewej. */
+        .lp[data-anim="on"] .glass .cecha { opacity: 0; transform: translateX(-8px);
+          transition: opacity .5s var(--e), transform .5s var(--e);
+          transition-delay: calc(180ms + var(--j, 0) * 55ms); }
+        .lp[data-anim="on"] .glass.in .cecha { opacity: 1; transform: none; }
         .lp .faq-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s var(--e); }
         .lp .faq-body.open { grid-template-rows: 1fr; }
         .lp .faq-body > div { overflow: hidden; min-height: 0; }
         @media (prefers-reduced-motion: reduce) {
           .lp[data-anim="on"] [data-rv] { opacity: 1 !important; transform: none !important; transition: none !important; }
           .lp .lift:hover { transform: none; }
+          .lp .tilt, .lp .tilt:hover { transform: none !important; }
+          .lp .tilt::after { display: none; }
+          .lp[data-anim="on"] .glass .cecha { opacity: 1 !important; transform: none !important; transition: none !important; }
         }
       `}</style>
 
