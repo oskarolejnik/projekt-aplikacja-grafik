@@ -2,8 +2,9 @@
 // Nic nie stoi w miejscu: każda scena ma własny ruch kamery, wejścia z blurem
 // prędkości i wyjście zoom+fade; cięcia co 2–3 s.
 import type { FC } from 'react'
-import { AbsoluteFill, Sequence } from 'remotion'
+import { AbsoluteFill, Audio, Sequence, interpolate, staticFile } from 'remotion'
 import { C } from './theme'
+import { SwiatloBeat } from './components/SwiatloBeat'
 import { S1Hook } from './scenes/S1Hook'
 import { S2Produkt } from './scenes/S2Produkt'
 import { S3Pulpit, S3Rezerwacje, S3Wyplaty } from './scenes/S3Cechy'
@@ -25,15 +26,21 @@ export const DLUGOSC = 750
 
 export const LokaloAd: FC = () => (
   <AbsoluteFill style={{ background: C.noc }}>
-    {/* Światło sceny noir: ciepły poblask złota + zimna kontra (jak na homepage) */}
-    <AbsoluteFill
-      style={{
-        background: `
-          radial-gradient(1200px 800px at 18% -8%, rgba(201,169,106,0.07), transparent 62%),
-          radial-gradient(900px 600px at 86% 6%, rgba(255,255,255,0.04), transparent 60%),
-          radial-gradient(1400px 900px at 50% 115%, rgba(201,169,106,0.05), transparent 65%)
-        `,
-      }}
+    {/* Ścieżka: własny syntezowany beat 120 BPM (scripts/beat.js) — cięcia scen
+        leżą na siatce beatu (każda scena = wielokrotność 15 klatek). */}
+    <Audio
+      src={staticFile('beat.wav')}
+      volume={(f) =>
+        interpolate(f, [0, 20, DLUGOSC - 50, DLUGOSC - 4], [0, 0.8, 0.8, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+      }
+    />
+    {/* Światło sceny noir oddycha w takcie: ciepły poblask złota + zimna kontra */}
+    <SwiatloBeat
+      gradient={`
+        radial-gradient(1200px 800px at 18% -8%, rgba(201,169,106,0.07), transparent 62%),
+        radial-gradient(900px 600px at 86% 6%, rgba(255,255,255,0.04), transparent 60%),
+        radial-gradient(1400px 900px at 50% 115%, rgba(201,169,106,0.05), transparent 65%)
+      `}
     />
     {PLAN.map(({ od, dur, El }) => (
       <Sequence key={od} from={od} durationInFrames={dur}>
