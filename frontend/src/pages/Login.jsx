@@ -25,7 +25,11 @@ export default function Login({ onClose }) {
   const { login, register } = useAuth()
   const { nazwa_lokalu } = useBranding()
   const { toast } = useToast()
-  const [tryb, setTryb] = useState('login') // 'login' | 'register'
+  // Tryb startowy z URL: ?login&tryb=rejestracja otwiera od razu rejestrację
+  // (tak kieruje strona ?start — „Dołączam do zespołu").
+  const [tryb, setTryb] = useState(() =>
+    new URLSearchParams(window.location.search).get('tryb') === 'rejestracja' ? 'register' : 'login'
+  ) // 'login' | 'register'
   const [loginName, setLoginName] = useState(() => localStorage.getItem('grafik_login') || '')
   const [haslo, setHaslo] = useState('')
   const [imie, setImie] = useState('')
@@ -183,6 +187,10 @@ export default function Login({ onClose }) {
               <button onClick={() => setTryb('login')} className="font-semibold text-ink underline-offset-2 hover:underline">
                 Zaloguj się
               </button>
+              <span className="mt-2 block text-muted/80">
+                To konto pracownika tego lokalu. Prowadzisz własny?{' '}
+                <a href="?start" className="font-semibold text-ink underline-offset-2 hover:underline">Załóż lokal na Lokalo</a>
+              </span>
             </>
           ) : (
             <>

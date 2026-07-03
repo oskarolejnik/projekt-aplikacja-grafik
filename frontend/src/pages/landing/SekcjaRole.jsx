@@ -1,8 +1,9 @@
 import { Icon } from '../../lib/icons'
+import { PulpitVignette, GrafikVignette } from './Vignettes'
 
 // Sekcja „System ról" — Lokalo Noir (DESIGN.md §8). Kompozycja asymetryczna:
-// 2 duże karty-pokazy (właściciel, manager) + 4 kompaktowe role zespołu.
-// Kolory wyłącznie z rejestru noir; złota nitka = pojedyncze słowo + ikony dużych kart.
+// 2 duże karty-pokazy (właściciel, manager) z podglądem realnego ekranu roli
+// + 4 kompaktowe role zespołu. Złota nitka = pojedyncze słowo + ikony dużych kart.
 
 const ROLE_DUZE = [
   {
@@ -14,6 +15,7 @@ const ROLE_DUZE = [
       'Koszt pracy liczony w tle każdej zmiany',
       'Antyfraud POS — flagi stornowań i rabatów',
     ],
+    Podglad: PulpitVignette,
   },
   {
     ikona: 'calendar',
@@ -24,6 +26,7 @@ const ROLE_DUZE = [
       'Akceptuje urlopy i zaliczki jednym ruchem',
       'Pilnuje zgodności — sanepid, badania, terminy',
     ],
+    Podglad: GrafikVignette,
   },
 ]
 
@@ -123,6 +126,10 @@ export default function SekcjaRole() {
                   </li>
                 ))}
               </ul>
+              {/* Podgląd realnego ekranu tej roli — „pokaż, nie opowiadaj" */}
+              <div className="mt-6">
+                <rola.Podglad />
+              </div>
               <div className="pt-6" />
               <MikroEtykieta />
             </article>

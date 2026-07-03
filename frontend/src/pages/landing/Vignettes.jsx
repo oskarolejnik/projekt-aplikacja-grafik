@@ -130,6 +130,75 @@ export function RezerwacjaVignette({ className = '' }) {
   )
 }
 
+// — Rozliczenie dnia: utarg POS vs kasa, różnica zero —
+export function KasaVignette({ className = '' }) {
+  return (
+    <div aria-hidden className={`${okno} ${className}`}>
+      {pasekOkna}
+      <div className="p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="font-display text-sm font-bold text-ink">Rozliczenie dnia · piątek</div>
+          <span className="rounded-full bg-mint/15 px-2 py-0.5 text-[10px] font-semibold text-mint">zamknięte</span>
+        </div>
+        <div className="space-y-1.5">
+          {[['Utarg z POS', '8 420 zł'], ['Terminal (karty)', '5 210 zł'], ['Gotówka w kasie', '3 210 zł']].map(([l, v]) => (
+            <div key={l} className="flex items-center justify-between rounded-lg border border-line bg-surface-2 px-3 py-2 text-[11px]">
+              <span className="text-muted">{l}</span>
+              <span className="font-mono font-bold tabular-nums text-ink">{v}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between rounded-lg bg-mint/[0.08] px-3 py-2">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-mint">
+            <Icon name="check" className="h-3 w-3" /> Różnica
+          </span>
+          <span className="font-display text-sm font-bold tabular-nums text-mint">0 zł</span>
+        </div>
+        <div className="mt-2 px-1 text-[10px] text-muted">
+          wtorek: różnica <span className="font-semibold text-lemon">−40 zł</span> → alert dla właściciela
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// — Imprezy i wesela: najbliższe wydarzenia + zadatki —
+const IMPREZY = [
+  { co: 'Wesele · Ania i Paweł', kiedy: 'sob 11.07 · 120 gości', chip: 'zadatek ✓', ton: 'mint' },
+  { co: 'Chrzciny · sala ogrodowa', kiedy: 'ndz 19.07 · 45 gości', chip: 'rata 2/3', ton: 'lemon' },
+  { co: 'Kolacja firmowa', kiedy: 'pt 24.07 · 80 osób', chip: 'szkic AI', ton: 'fiolet' },
+]
+const CHIP_IMPREZY = {
+  mint: 'bg-mint/15 text-mint',
+  lemon: 'bg-lemon/15 text-lemon',
+  fiolet: 'bg-fiolet/15 text-fiolet',
+}
+export function ImprezyVignette({ className = '' }) {
+  return (
+    <div aria-hidden className={`${okno} ${className}`}>
+      {pasekOkna}
+      <div className="p-4 sm:p-5">
+        <div className="mb-3 font-display text-sm font-bold text-ink">Najbliższe imprezy</div>
+        <div className="space-y-1.5">
+          {IMPREZY.map((im) => (
+            <div key={im.co} className="flex items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-[11px] font-semibold text-ink">{im.co}</div>
+                <div className="text-[10px] text-muted">{im.kiedy}</div>
+              </div>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${CHIP_IMPREZY[im.ton]}`}>{im.chip}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between rounded-lg bg-mint/[0.08] px-3 py-2">
+          <span className="text-[11px] font-semibold text-muted">Zadatki w kasie</span>
+          <span className="font-display text-sm font-bold tabular-nums text-mint">6 500 zł</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // — Wypłata: godziny z RCP → kwota —
 export function WyplataVignette({ className = '' }) {
   return (

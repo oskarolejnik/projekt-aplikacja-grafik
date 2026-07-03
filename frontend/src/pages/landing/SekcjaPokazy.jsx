@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Icon } from '../../lib/icons'
-import { GrafikVignette, PulpitVignette, RezerwacjaVignette, WyplataVignette } from './Vignettes'
+import { GrafikVignette, PulpitVignette, RezerwacjaVignette, WyplataVignette, KasaVignette, ImprezyVignette } from './Vignettes'
 
 // Pokazy produktu na żywo: przełączane winiety realnego UI zamiast trzech osobnych
 // sekcji showcase. Jeden ekran, cztery historie — użytkownik sam wybiera, co go boli.
@@ -33,6 +33,20 @@ const POKAZY = [
     opis: 'Odbicia czasu pracy spinają się z grafikiem i stawkami. Każdy widzi swoje godziny i kwotę na bieżąco — mniej sporów, zero przepisywania.',
     punkty: ['Godziny per stanowisko i dzień', 'Portfel pracownika: zarobki na żywo + zaliczki', 'Eksport wypłat do Excela dla księgowej'],
     W: WyplataVignette,
+  },
+  {
+    k: 'kasa', ikona: 'server', naz: 'Kasa i rozliczenia',
+    tytul: 'Wieczór zamyka się sam — i musi się zgadzać',
+    opis: 'Utarg z POS, terminal i gotówka spinają się w jedno rozliczenie dnia. Różnica inna niż zero od razu podnosi rękę — zanim urośnie do problemu.',
+    punkty: ['Rozliczenie dnia + zeszyt kasowy', 'Alerty anomalii i różnic kasowych', 'Antyfraud POS: storna per kelner (Enterprise)'],
+    W: KasaVignette,
+  },
+  {
+    k: 'imprezy', ikona: 'sparkles', naz: 'Imprezy i wesela',
+    tytul: 'Od zapytania o wesele do rozliczonej imprezy',
+    opis: 'Zapytania zbierają się w skrzynce, AI szykuje szkic oferty, zadatki i raty pilnują się same, a Para Młoda prowadzi listę gości we własnym portalu.',
+    punkty: ['Kalendarz imprez + zadatki z kasy', 'Skrzynka zapytań ze szkicami ofert (AI)', 'Portal Pary Młodej: goście, menu, wpłaty'],
+    W: ImprezyVignette,
   },
 ]
 

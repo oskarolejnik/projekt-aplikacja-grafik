@@ -13,6 +13,7 @@ import SzefKuchniView from './pages/SzefKuchniView'
 import RezerwacjaWidget from './pages/RezerwacjaWidget'
 import PortalImprezy from './pages/PortalImprezy'
 import Onboarding from './pages/Onboarding'
+import Start from './pages/Start'
 import Produkt from './pages/Produkt'
 import { api } from './lib/api'
 
@@ -24,6 +25,7 @@ const isWidget = _params.has('rezerwuj')
 const isPortalImprezy = _params.has('impreza')
 const isProdukt = _params.has('produkt')
 const isLogin = _params.has('login')   // ?login → ekran logowania (landing marketingowy prowadzi tu z „Zaloguj")
+const isStart = _params.has('start')   // ?start → kreator lokalu (świeża instancja) lub rozjazd „co dalej"
 
 // Routing wg stanu zalogowania i roli:
 //   brak użytkownika → ekran startowy (z logowaniem)
@@ -49,6 +51,7 @@ function Routed() {
     // domyślnie (status jeszcze null) renderujemy landing OD RAZU. Kreator pokazujemy dopiero,
     // gdy status potwierdzi świeżą instancję (potrzebny=true) — rzadki, jednorazowy przypadek.
     if (onboarding) return <Onboarding />
+    if (isStart) return <Start />                 // ?start → kreator (świeża instancja) albo jasny rozjazd
     if (isLogin) return <Landing />               // ?login → ekran logowania (z landingu „Zaloguj")
     return <Produkt />                            // publiczny landing sprzedażowy (domyślny widok gościa)
   }

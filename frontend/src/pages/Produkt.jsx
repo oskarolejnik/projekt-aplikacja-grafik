@@ -341,7 +341,7 @@ function Cennik() {
                 </p>
               </div>
               <a
-                href={darmowy ? '?login' : `${MAIL}?subject=Enterprise`}
+                href={darmowy ? '?start' : `${MAIL}?subject=Enterprise`}
                 className={`shrink-0 rounded-xl px-5 py-2.5 text-center text-sm font-semibold transition duration-200 active:scale-[0.98] ${
                   darmowy
                     ? 'bg-mint text-bg hover:brightness-105'
@@ -472,11 +472,12 @@ export default function Produkt() {
         {/* Hero — opowieść + ekosystem urządzeń */}
         <section className="grid items-center gap-12 py-14 lg:grid-cols-[1.05fr_1fr] lg:gap-10 lg:py-24">
           <div>
+            {/* Początek celowo cichy: zero złota poza jednym CTA — kolor wchodzi dopiero niżej. */}
             <p data-rv="" style={{ '--i': 0 }} className="inline-flex items-center gap-2 rounded-full border border-white/[0.10] bg-white/[0.03] px-3 py-1 text-xs font-semibold text-muted">
-              <span className="h-1.5 w-1.5 rounded-full bg-zloto" /> System operacyjny lokalu gastronomicznego
+              <span className="h-1.5 w-1.5 rounded-full bg-white/40" /> System operacyjny lokalu gastronomicznego
             </p>
             <h1 data-rv="" style={{ '--i': 1 }} className="mt-5 font-brand text-4xl font-bold leading-[1.04] tracking-tight sm:text-5xl lg:text-6xl">
-              Cały lokal w <em className="font-editorial font-medium italic text-zloto-2">jednym systemie</em>.
+              Cały lokal w jednym systemie.
               <span className="block text-muted">Zamiast Excela, papieru i pięciu apek.</span>
             </h1>
             <p data-rv="" style={{ '--i': 2 }} className="mt-6 max-w-xl text-lg leading-relaxed text-muted">
@@ -484,7 +485,7 @@ export default function Produkt() {
               same, a każdy z zespołu wie, gdzie ma być. Lokalo prowadzi operacje. Ty prowadzisz lokal.
             </p>
             <div data-rv="" style={{ '--i': 3 }} className="mt-8 flex flex-wrap gap-3">
-              <Magnes href="?login" className="rounded-xl bg-zloto px-6 py-3 text-sm font-semibold text-noc transition-colors hover:bg-zloto-2">Zacznij za darmo</Magnes>
+              <Magnes href="?start" className="rounded-xl bg-zloto px-6 py-3 text-sm font-semibold text-noc transition-colors hover:bg-zloto-2">Zacznij za darmo</Magnes>
               <a href={`${MAIL}?subject=Demo%20Lokalo`} className="rounded-xl border border-white/[0.12] px-6 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
             </div>
             <p data-rv="" style={{ '--i': 4 }} className="mt-5 text-xs text-muted">Plan darmowy bez karty · start w kilka minut · telefon, tablet i desktop</p>
@@ -561,7 +562,7 @@ export default function Produkt() {
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-base text-muted">Załóż konto w kilka minut albo umów demo — pokażemy, jak przenieść grafik, wypłaty i rezerwacje w jedno miejsce.</p>
           <div className="mt-7 flex flex-wrap justify-center gap-3">
-            <Magnes href="?login" className="rounded-xl bg-zloto px-7 py-3 text-sm font-semibold text-noc transition-colors hover:bg-zloto-2">Zacznij za darmo</Magnes>
+            <Magnes href="?start" className="rounded-xl bg-zloto px-7 py-3 text-sm font-semibold text-noc transition-colors hover:bg-zloto-2">Zacznij za darmo</Magnes>
             <a href={`${MAIL}?subject=Demo%20Lokalo`} className="rounded-xl border border-white/[0.12] px-7 py-3 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
           </div>
         </section>
