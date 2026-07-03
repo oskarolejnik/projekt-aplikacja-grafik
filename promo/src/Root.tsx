@@ -2,6 +2,7 @@ import type { FC } from 'react'
 import { Composition, Still } from 'remotion'
 import { DLUGOSC, LokaloAd } from './LokaloAd'
 import { DLUGOSC_SOCIAL, LokaloAdSocial } from './LokaloAdSocial'
+import { DLUGOSC_JASNY, LokaloAdJasny } from './LokaloAdJasny'
 import { PostBrand } from './posty/PostBrand'
 import { PostGrafik } from './posty/PostGrafik'
 import { PostWyplaty } from './posty/PostWyplaty'
@@ -14,6 +15,8 @@ export const RemotionRoot: FC = () => (
     <Composition id="LokaloAd" component={LokaloAd} durationInFrames={DLUGOSC} fps={30} width={1920} height={1080} />
     {/* Wersja social 9:16 — TikTok / Reels / Shorts / X */}
     <Composition id="LokaloAdSocial" component={LokaloAdSocial} durationInFrames={DLUGOSC_SOCIAL} fps={30} width={1080} height={1920} />
+    {/* Jasny teaser 9:16 — styl app-promo (pływające karty UI, chaos→porządek) */}
+    <Composition id="LokaloAdJasny" component={LokaloAdJasny} durationInFrames={DLUGOSC_JASNY} fps={30} width={1080} height={1920} />
     {/* Karuzela Instagram 4:5 — statyczne posty (render: `remotion still <Id>`) */}
     <Still id="PostBrand" component={PostBrand} width={1080} height={1350} />
     <Still id="PostGrafik" component={PostGrafik} width={1080} height={1350} />
