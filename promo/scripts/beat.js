@@ -9,7 +9,7 @@ const path = require('path')
 const SR = 44100
 const BPM = 120
 const BEAT = 60 / BPM // 0.5 s
-const DLUGOSC = 28 // s — pokrywa oba spoty (25 s i 20 s)
+const DLUGOSC = 38 // s — pokrywa wszystkie spoty (25 s / 20 s / 34 s teaser)
 const N = Math.round(SR * DLUGOSC)
 
 const L = new Float64Array(N)

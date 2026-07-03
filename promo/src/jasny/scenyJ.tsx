@@ -1,11 +1,13 @@
-// Sceny teasera 9:16 NA CZERNI (feedback: czarne tło + animacje Apple-like —
-// elementy wjeżdżają OD BOKU i to buduje dynamikę): powiadomienia z prawej →
-// karteczka z lewej → KARUZELA ekranów aplikacji (naprzemienne slide-iny) →
-// grafik+portfel spotykają się z obu stron → puenta → brand.
+// Sceny teasera 9:16 NA CZERNI, v3 (feedback: równe powiadomienia + więcej,
+// czyste tło karteczki + dłuższa lista, nowe sceny: auto-grafik, dyspozycje,
+// rozbudowany pulpit, telefon pracownika; wszystko równe i Apple-like).
+// Język ruchu: slide-in OD BOKU (naprzemiennie prawy/lewy per scena),
+// tytuły zawsze w tym samym miejscu (top 240, 56 px, wyśrodkowane).
 import type { FC, ReactNode } from 'react'
 import { AbsoluteFill, useCurrentFrame } from 'remotion'
 import { en, kamera, lerp, wjazd, wyjscie, SMOOTH } from '../helpers/anim'
-import { GrafikOkno, PulpitOkno, RezerwacjaOkno, WyplataOkno } from '../components/Okna'
+import { GrafikOkno, RezerwacjaOkno, WyplataOkno } from '../components/Okna'
+import { GrafikAutoOkno, DyspozycjeOkno, PulpitProOkno, Telefon } from './okna2'
 import { LogoMark } from '../components/LogoMark'
 import { C, F } from '../theme'
 import { CiemnaScena, IkonaApki, J, Karteczka, Powiadomienie } from './komponenty'
@@ -21,73 +23,69 @@ const ScenaJ: FC<{ dur: number; odSkali?: number; doSkali?: number; panX?: numbe
   )
 }
 
-// ── J1 [0–3.5 s]: wieczór managera — powiadomienia wjeżdżają z PRAWEJ ─────────
+// Tytuł sceny — ZAWSZE ta sama pozycja i skala (równość, spokój, Apple-like).
+const Tytul: FC<{ tekst: string; delay?: number; bok?: 'left' | 'right' }> = ({ tekst, delay = 28, bok = 'left' }) => {
+  const frame = useCurrentFrame()
+  return (
+    <div style={{ position: 'absolute', left: 40, right: 40, top: 240, textAlign: 'center', ...wjazd(frame, delay, 20, bok, 120) }}>
+      <span style={{ fontFamily: F.body, fontWeight: 700, fontSize: 56, color: J.jasnyInk, letterSpacing: '-0.02em' }}>
+        {tekst}
+      </span>
+    </div>
+  )
+}
+
+// ── J1 [0–4.5 s]: wieczór managera — RÓWNE powiadomienia z prawej ─────────────
+const POWIADOMIENIA: { kolor: string; glif: string; ciemny?: boolean; tytul: string; tresc: string; kiedy: string }[] = [
+  { kolor: '#1D6F42', glif: 'X', tytul: 'Excel', tresc: 'Skoroszyt GRAFIK_v7_OSTATECZNY jest zablokowany przez innego użytkownika', kiedy: '21:40' },
+  { kolor: '#34C759', glif: 'A', tytul: 'Ania (sala)', tresc: 'Szefie, mogę się zamienić na sobotę? Kasia się zgadza', kiedy: '21:52' },
+  { kolor: '#8E8E93', glif: 'K', tytul: 'Kasia (bar)', tresc: 'Szefie, jutro jednak nie dam rady przyjść', kiedy: '21:58' },
+  { kolor: '#F5C84C', glif: 'W', ciemny: true, tytul: 'Kalendarz', tresc: 'Wesele 120 os. — potwierdzić menu i zadatek do piątku', kiedy: '22:05' },
+]
+
 export const J1Powiadomienia: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
   return (
     <ScenaJ dur={dur} panY={-16}>
       <CiemnaScena>
-        <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', gap: 34 }}>
-          <div style={wjazd(frame, 6, 24, 'left', 340)}>
-            <Powiadomienie
-              ikona={<IkonaApki kolor="#1D6F42" glif="X" />}
-              tytul="Excel"
-              tresc="Skoroszyt GRAFIK_v7_OSTATECZNY jest zablokowany przez innego użytkownika"
-              kiedy="21:40"
-              w={880}
-            />
-          </div>
-          <div style={wjazd(frame, 28, 24, 'left', 340)}>
-            <Powiadomienie
-              ikona={<IkonaApki kolor="#34C759" glif="A" />}
-              tytul="Ania (sala)"
-              tresc="Szefie, mogę się zamienić na sobotę? Kasia się zgadza"
-              kiedy="21:52"
-              w={840}
-              style={{ transform: 'translateX(-22px)' }}
-            />
-          </div>
-          <div style={wjazd(frame, 50, 24, 'left', 340)}>
-            <Powiadomienie
-              ikona={<IkonaApki kolor="#F5C84C" glif="W" ciemnyGlif />}
-              tytul="Kalendarz"
-              tresc="Wesele 120 os. — potwierdzić menu i zadatek do piątku"
-              kiedy="22:05"
-              w={860}
-              style={{ transform: 'translateX(18px)' }}
-            />
-          </div>
+        <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', gap: 30 }}>
+          {POWIADOMIENIA.map((p, i) => (
+            <div key={p.tytul} style={wjazd(frame, 6 + i * 20, 24, 'left', 340)}>
+              <Powiadomienie
+                ikona={<IkonaApki kolor={p.kolor} glif={p.glif} ciemnyGlif={p.ciemny} />}
+                tytul={p.tytul}
+                tresc={p.tresc}
+                kiedy={p.kiedy}
+                w={880}
+              />
+            </div>
+          ))}
         </AbsoluteFill>
       </CiemnaScena>
     </ScenaJ>
   )
 }
 
-// ── J2 [3.5–7 s]: karteczka „Jutro:" wjeżdża z LEWEJ ──────────────────────────
+// ── J2 [4.5–8.5 s]: karteczka „Jutro:" z lewej — czyste tło, dłuższa lista ────
 export const J2Karteczka: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
-  // Parallax: powiadomienie z poprzedniej sceny odpływa w prawo, w rozmycie.
-  const odplyw = en(frame, 0, 30, SMOOTH)
   return (
-    <ScenaJ dur={dur} odSkali={1.02} doSkali={1.08} panY={-12}>
+    <ScenaJ dur={dur} odSkali={1.0} doSkali={1.06} panY={-12}>
       <CiemnaScena>
-        <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center' }}>
-          <div
-            style={{
-              transform: `translate(${lerp(odplyw, -60, 240)}px, -560px) rotate(-4deg) scale(0.78)`,
-              filter: 'blur(5px)',
-              opacity: 0.45 * (1 - odplyw * 0.6),
-            }}
-          >
-            <Powiadomienie ikona={<IkonaApki kolor="#1D6F42" glif="X" />} tytul="Excel" tresc="Skoroszyt jest zablokowany…" kiedy="21:40" w={640} />
-          </div>
-        </AbsoluteFill>
         <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center' }}>
           <div style={wjazd(frame, 4, 26, 'right', 380)}>
             <Karteczka
               data="pt, 3 lip"
               tytul="Jutro:"
-              zadania={['ułożyć grafik na tydzień', 'policzyć godziny i wypłaty', 'oddzwonić: wesele 120 os.', 'sprawdzić utarg z wczoraj']}
+              zadania={[
+                'ułożyć grafik na tydzień',
+                'policzyć godziny i wypłaty',
+                'oddzwonić: wesele 120 os.',
+                'sprawdzić utarg z wczoraj',
+                'zebrać dyspozycyjność zespołu',
+                'zamówić środki czystości',
+                'potwierdzić rezerwacje na sobotę',
+              ]}
               w={720}
             />
           </div>
@@ -97,17 +95,52 @@ export const J2Karteczka: FC<{ dur: number }> = ({ dur }) => {
   )
 }
 
-// ── J3 [7–14 s]: KARUZELA ekranów — naprzemienne slide-iny (Apple-like) ───────
-// Każdy ekran: wjeżdża z boku z rozmyciem prędkości, chwilę „gra" (liczniki,
-// mikrointerakcje), po czym miękko wyjeżdża w przeciwną stronę.
-const EKRANY: { El: FC<{ w?: number; start?: number }>; w: number; skala: number; tytul: string; bok: 'lewy' | 'prawy' }[] = [
-  { El: PulpitOkno, w: 880, skala: 1.06, tytul: 'Liczby lokalu. Na żywo.', bok: 'prawy' },
-  { El: RezerwacjaOkno, w: 700, skala: 1.18, tytul: 'Rezerwacje online. 0% prowizji.', bok: 'lewy' },
-  { El: WyplataOkno, w: 680, skala: 1.2, tytul: 'Wypłaty co do minuty.', bok: 'prawy' },
-]
-const SEGMENT = 70
+// ── J3 [8.5–12.5 s]: automatyzacja grafiku — „auto" wciska się, kaskada ───────
+export const J3AutoGrafik: FC<{ dur: number }> = ({ dur }) => {
+  const frame = useCurrentFrame()
+  return (
+    <ScenaJ dur={dur} odSkali={1.0} doSkali={1.05}>
+      <CiemnaScena>
+        <Tytul tekst="Grafik układa się sam." delay={30} bok="left" />
+        <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <div style={wjazd(frame, 2, 24, 'left', 420)}>
+            <div style={{ transform: 'scale(1.08)' }}>
+              <GrafikAutoOkno w={920} start={8} />
+            </div>
+          </div>
+        </AbsoluteFill>
+      </CiemnaScena>
+    </ScenaJ>
+  )
+}
 
-export const J3Karuzela: FC<{ dur: number }> = ({ dur }) => {
+// ── J4 [12.5–16 s]: dyspozycyjność — zespół zgłasza z telefonu ────────────────
+export const J4Dyspozycje: FC<{ dur: number }> = ({ dur }) => {
+  const frame = useCurrentFrame()
+  return (
+    <ScenaJ dur={dur} odSkali={1.0} doSkali={1.05}>
+      <CiemnaScena>
+        <Tytul tekst="Zespół sam zgłasza dyspozycyjność." delay={26} bok="right" />
+        <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <div style={wjazd(frame, 2, 24, 'right', 420)}>
+            <div style={{ transform: 'scale(1.06)' }}>
+              <DyspozycjeOkno w={720} start={10} />
+            </div>
+          </div>
+        </AbsoluteFill>
+      </CiemnaScena>
+    </ScenaJ>
+  )
+}
+
+// ── J5 [16–21 s]: karuzela — rozbudowany pulpit właściciela + rezerwacje ──────
+const EKRANY: { El: FC<{ w?: number; start?: number }>; w: number; skala: number; tytul: string; bok: 'lewy' | 'prawy' }[] = [
+  { El: PulpitProOkno, w: 920, skala: 1.04, tytul: 'Właściciel widzi wszystko. Na żywo.', bok: 'prawy' },
+  { El: RezerwacjaOkno, w: 700, skala: 1.18, tytul: 'Rezerwacje online. 0% prowizji.', bok: 'lewy' },
+]
+const SEGMENT = 75
+
+export const J5Karuzela: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
   return (
     <ScenaJ dur={dur} odSkali={1.0} doSkali={1.05}>
@@ -119,7 +152,6 @@ export const J3Karuzela: FC<{ dur: number }> = ({ dur }) => {
           const zPrawej = e.bok === 'prawy'
           const wej = en(frame, od + 2, 22)
           const wyj = i < EKRANY.length - 1 ? en(frame, od + SEGMENT - 10, 18, SMOOTH) : 0
-          // Wjazd z jednego boku, wyjazd w przeciwny — ciągłość ruchu jak w keynote.
           const x = lerp(wej, zPrawej ? 420 : -420, 0) + lerp(wyj, 0, zPrawej ? -460 : 460)
           const blur = (1 - wej) * 12 + wyj * 10
           return (
@@ -138,13 +170,13 @@ export const J3Karuzela: FC<{ dur: number }> = ({ dur }) => {
                   position: 'absolute',
                   left: 40,
                   right: 40,
-                  top: 260,
+                  top: 240,
                   textAlign: 'center',
                   transform: `translateX(${x * 0.55}px)`,
                   opacity: Math.min(en(frame, od + 12, 16), 1 - wyj),
                 }}
               >
-                <span style={{ fontFamily: F.body, fontWeight: 700, fontSize: 54, color: J.jasnyInk, letterSpacing: '-0.02em' }}>
+                <span style={{ fontFamily: F.body, fontWeight: 700, fontSize: 56, color: J.jasnyInk, letterSpacing: '-0.02em' }}>
                   {e.tytul}
                 </span>
               </div>
@@ -156,24 +188,34 @@ export const J3Karuzela: FC<{ dur: number }> = ({ dur }) => {
   )
 }
 
-// ── J4 [14–18 s]: grafik i portfel spotykają się z obu boków ──────────────────
-export const J4Porzadek: FC<{ dur: number }> = ({ dur }) => {
+// ── J6 [21–25 s]: pracownik ma wszystko na telefonie ──────────────────────────
+export const J6Telefon: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
   return (
-    <ScenaJ dur={dur} odSkali={1.0} doSkali={1.07} panY={-10}>
+    <ScenaJ dur={dur} odSkali={1.0} doSkali={1.06} panY={-8}>
       <CiemnaScena>
-        <div style={{ position: 'absolute', left: 40, right: 40, top: 250, textAlign: 'center', ...wjazd(frame, 34, 20, 'left', 120) }}>
-          <span style={{ fontFamily: F.body, fontWeight: 700, fontSize: 58, color: J.jasnyInk, letterSpacing: '-0.02em' }}>
-            Aż wszystko trafia tutaj.
-          </span>
-        </div>
+        <Tytul tekst="Pracownik ma wszystko na telefonie." delay={26} bok="left" />
+        <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', paddingTop: 120 }}>
+          <div style={wjazd(frame, 2, 26, 'left', 420)}>
+            <Telefon w={560} start={16} />
+          </div>
+        </AbsoluteFill>
+      </CiemnaScena>
+    </ScenaJ>
+  )
+}
+
+// ── J7 [25–28 s]: wypłaty co do minuty ────────────────────────────────────────
+export const J7Wyplaty: FC<{ dur: number }> = ({ dur }) => {
+  const frame = useCurrentFrame()
+  return (
+    <ScenaJ dur={dur} odSkali={1.0} doSkali={1.05}>
+      <CiemnaScena>
+        <Tytul tekst="Wypłaty co do minuty." delay={24} bok="right" />
         <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ position: 'relative' }}>
-            <div style={wjazd(frame, 2, 26, 'left', 420)}>
-              <GrafikOkno w={960} start={16} />
-            </div>
-            <div style={{ position: 'absolute', right: -30, bottom: -240, ...wjazd(frame, 18, 26, 'right', 420) }}>
-              <WyplataOkno w={470} start={32} />
+          <div style={wjazd(frame, 2, 24, 'right', 420)}>
+            <div style={{ transform: 'scale(1.22)' }}>
+              <WyplataOkno w={680} start={8} />
             </div>
           </div>
         </AbsoluteFill>
@@ -182,8 +224,8 @@ export const J4Porzadek: FC<{ dur: number }> = ({ dur }) => {
   )
 }
 
-// ── J5 [18–21 s]: puenta — białe boldy przesuwają się jak w keynote ───────────
-export const J5Puenta: FC<{ dur: number }> = ({ dur }) => {
+// ── J8 [28–31 s]: puenta — białe boldy jak w keynote ──────────────────────────
+export const J8Puenta: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
   const zamiana = en(frame, 46, 16, SMOOTH)
   const wspolny = {
@@ -231,8 +273,8 @@ export const J5Puenta: FC<{ dur: number }> = ({ dur }) => {
   )
 }
 
-// ── J6 [21–24 s]: brand-reveal ────────────────────────────────────────────────
-export const J6Brand: FC<{ dur: number }> = ({ dur }) => {
+// ── J9 [31–34 s]: brand-reveal ────────────────────────────────────────────────
+export const J9Brand: FC<{ dur: number }> = ({ dur }) => {
   const frame = useCurrentFrame()
   const logo = en(frame, 4, 20)
   return (
