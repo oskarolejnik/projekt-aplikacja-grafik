@@ -7,6 +7,7 @@ lecz od ROLI/FLAG. Dzięki temu dowolny lokal może nazwać stanowiska po swojem
 
 from datetime import date, datetime
 
+import deps
 import main
 import models
 import raporty
@@ -25,7 +26,7 @@ def test_sprzataczka_po_fladze_a_nie_nazwie(db):
     prac = factories.PracownikFactory(dzial="techniczny")
     prac.kwalifikacje = [stan]
     factories.Session.commit()
-    assert main._jest_sprzataczka(prac) is True
+    assert deps._jest_sprzataczka(prac) is True
 
 
 def test_kuchnia_pelne_godziny_pod_dowolna_nazwa(db):

@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, uprawnienia, ratelimit, prawo_pracy
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -26,12 +26,17 @@ from auth import (
     create_access_token, SECRET_KEY, ALGORITHM,
 )
 from validators import sprawdz_login, sprawdz_haslo
-from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow, VAPID_PUBLIC_KEY
+from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow
 
 import openpyxl
 
 import settings as app_settings
 from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, rewir_dla_pracownika as _rewir_dla_pracownika
+# Helpery współdzielone z routerami (wyniesione do deps.py — dekompozycja main, audyt CTO):
+from deps import (
+    ROZLICZENIA_START, _napiwki_podzial, _norm_nazwa, _przypisz_odbicia_do_pracownika,
+    _sala_stanowisko_ids, _teraz_lokalnie, _user_out, _zamowienie_out, _zbuduj_rozliczenie,
+)
 from routers.instancja import router as instancja_router
 from routers.lokal import router as lokal_router
 from routers.platnosci import router as platnosci_router
@@ -44,6 +49,8 @@ from routers.imprezy_ai import router as imprezy_ai_router
 from routers.portal_imprezy import router as portal_imprezy_router
 from routers.antyfraud import router as antyfraud_router
 from routers.portfel import router as portfel_router
+from routers.moje import router as moje_router
+from routers.kadry import router as kadry_router
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -59,6 +66,8 @@ app.include_router(imprezy_ai_router)  # skrzynka zapytań o imprezy — ekstrak
 app.include_router(portal_imprezy_router)  # portal klienta imprezy — tokenowa strona + wątek ustaleń (roadmapa v2, oś A)
 app.include_router(antyfraud_router)   # antyfraud POS — storna/rabaty per kelner + flagi (roadmapa v2, oś B)
 app.include_router(portfel_router)     # portfel pracownika — zarobek na żywo + zaliczki (roadmapa v2, oś C)
+app.include_router(moje_router)        # „Moje" /api/me/* — samoobsługa pracownika (dekompozycja main — audyt CTO)
+app.include_router(kadry_router)       # kadry i konta zespołu — users/pracownicy/stanowiska/dyspozycje/urlopy (dekompozycja main — audyt CTO)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -70,10 +79,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# Wszystkie dozwolone wartości ról konta. „employee" = Pracownik obsługa (zachowana wartość
-# z istniejących kont — bez migracji), „kuchnia" = Pracownik kuchnia, „szef_kuchni" = Szef kuchni.
-ROLE_VALID = ("admin", "employee", "szef", "kuchnia", "szef_kuchni")
 
 # Role nadzorcze i ich dozwolone ścieżki GET (poza /api/me/* dostępnym dla każdego zalogowanego).
 # Wszystko spoza tych prefiksów = 403. Zapisy (POST/PUT/DELETE) zarezerwowane dla admina.
@@ -115,17 +120,58 @@ def _sciezka_na_whitelist(path: str, prefiksy) -> bool:
     return False
 
 
-# Centralna ochrona API: /api/auth/* publiczne, /api/me/* dla każdego zalogowanego,
-# pozostałe /api/* tylko dla administratora (role nadzorcze: wybrane GET — patrz OVERSIGHT_GET).
+# ── Tabela tras autoryzacji ───────────────────────────────────────────────────
+# Audyt CTO: „kruchość role_guard — długi warunek z wieloma wyjątkami; łatwo o
+# regresję przy dodawaniu endpointów". Zamiast łańcucha `not path.startswith(...)`
+# — deklaratywne tabele. Dopasowanie prefiksów jest SEGMENTOWE (dokładnie albo
+# granica „/"), więc wpis „/api/online" nie przepuści „/api/online-cokolwiek".
+# Ścieżki, które dotąd jechały na tekstowym prefiksie (stoly → stoly-historia!),
+# są wypisane JAWNIE — tabela jest jednocześnie dokumentacją allowlisty.
+
+# Trasy publiczne — bez JWT. None = każda metoda, inaczej krotka metod.
+# Ingest agenta POS autoryzuje się stałym tokenem (X-RCP-Token) w endpointach.
+TRASY_PUBLICZNE = (
+    ("/api/auth", None),
+    ("/api/onboarding", None),                   # status + jednorazowy bootstrap (guard 409 w środku)
+    ("/api/health", None),
+    ("/api/lokal/branding", None),               # white-label dla ekranu logowania
+    ("/api/online", None),                       # publiczny widget gościa (rezerwacje, portal imprez)
+    ("/api/rcp/ingest", None),
+    ("/api/gastro/stoly", ("POST",)),            # agent: stan stołów na żywo
+    ("/api/gastro/stoly-historia", ("POST",)),   # agent: historia stolików
+    ("/api/gastro/rozliczenia", ("POST",)),      # agent: rozliczenia kelnerów
+    ("/api/gastro/zadatki", ("POST",)),          # agent: zadatki KP
+    ("/api/gastro/storna", ("POST",)),           # agent: storna/rabaty (antyfraud)
+)
+
+# Wyjątki od degradacji READ_ONLY — zapis dozwolony mimo nieaktywnej subskrypcji:
+# logowanie, kreator pierwszej konfiguracji, przedłużenie subskrypcji, health.
+READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health")
+
+# Przestrzenie, w których rola nadzorcza ma PEŁNY dostęp (też zapisy). Każdy taki
+# endpoint sam pilnuje, że dotyczy wyłącznie swojej domeny (np. grafik kuchni).
+ROLA_PELNA_PRZESTRZEN = {"szef_kuchni": ("/api/szefkuchni",)}
+
+
+def _trasa_publiczna(path: str, metoda: str) -> bool:
+    for prefiks, metody in TRASY_PUBLICZNE:
+        if _sciezka_na_whitelist(path, (prefiks,)) and (metody is None or metoda in metody):
+            return True
+    return False
+
+
+# Centralna ochrona API: tabele wyżej + reguły ról. /api/me/* dla każdego
+# zalogowanego, całość /api/* dla admina, role nadzorcze wg OVERSIGHT_GET.
 # Statyczny frontend jest publiczny.
 @app.middleware("http")
 async def role_guard(request: Request, call_next):
-    path = request.url.path
-    # Degradacja READ_ONLY: nieaktywna subskrypcja → tylko odczyt. Zapisy (POST/PUT/DELETE/PATCH)
-    # zwracają 402, POZA: logowaniem (/api/auth/*), zarządzaniem subskrypcją i /api/health.
-    if (request.method in ("POST", "PUT", "DELETE", "PATCH") and path.startswith("/api/")
-            and not path.startswith("/api/auth/") and not path.startswith("/api/onboarding/")
-            and path != "/api/subskrypcja" and path != "/api/health"):
+    path, metoda = request.url.path, request.method
+    if metoda == "OPTIONS" or not path.startswith("/api/"):
+        return await call_next(request)
+
+    # 1) Degradacja READ_ONLY: nieaktywna subskrypcja → zapisy zwracają 402.
+    #    Celowo PRZED autoryzacją (zachowanie historyczne: 402 także bez tokenu).
+    if metoda in ("POST", "PUT", "DELETE", "PATCH") and not _sciezka_na_whitelist(path, READ_ONLY_WYJATKI):
         _db = SessionLocal()
         try:
             if not subskrypcja_aktywna(_db):
@@ -135,26 +181,26 @@ async def role_guard(request: Request, call_next):
                     status_code=402)
         finally:
             _db.close()
-    # /api/rcp/ingest — wyjątek: autoryzacja stałym tokenem agenta (X-RCP-Token), nie JWT.
-    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/health" and path != "/api/lokal/branding" and not path.startswith("/api/online/") and not path.startswith("/api/onboarding/") and path != "/api/rcp/ingest" and not (path.startswith("/api/gastro/stoly") and request.method == "POST") and not (path == "/api/gastro/rozliczenia" and request.method == "POST") and not (path == "/api/gastro/zadatki" and request.method == "POST") and not (path == "/api/gastro/storna" and request.method == "POST"):
-        header = request.headers.get("authorization", "")
-        token = header[7:] if header.lower().startswith("bearer ") else ""
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        except jwt.PyJWTError:
-            return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
-        rola = payload.get("rola")
-        if not path.startswith("/api/me/") and rola != "admin":
-            # Szef kuchni ma PEŁNY dostęp do swojej przestrzeni /api/szefkuchni/ (też zapisy:
-            # korekty grafiku kuchni). Każdy taki endpoint sam pilnuje, że dotyczy tylko kuchni.
-            if rola == "szef_kuchni" and path.startswith("/api/szefkuchni/"):
-                pass
-            else:
-                # Pozostałe role nadzorcze (szef, szef_kuchni poza swoją przestrzenią) — tylko GET z whitelisty.
-                dozwolone = OVERSIGHT_GET.get(rola, ())
-                if not (request.method == "GET" and _sciezka_na_whitelist(path, dozwolone)):
-                    return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
-    return await call_next(request)
+
+    # 2) Trasy publiczne — bez JWT.
+    if _trasa_publiczna(path, metoda):
+        return await call_next(request)
+
+    # 3) Wszystko inne wymaga JWT.
+    header = request.headers.get("authorization", "")
+    token = header[7:] if header.lower().startswith("bearer ") else ""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
+    rola = payload.get("rola")
+    if path.startswith("/api/me/") or rola == "admin":
+        return await call_next(request)
+    if _sciezka_na_whitelist(path, ROLA_PELNA_PRZESTRZEN.get(rola, ())):
+        return await call_next(request)
+    if metoda == "GET" and _sciezka_na_whitelist(path, OVERSIGHT_GET.get(rola, ())):
+        return await call_next(request)
+    return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
 
 
 # Nazwa „ukrytego" stanowiska, na które trafiają zmiany z grafiku KUCHNI. Pracownik kuchni
@@ -208,67 +254,6 @@ def zapisz_audyt(db, user, akcja, *, zasob=None, pracownik_id=None, request=None
         db.commit()
     except Exception:
         db.rollback()
-
-
-# Kwalifikacje działu technicznego (nadawane w Pracownikach jak zwykłe kwalifikacje = Stanowiska).
-# „Sprzątaczka" daje dostęp do formularza zamówień; „Stróż" na razie tylko jako oznaczenie.
-SPRZATACZKA_NAZWA = "Sprzątaczka"
-STROZ_NAZWA = "Stróż"
-
-
-def _ensure_kwalifikacje_techniczne(db):
-    """Dba, by stanowiska-kwalifikacje Sprzątaczka/Stróż istniały (admin może je nadać w Pracownikach).
-    Sprzątaczka dostaje flagę `daje_dostep_zamowien` (dawniej rozpoznawana po nazwie)."""
-    zmiana = False
-    for nazwa in (SPRZATACZKA_NAZWA, STROZ_NAZWA):
-        existing = db.query(models.Stanowisko).filter_by(nazwa=nazwa).first()
-        if not existing:
-            db.add(models.Stanowisko(nazwa=nazwa,
-                                     daje_dostep_zamowien=(nazwa == SPRZATACZKA_NAZWA)))
-            zmiana = True
-        elif nazwa == SPRZATACZKA_NAZWA and not existing.daje_dostep_zamowien:
-            existing.daje_dostep_zamowien = True   # adopcja istniejącej Sprzątaczki na flagę
-            zmiana = True
-    if zmiana:
-        db.commit()
-
-
-def _jest_sprzataczka(prac: models.Pracownik) -> bool:
-    """Dostęp do formularza zamówień: dział techniczny + kwalifikacja z flagą `daje_dostep_zamowien`
-    (fallback po nazwie „Sprzątaczka" dla danych sprzed migracji)."""
-    return bool(prac and prac.dzial == "techniczny"
-                and any(getattr(s, "daje_dostep_zamowien", False) or (s.nazwa or "") == SPRZATACZKA_NAZWA
-                        for s in prac.kwalifikacje))
-
-
-# „Parkiet": stanowiska, których nazwa zaczyna się od „Sala" (Sala, Sala-ABC, Sala-RZP,
-# Sala-Bar...). Spośród nich wybieramy osobę ZAMYKAJĄCĄ lokal — patrz _przelicz_zamykajacego.
-SALA_PREFIX = "sala"
-
-
-def _data_env(nazwa: str, domyslnie: str):
-    """Czyta datę (RRRR-MM-DD) ze zmiennej środowiskowej; puste/niepoprawne -> None."""
-    s = (os.environ.get(nazwa, domyslnie) or "").strip()
-    if not s:
-        return None
-    try:
-        return date.fromisoformat(s[:10])
-    except ValueError:
-        return None
-
-
-# Rozliczenia sali liczymy DOPIERO od dnia startu systemu — inaczej kelnerom wyskakują
-# „zaległe" rozliczenia ze zmian Gastro sprzed wdrożenia (które nigdy nie były potwierdzane
-# w aplikacji). Sterowane env ROZLICZENIA_START=RRRR-MM-DD (ustawiane na serwerze na dzień
-# uruchomienia; puste/brak = bez cięcia). Po ~21 dniach naturalne okno (dziś−21) i tak wyprzedza
-# tę datę, więc cięcie samo przestaje cokolwiek zmieniać.
-ROZLICZENIA_START = _data_env("ROZLICZENIA_START", "")
-
-
-def _sala_stanowisko_ids(db) -> set:
-    """Stanowiska parkietu (kelnerzy). Rola 'sala' albo — fallback — nazwa zaczyna się od „Sala"."""
-    return {s.id for s in db.query(models.Stanowisko).all()
-            if s.rola == "sala" or (s.nazwa or "").strip().lower().startswith(SALA_PREFIX)}
 
 
 def _przelicz_zamykajacego(db, dzien: date):
@@ -328,16 +313,6 @@ def parse_date(s: str) -> date:
 # ═══════════════════════════════════════════════════════════════════════════
 # AUTORYZACJA / UŻYTKOWNICY
 # ═══════════════════════════════════════════════════════════════════════════
-
-def _user_out(u: models.User) -> schemas.UserOut:
-    return schemas.UserOut(
-        id=u.id, login=u.login, rola=u.rola, aktywny=bool(u.aktywny),
-        pracownik_id=u.pracownik_id,
-        dzial=u.pracownik.dzial if u.pracownik else None,
-        sprzataczka=_jest_sprzataczka(u.pracownik) if u.pracownik else False,
-        imie=u.pracownik.imie if u.pracownik else None,
-        nazwisko=u.pracownik.nazwisko if u.pracownik else None,
-    )
 
 @app.post("/api/auth/login", response_model=schemas.TokenOut)
 def login(dane: schemas.LoginIn, request: Request, db: Session = Depends(get_db)):
@@ -429,282 +404,10 @@ def auth_me(user: models.User = Depends(get_current_user)):
     return _user_out(user)
 
 
-@app.get("/api/me/uprawnienia")
-def me_uprawnienia(user: models.User = Depends(get_current_user)):
-    """Granularne uprawnienia zalogowanego użytkownika (RBAC) — do sterowania UI.
-    Krytyczny enforcement po stronie API dalej robi middleware role_guard."""
-    return {"rola": user.rola, "uprawnienia": uprawnienia.uprawnienia(user.rola)}
-
-# --- Zarządzanie kontami (dostęp tylko admin — wymusza middleware) ---
-
-@app.get("/api/users", response_model=List[schemas.UserOut])
-def list_users(db: Session = Depends(get_db)):
-    return [_user_out(u) for u in db.query(models.User).order_by(models.User.id).all()]
-
-@app.post("/api/users", response_model=schemas.UserOut, status_code=201)
-def create_user(dane: schemas.UserCreate, db: Session = Depends(get_db)):
-    if dane.rola not in ROLE_VALID:
-        raise HTTPException(400, "Nieprawidłowa rola.")
-    if db.query(models.User).filter(models.User.login == dane.login).first():
-        raise HTTPException(400, "Login jest już zajęty.")
-    if dane.pracownik_id is not None:
-        if not db.get(models.Pracownik, dane.pracownik_id):
-            raise HTTPException(404, "Nie znaleziono pracownika.")
-        if db.query(models.User).filter(models.User.pracownik_id == dane.pracownik_id).first():
-            raise HTTPException(400, "Ten pracownik ma już konto.")
-    u = models.User(
-        login=dane.login, haslo_hash=hash_password(dane.haslo),
-        rola=dane.rola, pracownik_id=dane.pracownik_id,
-    )
-    db.add(u); db.commit(); db.refresh(u)
-    return _user_out(u)
-
-@app.put("/api/users/{uid}", response_model=schemas.UserOut)
-def update_user(uid: int, dane: schemas.UserUpdate, db: Session = Depends(get_db)):
-    u = db.get(models.User, uid)
-    if not u:
-        raise HTTPException(404, "Nie znaleziono konta.")
-    if dane.rola is not None:
-        if dane.rola not in ROLE_VALID:
-            raise HTTPException(400, "Nieprawidłowa rola.")
-        u.rola = dane.rola
-    if dane.aktywny is not None:
-        u.aktywny = dane.aktywny
-    if dane.pracownik_id is not None:
-        u.pracownik_id = dane.pracownik_id
-    db.commit(); db.refresh(u)
-    return _user_out(u)
-
-@app.post("/api/users/{uid}/reset-haslo", status_code=204)
-def reset_haslo(uid: int, dane: schemas.ResetHasloIn, db: Session = Depends(get_db)):
-    u = db.get(models.User, uid)
-    if not u:
-        raise HTTPException(404, "Nie znaleziono konta.")
-    u.haslo_hash = hash_password(dane.haslo)
-    db.commit()
-
-@app.delete("/api/users/{uid}", status_code=204)
-def delete_user(uid: int, db: Session = Depends(get_db)):
-    u = db.get(models.User, uid)
-    if not u:
-        raise HTTPException(404, "Nie znaleziono konta.")
-    db.delete(u); db.commit()
-
-@app.post("/api/users/provision", status_code=200)
-def provision_accounts(db: Session = Depends(get_db)):
-    """Tworzy konta (login=imie.nazwisko, hasło tymczasowe) dla pracowników bez konta."""
-    import unicodedata
-    def slug(s: str) -> str:
-        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
-        return "".join(c for c in s if c.isalnum())
-    maja_konto = {u.pracownik_id for u in db.query(models.User).all() if u.pracownik_id}
-    utworzone = []
-    for p in db.query(models.Pracownik).all():
-        if p.id in maja_konto:
-            continue
-        base = f"{slug(p.imie)}.{slug(p.nazwisko)}" or f"user{p.id}"
-        login = base; i = 1
-        while db.query(models.User).filter(models.User.login == login).first():
-            i += 1; login = f"{base}{i}"
-        haslo = (slug(p.nazwisko) or "haslo") + "123"
-        db.add(models.User(login=login, haslo_hash=hash_password(haslo), rola="employee", pracownik_id=p.id))
-        utworzone.append({"pracownik": f"{p.imie} {p.nazwisko}", "login": login, "haslo_tymczasowe": haslo})
-    db.commit()
-    return {"utworzone": utworzone}
-
-# --- Samoobsługa: dyspozycyjność zalogowanego pracownika ---
-
-@app.get("/api/me/dyspozycje", response_model=List[schemas.DyspozycjaOut])
-def moje_dyspozycje(
-    start: Optional[date] = None, end: Optional[date] = None,
-    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    if not user.pracownik_id:
-        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
-    q = db.query(models.Dyspozycja).filter(models.Dyspozycja.pracownik_id == user.pracownik_id)
-    if start: q = q.filter(models.Dyspozycja.data >= start)
-    if end:   q = q.filter(models.Dyspozycja.data <= end)
-    return q.all()
-
-@app.get("/api/me/imprezy")
-def moje_imprezy(
-    start: date = Query(...), end: date = Query(...),
-    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    """Imprezy w zakresie — podgląd dla pracownika przy składaniu dyspozycji.
-    PRYWATNOŚĆ: pracownik NIE dostaje nazwy klienta/imprezy — tylko salę, godzinę, liczbę osób."""
-    imprezy = (
-        db.query(models.Impreza)
-        .filter(models.Impreza.data >= start, models.Impreza.data <= end)
-        .order_by(models.Impreza.data.asc(), models.Impreza.godzina.asc())
-        .all()
-    )
-    return [
-        {"id": i.id, "data": str(i.data), "godzina": i.godzina, "sala": i.sala, "liczba_osob": i.liczba_osob}
-        for i in imprezy
-    ]
-
-@app.put("/api/me/dyspozycje", status_code=200)
-def zapisz_moje_dyspozycje(
-    batch: schemas.MojeDyspozycjeBatch,
-    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    if not user.pracownik_id:
-        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
-    # Edycja dyspozycji możliwa tylko DO publikacji grafiku danego tygodnia.
-    daty = [d.data for d in batch.dyspozycje]
-    if daty:
-        opub = db.query(models.PublikacjaGrafiku).filter(
-            models.PublikacjaGrafiku.start <= min(daty),
-            models.PublikacjaGrafiku.koniec >= max(daty),
-        ).first()
-        if opub:
-            raise HTTPException(409, "Grafik na ten tydzień jest już opublikowany — dyspozycji nie można już zmieniać.")
-    zapisano = 0
-    for d in batch.dyspozycje:
-        existing = db.query(models.Dyspozycja).filter_by(
-            pracownik_id=user.pracownik_id, data=d.data
-        ).first()
-        if existing:
-            existing.dostepnosc = d.dostepnosc
-            existing.godz_od = d.godz_od
-            existing.godz_do = d.godz_do
-        else:
-            db.add(models.Dyspozycja(
-                pracownik_id=user.pracownik_id, data=d.data,
-                dostepnosc=d.dostepnosc, godz_od=d.godz_od, godz_do=d.godz_do,
-            ))
-        zapisano += 1
-    db.commit()
-    return {"zapisano": zapisano}
+# --- Zarządzanie kontami (/api/users) → routers/kadry.py (dekompozycja main — audyt CTO) ---
 
 
-@app.get("/api/me/grafik", status_code=200)
-def moj_grafik(
-    start: date = Query(...), end: date = Query(...),
-    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    """Grafik zalogowanego pracownika — TYLKO jeśli tydzień został udostępniony przez
-    admina. Zwraca zmiany z rewirem oraz współpracownikami dzielącymi ten rewir."""
-    if not user.pracownik_id:
-        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
-    prac = db.get(models.Pracownik, user.pracownik_id)
-    jest_kuchnia = bool(prac and prac.dzial == "kuchnia")
-    pub = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
-    # „Rozlicz się" jest globalne (ostatnie 21 dni z Gastro), niezależne od oglądanego tygodnia.
-    oczekujace = _rozliczenia_oczekujace(db, user.pracownik_id)
-    # Kuchnia: grafik „żywy" — kucharz widzi swoje zmiany od razu (bez czekania na publikację).
-    if not pub and not jest_kuchnia:
-        return {"opublikowany": False, "opublikowano_at": None, "zmiany": [],
-                "rozliczenia_oczekujace": oczekujace}
-
-    moje = (
-        db.query(models.PrzydzialZmiany)
-        .filter(
-            models.PrzydzialZmiany.pracownik_id == user.pracownik_id,
-            models.PrzydzialZmiany.data >= start,
-            models.PrzydzialZmiany.data <= end,
-        )
-        .order_by(models.PrzydzialZmiany.data.asc(), models.PrzydzialZmiany.godz_od.asc())
-        .all()
-    )
-    stan_objs = db.query(models.Stanowisko).all()
-    stan_map = {s.id: s.nazwa for s in stan_objs}
-    stan_grupa = {s.id: (s.grupa_widocznosci or "").strip().lower() for s in stan_objs}
-    stan_wszyscy = {s.id: bool(s.widoczny_dla_wszystkich) for s in stan_objs}
-    prac_map = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
-
-    def _norm_rewir(r):
-        return (r or "").strip()
-
-    sala_ids = _sala_stanowisko_ids(db)
-    _status_cache = {}
-    def _status_sala(d):
-        if d not in _status_cache:
-            _status_cache[d] = _rozlicz_sala_status(db, user.pracownik_id, d, sala_ids)
-        return _status_cache[d]
-
-    zmiany = []
-    for a in moje:
-        # Z kim pracuję danego dnia — niezależnie od godziny przyjścia. Widzę:
-        #  • ten sam REWIR na MOIM stanowisku (np. Sala/Parter — nie całą Salę),
-        #  • stanowiska „widoczne dla wszystkich" (np. Menadżer),
-        #  • stanowiska z mojej „grupy widoczności" (np. KOMP↔Wydawka).
-        sv, rv = a.stanowisko_id, _norm_rewir(a.rewir)
-        grupa_v = stan_grupa.get(sv, "")
-        kandydaci = (
-            db.query(models.PrzydzialZmiany)
-            .filter(
-                models.PrzydzialZmiany.data == a.data,
-                models.PrzydzialZmiany.pracownik_id != user.pracownik_id,
-            )
-            .all()
-        )
-        wspol = []
-        for w in kandydaci:
-            ten_sam_rewir = w.stanowisko_id == sv and _norm_rewir(w.rewir) == rv
-            dla_wszystkich = stan_wszyscy.get(w.stanowisko_id, False)
-            ta_sama_grupa = bool(grupa_v) and stan_grupa.get(w.stanowisko_id, "") == grupa_v and w.stanowisko_id != sv
-            if ten_sam_rewir or dla_wszystkich or ta_sama_grupa:
-                wspol.append(w)
-        wspol.sort(key=lambda w: (w.godz_od or time.min, w.id))
-        zmiany.append({
-            "data": str(a.data),
-            "godz_od": a.godz_od.strftime("%H:%M") if a.godz_od else None,
-            "stanowisko": stan_map.get(a.stanowisko_id, ""),
-            "rewir": _rewir_dla_pracownika(a.rewir),
-            "zamyka": bool(a.zamyka),
-            "zamyka_rewir": bool(a.zamyka_rewir),
-            "rozlicza_imprize": bool(a.rozlicza_imprize),
-            "rozlicz_sala": _status_sala(a.data),   # None | 'oczekuje' | 'wyslane' (sala + zamknięte Gastro)
-            "wspolpracownicy": [
-                {"imie": prac_map.get(w.pracownik_id, ""),
-                 "stanowisko": stan_map.get(w.stanowisko_id, ""),
-                 "godz_od": w.godz_od.strftime("%H:%M") if w.godz_od else None,
-                 "zamyka": bool(w.zamyka)}
-                for w in wspol
-            ],
-        })
-    return {"opublikowany": True, "opublikowano_at": pub.opublikowano_at.isoformat() if pub else None,
-            "zmiany": zmiany, "rozliczenia_oczekujace": oczekujace}
-
-# --- GRAFIK SPRZĄTANIA (dział techniczny + admin) ---
-
-def _wymagaj_technicznego(user: models.User, db) -> models.Pracownik:
-    """Sprzątanie widzi dział techniczny (i admin). Zwraca pracownika (dla odhaczeń)."""
-    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
-    if user.rola != "admin" and (not prac or prac.dzial != "techniczny"):
-        raise HTTPException(403, "Grafik sprzątania jest dostępny dla działu technicznego.")
-    return prac
-
-
-@app.get("/api/me/sprzatanie")
-def moje_sprzatanie(
-    start: date = Query(...), end: date = Query(...),
-    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    _wymagaj_technicznego(user, db)
-    return {"pozycje": sprzatanie.generuj(db, start, end), "sale": list(sprzatanie.SALE)}
-
-
-@app.put("/api/me/sprzatanie/zrobione", status_code=204)
-def odhacz_sprzatanie(
-    dane: schemas.SprzatanieZrobioneIn,
-    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    prac = _wymagaj_technicznego(user, db)
-    if dane.sala not in sprzatanie.SALE:
-        raise HTTPException(400, "Nieznana sala.")
-    istn = db.query(models.SprzatanieOdhaczenie).filter_by(data=dane.data, sala=dane.sala).first()
-    if dane.zrobione and not istn:
-        db.add(models.SprzatanieOdhaczenie(
-            data=dane.data, sala=dane.sala,
-            pracownik_id=prac.id if prac else None, odhaczono_at=utcnow_naive(),
-        ))
-    elif not dane.zrobione and istn:
-        db.delete(istn)  # odznaczenie ✓ (cofnięcie własnego odhaczenia)
-    db.commit()
-
+# --- GRAFIK SPRZĄTANIA (część admina; /api/me/* w routers/moje.py) ---
 
 @app.get("/api/sprzatanie")
 def sprzatanie_admin(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
@@ -730,59 +433,6 @@ def korekta_sprzatania(dane: schemas.SprzatanieKorektaIn, db: Session = Depends(
 
 
 # --- ZAMÓWIENIA SPRZĄTACZKI (dział techniczny) ---
-
-ZDJECIE_MAX = 2_000_000   # ~2 MB data URL (front i tak zmniejsza zdjęcie przed wysyłką)
-
-
-def _zamowienie_out(z, prac_map):
-    # Lista NIE zawiera samego zdjęcia (może być ciężkie) — tylko flagę; obrazek pobiera się osobno.
-    return {
-        "id": z.id, "pracownik": prac_map.get(z.pracownik_id),
-        "nazwa": z.nazwa, "ilosc": z.ilosc, "notatka": z.notatka,
-        "ma_zdjecie": bool(z.zdjecie), "status": z.status,
-        "utworzono_at": z.utworzono_at.isoformat() if z.utworzono_at else None,
-    }
-
-
-@app.post("/api/me/zamowienia", status_code=201)
-def utworz_zamowienie(dane: schemas.ZamowienieIn,
-                      user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Sprzątaczka zgłasza zamówienie produktu → push do administratorów."""
-    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
-    if not _jest_sprzataczka(prac):
-        raise HTTPException(403, 'Formularz zamówień jest dla sprzątaczki (dział techniczny z kwalifikacją „Sprzątaczka").')
-    nazwa = (dane.nazwa or "").strip()
-    if not nazwa:
-        raise HTTPException(400, "Podaj nazwę produktu.")
-    if dane.zdjecie and len(dane.zdjecie) > ZDJECIE_MAX:
-        raise HTTPException(400, "Zdjęcie jest za duże — zrób mniejsze lub pomiń.")
-    z = models.ZamowienieSprzataczki(
-        pracownik_id=prac.id, utworzono_at=utcnow_naive(), nazwa=nazwa,
-        ilosc=(dane.ilosc or "").strip() or None, notatka=(dane.notatka or "").strip() or None,
-        zdjecie=dane.zdjecie or None, status="nowe",
-    )
-    db.add(z); db.commit(); db.refresh(z)
-    wyslij_push_do_adminow(db, "Nowe zamówienie", f"{prac.imie} {prac.nazwisko}: {nazwa}", url="/")
-    return {"id": z.id}
-
-
-@app.get("/api/me/zamowienia")
-def moje_zamowienia(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
-    if not _jest_sprzataczka(prac):
-        raise HTTPException(403, "Tylko dla sprzątaczki.")
-    rows = (db.query(models.ZamowienieSprzataczki).filter_by(pracownik_id=prac.id)
-            .order_by(models.ZamowienieSprzataczki.utworzono_at.desc()).all())
-    prac_map = {prac.id: f"{prac.imie} {prac.nazwisko}"}
-    return {"zamowienia": [_zamowienie_out(z, prac_map) for z in rows]}
-
-
-@app.get("/api/me/zamowienia/{zid}/zdjecie")
-def moje_zamowienie_zdjecie(zid: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    z = db.get(models.ZamowienieSprzataczki, zid)
-    if not z or z.pracownik_id != user.pracownik_id:
-        raise HTTPException(404, "Nie znaleziono.")
-    return {"zdjecie": z.zdjecie}
 
 
 @app.get("/api/zamowienia")
@@ -824,53 +474,6 @@ def zmien_status_zamowienia(zid: int, dane: schemas.ZamowienieStatusIn, db: Sess
 
 # --- URLOPY (obsługa) ---
 
-def _urlop_out(u, prac_map):
-    return {
-        "id": u.id, "pracownik": prac_map.get(u.pracownik_id), "pracownik_id": u.pracownik_id,
-        "start": str(u.start), "koniec": str(u.koniec), "powod": u.powod,
-        "status": u.status, "utworzono_at": u.utworzono_at.isoformat() if u.utworzono_at else None,
-    }
-
-
-@app.post("/api/me/urlopy", status_code=201)
-def zloz_urlop(dane: schemas.UrlopIn,
-               user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Pracownik OBSŁUGI składa wniosek urlopowy → push do administratorów."""
-    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
-    if not prac or prac.dzial != "obsluga":
-        raise HTTPException(403, "Wnioski urlopowe są dla pracowników obsługi.")
-    if dane.koniec < dane.start:
-        raise HTTPException(400, "Data końca nie może być wcześniejsza niż początek.")
-    u = models.Urlop(pracownik_id=prac.id, start=dane.start, koniec=dane.koniec,
-                     powod=(dane.powod or "").strip() or None, status="oczekuje",
-                     utworzono_at=utcnow_naive())
-    db.add(u); db.commit(); db.refresh(u)
-    wyslij_push_do_adminow(db, "Wniosek urlopowy",
-                           f"{prac.imie} {prac.nazwisko}: {dane.start.strftime('%d.%m')}–{dane.koniec.strftime('%d.%m')}", url="/")
-    return {"id": u.id}
-
-
-@app.get("/api/me/urlopy")
-def moje_urlopy(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not user.pracownik_id:
-        return {"urlopy": []}
-    rows = (db.query(models.Urlop).filter_by(pracownik_id=user.pracownik_id)
-            .order_by(models.Urlop.start.desc()).all())
-    prac = db.get(models.Pracownik, user.pracownik_id)
-    prac_map = {prac.id: f"{prac.imie} {prac.nazwisko}"} if prac else {}
-    return {"urlopy": [_urlop_out(u, prac_map) for u in rows]}
-
-
-@app.delete("/api/me/urlopy/{uid}", status_code=204)
-def anuluj_urlop(uid: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Pracownik wycofuje WŁASNY wniosek — tylko gdy jeszcze oczekuje."""
-    u = db.get(models.Urlop, uid)
-    if not u or u.pracownik_id != user.pracownik_id:
-        raise HTTPException(404, "Nie znaleziono.")
-    if u.status != "oczekuje":
-        raise HTTPException(400, "Można wycofać tylko wniosek oczekujący.")
-    db.delete(u); db.commit()
-
 
 @app.get("/api/urlopy")
 def lista_urlopow(db: Session = Depends(get_db)):
@@ -899,19 +502,6 @@ def rozpatrz_urlop(uid: int, dane: schemas.UrlopStatusIn, db: Session = Depends(
 
 # --- ROZLICZANIE IMPREZ (osoba wyznaczona w grafiku) ---
 
-def _moze_rozliczyc_imprize(db, pracownik_id: int, data: date):
-    """Przydział tej osoby tego dnia na stanowisku imprezowym z flagą rozlicza_imprize (albo None)."""
-    imprezy_ids = {s.id for s in db.query(models.Stanowisko).all()
-                   if (s.nazwa or "").strip().lower().startswith("imprez")}
-    if not imprezy_ids:
-        return None
-    return (db.query(models.PrzydzialZmiany)
-            .filter(models.PrzydzialZmiany.pracownik_id == pracownik_id,
-                    models.PrzydzialZmiany.data == data,
-                    models.PrzydzialZmiany.rozlicza_imprize == True,  # noqa: E712
-                    models.PrzydzialZmiany.stanowisko_id.in_(imprezy_ids))
-            .first())
-
 
 def imp_dla_dnia(db, data: date) -> dict:
     """Kwoty IMP dla rozliczenia dnia (D2). Gotówka SFISKALIZOWANA z imprez → minus w kasach;
@@ -924,46 +514,6 @@ def imp_dla_dnia(db, data: date) -> dict:
             elif p.forma == "karta":
                 karta += p.kwota or 0
     return {"gotowka_sfiskalizowana": round(gotowka_sfisk, 2), "karta": round(karta, 2)}
-
-
-@app.post("/api/me/imprezy/rozlicz", status_code=201)
-def rozlicz_imprize(dane: schemas.RozliczenieImprezyIn,
-                    user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Osoba wyznaczona w grafiku rozlicza imprezę (upsert na dany dzień) → push do adminów."""
-    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
-    if not prac or not _moze_rozliczyc_imprize(db, prac.id, dane.data):
-        raise HTTPException(403, "Imprezę rozlicza tylko osoba wyznaczona w grafiku (rozlicza imprezę).")
-    for p in dane.pozycje:
-        if p.forma not in ("gotowka", "karta", "przelew"):
-            raise HTTPException(400, "Forma musi być: gotowka, karta albo przelew.")
-    r = db.query(models.RozliczenieImprezy).filter_by(pracownik_id=prac.id, data=dane.data).first()
-    if r is None:
-        r = models.RozliczenieImprezy(pracownik_id=prac.id, data=dane.data, utworzono_at=utcnow_naive())
-        db.add(r)
-    r.opis = (dane.opis or "").strip() or None
-    r.pozycje.clear()
-    for p in dane.pozycje:
-        r.pozycje.append(models.RozliczenieImprezyPozycja(
-            forma=p.forma, kwota=float(p.kwota or 0),
-            sfiskalizowane=bool(p.sfiskalizowane) if p.forma == "gotowka" else False))
-    db.commit(); db.refresh(r)
-    wyslij_push_do_adminow(db, "Rozliczenie imprezy",
-                           f"{prac.imie} {prac.nazwisko}: {dane.data.strftime('%d.%m')}", url="/")
-    return {"id": r.id}
-
-
-@app.get("/api/me/imprezy/rozlicz")
-def moje_rozliczenie_imprezy(data: date = Query(...),
-                             user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Czy wolno rozliczać + ewentualne dotychczasowe pozycje (prefill/edycja)."""
-    prac = db.get(models.Pracownik, user.pracownik_id) if user.pracownik_id else None
-    przydzial = _moze_rozliczyc_imprize(db, prac.id, data) if prac else None
-    r = db.query(models.RozliczenieImprezy).filter_by(pracownik_id=user.pracownik_id, data=data).first() if prac else None
-    return {
-        "moze": przydzial is not None,
-        "rewir": _rewir_dla_pracownika(przydzial.rewir) if przydzial else None,
-        "pozycje": [{"forma": p.forma, "kwota": p.kwota, "sfiskalizowane": p.sfiskalizowane} for p in (r.pozycje if r else [])],
-    }
 
 
 @app.get("/api/imprezy/rozliczenia")
@@ -987,56 +537,6 @@ def rejestr_imprez(start: date = Query(...), end: date = Query(...), db: Session
 
 
 # --- ROZLICZENIE DNIA (sala) ---
-
-def _gastro_dla_kelnera(db, pid: int, data: date) -> dict:
-    """Prefill kelnera z Gastro: G/T = zadeklarowane gotówka/karta, FV = sprzedaż KARTA_FV+GOTÓWKA_FV.
-    (BON pomijamy — nie przechodzi przez kasę i nie wchodzi do utargu.)"""
-    rows = db.query(models.RozliczenieGastro).filter_by(pracownik_id=pid, data=data).all()
-    g = sum(r.deklarowane for r in rows if r.forma == "GOTÓWKA")
-    t = sum(r.deklarowane for r in rows if r.forma == "KARTA")
-    fv = sum(r.sprzedaz for r in rows if r.forma in ("KARTA_FV", "GOTÓWKA_FV"))
-    return {"gotowka": round(g, 2), "karta": round(t, 2), "fv": round(fv, 2)}
-
-
-def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
-    """Get-or-create rozliczenia dnia + dołożenie wierszy kelnerów z grafiku Sali (prefill z Gastro)."""
-    roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
-    if roz is None:
-        roz = models.RozliczenieDnia(data=data, status="robocze", utworzono_at=utcnow_naive(),
-                                     terminale=[], kasy=[])
-        db.add(roz)
-        try:
-            db.flush()
-        except Exception:
-            # Wyścig przy pierwszym dostępie do nowego dnia (kolumna data ma UNIQUE) — ktoś już
-            # utworzył rozliczenie. Rollback + ponowny odczyt istniejącego zamiast 500.
-            db.rollback()
-            roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
-    sala_ids = _sala_stanowisko_ids(db)
-    istn = {k.pracownik_id for k in roz.kelnerzy}
-    pids = set()
-    if sala_ids:
-        # 1) grafik Sali tego dnia
-        pids |= {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
-            models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
-        # 2) faktycznie pracujący na sali = zamknięte rozliczenie Gastro tego dnia + obsada sali w oknie
-        #    (radzi sobie z rozjazdem: data zmiany w grafiku ≠ DataOtwarcia rozliczenia w Gastro)
-        sala_staff = {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
-            models.PrzydzialZmiany.data >= data - timedelta(days=21),
-            models.PrzydzialZmiany.data <= data + timedelta(days=21),
-            models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
-        gastro_pids = {r.pracownik_id for r in db.query(models.RozliczenieGastro).filter(
-            models.RozliczenieGastro.data == data, models.RozliczenieGastro.pracownik_id.isnot(None)).all()}
-        pids |= (gastro_pids & sala_staff)
-    for pid in pids:
-        if pid in istn:
-            continue
-        g = _gastro_dla_kelnera(db, pid, data)
-        roz.kelnerzy.append(models.RozliczenieKelner(
-            pracownik_id=pid, gotowka=g["gotowka"], karta=g["karta"], fv=g["fv"]))
-        istn.add(pid)
-    db.commit(); db.refresh(roz)
-    return roz
 
 
 def _kp_dla_dnia(db, data: date) -> float:
@@ -1134,129 +634,6 @@ def szef_rozliczenie(data: date = Query(...), db: Session = Depends(get_db)):
                       "fv": w["fv"], "razem": round(w["suma_szef"]["razem"] + w["fv"], 2)},   # utarg sali Z FV
             "zadatek": w["zadatek"],
             "roznica_karty": w["terminale"]["roznica_karty"], "roznica_calosc": w["kasy"]["roznica"]}
-
-
-def _obsada_sali_okno(db, pid: int, data: date, sala_ids) -> bool:
-    """Czy pracownik jest obsadą sali w oknie ±21 dni (radzi sobie z rozjazdem dat grafik↔Gastro)."""
-    return bool(sala_ids and db.query(models.PrzydzialZmiany).filter(
-        models.PrzydzialZmiany.pracownik_id == pid,
-        models.PrzydzialZmiany.data >= data - timedelta(days=21),
-        models.PrzydzialZmiany.data <= data + timedelta(days=21),
-        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first())
-
-
-def _kelner_sala_dnia(db, pid: int, data: date) -> bool:
-    sala_ids = _sala_stanowisko_ids(db)
-    if not (pid and sala_ids):
-        return False
-    # 1) przydział Sali tego dnia (grafik)
-    if db.query(models.PrzydzialZmiany).filter(
-            models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.pracownik_id == pid,
-            models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first():
-        return True
-    # 2) zamknięte rozliczenie Gastro tego dnia + obsada sali w oknie (rozjazd dat grafik↔Gastro)
-    if db.query(models.RozliczenieGastro).filter_by(pracownik_id=pid, data=data, zamkniete=True).first() \
-            and _obsada_sali_okno(db, pid, data, sala_ids):
-        return True
-    return False
-
-
-def _rozliczenia_oczekujace(db, pid: int):
-    """Daty (ISO, malejąco) zamkniętych rozliczeń Gastro kelnera sali, których jeszcze NIE przesłał.
-    Niezależne od daty zmiany w grafiku — bazuje na realnych zamknięciach w Gastro (DataOtwarcia),
-    więc przycisk „Rozlicz się" pojawia się nawet gdy dzień zmiany ≠ dzień rozliczenia w Gastro."""
-    if not pid:
-        return []
-    sala_ids = _sala_stanowisko_ids(db)
-    if not sala_ids:
-        return []
-    od = date.today() - timedelta(days=21)
-    # tylko obsada sali (żeby nie pokazywać np. baru/kuchni) — szersze okno łapie rozjazd grafik↔Gastro
-    czy_sala = db.query(models.PrzydzialZmiany).filter(
-        models.PrzydzialZmiany.pracownik_id == pid, models.PrzydzialZmiany.data >= od,
-        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).first()
-    if not czy_sala:
-        return []
-    # ale rozliczenia POKAZUJEMY dopiero od startu systemu — bez „zaległych" sprzed wdrożenia
-    od_pokaz = max(od, ROZLICZENIA_START) if ROZLICZENIA_START else od
-    daty = sorted({r.data for r in db.query(models.RozliczenieGastro).filter_by(
-        pracownik_id=pid, zamkniete=True).filter(models.RozliczenieGastro.data >= od_pokaz).all()}, reverse=True)
-    out = []
-    for d in daty:
-        roz = db.query(models.RozliczenieDnia).filter_by(data=d).first()
-        k = next((x for x in roz.kelnerzy if x.pracownik_id == pid), None) if roz else None
-        if not (k and k.potwierdzone):
-            out.append(d.isoformat())
-    return out
-
-
-def _rozlicz_sala_status(db, pid: int, data: date, sala_ids=None):
-    """Status przycisku „Rozlicz się": None (push jeszcze nie wyszedł), 'oczekuje' (wysłano push
-    „raport oczekuje", kelner ma się rozliczyć), 'wyslane' (kelner przesłał raport).
-    Bramka = push_oczekuje_at — przycisk pojawia się DOPIERO gdy push faktycznie poszedł (ingest)."""
-    roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
-    k = next((x for x in roz.kelnerzy if x.pracownik_id == pid), None) if roz else None
-    if not k or k.push_oczekuje_at is None:
-        return None
-    return "wyslane" if k.potwierdzone else "oczekuje"
-
-
-def _kelner_sala_przydzial(db, pid: int, data: date):
-    """Flagi zamykania z przydziałów sali kelnera danego dnia: (zamyka, zamyka_rewir, rewir)."""
-    sala_ids = _sala_stanowisko_ids(db)
-    przy = (db.query(models.PrzydzialZmiany).filter(
-        models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.pracownik_id == pid,
-        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()) if sala_ids else []
-    zamyka = any(p.zamyka for p in przy)
-    zamyka_rewir = any(p.zamyka_rewir for p in przy)
-    rewir = next((p.rewir for p in przy if p.zamyka_rewir and p.rewir), None) \
-        or next((p.rewir for p in przy if p.rewir), None)
-    return zamyka, zamyka_rewir, rewir
-
-
-@app.get("/api/me/rozliczenie")
-def moje_rozliczenie(data: date = Query(...), user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not _kelner_sala_dnia(db, user.pracownik_id, data):
-        return {"moze": False}
-    roz = _zbuduj_rozliczenie(db, data)
-    k = next((x for x in roz.kelnerzy if x.pracownik_id == user.pracownik_id), None)
-    zamyka, zamyka_rewir, rewir = _kelner_sala_przydzial(db, user.pracownik_id, data)
-    # Filtrujemy po SUROWYM rewirze (dopasowanie 1:1 do zapisu), ale w odpowiedzi dla pracownika
-    # MASKUJEMY nazwę klienta imprezy — jak w /api/me/grafik (model prywatności).
-    term = [{**p, "rewir": _rewir_dla_pracownika(p.get("rewir"))}
-            for p in (roz.terminale or []) if (p.get("rewir") or "") == (rewir or "")] if zamyka_rewir else []
-    return {"moze": True, "status": _rozlicz_sala_status(db, user.pracownik_id, data),
-            "potwierdzone": bool(k and k.potwierdzone),
-            "wiersz": ({"gotowka": k.gotowka, "karta": k.karta, "fv": k.fv, "kw": k.kw} if k else None),
-            "zamyka": zamyka, "zamyka_rewir": zamyka_rewir, "rewir": _rewir_dla_pracownika(rewir),
-            "terminale": term, "kasy": (roz.kasy or []) if zamyka else []}
-
-
-@app.put("/api/me/rozliczenie", status_code=204)
-def zapisz_moje_rozliczenie(dane: schemas.MojRozliczenieIn, data: date = Query(...),
-                            user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not _kelner_sala_dnia(db, user.pracownik_id, data):
-        raise HTTPException(403, "Rozliczenie wypełnia kelner sali w dniu swojej zmiany.")
-    roz = _zbuduj_rozliczenie(db, data)
-    k = next((x for x in roz.kelnerzy if x.pracownik_id == user.pracownik_id), None)
-    if k is None:
-        k = models.RozliczenieKelner(pracownik_id=user.pracownik_id); roz.kelnerzy.append(k)
-    k.gotowka = dane.gotowka; k.karta = dane.karta; k.kw = dane.kw
-    k.potwierdzone = True            # kelner przesłał raport → przycisk znika
-    # Zamykający dosyła terminale (swój rewir) / kasy (cała zmiana) — trafiają do rozliczenia dnia
-    zamyka, zamyka_rewir, rewir = _kelner_sala_przydzial(db, user.pracownik_id, data)
-    if zamyka_rewir:
-        inne = [t for t in (roz.terminale or []) if (t.get("rewir") or "") != (rewir or "")]
-        roz.terminale = inne + [{"etykieta": None, "kwota": float(t.kwota or 0), "rewir": rewir} for t in dane.terminale]
-    if zamyka:
-        roz.kasy = [{"etykieta": t.etykieta, "kwota": float(t.kwota or 0), "rewir": None} for t in dane.kasy]
-    db.commit()
-    # Gdy WSZYSCY kelnerzy sali danego dnia się rozliczyli → push do admina (raz)
-    if roz.kelnerzy and all(x.potwierdzone for x in roz.kelnerzy) and roz.push_admin_at is None:
-        roz.push_admin_at = utcnow_naive()
-        wyslij_push_do_adminow(db, "Raport finansowy",
-                               f"Raport finansowy {data.strftime('%d.%m')} czeka na zatwierdzenie", url="/")
-        db.commit()
 
 
 # ── ZESZYT KASOWY ─────────────────────────────────────────────────────────────
@@ -1518,66 +895,7 @@ def alerty_obsady(dni: int = 14, db: Session = Depends(get_db)):
     return {"alerty": alerty, "razem_brakuje": sum(a["brakuje"] for a in alerty), "dni": dni}
 
 
-# ── NAPIWKI (pula dnia dzielona między obsługę sali wg godzin z RCP) ──────────
-def _rozdziel_kwote(kwota: float, wagi):
-    """Dzieli kwotę (w złotych) na len(wagi) części proporcjonalnie do `wagi`, DOKŁADNIE co do
-    grosza (metoda największej reszty) — suma części = kwota. Zerowe/ujemne wagi → podział równy."""
-    n = len(wagi)
-    if n == 0:
-        return []
-    grosze = round(float(kwota) * 100)
-    suma = sum(wagi)
-    if grosze <= 0:
-        return [0.0] * n
-    if suma <= 0:                                  # brak wag → po równo
-        baza, reszta = divmod(grosze, n)
-        return [round((baza + (1 if i < reszta else 0)) / 100, 2) for i in range(n)]
-    surowe = [grosze * w / suma for w in wagi]
-    podl = [int(x) for x in surowe]
-    reszta = grosze - sum(podl)
-    for i in sorted(range(n), key=lambda i: surowe[i] - podl[i], reverse=True)[:reszta]:
-        podl[i] += 1
-    return [round(g / 100, 2) for g in podl]
-
-
-def _napiwki_obsada(db, data: date):
-    """Obsada sali danego dnia (kandydaci do napiwków) + godziny z RCP. Baza = pracownicy z
-    przydziałem na Sali tego dnia; godziny sumowane z odbić RCP (0, gdy brak odbicia)."""
-    sala_ids = _sala_stanowisko_ids(db)
-    if not sala_ids:
-        return []
-    pids = {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
-        models.PrzydzialZmiany.data == data,
-        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
-    if not pids:
-        return []
-    godz = defaultdict(float)
-    for o in db.query(models.OdbicieRcp).filter(
-            models.OdbicieRcp.data == data, models.OdbicieRcp.pracownik_id.in_(pids)).all():
-        godz[o.pracownik_id] += float(o.godziny or 0.0)
-    prac = {p.id: f"{p.imie} {p.nazwisko}"
-            for p in db.query(models.Pracownik).filter(models.Pracownik.id.in_(pids)).all()}
-    out = [{"pracownik_id": pid, "pracownik": prac.get(pid, "—"), "godziny": round(godz.get(pid, 0.0), 2)}
-           for pid in pids]
-    out.sort(key=lambda x: x["pracownik"])
-    return out
-
-
-def _napiwki_podzial(db, data: date) -> dict:
-    """Buduje podział napiwków dnia: kwota + sposób + lista {pracownik, godziny, kwota}."""
-    rec = db.query(models.NapiwkiDnia).filter_by(data=data).first()
-    kwota = float(rec.kwota) if rec else 0.0
-    sposob = rec.sposob if (rec and rec.sposob in ("godziny", "rowno")) else "godziny"
-    obsada = _napiwki_obsada(db, data)
-    if sposob == "godziny" and sum(o["godziny"] for o in obsada) > 0:
-        wagi = [o["godziny"] for o in obsada]
-    else:
-        wagi = [1] * len(obsada)                   # „rowno" albo brak godzin RCP → po równo
-    kwoty = _rozdziel_kwote(kwota, wagi)
-    podzial = [{**o, "kwota": k} for o, k in zip(obsada, kwoty)]
-    return {"data": str(data), "kwota": round(kwota, 2), "sposob": sposob,
-            "suma_godzin": round(sum(o["godziny"] for o in obsada), 2), "podzial": podzial}
-
+# ── NAPIWKI (admin; helpery podziału w deps.py, /api/me/napiwki w routers/moje.py) ──
 
 @app.get("/api/napiwki")
 def get_napiwki(data: date = Query(...), db: Session = Depends(get_db)):
@@ -1598,24 +916,6 @@ def zapisz_napiwki(dane: schemas.NapiwkiIn, data: date = Query(...), db: Session
     rec.kwota = float(dane.kwota or 0); rec.sposob = sposob
     db.commit()
     return _napiwki_podzial(db, data)
-
-
-@app.get("/api/me/napiwki")
-def moje_napiwki(start: date = Query(...), end: date = Query(...),
-                 user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Pracownik: jego udział w napiwkach w zakresie dat (per dzień + suma)."""
-    if not user.pracownik_id:
-        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
-    pid = user.pracownik_id
-    dni = []
-    for rec in db.query(models.NapiwkiDnia).filter(
-            models.NapiwkiDnia.data >= start, models.NapiwkiDnia.data <= end,
-            models.NapiwkiDnia.kwota > 0).all():
-        moj = next((x for x in _napiwki_podzial(db, rec.data)["podzial"] if x["pracownik_id"] == pid), None)
-        if moj and moj["kwota"] > 0:
-            dni.append({"data": str(rec.data), "kwota": moj["kwota"], "godziny": moj["godziny"]})
-    dni.sort(key=lambda x: x["data"])
-    return {"dni": dni, "suma": round(sum(d["kwota"] for d in dni), 2)}
 
 
 # ── PROGNOZA RUCHU (z historii StolikiHistoria — wsparcie decyzji o obsadzie) ──
@@ -2182,7 +1482,7 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Se
         raise HTTPException(400, "Liczba osób musi być dodatnia.")
     # Data „dziś" wg strefy LOKALU (nie UTC hosta) — inaczej w oknie nocnym (po północy lokalnej,
     # przed północą UTC) bramka „wstecz" i dobowy klucz limitu liczyły zły dzień.
-    dzis_lokalnie = (_teraz_lokalnie() or datetime.utcnow()).date()
+    dzis_lokalnie = (_teraz_lokalnie() or datetime.now(timezone.utc)).date()
     if dane.data < dzis_lokalnie:
         raise HTTPException(400, "Nie można rezerwować wstecz.")
     # Anty-DoS: twardy limit rezerwacji/dzień z jednego IP — działa NIEZALEŻNIE od telefonu/e-maila
@@ -2250,26 +1550,6 @@ def online_rezerwacja_odwolaj(token: str, db: Session = Depends(get_db)):
         t.status = "odwolana"; t.odwolano_at = utcnow_naive(); db.commit(); db.refresh(t)
     return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
 
-
-# --- POWIADOMIENIA WEB PUSH (pracownik) ---
-
-@app.get("/api/me/push/public-key", status_code=200)
-def push_public_key(user: models.User = Depends(get_current_user)):
-    return {"publicKey": VAPID_PUBLIC_KEY}
-
-@app.post("/api/me/push/subscribe", status_code=204)
-def push_subscribe(sub: dict, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    endpoint = sub.get("endpoint")
-    keys = sub.get("keys") or {}
-    p256dh, auth = keys.get("p256dh"), keys.get("auth")
-    if not endpoint or not p256dh or not auth:
-        raise HTTPException(400, "Nieprawidłowa subskrypcja push.")
-    existing = db.query(models.PushSubscription).filter_by(endpoint=endpoint).first()
-    if existing:
-        existing.user_id, existing.p256dh, existing.auth = user.id, p256dh, auth
-    else:
-        db.add(models.PushSubscription(user_id=user.id, endpoint=endpoint, p256dh=p256dh, auth=auth))
-    db.commit()
 
 # --- PUBLIKACJA GRAFIKU (admin — chronione middleware) ---
 
@@ -3242,16 +2522,6 @@ RCP_INGEST_TOKEN = os.environ.get("RCP_INGEST_TOKEN", "")
 RCP_POWIADOM_OKNO = timedelta(minutes=int(os.environ.get("RCP_POWIADOM_OKNO_MIN", "60")))
 
 
-def _teraz_lokalnie():
-    """Czas sciany zegarowej w strefie RCP (Europe/Warsaw) jako naive datetime — timestampy
-    z RCP sa lokalne i naive. Gdy strefa niedostepna -> None (wtedy NIE blokujemy powiadomien)."""
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("Europe/Warsaw")).replace(tzinfo=None)
-    except Exception:
-        return None
-
-
 # Litery 'ł/Ł' (i kilka innych) NIE rozkładają się przez NFKD — mapujemy je ręcznie,
 # inaczej wypadłyby z dopasowania imion (np. „Łukasz" → „ukasz").
 _PL_SPEC = str.maketrans({"ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D"})
@@ -3369,78 +2639,6 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
 
     db.commit()
     return {"przyjeto": len(odbicia), "nowe": nowe, "zakonczone": zakonczone, "powiadomienia": powiadomienia}
-
-
-@app.get("/api/me/godziny", status_code=200)
-def moje_godziny(
-    rok: int = Query(..., ge=2000, le=2100), miesiac: int = Query(..., ge=1, le=12),
-    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    """Miesięczne podsumowanie przepracowanych godzin zalogowanego pracownika
-    z podziałem na stanowiska (z opublikowanego grafiku)."""
-    if not user.pracownik_id:
-        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
-    raport = raporty.raport_godzin_miesiac(db, rok, miesiac, tylko_pracownik_id=user.pracownik_id)
-    moj = next((p for p in raport["pracownicy"] if p["pracownik_id"] == user.pracownik_id), None)
-
-    # Trwajaca (niezakonczona) zmiana: wejscie jest, wyjscia brak. Pokazujemy tylko swieza
-    # (rozpoczeta w ostatnich ~18h), zeby nie wyswietlac zapomnianych odbic sprzed dni.
-    aktywna_out = None
-    aktywna = (
-        db.query(models.OdbicieRcp)
-        .filter(
-            models.OdbicieRcp.pracownik_id == user.pracownik_id,
-            models.OdbicieRcp.wyjscie.is_(None),
-            models.OdbicieRcp.wejscie.isnot(None),
-        )
-        .order_by(models.OdbicieRcp.wejscie.desc())
-        .first()
-    )
-    if aktywna:
-        teraz = _teraz_lokalnie()
-        if teraz is None or aktywna.wejscie >= teraz - timedelta(hours=18):
-            aktywna_out = {"data": aktywna.data.isoformat(), "wejscie": aktywna.wejscie.isoformat()}
-
-    # Podzial na DNI: ile godzin pracownik przepracowal kazdego dnia (zakonczone zmiany),
-    # PRZYCIETE do grafiku tak jak w raporcie (od zaplanowanej godziny), by suma dni == suma_godzin.
-    from calendar import monthrange
-    start = date(rok, miesiac, 1)
-    end = date(rok, miesiac, monthrange(rok, miesiac)[1])
-    zakresy_pub = raporty._zakresy_publikacji(db)
-    przydz = defaultdict(list)
-    for a in db.query(models.PrzydzialZmiany).filter(
-        models.PrzydzialZmiany.pracownik_id == user.pracownik_id,
-        models.PrzydzialZmiany.data >= start,
-        models.PrzydzialZmiany.data <= end,
-    ).all():
-        przydz[a.data].append(a)
-    per_dzien = {}
-    for o in db.query(models.OdbicieRcp).filter(
-        models.OdbicieRcp.pracownik_id == user.pracownik_id,
-        models.OdbicieRcp.data >= start,
-        models.OdbicieRcp.data <= end,
-        models.OdbicieRcp.wyjscie.isnot(None),
-    ).all():
-        h = float(o.godziny or 0.0)
-        przy = przydz.get(o.data, [])
-        # Przycinamy start do grafiku TYLKO od daty obowiązywania reguły (PRZYCINANIE_OD) — tak samo
-        # jak raport miesięczny (raporty.py). Bez tej bramki dni sprzed progu zaniżały godziny i suma
-        # słupków przestawała się zgadzać z nagłówkiem suma_godzin (liczonym z raportu).
-        if przy and raporty._opublikowany(o.data, zakresy_pub) and o.data >= raporty.PRZYCINANIE_OD:
-            wt = o.wejscie.time() if o.wejscie else None
-            wybrany = raporty._wybierz_przydzial(przy, wt)
-            h, _ = raporty.efektywne_i_oszczednosc(wt, wybrany.godz_od, h)
-        per_dzien[o.data] = per_dzien.get(o.data, 0.0) + h
-    dni_out = [{"data": d.isoformat(), "godziny": round(g, 2)} for d, g in sorted(per_dzien.items())]
-
-    return {
-        "rok": rok, "miesiac": miesiac,
-        "suma_godzin": moj["suma_godzin"] if moj else 0.0,
-        "stanowiska": moj["stanowiska"] if moj else [],
-        "do_wyplaty": moj["do_wyplaty"] if moj else 0.0,
-        "dni": dni_out,
-        "aktywna_zmiana": aktywna_out,
-    }
 
 
 def _trwajace_zmiany(db):
@@ -3881,13 +3079,6 @@ def gastro_rozliczenia(start: date = Query(...), end: date = Query(...), db: Ses
 def get_rezerwacje():
     """Admin + szef: rezerwacje na 30 dni — per dzień z rozbiciem per godzina."""
     return {"dni": rezerwacje.rezerwacje_per_dzien(30)}
-
-
-@app.get("/api/me/rezerwacje")
-def moje_rezerwacje(user: models.User = Depends(get_current_user)):
-    """Pracownik: TYLKO sumy dzienne (liczba rezerwacji + suma osób), bez godzin i danych klienta."""
-    dane = rezerwacje.rezerwacje_per_dzien(30)
-    return {"dni": [{"data": d["data"], "liczba": d["liczba"], "osoby": d["osoby"]} for d in dane]}
 
 
 # ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────

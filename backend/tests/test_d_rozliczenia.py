@@ -415,19 +415,19 @@ def test_do_rozliczenia_tylko_dla_obsady_sali(client, db):
 
 def test_rozliczenia_oczekujace_tnie_zalegle_sprzed_startu(client, db, monkeypatch):
     """„Rozlicz się" nie pokazuje zaległych rozliczeń sprzed startu systemu (ROZLICZENIA_START)."""
-    import main
+    from routers import moje   # /api/me/grafik i _rozliczenia_oczekujace mieszkają w routers/moje.py
     sala = factories.StanowiskoFactory(nazwa="Sala")
     p = factories.PracownikFactory(dzial="obsluga")
     u = factories.UserFactory(login="emp_cutoff", rola="employee", pracownik=p)
     start = date.today() - timedelta(days=3)
-    monkeypatch.setattr(main, "ROZLICZENIA_START", start)
+    monkeypatch.setattr(moje, "ROZLICZENIA_START", start)
     przed = start - timedelta(days=1)   # sprzed startu -> ma zniknąć
     po = start + timedelta(days=1)       # po starcie -> ma zostać
     db.add(models.PrzydzialZmiany(data=po, stanowisko_id=sala.id, pracownik_id=p.id))
     _gastro(db, p.id, przed, "GOTÓWKA", dekl=100)
     _gastro(db, p.id, po, "GOTÓWKA", dekl=200)
     db.commit()
-    daty = main._rozliczenia_oczekujace(db, p.id)
+    daty = moje._rozliczenia_oczekujace(db, p.id)
     assert po.isoformat() in daty
     assert przed.isoformat() not in daty
     # to samo przez /me/grafik (źródło bannera)

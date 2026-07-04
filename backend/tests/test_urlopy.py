@@ -46,8 +46,9 @@ def test_koniec_przed_startem_400(client, db):
 
 
 def test_wniosek_pcha_push_do_adminow(client, db, monkeypatch):
+    from routers import moje   # POST /api/me/urlopy mieszka w routers/moje.py (dekompozycja main)
     n = {"c": 0}
-    monkeypatch.setattr(main, "wyslij_push_do_adminow", lambda *a, **k: n.__setitem__("c", n["c"] + 1) or 1)
+    monkeypatch.setattr(moje, "wyslij_push_do_adminow", lambda *a, **k: n.__setitem__("c", n["c"] + 1) or 1)
     p, u = _obsluga(db)
     client.post("/api/me/urlopy", headers=_h(u),
                 json={"start": str(factories.dzien(0)), "koniec": str(factories.dzien(0))})
@@ -56,7 +57,8 @@ def test_wniosek_pcha_push_do_adminow(client, db, monkeypatch):
 
 def test_admin_akceptuje_pcha_push_do_pracownika(client, admin_client, db, monkeypatch):
     pushe = []
-    monkeypatch.setattr(main, "wyslij_push_do_pracownika", lambda db, pid, t, tr, url="/": pushe.append(pid) or 1)
+    import push as push_mod
+    monkeypatch.setattr(push_mod, "wyslij_push_do_pracownika", lambda db, pid, t, tr, url="/": pushe.append(pid) or 1)
     p, u = _obsluga(db)
     uid = client.post("/api/me/urlopy", headers=_h(u),
                       json={"start": str(factories.dzien(0)), "koniec": str(factories.dzien(2))}).json()["id"]

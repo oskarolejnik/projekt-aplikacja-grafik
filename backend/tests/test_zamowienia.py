@@ -51,8 +51,9 @@ def test_tylko_sprzataczka_moze_skladac(client, db):
 
 
 def test_tworzenie_pcha_push_do_adminow(client, db, monkeypatch):
+    from routers import moje   # POST /api/me/zamowienia mieszka w routers/moje.py (dekompozycja main)
     licznik = {"n": 0}
-    monkeypatch.setattr(main, "wyslij_push_do_adminow",
+    monkeypatch.setattr(moje, "wyslij_push_do_adminow",
                         lambda *a, **k: licznik.__setitem__("n", licznik["n"] + 1) or 1)
     p, u = _sprzataczka(db)
     client.post("/api/me/zamowienia", headers=_h(u), json={"nazwa": "Mop"})

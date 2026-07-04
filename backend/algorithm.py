@@ -121,12 +121,22 @@ def auto_assign(db: Session, start: date, end: date) -> dict:
             wolne_miejsca = w.liczba_osob - uzyte
             slots.extend([w] * wolne_miejsca)
 
-        # Sortowanie slotów: najpierw te, które najtrudniej obsadzić (mało kandydatów)
+        # Sortowanie slotów: najpierw te, które najtrudniej obsadzić (mało kandydatów).
+        # Memoizacja per (stanowisko, godzina, rewir) — sloty zduplikowane przez
+        # liczba_osob > 1 dzielą wynik zamiast liczyć tę samą trudność od nowa
+        # (audyt CTO: koszt kumulował się przy dużych zakresach dat i załogach).
+        # Cache żyje tylko na czas sortowania danego dnia — busy_workers_per_day
+        # zmienia się dopiero później, w fazie przydzielania.
+        _trudnosc: dict = {}
+
         def evaluate_slot_difficulty(req) -> int:
-            cnt = sum(1 for p in pracownicy if req.stanowisko_id in kwal_map.get(p.id, set()) 
-                      and (current, p.id) not in busy_workers_per_day 
-                      and is_time_compatible(p.id, current, req.godz_od))
-            return cnt
+            key = (req.stanowisko_id, req.godz_od, req.rewir)
+            if key not in _trudnosc:
+                _trudnosc[key] = sum(
+                    1 for p in pracownicy if req.stanowisko_id in kwal_map.get(p.id, set())
+                    and (current, p.id) not in busy_workers_per_day
+                    and is_time_compatible(p.id, current, req.godz_od))
+            return _trudnosc[key]
 
         # Najpierw najtrudniej obsadzić (najmniej kandydatów), a PARKIET (Sala*) jako tie-break przy
         # równej trudności. Twardy priorytet sali PRZED trudnością potrafił zabrać jedynego kandydata
