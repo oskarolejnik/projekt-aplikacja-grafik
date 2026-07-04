@@ -96,6 +96,23 @@ def _reset_ratelimit():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _otwarta_rejestracja(_reset_schema):
+    """Produkcyjny default to rejestracja TYLKO z zaproszenia (rejestracja_otwarta=False).
+    Duża część istniejących testów zakłada konta przez POST /api/auth/register — włączamy
+    flagę w konfiguracji testowej bazy (PO utworzeniu schematu — stąd zależność).
+    Testy zaproszeń wyłączają ją jawnie u siebie."""
+    from deps import get_lokal_config
+    s = TestSessionLocal()
+    try:
+        cfg = get_lokal_config(s)
+        cfg.rejestracja_otwarta = True
+        s.commit()
+    finally:
+        s.close()
+    yield
+
+
 @pytest.fixture
 def db():
     """Bezpośrednia sesja do asercji na bazie (ta sama baza co aplikacja)."""

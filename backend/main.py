@@ -51,6 +51,7 @@ from routers.antyfraud import router as antyfraud_router
 from routers.portfel import router as portfel_router
 from routers.moje import router as moje_router
 from routers.kadry import router as kadry_router
+from routers.zaproszenia import router as zaproszenia_router
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -68,6 +69,7 @@ app.include_router(antyfraud_router)   # antyfraud POS — storna/rabaty per kel
 app.include_router(portfel_router)     # portfel pracownika — zarobek na żywo + zaliczki (roadmapa v2, oś C)
 app.include_router(moje_router)        # „Moje" /api/me/* — samoobsługa pracownika (dekompozycja main — audyt CTO)
 app.include_router(kadry_router)       # kadry i konta zespołu — users/pracownicy/stanowiska/dyspozycje/urlopy (dekompozycja main — audyt CTO)
+app.include_router(zaproszenia_router) # zaproszenia pracowników do kont — jedyna ścieżka rejestracji (feedback UX)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -335,9 +337,13 @@ def login(dane: schemas.LoginIn, request: Request, db: Session = Depends(get_db)
 
 @app.post("/api/auth/register", response_model=schemas.TokenOut, status_code=201)
 def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
-    """Samodzielna rejestracja pracownika. Tworzy Pracownika + konto (rola employee)
-    i od razu loguje (zwraca token). Wszystkie zapytania przez ORM = parametryzowane
-    (brak ryzyka SQL Injection)."""
+    """Samodzielna rejestracja pracownika. DOMYŚLNIE WYŁĄCZONA (rejestracja_otwarta=False):
+    konto zakłada się z linku-zaproszenia od managera (routers/zaproszenia.py); flaga
+    w konfiguracji lokalu pozwala świadomie wrócić do otwartej rejestracji.
+    Tworzy Pracownika + konto (rola employee) i od razu loguje (zwraca token)."""
+    if not get_lokal_config(db).rejestracja_otwarta:
+        raise HTTPException(
+            403, "Samodzielna rejestracja jest wyłączona — poproś managera o link z zaproszeniem.")
     login = sprawdz_login(dane.login)        # min 5, tylko [A-Za-z0-9]
     sprawdz_haslo(dane.haslo)                 # min 8, litera+cyfra+znak specjalny, ASCII
     imie = (dane.imie or "").strip()

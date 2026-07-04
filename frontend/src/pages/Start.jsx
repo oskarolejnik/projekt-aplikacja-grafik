@@ -43,9 +43,9 @@ export default function Start() {
     {
       ikona: 'users',
       tytul: `Dołączam do zespołu ${nazwa}`,
-      opis: 'Pracujesz tutaj? Załóż konto pracownika — zobaczysz swój grafik, godziny i portfel. Manager zatwierdzi Cię po pierwszym logowaniu.',
-      cta: 'Załóż konto pracownika',
-      href: '?login&tryb=rejestracja',
+      opis: 'Konto pracownika zakłada się z linku-zaproszenia. Poproś właściciela lub managera o link — założysz konto w minutę, a grafik, godziny i portfel będą już przypięte do Ciebie.',
+      cta: 'Czekam na link od managera',
+      href: null,
     },
     {
       ikona: 'key',
@@ -74,26 +74,29 @@ export default function Start() {
         </p>
 
         <div className="mt-7 space-y-4">
-          {sciezki.map((s) => (
-            <a
-              key={s.tytul}
-              href={s.href}
-              className={`card flex items-start gap-4 rounded-2xl p-5 transition duration-200 hover:border-white/[0.16] active:scale-[0.99] ${
-                s.glowna ? 'border-mint/30' : ''
-              }`}
-            >
-              <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${s.glowna ? 'bg-mint/15 text-mint' : 'bg-white/[0.06] text-muted'}`}>
-                <Icon name={s.ikona} className="h-5 w-5" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block font-display text-base font-bold text-ink">{s.tytul}</span>
-                <span className="mt-1 block text-sm leading-relaxed text-muted">{s.opis}</span>
-                <span className={`mt-3 inline-flex items-center gap-1.5 text-sm font-semibold ${s.glowna ? 'text-mint' : 'text-ink'}`}>
-                  {s.cta} <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
+          {sciezki.map((s) => {
+            const Tag = s.href ? 'a' : 'div'   // pozycja bez akcji (np. „czekam na link") nie jest linkiem
+            return (
+              <Tag
+                key={s.tytul}
+                {...(s.href ? { href: s.href } : {})}
+                className={`card flex items-start gap-4 rounded-2xl p-5 ${
+                  s.href ? 'transition duration-200 hover:border-white/[0.16] active:scale-[0.99]' : ''
+                } ${s.glowna ? 'border-mint/30' : ''}`}
+              >
+                <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${s.glowna ? 'bg-mint/15 text-mint' : 'bg-white/[0.06] text-muted'}`}>
+                  <Icon name={s.ikona} className="h-5 w-5" />
                 </span>
-              </span>
-            </a>
-          ))}
+                <span className="min-w-0 flex-1">
+                  <span className="block font-display text-base font-bold text-ink">{s.tytul}</span>
+                  <span className="mt-1 block text-sm leading-relaxed text-muted">{s.opis}</span>
+                  <span className={`mt-3 inline-flex items-center gap-1.5 text-sm font-semibold ${s.href ? (s.glowna ? 'text-mint' : 'text-ink') : 'text-muted'}`}>
+                    {s.cta} {s.href && <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />}
+                  </span>
+                </span>
+              </Tag>
+            )
+          })}
         </div>
 
         <a href="?produkt" className="mt-8 text-center text-xs text-muted transition hover:text-ink">

@@ -8,6 +8,136 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 
+// Zaproszenia do kont: manager wpisuje imię, nazwisko i rolę → dostaje link,
+// który wysyła pracownikowi dowolnym kanałem. Pracownik z linku sam ustala
+// login i hasło, a konto od razu jest przypięte do właściwej osoby.
+// (Publiczna samodzielna rejestracja jest domyślnie wyłączona.)
+function Zaproszenia({ pracownicy }) {
+  const { toast, confirm } = useToast()
+  const [zaproszenia, setZaproszenia] = useState([])
+  const [imie, setImie] = useState('')
+  const [nazwisko, setNazwisko] = useState('')
+  const [rola, setRola] = useState('employee')
+  const [pracownikId, setPracownikId] = useState('')
+  const [swiezyLink, setSwiezyLink] = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      setZaproszenia((await api('/zaproszenia')).zaproszenia)
+    } catch (e) {
+      toast(e.message, 'error')
+    }
+  }, [toast])
+
+  useEffect(() => { load() }, [load])
+
+  const pelnyLink = (z) => `${window.location.origin}/${z.link.startsWith('/') ? z.link.slice(1) : z.link}`
+
+  const kopiuj = async (z) => {
+    try {
+      await navigator.clipboard.writeText(pelnyLink(z))
+      toast('Link skopiowany — wyślij go pracownikowi.', 'success')
+    } catch {
+      toast('Nie udało się skopiować — zaznacz link ręcznie.', 'error')
+    }
+  }
+
+  const zapros = async () => {
+    const body = pracownikId
+      ? { pracownik_id: +pracownikId, rola }
+      : { imie: imie.trim(), nazwisko: nazwisko.trim(), rola }
+    if (!pracownikId && (!body.imie || !body.nazwisko)) {
+      toast('Podaj imię i nazwisko albo wybierz pracownika z listy.', 'error')
+      return
+    }
+    try {
+      const z = await api('/zaproszenia', 'POST', body)
+      setSwiezyLink(z)
+      setImie(''); setNazwisko(''); setPracownikId(''); setRola('employee')
+      load()
+    } catch (e) {
+      toast(e.message, 'error')
+    }
+  }
+
+  const uniewaznij = async (z) => {
+    if (!(await confirm(`Unieważnić zaproszenie dla „${z.pracownik}”?`))) return
+    try {
+      await api(`/zaproszenia/${z.id}`, 'DELETE')
+      if (swiezyLink?.id === z.id) setSwiezyLink(null)
+      load()
+    } catch (e) {
+      toast(e.message, 'error')
+    }
+  }
+
+  const aktywne = zaproszenia.filter((z) => z.status === 'aktywne')
+
+  return (
+    <Card className="p-6 sm:p-8">
+      <SectionHeader
+        title="Zaproś pracownika"
+        subtitle="Wpisz dane i rolę — wyślij pracownikowi link, z którego sam założy swoje konto."
+      />
+      <div className="mx-auto max-w-lg">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <input value={imie} onChange={(e) => setImie(e.target.value)} placeholder="Imię" className="field" autoComplete="off" disabled={!!pracownikId} />
+          <input value={nazwisko} onChange={(e) => setNazwisko(e.target.value)} placeholder="Nazwisko" className="field" autoComplete="off" disabled={!!pracownikId} />
+          <select value={rola} onChange={(e) => setRola(e.target.value)} className="field">
+            <option value="employee" className="bg-surface">Pracownik obsługa</option>
+            <option value="kuchnia" className="bg-surface">Pracownik kuchnia</option>
+            <option value="szef_kuchni" className="bg-surface">Szef kuchni</option>
+            <option value="szef" className="bg-surface">Szef (podgląd)</option>
+          </select>
+          <select value={pracownikId} onChange={(e) => setPracownikId(e.target.value)} className="field">
+            <option value="" className="bg-surface">— albo istniejący pracownik —</option>
+            {pracownicy.map((p) => (
+              <option key={p.id} value={p.id} className="bg-surface text-ink">{p.imie} {p.nazwisko}</option>
+            ))}
+          </select>
+        </div>
+        <Button className="mt-5 w-full" onClick={zapros}>
+          <Icon name="key" className="h-4 w-4" /> Generuj link z zaproszeniem
+        </Button>
+
+        {swiezyLink && (
+          <div className="mt-4 rounded-xl border border-mint/40 bg-mint/10 p-4">
+            <div className="text-xs font-semibold text-mint">
+              Zaproszenie dla: {swiezyLink.pracownik} · ważne 7 dni
+            </div>
+            <div className="mt-2 break-all rounded-lg bg-surface-2 px-3 py-2 font-mono text-xs text-ink">
+              {pelnyLink(swiezyLink)}
+            </div>
+            <Button size="sm" className="mt-3" onClick={() => kopiuj(swiezyLink)}>
+              Kopiuj link
+            </Button>
+          </div>
+        )}
+
+        {aktywne.length > 0 && (
+          <div className="mt-6 space-y-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted">Aktywne zaproszenia</div>
+            {aktywne.map((z) => (
+              <div key={z.id} className="flex items-center justify-between gap-3 rounded-xl border border-line bg-white/[0.02] px-4 py-2.5">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-ink">{z.pracownik}</div>
+                  <div className="text-xs text-muted">rola: {z.rola} · wygasa {new Date(z.wygasa_at).toLocaleDateString('pl-PL')}</div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => kopiuj(z)}>Kopiuj</Button>
+                  <Button size="sm" variant="danger" onClick={() => uniewaznij(z)} aria-label="Unieważnij zaproszenie">
+                    <Icon name="trash" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
 // Zarządzanie kontami: tworzenie loginów dla pracowników, role, reset hasła,
 // aktywność, usuwanie. Realizuje model „admin provisionuje konta”.
 export default function Konta() {
@@ -108,8 +238,10 @@ export default function Konta() {
 
   return (
     <div className="space-y-8">
+      <Zaproszenia pracownicy={pracownicy.filter((p) => !users.some((u) => u.pracownik_id === p.id))} />
+
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Nowe konto" subtitle="Utwórz login dla pracownika lub administratora.">
+        <SectionHeader title="Nowe konto" subtitle="Ręczne konto (np. administrator) — pracowników wygodniej zapraszać linkiem.">
           <Button variant="ghost" onClick={provision}>
             <Icon name="users" className="h-4 w-4" /> Konta dla wszystkich
           </Button>

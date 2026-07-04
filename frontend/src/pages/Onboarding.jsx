@@ -52,6 +52,15 @@ function Toggle({ on, onClick, disabled }) {
   )
 }
 
+// Pakiet wybrany na stronie cennika wędruje w URL (?start&plan=pro) — kreator
+// pokazuje go w kroku konta i po bootstrapie ustawia tier subskrypcji instancji.
+const PLAN_Z_URL = (() => {
+  const p = (new URLSearchParams(window.location.search).get('plan') || '').toLowerCase()
+  return ['darmowy', 'basic', 'pro', 'premium'].includes(p) ? p : null
+})()
+const PLAN_NA_TIER = { darmowy: 'free', basic: 'basic', pro: 'pro', premium: 'premium' }
+const PLAN_ETYKIETA = { darmowy: 'Darmowy', basic: 'Basic', pro: 'Pro', premium: 'Premium' }
+
 export default function Onboarding() {
   const { toast } = useToast()
   const [krok, setKrok] = useState('konto')
@@ -75,6 +84,10 @@ export default function Onboarding() {
         login: form.login.trim(), haslo: form.haslo, nazwa_lokalu: form.nazwa_lokalu.trim(),
       })
       setToken(r.access_token)
+      // Pakiet z cennika → tier subskrypcji (best-effort; operator może zmienić w Ustawieniach).
+      if (PLAN_Z_URL) {
+        try { await api('/subskrypcja', 'PUT', { tier: PLAN_NA_TIER[PLAN_Z_URL] }) } catch { /* nie blokuj kreatora */ }
+      }
       setKrok('typ')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
   }
@@ -126,6 +139,14 @@ export default function Onboarding() {
         {krok === 'konto' && (
           <div className="mx-auto max-w-md">
             <div className="card p-6 sm:p-8">
+              {PLAN_Z_URL && (
+                <div className="mb-5 flex items-center justify-between rounded-xl bg-mint/10 px-4 py-2.5">
+                  <span className="text-xs font-semibold text-muted">Wybrany pakiet</span>
+                  <span className="rounded-full bg-mint/20 px-3 py-1 text-xs font-bold text-mint">
+                    {PLAN_ETYKIETA[PLAN_Z_URL]}
+                  </span>
+                </div>
+              )}
               <div className="space-y-3">
                 <label className="block text-xs font-semibold text-muted">Nazwa lokalu
                   <input value={form.nazwa_lokalu} onChange={(e) => set('nazwa_lokalu', e.target.value)} className={fld} placeholder="Moja Restauracja" /></label>

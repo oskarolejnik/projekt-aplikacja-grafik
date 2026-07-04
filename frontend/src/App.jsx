@@ -15,6 +15,7 @@ import PortalImprezy from './pages/PortalImprezy'
 import Onboarding from './pages/Onboarding'
 import Start from './pages/Start'
 import Produkt from './pages/Produkt'
+import Zaproszenie from './pages/Zaproszenie'
 import { api } from './lib/api'
 
 // Publiczne „trasy" wykrywane po query param (bez logowania, poza AuthProvider):
@@ -26,6 +27,7 @@ const isPortalImprezy = _params.has('impreza')
 const isProdukt = _params.has('produkt')
 const isLogin = _params.has('login')   // ?login → ekran logowania (landing marketingowy prowadzi tu z „Zaloguj")
 const isStart = _params.has('start')   // ?start → kreator lokalu (świeża instancja) lub rozjazd „co dalej"
+const zaproszenieToken = _params.get('zaproszenie')   // ?zaproszenie=TOKEN → rejestracja pracownika z linku
 
 // Routing wg stanu zalogowania i roli:
 //   brak użytkownika → ekran startowy (z logowaniem)
@@ -67,6 +69,17 @@ export default function App() {
     return (
       <MotionConfig reducedMotion="user">
         <Produkt />
+      </MotionConfig>
+    )
+  }
+  // Rejestracja pracownika z linku-zaproszenia — publiczna, poza AuthProvider
+  // (osoba nie ma jeszcze konta; po rejestracji pełne przeładowanie do panelu).
+  if (zaproszenieToken) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <BrandingProvider>
+          <Zaproszenie token={zaproszenieToken} />
+        </BrandingProvider>
       </MotionConfig>
     )
   }

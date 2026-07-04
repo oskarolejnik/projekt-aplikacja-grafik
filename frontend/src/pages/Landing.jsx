@@ -36,11 +36,7 @@ function LiveClock() {
 }
 
 export default function Landing() {
-  // ?login&tryb=rejestracja (ze strony ?start „Dołączam do zespołu") → modal
-  // logowania otwiera się od razu, już w trybie rejestracji (tryb czyta Login).
-  const [showLogin, setShowLogin] = useState(
-    () => new URLSearchParams(window.location.search).get('tryb') === 'rejestracja'
-  )
+  const [showLogin, setShowLogin] = useState(false)
   const openLogin = () => setShowLogin(true)
 
   return (

@@ -122,6 +122,18 @@ class RegisterIn(BaseModel):
     imie: str
     nazwisko: str
 
+class ZaproszenieIn(BaseModel):
+    """Zaproszenie pracownika do konta: istniejący (pracownik_id) ALBO nowy (imię+nazwisko)."""
+    pracownik_id: Optional[int] = None
+    imie: Optional[str] = None
+    nazwisko: Optional[str] = None
+    rola: str = "employee"          # employee|kuchnia|szef|szef_kuchni (admin tylko ręcznie)
+
+class ZaproszenieRejestracjaIn(BaseModel):
+    """Rejestracja z linku-zaproszenia: pracownik ustala tylko login i hasło."""
+    login: str
+    haslo: str
+
 class OnboardingIn(BaseModel):
     """Pierwsza konfiguracja instancji (samoobsługowy kreator) — tworzy pierwszego admina."""
     login: str
@@ -297,6 +309,7 @@ class LokalConfigOut(LokalBrandingOut):
     modul_rezerwacje: bool = True
     rezerwacje_online: bool = False
     rezerwacje_auto_potwierdzenie: bool = False
+    rejestracja_otwarta: bool = False
     impreza_osoby_na_obsluge: int = 15
     impreza_wyprzedzenie_min: int = 120
     impreza_najwczesniej: str = "10:00"
@@ -321,6 +334,7 @@ class LokalConfigIn(BaseModel):
     modul_rezerwacje: Optional[bool] = None
     rezerwacje_online: Optional[bool] = None
     rezerwacje_auto_potwierdzenie: Optional[bool] = None
+    rejestracja_otwarta: Optional[bool] = None
     impreza_osoby_na_obsluge: Optional[int] = None
     impreza_wyprzedzenie_min: Optional[int] = None
     impreza_najwczesniej: Optional[str] = None

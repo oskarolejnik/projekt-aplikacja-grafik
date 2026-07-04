@@ -301,8 +301,10 @@ function Cennik() {
 
               {p.szczegoly && <SzczegolyPlanu wiersze={p.szczegoly} />}
 
+              {/* Wybór pakietu prowadzi do KREATORA lokalu (nie mailto) — plan
+                  wędruje w URL i ustawia tier subskrypcji po założeniu konta. */}
               <a
-                href={`${MAIL}?subject=Plan%20${encodeURIComponent(p.nazwa)}`}
+                href={`?start&plan=${p.nazwa.toLowerCase()}`}
                 className={`mt-6 rounded-xl px-4 py-3 text-center text-sm font-semibold transition duration-200 active:scale-[0.98] ${
                   p.flagowy
                     ? 'bg-zloto text-noc hover:bg-zloto-2'
@@ -341,7 +343,7 @@ function Cennik() {
                 </p>
               </div>
               <a
-                href={darmowy ? '?start' : `${MAIL}?subject=Enterprise`}
+                href={darmowy ? '?start&plan=darmowy' : `${MAIL}?subject=Enterprise`}
                 className={`shrink-0 rounded-xl px-5 py-2.5 text-center text-sm font-semibold transition duration-200 active:scale-[0.98] ${
                   darmowy
                     ? 'bg-mint text-bg hover:brightness-105'

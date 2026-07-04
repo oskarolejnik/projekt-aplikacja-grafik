@@ -487,6 +487,10 @@ class LokalConfig(Base):
     # --- Rezerwacje online (publiczny widget) ---
     rezerwacje_online             = Column(Boolean, nullable=False, default=False)  # gość rezerwuje bez logowania
     rezerwacje_auto_potwierdzenie = Column(Boolean, nullable=False, default=False)  # online od razu 'potwierdzona'
+    # --- Konta zespołu ---
+    # False (domyślnie) = publiczna samodzielna rejestracja pracownika WYŁĄCZONA:
+    # konto zakłada się wyłącznie z linku-zaproszenia wygenerowanego przez managera.
+    rejestracja_otwarta = Column(Boolean, nullable=False, default=False)
     # --- Parametry obsady imprez (dawniej zaszyte pod jeden lokal; domyślne = zachowanie historyczne) ---
     impreza_osoby_na_obsluge = Column(Integer, nullable=False, default=15)             # 1 pracownik na tylu gości
     impreza_wyprzedzenie_min = Column(Integer, nullable=False, default=120)            # obsługa startuje tyle min przed
@@ -728,5 +732,26 @@ class Zaliczka(Base):
     wniosek_at    = Column(DateTime, nullable=False)
     decyzja_at    = Column(DateTime, nullable=True)
     decyzja_login = Column(String, nullable=True)
+
+    pracownik = relationship("Pracownik")
+
+
+class Zaproszenie(Base):
+    """Zaproszenie pracownika do założenia konta (jedyna ścieżka rejestracji przy
+    rejestracja_otwarta=False). Manager tworzy wpis dla KONKRETNEGO pracownika
+    (istniejącego lub zakładanego przy okazji) z docelową rolą konta; link z tokenem
+    trafia do pracownika dowolnym kanałem. Rejestracja z tokenu tworzy konto już
+    PRZYPIĘTE do pracownika (godziny/grafik od pierwszego logowania), oznacza
+    zaproszenie jako użyte. Token jednorazowy, z terminem ważności."""
+    __tablename__ = "zaproszenia"
+    id            = Column(Integer, primary_key=True, index=True)
+    token         = Column(String(64), nullable=False, unique=True, index=True)
+    pracownik_id  = Column(Integer, ForeignKey("pracownicy.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    rola          = Column(String(16), nullable=False, default="employee")  # employee|kuchnia|szef|szef_kuchni
+    utworzono_at  = Column(DateTime, nullable=False)
+    wygasa_at     = Column(DateTime, nullable=False)
+    uzyte_at      = Column(DateTime, nullable=True)
+    utworzyl_login = Column(String, nullable=True)   # rozliczalność (denormalizacja jak AuditLog)
 
     pracownik = relationship("Pracownik")

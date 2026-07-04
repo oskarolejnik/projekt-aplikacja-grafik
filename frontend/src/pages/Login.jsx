@@ -25,11 +25,9 @@ export default function Login({ onClose }) {
   const { login, register } = useAuth()
   const { nazwa_lokalu } = useBranding()
   const { toast } = useToast()
-  // Tryb startowy z URL: ?login&tryb=rejestracja otwiera od razu rejestrację
-  // (tak kieruje strona ?start — „Dołączam do zespołu").
-  const [tryb, setTryb] = useState(() =>
-    new URLSearchParams(window.location.search).get('tryb') === 'rejestracja' ? 'register' : 'login'
-  ) // 'login' | 'register'
+  // Rejestracja pracownika odbywa się WYŁĄCZNIE z linku-zaproszenia (?zaproszenie=TOKEN)
+  // generowanego przez managera w panelu Konta — ekran logowania nie ma trybu rejestracji.
+  const [tryb, setTryb] = useState('login') // 'login' | 'register' (register: tylko historyczne ścieżki)
   const [loginName, setLoginName] = useState(() => localStorage.getItem('grafik_login') || '')
   const [haslo, setHaslo] = useState('')
   const [imie, setImie] = useState('')
@@ -187,17 +185,11 @@ export default function Login({ onClose }) {
               <button onClick={() => setTryb('login')} className="font-semibold text-ink underline-offset-2 hover:underline">
                 Zaloguj się
               </button>
-              <span className="mt-2 block text-muted/80">
-                To konto pracownika tego lokalu. Prowadzisz własny?{' '}
-                <a href="?start" className="font-semibold text-ink underline-offset-2 hover:underline">Załóż lokal na Lokalo</a>
-              </span>
             </>
           ) : (
             <>
-              Nie masz konta?{' '}
-              <button onClick={() => setTryb('register')} className="font-semibold text-ink underline-offset-2 hover:underline">
-                Zarejestruj się
-              </button>
+              Pierwszy raz? Konto pracownika założysz z{' '}
+              <span className="font-semibold text-ink">linku-zaproszenia</span> od managera.
             </>
           )}
         </div>
