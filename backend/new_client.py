@@ -180,6 +180,10 @@ def main(argv=None) -> int:
     p.add_argument("--db-url", default=None, help="DATABASE_URL (domyślnie SQLite w katalogu instancji)")
     p.add_argument("--base-dir", default=None, help="katalog na instancje (domyślnie backend/instances)")
     p.add_argument("--init", action="store_true", help="zainicjuj bazę, załóż admina i ustaw nazwę lokalu")
+    p.add_argument("--bez-admina", action="store_true",
+                   help="z --init: zainicjuj bazę BEZ konta administratora — świeża instancja "
+                        "pokaże kreator (onboarding), w którym klient sam założy konto właściciela "
+                        "(tor samoobsługowego provisioningu)")
     p.add_argument("--force", action="store_true", help="nadpisz istniejący .env instancji")
     args = p.parse_args(argv)
 
@@ -217,12 +221,17 @@ def main(argv=None) -> int:
 
     database.init_db()
 
-    admin_login = args.admin or "admin"
-    admin_haslo = args.haslo or domyslne_haslo()
     db = database.SessionLocal()
     try:
-        zaloz_admina(db, admin_login, admin_haslo)
-        ustaw_nazwe_lokalu(db, nazwa)
+        if args.bez_admina:
+            # Tor samoobsługi: baza gotowa, zero kont → instancja przy pierwszym wejściu
+            # pokaże kreator (bootstrap 0-userów), gdzie klient założy konto właściciela.
+            ustaw_nazwe_lokalu(db, nazwa)
+        else:
+            admin_login = args.admin or "admin"
+            admin_haslo = args.haslo or domyslne_haslo()
+            zaloz_admina(db, admin_login, admin_haslo)
+            ustaw_nazwe_lokalu(db, nazwa)
     except HTTPException as e:
         print(f"Błąd: {e.detail}", file=sys.stderr)
         return 1
@@ -230,9 +239,12 @@ def main(argv=None) -> int:
         db.close()
 
     print(f"[OK] Zainicjowano baze instancji: {db_url}")
-    print(f"[OK] Administrator: login='{admin_login}'")
-    if not args.haslo:
-        print(f"     haslo (wygenerowane, zapisz je): {admin_haslo}")
+    if args.bez_admina:
+        print("[OK] Bez konta administratora — konto wlasciciela zalozy kreator (onboarding).")
+    else:
+        print(f"[OK] Administrator: login='{admin_login}'")
+        if not args.haslo:
+            print(f"     haslo (wygenerowane, zapisz je): {admin_haslo}")
     print(f"[OK] Nazwa lokalu: {nazwa}")
     print(f"\nNastepny krok: uruchom backend ze srodowiskiem tej instancji (plik {plik}).")
     return 0

@@ -52,6 +52,8 @@ from routers.portfel import router as portfel_router
 from routers.moje import router as moje_router
 from routers.kadry import router as kadry_router
 from routers.zaproszenia import router as zaproszenia_router
+from routers.flota import router as flota_router
+import provisioning
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Scheduler API")
@@ -70,6 +72,7 @@ app.include_router(portfel_router)     # portfel pracownika — zarobek na żywo
 app.include_router(moje_router)        # „Moje" /api/me/* — samoobsługa pracownika (dekompozycja main — audyt CTO)
 app.include_router(kadry_router)       # kadry i konta zespołu — users/pracownicy/stanowiska/dyspozycje/urlopy (dekompozycja main — audyt CTO)
 app.include_router(zaproszenia_router) # zaproszenia pracowników do kont — jedyna ścieżka rejestracji (feedback UX)
+app.include_router(flota_router)       # samoobsługowe zakładanie lokali + panel floty (feedback: zero ręcznej pracy)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -290,6 +293,13 @@ def startup():
     # Fail-fast: w produkcji odmawiamy startu przy niebezpiecznych sekretach domyślnych.
     app_settings.validate_critical_secrets()
     init_db()
+    # Instancja-matka z włączoną samoobsługą: podnieś instancje floty, których proces
+    # nie przeżył restartu hosta (best-effort; provisioning.py, feedback: zero ręcznej pracy).
+    if provisioning.wlaczony():
+        try:
+            provisioning.wskrzes_flote()
+        except Exception:
+            logger.exception("Wskrzeszanie floty nie powiodło się (kontynuuję start).")
     # Stanowisko kuchni tworzymy LENIWIE (endpoint /api/grafik/kuchnia-stanowisko), nie na starcie —
     # żeby nie zaśmiecać bazy/testów dodatkowym stanowiskiem, gdy grafik kuchni nie jest używany.
     # Uwaga: konto administratora NIE jest już tworzone z pliku konfiguracyjnego (.env).

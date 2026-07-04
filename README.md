@@ -178,6 +178,25 @@ python new_client.py restauracja-pod-lipa --nazwa "Restauracja Pod Lipą" \
 Katalog `instances/` zawiera prawdziwe sekrety i bazy — jest w `.gitignore` i **nigdy nie trafia do repo**.
 Następnie uruchom backend ze środowiskiem tej instancji (plik `.env` instancji).
 
+### 🤖 Samoobsługa (klient zakłada lokal sam)
+
+Instancja-matka może stawiać nowe lokale **automatycznie, bez udziału operatora**:
+klient przechodzi kreator na stronie produktu i klika „Utwórz mój lokal" — system
+provisionuje instancję (`new_client.py --init --bez-admina`), uruchamia ją na wolnym
+porcie z puli `8100–8199` i oddaje link, pod którym świeży kreator zakłada konto
+właściciela. Rejestr floty: `backend/instances/registry.json`; podgląd dla operatora:
+`GET /api/flota` (admin). Po restarcie matki instancje floty są wskrzeszane automatycznie.
+
+Samoobsługa jest **domyślnie wyłączona** — włącza ją operator w `.env` instancji-matki:
+
+```bash
+PROVISIONING_ENABLED=1          # świadoma zgoda operatora
+PROVISIONING_MAX_INSTANCJI=20   # twardy limit floty (opcjonalnie; + limit 3/dzień na IP)
+```
+
+Lokalnie/desktopowo instancje działają na portach; produkcyjnie ten sam tor spina się
+z reverse proxy (subdomena per instancja).
+
 ## 🐳 Wdrożenie produkcyjne (Docker + Caddy)
 
 Gotowy stack produkcyjny w `docker-compose.prod.yml`: **aplikacja** (obraz z `Dockerfile` —
