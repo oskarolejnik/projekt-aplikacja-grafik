@@ -9,8 +9,6 @@ import Onboarding from './Onboarding'
 // od razu otwiera kreator lokalu; na działającej pokazuje uczciwy rozjazd zamiast
 // wrzucania gościa w ekran logowania cudzego lokalu (feedback: „nie da się przejść
 // do kreatora, a rejestracja tworzy konto pracownika").
-const MAIL = 'mailto:kontakt@grafikpracy.pl'
-
 export default function Start() {
   const [status, setStatus] = useState(null) // null = sprawdzam; { potrzebny, nazwa_lokalu }
   useEffect(() => {
@@ -31,26 +29,21 @@ export default function Start() {
   if (status.potrzebny) return <Onboarding />
 
   const nazwa = status.nazwa_lokalu || 'ten lokal'
+  // Plan z cennika wędruje dalej do kreatora (?start&plan=pro → ?onboarding&plan=pro).
+  const plan = new URLSearchParams(window.location.search).get('plan')
   const sciezki = [
     {
       ikona: 'office',
       tytul: 'Zakładam własny lokal',
-      opis: `Każda restauracja dostaje własną, odizolowaną instancję — Twoje dane nie mieszkają na wspólnym serwerze. Napisz do nas, a postawimy Ci czysty lokal z kreatorem konfiguracji.`,
-      cta: 'Napisz — stawiamy lokal',
-      href: `${MAIL}?subject=${encodeURIComponent('Nowy lokal na Lokalo')}`,
+      opis: 'Kreator poprowadzi Cię przez start: nazwa lokalu, konto właściciela, typ lokalu i moduły. Kilka minut i panel jest Twój.',
+      cta: 'Otwórz kreator lokalu',
+      href: `?onboarding${plan ? `&plan=${plan}` : ''}`,
       glowna: true,
-    },
-    {
-      ikona: 'users',
-      tytul: `Dołączam do zespołu ${nazwa}`,
-      opis: 'Konto pracownika zakłada się z linku-zaproszenia. Poproś właściciela lub managera o link — założysz konto w minutę, a grafik, godziny i portfel będą już przypięte do Ciebie.',
-      cta: 'Czekam na link od managera',
-      href: null,
     },
     {
       ikona: 'key',
       tytul: 'Mam już konto',
-      opis: `Wracasz do panelu lokalu ${nazwa}? Zaloguj się jak zwykle.`,
+      opis: `Wracasz do panelu lokalu ${nazwa}? Zaloguj się jak zwykle. (Konto pracownika? Zakłada się z linku-zaproszenia od managera.)`,
       cta: 'Zaloguj się',
       href: '?login',
     },

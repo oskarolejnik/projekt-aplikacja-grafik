@@ -61,7 +61,10 @@ const PLAN_Z_URL = (() => {
 const PLAN_NA_TIER = { darmowy: 'free', basic: 'basic', pro: 'pro', premium: 'premium' }
 const PLAN_ETYKIETA = { darmowy: 'Darmowy', basic: 'Basic', pro: 'Pro', premium: 'Premium' }
 
-export default function Onboarding() {
+// demo=true (zajęta instancja, wejście przez ?onboarding): kreator działa jako
+// PODGLĄD — wszystkie kroki klikalne, zapis wyłączony, finał wyjaśnia, że nowy
+// lokal dostaje własną instancję. Na świeżej instancji (demo=false) pełny bootstrap.
+export default function Onboarding({ demo = false }) {
   const { toast } = useToast()
   const [krok, setKrok] = useState('konto')
   const [form, setForm] = useState({ nazwa_lokalu: '', login: '', haslo: '' })
@@ -78,6 +81,7 @@ export default function Onboarding() {
     if (!form.nazwa_lokalu.trim()) { toast('Podaj nazwę lokalu.', 'error'); return }
     if (form.login.trim().length < 5) { toast('Login: min. 5 znaków (litery i cyfry).', 'error'); return }
     if (form.haslo.length < 8) { toast('Hasło: min. 8 znaków (litera + cyfra + znak specjalny).', 'error'); return }
+    if (demo) { setKrok('typ'); return }   // podgląd: bez zapisu, idziemy dalej
     setBusy(true)
     try {
       const r = await api('/onboarding/bootstrap', 'POST', {
@@ -111,6 +115,7 @@ export default function Onboarding() {
 
   // Krok 3 → zapis konfiguracji i wejście.
   const zakoncz = async () => {
+    if (demo) { setKrok('gotowe-demo'); return }   // podgląd: ekran podsumowania zamiast zapisu
     setBusy(true)
     try {
       await api('/lokal/config', 'PUT', { typ_lokalu: wybranyTyp === 'inny' ? null : wybranyTyp, ...moduly })
@@ -132,6 +137,16 @@ export default function Onboarding() {
             <p className="text-xs text-muted">Skonfiguruj system pod swoją knajpę w kilka kroków.</p>
           </div>
         </div>
+
+        {demo && (
+          <div className="mb-6 flex items-start gap-3 rounded-xl border border-lemon/30 bg-lemon/10 px-4 py-3">
+            <Icon name="info" className="mt-0.5 h-4 w-4 shrink-0 text-lemon" />
+            <p className="text-xs leading-relaxed text-muted">
+              <span className="font-semibold text-ink">Podgląd kreatora.</span> Ta instalacja prowadzi już
+              lokal — kroki są klikalne, ale nic się nie zapisze. Nowy lokal dostaje własną, czystą instancję.
+            </p>
+          </div>
+        )}
 
         <Kroki krok={krok} />
 
@@ -159,7 +174,9 @@ export default function Onboarding() {
                 className="mt-5 w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.99] disabled:opacity-60">
                 {busy ? 'Zakładam…' : 'Dalej — wybór typu lokalu'}
               </button>
-              <p className="mt-3 text-center text-xs text-muted/70">Ten kreator pojawia się tylko na nowej, pustej instancji.</p>
+              <p className="mt-3 text-center text-xs text-muted/70">
+                {demo ? 'Podgląd — dane nie zostaną zapisane.' : 'Ten kreator pojawia się tylko na nowej, pustej instancji.'}
+              </p>
             </div>
           </div>
         )}
@@ -245,8 +262,37 @@ export default function Onboarding() {
               </button>
               <button onClick={zakoncz} disabled={busy}
                 className="rounded-xl bg-mint px-6 py-2.5 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
-                {busy ? 'Zapisuję…' : 'Zapisz i wejdź do panelu'}
+                {busy ? 'Zapisuję…' : demo ? 'Zobacz podsumowanie' : 'Zapisz i wejdź do panelu'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* FINAŁ PODGLĄDU (tylko demo) — tak wyglądałby start nowego lokalu */}
+        {krok === 'gotowe-demo' && (
+          <div className="mx-auto max-w-md">
+            <div className="card p-6 text-center sm:p-8">
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-mint/15">
+                <Icon name="check" className="h-6 w-6 text-mint" />
+              </span>
+              <h2 className="mt-4 font-display text-xl font-bold text-ink">
+                Tak wygląda start lokalu „{form.nazwa_lokalu || 'Twój lokal'}"
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted">
+                W prawdziwym kreatorze w tym miejscu wchodzisz już do panelu — z kontem właściciela,
+                typem „{wybranyTyp === 'inny' || !wybranyTyp ? 'własnym' : TYP_PO_ID[wybranyTyp]?.nazwa}"
+                i dobranymi modułami{PLAN_Z_URL ? ` na pakiecie ${PLAN_ETYKIETA[PLAN_Z_URL]}` : ''}.
+                Każdy lokal dostaje własną, czystą instancję ze swoją bazą.
+              </p>
+              <a
+                href={`mailto:kontakt@grafikpracy.pl?subject=${encodeURIComponent('Nowy lokal na Lokalo')}`}
+                className="mt-6 block rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]"
+              >
+                Napisz do nas — stawiamy Twój lokal
+              </a>
+              <a href="?produkt" className="mt-3 block text-xs text-muted transition hover:text-ink">
+                ← Wróć na stronę Lokalo
+              </a>
             </div>
           </div>
         )}

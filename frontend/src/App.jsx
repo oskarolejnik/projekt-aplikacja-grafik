@@ -27,6 +27,7 @@ const isPortalImprezy = _params.has('impreza')
 const isProdukt = _params.has('produkt')
 const isLogin = _params.has('login')   // ?login → ekran logowania (landing marketingowy prowadzi tu z „Zaloguj")
 const isStart = _params.has('start')   // ?start → kreator lokalu (świeża instancja) lub rozjazd „co dalej"
+const isOnboardingParam = _params.has('onboarding')   // ?onboarding → kreator zawsze (na zajętej instancji: podgląd demo)
 const zaproszenieToken = _params.get('zaproszenie')   // ?zaproszenie=TOKEN → rejestracja pracownika z linku
 
 // Routing wg stanu zalogowania i roli:
@@ -53,6 +54,12 @@ function Routed() {
     // domyślnie (status jeszcze null) renderujemy landing OD RAZU. Kreator pokazujemy dopiero,
     // gdy status potwierdzi świeżą instancję (potrzebny=true) — rzadki, jednorazowy przypadek.
     if (onboarding) return <Onboarding />
+    if (isOnboardingParam) {
+      // Jawne wejście do kreatora (?onboarding, np. ze strony ?start). Na zajętej
+      // instancji kreator działa w trybie PODGLĄDU (demo) — kroki bez zapisu.
+      if (onboarding === null) return spinner
+      return <Onboarding demo />
+    }
     if (isStart) return <Start />                 // ?start → kreator (świeża instancja) albo jasny rozjazd
     if (isLogin) return <Landing />               // ?login → ekran logowania (z landingu „Zaloguj")
     return <Produkt />                            // publiczny landing sprzedażowy (domyślny widok gościa)
