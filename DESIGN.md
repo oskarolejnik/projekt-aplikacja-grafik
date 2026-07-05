@@ -218,11 +218,18 @@ bloby i animowane poświaty pozostają zakazane.
 - **Focus:** obrys szałwiowy (`mint/60`) + pierścień `ring-2 ring-mint/20`. Spokojny, wyraźny.
 - **Label:** uppercase 0.75rem `muted` nad polem (wzorzec formularzy iOS).
 
-### Navigation (sidebar)
-- Pozycja aktywna: **tinta szałwii 12% + szałwiowy tekst + font-semibold** — jak selekcja
-  w sidebarze iPadOS. Nieaktywna: `muted`, hover `white/5%` + `ink`.
-- Nagłówki grup: label uppercase `muted/70`.
-- Chrome (sidebar, header) na `bg-2` z `backdrop-blur` — translucentny pasek natywny.
+### Navigation (kategorie + listy rozwijane)
+- Panel admina: **dwupoziomowa nawigacja** zamiast długiego sidebara (30 zakładek → 6 kategorii
+  domenowych: Pulpit / Zespół / Grafik / Kasa i POS / Goście / Imprezy; Ustawienia przy profilu).
+- **Desktop:** górny pasek — przyciski kategorii (tekst, bez ikon) z chevronem; klik otwiera
+  dropdown-panel (`bg/95 + blur-2xl`, obrys `line`, promień 16px, cień głęboki). Kategoria
+  zawierająca aktywną zakładkę: szałwiowy tekst + semibold. Klik poza / Escape zamyka.
+- **Mobile:** szuflada z akordeonami kategorii (ikona + label + chevron rotujący); jeden
+  rozwinięty naraz, kategoria aktywnej zakładki auto-rozwinięta przy otwarciu.
+- Pozycja aktywna (w dropdownie/akordeonie): **tinta szałwii 12% + szałwiowy tekst +
+  font-semibold** — jak selekcja w sidebarze iPadOS. Nieaktywna: `muted`, hover `white/5%` + `ink`.
+- Breadcrumb nad treścią: `Kategoria / Tytuł zakładki` (kategoria `muted/70`, tytuł display bold).
+- Chrome (header, szuflada) na `bg-2` z `backdrop-blur` — translucentny pasek natywny.
 
 ### Segmented control (PillSwitch)
 - Kontener: obrys `line`, tło `white/3%`. Wskaźnik: `surface-raised` + cień `cta`,
