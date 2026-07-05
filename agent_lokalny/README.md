@@ -1,10 +1,28 @@
-# Agent RCP (serwer lokalny Gastro LSI → VPS)
+# Agent lokalny POS/RCP (serwer lokalu → chmura Lokalo)
 
-Mały, zawsze włączony agent w sieci lokalnej. Czyta odbicia z bazy RCP **tylko do odczytu
-(NOLOCK)** i **wypycha** je na VPS. **VPS nigdy nie łączy się do tej sieci** — więc nie może
-zaburzyć Gastro LSI. Pliki/baza zostają na lokalu; na VPS idą tylko kopie odbić.
+Mały, zawsze włączony agent w sieci lokalnej. Czyta dane z bazy POS **tylko do odczytu
+(NOLOCK)** i **wypycha** je do chmury. **Chmura nigdy nie łączy się do tej sieci** — więc
+nie może zaburzyć systemu POS. Dane zostają na lokalu; do chmury idą tylko kopie.
 
-## Dwa warianty agenta
+## ⭐ Uniwersalny agent — `agent_pos.py` (nowe wdrożenia)
+
+Rdzeń + wymienne **drivery per system POS** (architektura: `docs/POS-INTEGRACJA.md`):
+
+```
+agent_pos.py          # entrypoint: python agent_pos.py [--config config.yaml] [--raz]
+config.example.yaml   # wzór konfiguracji (panel Lokalo generuje gotowy config.yaml)
+core/                 # pętla, wysyłka, konfiguracja
+drivers/              # gastro_mssql (dziś); soga_firebird, x2_postgres (w przygotowaniu)
+```
+
+Instalacja: w panelu Lokalo (**Ustawienia → Kasa i POS → Utarg (POS) → Podłącz agenta**)
+wygeneruj token i pobierz `config.yaml` → na serwerze POS uzupełnij connection string
+(konto READ-ONLY) i SQL-e strumieni → `pip install -r requirements.txt` →
+test `python agent_pos.py --raz` → zarejestruj jako usługę/Harmonogram zadań.
+Strumienie (capabilities z konfiguracji): `utarg` (dzienny agregat sprzedaży — minimum),
+`odbicia` (RCP). Agent wysyła heartbeat — panel pokazuje zdrowie integracji i ostatnie błędy.
+
+## Legacy: dwa warianty agenta RCP (istniejące wdrożenia — działają bez zmian)
 - **PowerShell — `agent_rcp.ps1` (ZALECANY, gdy nie wolno instalować Pythona).** Zero instalacji —
   korzysta z wbudowanych w Windows: PowerShell + .NET (`System.Data.SqlClient`, `Invoke-RestMethod`).
   Konfiguracja w `agent_rcp.env`. Runbook na dole („Wariant PowerShell").

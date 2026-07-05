@@ -1,6 +1,7 @@
-# Zależności agenta lokalnego (instaluj na serwerze Gastro LSI):
+# Zależności agenta lokalnego (instaluj na serwerze POS):
 #   pip install -r requirements.txt
 SQLAlchemy>=2.0,<3
 pymssql>=2.2          # sterownik MS SQL Server (wheels z FreeTDS — bez instalacji ODBC)
 requests>=2.28
-python-dotenv>=1.0
+python-dotenv>=1.0    # legacy agent.py (.env)
+PyYAML>=6.0           # agent_pos.py (config.yaml)

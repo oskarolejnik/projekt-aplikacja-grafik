@@ -1,0 +1,40 @@
+# Konfiguracja uniwersalnego agenta POS Lokalo (agent_pos.py).
+# Panel Lokalo generuje ten plik z wypełnionym `lokalo:` — na serwerze POS
+# uzupełniasz tylko sekcję drivera (connection string READ-ONLY + SQL-e).
+
+lokalo:
+  url: "https://twoja-instancja.example.com"   # adres instancji Lokalo
+  token: "WKLEJ-TOKEN-Z-PANELU"                # Ustawienia → Utarg (POS) → Podłącz agenta
+
+agent:
+  poll_sekundy: 300    # co ile sekund cykl synchronizacji
+  okno_dni: 3          # ile dni wstecz czytać (upsert — nadpisywanie jest bezpieczne)
+
+driver: gastro_mssql   # dostępne: gastro_mssql (SOGA/Firebird i X2/Postgres — w przygotowaniu)
+
+gastro_mssql:
+  # Konto TYLKO DO ODCZYTU! Agent czyta z READ UNCOMMITTED (NOLOCK), nigdy nie zapisuje.
+  database_url: "mssql+pymssql://czytelnik:haslo@localhost/gastro"
+
+  # Strumień „utarg" — dzienny agregat sprzedaży. Kolumny (aliasy):
+  #   data (DATE), netto, gotowka (opc.), karta (opc.), liczba_rachunkow (opc.)
+  # Parametry :start i :end (daty) binduje agent. Dopasuj tabele do swojej wersji Gastro.
+  utarg_sql: |
+    SELECT CAST(d.DataOtwarcia AS DATE) AS data,
+           SUM(d.WartoscNetto)          AS netto,
+           COUNT(*)                     AS liczba_rachunkow
+    FROM NGastroDokument d WITH (NOLOCK)
+    WHERE CAST(d.DataOtwarcia AS DATE) BETWEEN :start AND :end
+    GROUP BY CAST(d.DataOtwarcia AS DATE)
+
+  # Strumień „odbicia" (RCP) — jak w legacy agent.py. Usuń, jeśli nie używasz RCP.
+  # Kolumny: rcp_id, imie_nazwisko, data, wejscie, wyjscie.
+  odbicia_sql: |
+    SELECT o.ID          AS rcp_id,
+           p.Nazwa       AS imie_nazwisko,
+           CAST(o.Wejscie AS DATE) AS data,
+           o.Wejscie     AS wejscie,
+           o.Wyjscie     AS wyjscie
+    FROM RCPOdbicia o WITH (NOLOCK)
+    JOIN NGastroUzytkownik p WITH (NOLOCK) ON p.ID = o.UzytkownikID
+    WHERE CAST(o.Wejscie AS DATE) BETWEEN :start AND :end

@@ -260,7 +260,7 @@ def test_rozlicz_sala_dopiero_po_pushu(client, db, monkeypatch):
     """Przycisk „Rozlicz się" pojawia się DOPIERO po wysłaniu pusha (ingest agenta ustawia
     push_oczekuje_at). Samo zamknięte Gastro w bazie (bez ingestu) nie pokazuje przycisku."""
     import main
-    monkeypatch.setattr(main, "RCP_INGEST_TOKEN", "tok123")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "tok123")   # helper czyta env w momencie wywolania
     sala = factories.StanowiskoFactory(nazwa="Sala")
     k = factories.PracownikFactory(dzial="obsluga")
     u = factories.UserFactory(login="kelpush", rola="employee", pracownik=k)
@@ -292,7 +292,7 @@ def test_rozlicz_sala_dopiero_po_pushu(client, db, monkeypatch):
 def test_gastro_zadatki_ingest_i_kp_baza(client, db, monkeypatch):
     """Agent wysyła zadatki (KP) → upsert po id → suma KP dla dnia w rozliczeniu."""
     import main
-    monkeypatch.setattr(main, "RCP_INGEST_TOKEN", "tok123")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "tok123")   # helper czyta env w momencie wywolania
     d = factories.dzien(0)
     payload = {"zadatki": [
         {"id": "g1", "numer": "120/2026", "kwota": 500, "opis": "Zadatek za komunie p.Nowak 15.05.2027", "data": str(d)},

@@ -31,7 +31,7 @@ from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow
 import openpyxl
 
 import settings as app_settings
-from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, rewir_dla_pracownika as _rewir_dla_pracownika
+from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, token_agenta_ok, rewir_dla_pracownika as _rewir_dla_pracownika
 # Helpery współdzielone z routerami (wyniesione do deps.py — dekompozycja main, audyt CTO):
 from deps import (
     ROZLICZENIA_START, _napiwki_podzial, _norm_nazwa, _przypisz_odbicia_do_pracownika,
@@ -2611,7 +2611,7 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
     """Przyjmuje paczkę odbić od lokalnego agenta i robi upsert po `rcp_id`.
     Wykrywa wejście (push „start zmiany") i wyjście (push „koniec zmiany" + godziny).
     Idempotentne — flagi powiadomień zapobiegają dublom."""
-    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+    if not token_agenta_ok(request, db):
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta RCP.")
 
     odbicia = payload.get("odbicia", []) if isinstance(payload, dict) else []
@@ -2834,7 +2834,7 @@ STOLY_KUCHNIA_POZYCJE = -2  # pseudo-rewir: liczba pozycji (dań) na tych niewyd
 @app.post("/api/gastro/stoly")
 def gastro_stoly_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
     """Snapshot zajętości stołów od agenta (X-RCP-Token). Upsert per rewir. NIE dotyka RCP."""
-    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+    if not token_agenta_ok(request, db):
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
     teraz = utcnow_naive()
     for it in (payload.get("stoly") or []):
@@ -2876,7 +2876,7 @@ def gastro_stoly(db: Session = Depends(get_db)):
 @app.post("/api/gastro/stoly-historia")
 def gastro_stoly_historia_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
     """Dzienna historia liczby stolików od agenta (X-RCP-Token). Upsert per dzień. NIE dotyka RCP."""
-    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+    if not token_agenta_ok(request, db):
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
     teraz = utcnow_naive()
     for it in (payload.get("dni") or []):
@@ -2912,7 +2912,7 @@ def gastro_stoly_historia(db: Session = Depends(get_db)):
 def gastro_rozliczenia_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
     """Pozycje rozliczeń kelnerów z Gastro od agenta (X-RCP-Token). Upsert po poz_id,
     mapowanie kelnera po imieniu i nazwisku (jak RCP). NIE dotyka RCP — osobna gałąź."""
-    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+    if not token_agenta_ok(request, db):
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
     mapa = {}
     for p in db.query(models.Pracownik).all():
@@ -3016,7 +3016,7 @@ def _dopasuj_zadatek(db, z) -> bool:
 def gastro_zadatki_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
     """Zadatki (KP „Kasa przyjęła") z Gastro od agenta (X-RCP-Token). Upsert po id. Parsuje opis
     (nazwisko + data imprezy) i próbuje auto-dopasować do terminu w kalendarzu."""
-    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+    if not token_agenta_ok(request, db):
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
     teraz = utcnow_naive()
     n = 0

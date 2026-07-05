@@ -4,6 +4,7 @@ Wydzielone tutaj, aby routery mogły z nich korzystać BEZ importowania main.py
 (co dawałoby cykl importów: main → router → main). Zależą tylko od models.
 """
 
+import hashlib
 import os
 import unicodedata
 from collections import defaultdict
@@ -54,6 +55,25 @@ def get_lokal_config(db) -> models.LokalConfig:
             db.rollback()
             cfg = db.get(models.LokalConfig, 1)   # wyścig przy pierwszym zapisie — ktoś już utworzył
     return cfg
+
+
+def token_agenta_ok(request, db) -> bool:
+    """Autoryzacja ingestu POS/RCP: token wygenerowany w panelu (hash SHA-256
+    w konfiguracji lokalu, unieważnialny) LUB stały env RCP_INGEST_TOKEN (legacy —
+    zostaje na zawsze, żeby wdrożone agenty przeżyły każdy deploy).
+    Token przyjmowany w X-RCP-Token oraz Authorization: Bearer."""
+    podany = request.headers.get("x-rcp-token") or ""
+    if not podany:
+        naglowek = request.headers.get("authorization") or ""
+        if naglowek.startswith("Bearer "):
+            podany = naglowek[7:]
+    if not podany:
+        return False
+    env_token = os.environ.get("RCP_INGEST_TOKEN", "")
+    if env_token and podany == env_token:
+        return True
+    hash_db = getattr(get_lokal_config(db), "pos_token_hash", None)
+    return bool(hash_db) and hashlib.sha256(podany.encode("utf-8")).hexdigest() == hash_db
 
 
 def rewir_dla_pracownika(rewir):

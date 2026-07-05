@@ -71,6 +71,60 @@ export default function UtargPos() {
 
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
 
+  // Kreator „Podłącz agenta": token pokazywany JEDEN raz + gotowy config.yaml.
+  const [nowyToken, setNowyToken] = useState(null)
+  const [driverWybrany, setDriverWybrany] = useState('gastro_mssql')
+
+  const generujToken = async () => {
+    if (status?.token_aktywny) {
+      const zgoda = await window.confirm?.('Nowy token unieważni poprzedni — działający agent straci dostęp. Kontynuować?')
+      if (zgoda === false) return
+    }
+    setBusy(true)
+    try {
+      const r = await api('/pos/token', 'POST')
+      setNowyToken(r.token)
+      setStatus((s) => ({ ...s, token_aktywny: true, token_od: r.utworzono }))
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+
+  const uniewaznijToken = async () => {
+    setBusy(true)
+    try {
+      await api('/pos/token', 'DELETE')
+      setNowyToken(null)
+      setStatus((s) => ({ ...s, token_aktywny: false, token_od: null }))
+      toast('Token unieważniony — agent straci dostęp od następnego żądania.', 'success')
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+
+  const pobierzConfig = () => {
+    const yaml = [
+      '# Konfiguracja agenta POS Lokalo — wygenerowana w panelu.',
+      '# Na serwerze POS uzupełnij dostęp do bazy (konto TYLKO DO ODCZYTU).',
+      '',
+      'lokalo:',
+      `  url: "${window.location.origin}"`,
+      `  token: "${nowyToken}"`,
+      '',
+      'agent:',
+      '  poll_sekundy: 300',
+      '  okno_dni: 3',
+      '',
+      `driver: ${driverWybrany}`,
+      '',
+      `${driverWybrany}:`,
+      '  database_url: "mssql+pymssql://czytelnik:haslo@localhost/gastro"',
+      '  # SQL-e strumieni: wzory i opis kolumn w agent_lokalny/config.example.yaml',
+    ].join('\n')
+    const blob = new Blob([yaml], { type: 'text/yaml' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'config.yaml'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   const zapiszReczny = async () => {
     if (!form.data || form.netto === '') { toast('Podaj datę i utarg netto.', 'error'); return }
     setBusy(true)
@@ -140,6 +194,63 @@ export default function UtargPos() {
               Żaden agent POS nie zgłosił się jeszcze do tej instancji. Utarg możesz prowadzić
               ręcznie lub z pliku CSV — a gdy podepniesz agenta, dane wskoczą w to samo miejsce.
             </p>
+          )}
+        </div>
+
+        {/* Kreator podłączenia agenta: token + gotowy config.yaml do pobrania. */}
+        <div className="mt-5 rounded-xl border border-line bg-white/[0.02] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-bold text-ink">Podłącz agenta POS</span>
+            {status?.token_aktywny && (
+              <span className="rounded-full bg-mint/15 px-2.5 py-0.5 text-xs font-semibold text-mint">
+                token aktywny{status.token_od ? ` od ${status.token_od.slice(0, 10)}` : ''}
+              </span>
+            )}
+          </div>
+          <p className="mt-1.5 text-sm leading-relaxed text-muted">
+            Agent instalowany na serwerze POS czyta dane (tylko odczyt!) i wypycha je tutaj.
+            Wygeneruj token, pobierz gotowy <code className="text-ink">config.yaml</code> i przekaż
+            paczkę serwisantowi POS — na miejscu zostaje tylko wpisanie dostępu do bazy.
+          </p>
+
+          {nowyToken ? (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs font-semibold text-lemon">
+                Zapisz token teraz — widzisz go tylko raz (w bazie zostaje wyłącznie skrót):
+              </p>
+              <code className="block break-all rounded-lg border border-mint/30 bg-mint/[0.07] px-3 py-2 text-xs text-ink">{nowyToken}</code>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => { navigator.clipboard?.writeText(nowyToken); toast('Skopiowano token.', 'success') }}>
+                  Kopiuj token
+                </Button>
+                <Button variant="ghost" onClick={pobierzConfig}>
+                  <Icon name="download" className="h-4 w-4" /> Pobierz config.yaml
+                </Button>
+              </div>
+              <p className="text-xs text-muted">
+                Dalej na serwerze POS: <code>pip install -r requirements.txt</code>, uzupełnij dostęp
+                do bazy w config.yaml, test: <code>python agent_pos.py --raz</code> — a tu pojawi się heartbeat.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <label className="text-xs font-semibold text-muted">System POS
+                <select value={driverWybrany} onChange={(e) => setDriverWybrany(e.target.value)} className={`${fld} mt-0.5 w-56`}>
+                  <option value="gastro_mssql">Gastro (Softech/LSI, MS SQL)</option>
+                  <option value="" disabled>SOGA (Firebird) — wkrótce</option>
+                  <option value="" disabled>X2System (PostgreSQL) — wkrótce</option>
+                  <option value="" disabled>Dotykačka (chmura) — wkrótce</option>
+                </select>
+              </label>
+              <div className="flex gap-2 pt-4">
+                <Button onClick={generujToken} disabled={busy}>
+                  <Icon name="key" className="h-4 w-4" /> {status?.token_aktywny ? 'Wygeneruj nowy token' : 'Wygeneruj token agenta'}
+                </Button>
+                {status?.token_aktywny && (
+                  <Button variant="ghost" onClick={uniewaznijToken} disabled={busy}>Unieważnij token</Button>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </Card>

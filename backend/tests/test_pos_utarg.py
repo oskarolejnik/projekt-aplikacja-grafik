@@ -86,3 +86,52 @@ def test_odczyty_tylko_admin(client):
         dz = str(date.today())
         assert anon.get(f"/api/pos/utarg-dnia?start={dz}&end={dz}").status_code == 401
         assert anon.get("/api/pos/status").status_code == 401
+
+
+def test_token_z_panelu_autoryzuje_ingest(admin_client, db, monkeypatch):
+    # bez env-tokena zostaje wyłącznie token z panelu (hash w konfiguracji lokalu)
+    monkeypatch.delenv("RCP_INGEST_TOKEN", raising=False)
+
+    r = admin_client.post("/api/pos/token")
+    assert r.status_code == 201
+    token = r.json()["token"]
+    assert len(token) > 30
+    cfg = db.query(models.LokalConfig).get(1)
+    db.refresh(cfg)
+    assert cfg.pos_token_hash and token not in cfg.pos_token_hash   # w bazie tylko skrót
+
+    from fastapi.testclient import TestClient
+    import main
+    with TestClient(main.app) as agent:
+        # token z panelu działa i w X-RCP-Token, i w Bearer — także na legacy /api/rcp/ingest
+        assert agent.post("/api/pos/utarg-dnia", json=_paczka("gastro_mssql"),
+                          headers={"X-RCP-Token": token}).status_code == 200
+        assert agent.post("/api/pos/heartbeat", json={"driver": "gastro_mssql"},
+                          headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        assert agent.post("/api/rcp/ingest", json={"odbicia": []},
+                          headers={"X-RCP-Token": token}).status_code == 200
+        assert agent.post("/api/pos/utarg-dnia", json=_paczka(),
+                          headers={"X-RCP-Token": "zly-token"}).status_code == 401
+
+    # status raportuje aktywny token; unieważnienie odcina agenta
+    assert admin_client.get("/api/pos/status").json()["token_aktywny"] is True
+    assert admin_client.delete("/api/pos/token").status_code == 204
+    with TestClient(main.app) as agent:
+        assert agent.post("/api/pos/utarg-dnia", json=_paczka("gastro_mssql"),
+                          headers={"X-RCP-Token": token}).status_code == 401
+    assert admin_client.get("/api/pos/status").json()["token_aktywny"] is False
+
+
+def test_env_token_dziala_rownolegle_z_tokenem_panelu(client, admin_client):
+    # conftest wymusza RCP_INGEST_TOKEN=test-rcp-token; token z panelu go NIE wyłącza
+    admin_client.post("/api/pos/token")
+    assert client.post("/api/pos/utarg-dnia", json=_paczka("gastro_mssql"),
+                       headers=TOKEN).status_code == 200
+
+
+def test_token_tylko_admin(client):
+    from fastapi.testclient import TestClient
+    import main
+    with TestClient(main.app) as anon:
+        assert anon.post("/api/pos/token").status_code == 401
+        assert anon.delete("/api/pos/token").status_code == 401

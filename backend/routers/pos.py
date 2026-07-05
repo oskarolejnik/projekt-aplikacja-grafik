@@ -12,8 +12,9 @@ Autoryzacja POST-ów (trasy publiczne w role_guard): stały token agenta
 dzięki temu formularz w panelu i agent piszą w ten sam endpoint.
 """
 
+import hashlib
 import logging
-import os
+import secrets
 from datetime import date, datetime
 from typing import List, Optional
 
@@ -24,7 +25,7 @@ from sqlalchemy.orm import Session
 import auth
 import models
 from database import get_db
-from deps import utcnow_naive
+from deps import get_lokal_config, token_agenta_ok, utcnow_naive
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -92,22 +93,9 @@ class HeartbeatIn(BaseModel):
         return v
 
 
-def _token_agenta_ok(request: Request) -> bool:
-    """Stały token ingestu (jak /api/rcp/ingest): X-RCP-Token albo Bearer."""
-    oczekiwany = os.environ.get("RCP_INGEST_TOKEN", "")
-    if not oczekiwany:
-        return False
-    podany = request.headers.get("x-rcp-token") or ""
-    if not podany:
-        naglowek = request.headers.get("authorization") or ""
-        if naglowek.startswith("Bearer "):
-            podany = naglowek[7:]
-    return podany == oczekiwany
-
-
 def _wymagaj_agenta_lub_admina(request: Request, db: Session) -> str:
     """Zwraca 'agent' albo login admina; 401/403 gdy żadna ścieżka nie pasuje."""
-    if _token_agenta_ok(request):
+    if token_agenta_ok(request, db):
         return "agent"
     naglowek = request.headers.get("authorization") or ""
     if naglowek.startswith("Bearer "):
@@ -188,7 +176,7 @@ def utarg_dnia_lista(start: date = Query(...), end: date = Query(...),
 
 @router.get("/api/pos/status")
 def pos_status(db: Session = Depends(get_db), admin: models.User = Depends(auth.require_admin)):
-    """Zdrowie integracji POS: agenty (heartbeat) + świeżość utargu per źródło."""
+    """Zdrowie integracji POS: agenty (heartbeat) + świeżość utargu per źródło + token."""
     agenty = [{
         "driver": a.driver, "wersja": a.wersja, "capabilities": a.capabilities,
         "ostatni_sync": a.ostatni_sync.isoformat() if a.ostatni_sync else None,
@@ -197,4 +185,33 @@ def pos_status(db: Session = Depends(get_db), admin: models.User = Depends(auth.
     ostatnie = {}
     for r in db.query(models.UtargDnia).order_by(models.UtargDnia.data.desc()).limit(200).all():
         ostatnie.setdefault(r.zrodlo, str(r.data))
-    return {"agenty": agenty, "ostatni_utarg": ostatnie}
+    cfg = get_lokal_config(db)
+    return {"agenty": agenty, "ostatni_utarg": ostatnie,
+            "token_aktywny": bool(cfg.pos_token_hash),
+            "token_od": cfg.pos_token_od.isoformat() if cfg.pos_token_od else None}
+
+
+@router.post("/api/pos/token", status_code=201)
+def wygeneruj_token_agenta(db: Session = Depends(get_db),
+                           admin: models.User = Depends(auth.require_admin)):
+    """Generuje token agenta POS (kreator „Podłącz POS"). Plaintext zwracany JEDEN raz —
+    w bazie zostaje wyłącznie hash SHA-256. Nowy token unieważnia poprzedni."""
+    token = secrets.token_urlsafe(32)
+    cfg = get_lokal_config(db)
+    cfg.pos_token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    cfg.pos_token_od = utcnow_naive()
+    db.commit()
+    logger.info("Wygenerowano token agenta POS (admin: %s).", admin.login)
+    return {"token": token, "utworzono": cfg.pos_token_od.isoformat()}
+
+
+@router.delete("/api/pos/token", status_code=204)
+def uniewaznij_token_agenta(db: Session = Depends(get_db),
+                            admin: models.User = Depends(auth.require_admin)):
+    """Unieważnia token agenta — agent traci dostęp od następnego żądania.
+    (Env RCP_INGEST_TOKEN, jeśli ustawiony, pozostaje w mocy — to osobny, stały kanał.)"""
+    cfg = get_lokal_config(db)
+    cfg.pos_token_hash = None
+    cfg.pos_token_od = None
+    db.commit()
+    logger.info("Unieważniono token agenta POS (admin: %s).", admin.login)

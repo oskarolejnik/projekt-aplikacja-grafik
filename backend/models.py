@@ -516,6 +516,10 @@ class LokalConfig(Base):
     rozliczenia_nazwy_terminali = Column(JSON, nullable=True)
     # --- Cykl grafiku: 'tydzien' (domyślnie) | 'miesiac' (silnik w przygotowaniu) ---
     grafik_cykl = Column(String(16), nullable=False, default="tydzien")
+    # --- Token agenta POS (kreator „Podłącz POS"): hash SHA-256, plaintext widzi tylko
+    #     admin przy generowaniu; NULL = brak tokenu (zostaje env RCP_INGEST_TOKEN) ---
+    pos_token_hash = Column(String(64), nullable=True)
+    pos_token_od   = Column(DateTime, nullable=True)
 
 
 class Stolik(Base):

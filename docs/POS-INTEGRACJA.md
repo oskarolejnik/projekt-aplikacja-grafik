@@ -3,6 +3,13 @@
 *Stan researchu: lipiec 2026. Ten dokument to plan produktowy dla „wtyczki POS dla każdego lokalu" —
 uniwersalnego następcy dzisiejszego `agent_lokalny/` (który obsługuje wyłącznie Gastro/NGastro na MSSQL).*
 
+**Stan wdrożenia:** ✅ tor A (utarg ręczny/CSV + `POST /api/pos/utarg-dnia` + heartbeat + zakładka
+„Utarg (POS)"), ✅ token agenta z panelu (hash w DB, unieważnialny; env `RCP_INGEST_TOKEN` = fallback,
+przyjmowany też na legacy `/api/rcp|gastro/*`), ✅ agent `core+drivers` z driverem `gastro_mssql`
+(`agent_lokalny/agent_pos.py`, config.yaml z panelu) i kreatorem „Podłącz agenta".
+Do zrobienia: drivery SOGA/X2, konektor Dotykačka, KSeF, kolejka offline + auto-update agenta,
+krok mapowań pracowników/rewirów w kreatorze.
+
 ## 1. Mapa rynku POS w Polsce (2025/2026)
 
 Rynek dzieli się na dwa światy o zupełnie różnych metodach integracji:

@@ -34,7 +34,7 @@ def test_terminy_tylko_w_zakresie(admin_client, db):
 
 def test_parsowanie_i_dopasowanie_zadatkow(client, admin_client, db, monkeypatch):
     import main
-    monkeypatch.setattr(main, "RCP_INGEST_TOKEN", "tok123")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "tok123")   # helper czyta env w momencie wywolania
     # parser
     assert main._parsuj_zadatek("Zadatek za komunie p.Nowak 15.05.2027") == ("Nowak", date(2027, 5, 15))
     assert main._parsuj_zadatek("26.07.2026 p. Wojtyra zadatek za chrzciny") == ("Wojtyra", date(2026, 7, 26))
