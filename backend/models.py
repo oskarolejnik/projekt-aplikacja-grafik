@@ -503,6 +503,19 @@ class LokalConfig(Base):
     praca_min_odpoczynek_h = Column(Integer, nullable=False, default=11)  # min. godzin przerwy między zmianami (KP art. 132)
     praca_max_dni_tydzien  = Column(Integer, nullable=False, default=6)   # maks. dni pracy w tygodniu (KP: 1 dzień wolny)
     praca_max_dni_miesiac  = Column(Integer, nullable=False, default=22)  # maks. dni pracy w miesiącu kalendarzowym
+    # --- Profil rozliczeń i imprez (de-Rajculizacja; defaulty = zachowanie historyczne) ---
+    # True = imprezy rozliczane OSOBNO (IMP odejmowany z kas, osobne wiersze w zeszycie, kafelek na
+    # pulpicie). False = lokal nie wyodrębnia imprez — sprzedaż imprezowa siedzi w zwykłym obrocie.
+    impreza_osobne_rozliczenie = Column(Boolean, nullable=False, default=True)
+    # 'indywidualnie' = każdy kelner deklaruje swoje G/T (wiersz per osoba);
+    # 'pula' = wspólna pula sali (bez deklaracji per kelner) — silnik w przygotowaniu.
+    rozliczenia_tryb_kelnera   = Column(String(16), nullable=False, default="indywidualnie")
+    # Predefiniowane etykiety kas/terminali w Rozliczeniu dnia (listy stringów).
+    # NULL = wolny wpis (zachowanie historyczne — admin wpisuje etykiety ręcznie).
+    rozliczenia_nazwy_kas       = Column(JSON, nullable=True)
+    rozliczenia_nazwy_terminali = Column(JSON, nullable=True)
+    # --- Cykl grafiku: 'tydzien' (domyślnie) | 'miesiac' (silnik w przygotowaniu) ---
+    grafik_cykl = Column(String(16), nullable=False, default="tydzien")
 
 
 class Stolik(Base):

@@ -32,6 +32,9 @@ export default function Pulpit() {
   const [alerty, setAlerty] = useState(null)
   const [obsada, setObsada] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Kafelek „Impreza" tylko w lokalach z osobnym rozliczaniem imprez.
+  const [cfg, setCfg] = useState(null)
+  useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -76,7 +79,8 @@ export default function Pulpit() {
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {[['Gotówka', 'gotowka'], ['Karta', 'karta'], ['Przelew', 'przelew'], ['Impreza', 'impreza']].map(([l, k]) => (
+            {[['Gotówka', 'gotowka'], ['Karta', 'karta'], ['Przelew', 'przelew'],
+              ...(cfg?.impreza_osobne_rozliczenie !== false ? [['Impreza', 'impreza']] : [])].map(([l, k]) => (
               <div key={k} className="rounded-xl border border-line bg-surface px-4 py-3">
                 <div className="text-xs text-muted">{l}</div>
                 <div className="font-display font-bold text-ink">{zl(p.przychod[k])}</div>

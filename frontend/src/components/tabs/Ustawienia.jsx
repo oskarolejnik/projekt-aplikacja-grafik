@@ -36,11 +36,17 @@ export default function Ustawienia() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
+  // Etykiety kas/terminali edytowane jako tekst „po przecinku" (puste = wolny wpis w Rozliczeniu dnia).
+  const [kasyText, setKasyText] = useState('')
+  const [terminaleText, setTerminaleText] = useState('')
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const [c, i, s] = await Promise.all([api('/lokal/config'), api('/integracje/status'), api('/subskrypcja')])
       setCfg(c); setInteg(i.integracje || []); setSub(s)
+      setKasyText((c.rozliczenia_nazwy_kas || []).join(', '))
+      setTerminaleText((c.rozliczenia_nazwy_terminali || []).join(', '))
     } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [toast])
   useEffect(() => { load() }, [load])
@@ -99,6 +105,9 @@ export default function Ustawienia() {
         praca_min_odpoczynek_h: Number(cfg.praca_min_odpoczynek_h),
         praca_max_dni_tydzien: Number(cfg.praca_max_dni_tydzien),
         praca_max_dni_miesiac: Number(cfg.praca_max_dni_miesiac),
+        impreza_osobne_rozliczenie: cfg.impreza_osobne_rozliczenie,
+        rozliczenia_nazwy_kas: kasyText.split(',').map((t) => t.trim()).filter(Boolean),
+        rozliczenia_nazwy_terminali: terminaleText.split(',').map((t) => t.trim()).filter(Boolean),
       })
       toast('Zapisano. Odśwież stronę, by zobaczyć zmiany w marce i nawigacji.', 'success')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
@@ -168,6 +177,31 @@ export default function Ustawienia() {
             <input value={cfg.impreza_najwczesniej ?? '10:00'} onChange={(e) => set('impreza_najwczesniej', e.target.value)} placeholder="10:00" className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Sale z minimum 2 obsady (po przecinku)
             <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="R2Piw,R2G" className={fld} /></label>
+        </div>
+      </Card>
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Rozliczenie dnia" subtitle="Dopasuj kasę do swojego lokalu — nie każda knajpa rozlicza się jak dom weselny." />
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-line bg-surface-2 px-4 py-3">
+            <span className="text-sm text-ink">Imprezy rozliczane osobno
+              <span className="mt-0.5 block text-xs text-muted">
+                Włączone: rozliczenia imprez trafiają do zeszytu i pulpitu, a IMP pomniejsza kasy.
+                Wyłączone: sprzedaż imprezowa siedzi w zwykłym obrocie sali (bez osobnych rozliczeń).
+              </span>
+            </span>
+            <Toggle on={!!cfg.impreza_osobne_rozliczenie} onChange={(v) => set('impreza_osobne_rozliczenie', v)} />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="text-xs font-semibold text-muted">Kasy — etykiety po przecinku (puste = wolny wpis)
+              <input value={kasyText} onChange={(e) => setKasyText(e.target.value)} placeholder="np. Kasa główna, Kasa bar" className={fld} /></label>
+            <label className="text-xs font-semibold text-muted">Terminale — etykiety po przecinku (puste = wolny wpis)
+              <input value={terminaleText} onChange={(e) => setTerminaleText(e.target.value)} placeholder="np. Terminal 1, Terminal ogródek" className={fld} /></label>
+          </div>
+          <p className="text-xs text-muted">
+            Podane etykiety pojawią się jako lista wyboru w Rozliczeniu dnia — liczba kas i terminali
+            wynika z długości list.
+          </p>
         </div>
       </Card>
 

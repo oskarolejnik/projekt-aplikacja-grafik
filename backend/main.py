@@ -519,9 +519,20 @@ def rozpatrz_urlop(uid: int, dane: schemas.UrlopStatusIn, db: Session = Depends(
 # --- ROZLICZANIE IMPREZ (osoba wyznaczona w grafiku) ---
 
 
+def _wymagaj_modul_imprezy(db: Session = Depends(get_db)):
+    """Bramka feature-flagi: endpointy imprez działają tylko w lokalach z włączonym modułem
+    (dotąd flaga chowała wyłącznie zakładki w UI — backend przyjmował żądania mimo wyłączenia)."""
+    if not get_lokal_config(db).modul_imprezy:
+        raise HTTPException(403, "Moduł imprez jest wyłączony.")
+
+
 def imp_dla_dnia(db, data: date) -> dict:
     """Kwoty IMP dla rozliczenia dnia (D2). Gotówka SFISKALIZOWANA z imprez → minus w kasach;
-    karta z imprez → minus w terminalach i kasach. Gotówka niesfiskalizowana i przelew NIE wchodzą."""
+    karta z imprez → minus w terminalach i kasach. Gotówka niesfiskalizowana i przelew NIE wchodzą.
+    Lokal bez osobnego rozliczania imprez (impreza_osobne_rozliczenie=False): IMP zawsze 0 —
+    sprzedaż imprezowa siedzi w zwykłym obrocie sali."""
+    if not get_lokal_config(db).impreza_osobne_rozliczenie:
+        return {"gotowka_sfiskalizowana": 0.0, "karta": 0.0}
     gotowka_sfisk = karta = 0.0
     for r in db.query(models.RozliczenieImprezy).filter_by(data=data).all():
         for p in r.pozycje:
@@ -532,7 +543,7 @@ def imp_dla_dnia(db, data: date) -> dict:
     return {"gotowka_sfiskalizowana": round(gotowka_sfisk, 2), "karta": round(karta, 2)}
 
 
-@app.get("/api/imprezy/rozliczenia")
+@app.get("/api/imprezy/rozliczenia", dependencies=[Depends(_wymagaj_modul_imprezy)])
 def rejestr_imprez(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     """Rejestr rozliczeń imprez (admin) — per impreza, z pozycjami i sumami per forma."""
     rows = (db.query(models.RozliczenieImprezy)
@@ -665,9 +676,12 @@ def _zeszyt_dane(db, start: date, end: date) -> dict:
     rozl = {r.data: r for r in db.query(models.RozliczenieDnia)
             .filter(models.RozliczenieDnia.data >= anchor, models.RozliczenieDnia.data <= end).all()}
     imp_by_day = {}
-    for im in (db.query(models.RozliczenieImprezy)
-               .filter(models.RozliczenieImprezy.data >= anchor, models.RozliczenieImprezy.data <= end).all()):
-        imp_by_day.setdefault(im.data, []).append(im)
+    # Wiersze imprez tylko w lokalach z osobnym rozliczaniem imprez — w trybie „imprezy
+    # w ogólnym obrocie" zeszyt widzi wyłącznie SALĘ i wpisy ręczne.
+    if get_lokal_config(db).impreza_osobne_rozliczenie:
+        for im in (db.query(models.RozliczenieImprezy)
+                   .filter(models.RozliczenieImprezy.data >= anchor, models.RozliczenieImprezy.data <= end).all()):
+            imp_by_day.setdefault(im.data, []).append(im)
     poz_by_day = {}
     for p in (db.query(models.ZeszytPozycja)
               .filter(models.ZeszytPozycja.data >= anchor, models.ZeszytPozycja.data <= end).all()):
@@ -1048,7 +1062,7 @@ def _termin_out(t: models.Termin, zadatek_kp: float = 0.0) -> dict:
             "zadatek_kp": round(zadatek_kp, 2)}   # suma zadatków KP przypisanych do terminu
 
 
-@app.get("/api/terminy")
+@app.get("/api/terminy", dependencies=[Depends(_wymagaj_modul_imprezy)])
 def get_terminy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     rows = (db.query(models.Termin)
             .filter(models.Termin.data >= start, models.Termin.data <= end)
@@ -1061,7 +1075,7 @@ def get_terminy(start: date = Query(...), end: date = Query(...), db: Session = 
     return {"terminy": [_termin_out(t, kp_sum.get(t.id, 0)) for t in rows]}
 
 
-@app.post("/api/terminy", status_code=201)
+@app.post("/api/terminy", status_code=201, dependencies=[Depends(_wymagaj_modul_imprezy)])
 def dodaj_termin(dane: schemas.TerminIn, db: Session = Depends(get_db)):
     t = models.Termin(data=dane.data, nazwisko=dane.nazwisko.strip(), typ=dane.typ,
                       liczba_osob=dane.liczba_osob, telefon=dane.telefon, sala=dane.sala,
@@ -1071,7 +1085,7 @@ def dodaj_termin(dane: schemas.TerminIn, db: Session = Depends(get_db)):
     return _termin_out(t)
 
 
-@app.put("/api/terminy/{termin_id}")
+@app.put("/api/terminy/{termin_id}", dependencies=[Depends(_wymagaj_modul_imprezy)])
 def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(get_db)):
     t = db.get(models.Termin, termin_id)
     if not t:
@@ -1093,7 +1107,7 @@ def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(
     return _termin_out(t)
 
 
-@app.delete("/api/terminy/{termin_id}", status_code=204)
+@app.delete("/api/terminy/{termin_id}", status_code=204, dependencies=[Depends(_wymagaj_modul_imprezy)])
 def usun_termin(termin_id: int, db: Session = Depends(get_db)):
     t = db.get(models.Termin, termin_id)
     if t:
@@ -2251,7 +2265,7 @@ def eksport_wyplaty(request: Request, rok: int = Query(..., ge=2000, le=2100),
 # kopie plików (VPS tylko je odczytuje). Puste = funkcja importu plików imprez wyłączona.
 NAS_BASE_PATH = os.environ.get("IMPREZY_PATH", "")
 
-@app.get("/api/imprezy", response_model=List[schemas.ImprezaOut])
+@app.get("/api/imprezy", response_model=List[schemas.ImprezaOut], dependencies=[Depends(_wymagaj_modul_imprezy)])
 def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     return db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).order_by(models.Impreza.data.asc()).all()
 
@@ -2317,7 +2331,7 @@ def _odswiez_wymagania_imprez(db, start, end):
     db.commit()
 
 
-@app.post("/api/imprezy/sync")
+@app.post("/api/imprezy/sync", dependencies=[Depends(_wymagaj_modul_imprezy)])
 def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     if not os.path.exists(NAS_BASE_PATH):
         raise HTTPException(status_code=404, detail="Brak połączenia z serwerem NAS.")
@@ -2439,7 +2453,7 @@ def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(..
 #   ORAZ Imprezę (źródło obsady). „iCloud tylko dodaje" — istniejące (po UID) pomijamy.
 #   Godzina z kalendarza jest NIEISTOTNA (impreza dostaje 'Brak'); obsada liczy się z osób.
 # ═══════════════════════════════════════════════════════════════════════════
-@app.post("/api/imprezy/import-ics")
+@app.post("/api/imprezy/import-ics", dependencies=[Depends(_wymagaj_modul_imprezy)])
 def import_imprez_ics(payload: dict, db: Session = Depends(get_db)):
     """Import imprez z .ics. Body: {"ics": "<zawartość pliku>"}. Admin-only (middleware).
     Dla każdego VEVENT (jeśli jeszcze nie ma — dedup po UID):

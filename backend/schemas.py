@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from datetime import date, time
 from typing import Optional, List
 
@@ -319,6 +319,11 @@ class LokalConfigOut(LokalBrandingOut):
     praca_min_odpoczynek_h: int = 11
     praca_max_dni_tydzien: int = 6
     praca_max_dni_miesiac: int = 22
+    impreza_osobne_rozliczenie: bool = True
+    rozliczenia_tryb_kelnera: str = "indywidualnie"
+    rozliczenia_nazwy_kas: Optional[List[str]] = None
+    rozliczenia_nazwy_terminali: Optional[List[str]] = None
+    grafik_cykl: str = "tydzien"
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -344,6 +349,35 @@ class LokalConfigIn(BaseModel):
     praca_min_odpoczynek_h: Optional[int] = None
     praca_max_dni_tydzien: Optional[int] = None
     praca_max_dni_miesiac: Optional[int] = None
+    impreza_osobne_rozliczenie: Optional[bool] = None
+    rozliczenia_tryb_kelnera: Optional[str] = None
+    rozliczenia_nazwy_kas: Optional[List[str]] = None
+    rozliczenia_nazwy_terminali: Optional[List[str]] = None
+    grafik_cykl: Optional[str] = None
+
+    @field_validator("rozliczenia_tryb_kelnera")
+    @classmethod
+    def _tryb_kelnera(cls, v):
+        if v is not None and v not in ("indywidualnie", "pula"):
+            raise ValueError("rozliczenia_tryb_kelnera: dozwolone 'indywidualnie' lub 'pula'")
+        return v
+
+    @field_validator("grafik_cykl")
+    @classmethod
+    def _cykl(cls, v):
+        if v is not None and v not in ("tydzien", "miesiac"):
+            raise ValueError("grafik_cykl: dozwolone 'tydzien' lub 'miesiac'")
+        return v
+
+    @field_validator("rozliczenia_nazwy_kas", "rozliczenia_nazwy_terminali")
+    @classmethod
+    def _etykiety(cls, v):
+        if v is None:
+            return v
+        czyste = [s.strip() for s in v if isinstance(s, str) and s.strip()]
+        if len(czyste) > 20:
+            raise ValueError("Maksymalnie 20 etykiet.")
+        return czyste or None   # pusta lista = wróć do wolnego wpisu
 
 class SubskrypcjaIn(BaseModel):
     """Częściowa aktualizacja subskrypcji/licencji instancji (admin)."""

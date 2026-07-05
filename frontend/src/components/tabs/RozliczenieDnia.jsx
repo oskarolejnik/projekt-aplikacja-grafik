@@ -29,6 +29,10 @@ export default function RozliczenieDnia() {
   const [roz, setRoz] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  // Profil rozliczeń lokalu: predefiniowane etykiety kas/terminali (null = wolny wpis)
+  // + czy imprezy są rozliczane osobno (sekcja IMP).
+  const [cfg, setCfg] = useState(null)
+  useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -170,7 +174,10 @@ export default function RozliczenieDnia() {
 
             {/* PRAWA: terminale + kasy + IMP */}
             <div className="space-y-4">
-              {['terminale', 'kasy'].map((pole) => (
+              {['terminale', 'kasy'].map((pole) => {
+                // Lokal z predefiniowanymi etykietami (Ustawienia) → wybór z listy zamiast wolnego wpisu.
+                const etykiety = pole === 'terminale' ? cfg?.rozliczenia_nazwy_terminali : cfg?.rozliczenia_nazwy_kas
+                return (
                 <div key={pole} className="rounded-xl border border-line bg-white/[0.02] p-3">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="text-sm font-bold uppercase tracking-wide text-ink">{pole === 'terminale' ? 'Terminale' : 'Kasy'}</span>
@@ -179,7 +186,19 @@ export default function RozliczenieDnia() {
                   <div className="space-y-1.5">
                     {(roz[pole] || []).map((p, i) => (
                       <div key={i} className="flex items-center gap-2">
-                        <input placeholder="rewir/opis" value={p.rewir || p.etykieta || ''} onChange={(e) => setPoz(pole, i, { rewir: e.target.value })} className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none" />
+                        {etykiety?.length ? (
+                          <select value={p.rewir || p.etykieta || ''} onChange={(e) => setPoz(pole, i, { rewir: e.target.value })}
+                                  className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none">
+                            <option value="">— wybierz —</option>
+                            {etykiety.map((et) => <option key={et} value={et}>{et}</option>)}
+                            {/* wpis historyczny spoza listy zostaje wybieralny, żeby nie znikał z zapisu */}
+                            {(p.rewir || p.etykieta) && !etykiety.includes(p.rewir || p.etykieta) && (
+                              <option value={p.rewir || p.etykieta}>{p.rewir || p.etykieta}</option>
+                            )}
+                          </select>
+                        ) : (
+                          <input placeholder="rewir/opis" value={p.rewir || p.etykieta || ''} onChange={(e) => setPoz(pole, i, { rewir: e.target.value })} className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none" />
+                        )}
                         <input value={p.kwota} onChange={(e) => setPoz(pole, i, { kwota: e.target.value })} placeholder="kwota" className={inp} />
                         <button onClick={() => usunPoz(pole, i)} className="rounded-lg border border-danger/20 bg-danger/10 p-1.5 text-danger"><Icon name="trash" className="h-3.5 w-3.5" /></button>
                       </div>
@@ -196,10 +215,10 @@ export default function RozliczenieDnia() {
                     </div>
                   )}
                 </div>
-              ))}
+              )})}
 
-              {/* IMP (imprezy −) — auto z imprez, z możliwością nadpisania z palca */}
-              {w && (
+              {/* IMP (imprezy −) — tylko w lokalach z osobnym rozliczaniem imprez */}
+              {w && cfg?.impreza_osobne_rozliczenie !== false && (
                 <div className="rounded-xl border border-line bg-white/[0.02] p-3">
                   <label className="flex items-center justify-between">
                     <span className="text-sm font-bold uppercase tracking-wide text-ink">IMP (imprezy −)</span>
