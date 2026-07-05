@@ -108,8 +108,10 @@ export default function Dashboard() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [cfg, setCfg] = useState({})
   const [flotaEnabled, setFlotaEnabled] = useState(false)   // panel operatora tylko na matce
+  const [sub, setSub] = useState(null)                      // stan subskrypcji (baner grace/blokada)
   // Konfiguracja lokalu — chowamy zakładki wyłączonych modułów (np. modul_rezerwacje).
   useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
+  useEffect(() => { api('/subskrypcja').then(setSub).catch(() => {}) }, [])
   // Zakładka „Flota" pojawia się tylko na instancji-matce (samoobsługa włączona).
   useEffect(() => { api('/flota').then((f) => setFlotaEnabled(!!f.enabled)).catch(() => {}) }, [])
 
@@ -303,6 +305,20 @@ export default function Dashboard() {
 
       {/* ── Treść ── */}
       <main className="relative z-10 flex-1 overflow-y-auto p-5 md:p-8">
+        {sub && sub.stan !== 'aktywna' && (
+          <div className={`mx-auto mb-5 flex w-full max-w-7xl flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-sm ${
+            sub.stan === 'grace' ? 'border-lemon/40 bg-lemon/10 text-lemon' : 'border-danger/40 bg-danger/10 text-danger'}`}>
+            <Icon name="warning" className="h-4 w-4 shrink-0" />
+            <span className="font-semibold">
+              {sub.stan === 'grace'
+                ? `Faktura po terminie — opłać subskrypcję do ${sub.data_grace}, inaczej instancja przejdzie w tryb tylko do odczytu.`
+                : 'Subskrypcja nieopłacona — instancja działa w trybie tylko do odczytu. Opłać, aby odblokować zapisy.'}
+            </span>
+            <button onClick={() => select('ustawienia')} className="ml-auto rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+              Przejdź do subskrypcji
+            </button>
+          </div>
+        )}
         <div key={active} className="mx-auto w-full max-w-7xl animate-fade-up">
           <div className="mb-5 flex items-baseline gap-3 md:mb-6">
             {current.kat !== 'ustawienia' && (

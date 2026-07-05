@@ -35,12 +35,39 @@ def get_subskrypcja(db) -> models.Subskrypcja:
     return s
 
 
-def subskrypcja_aktywna(db) -> bool:
-    """Czy instancja ma aktywną subskrypcję (status aktywna/trial i przed data_do)."""
+# Grace period: ile dni po data_do zapisy są jeszcze dozwolone (miękka degradacja
+# z banerem „faktura po terminie") zanim instancja wpadnie w twarde READ_ONLY.
+GRACE_DNI = 7
+
+
+def stan_subskrypcji(db) -> str:
+    """Stan subskrypcji instancji: 'aktywna' | 'grace' | 'zablokowana'.
+    - manualne wygasla/zawieszona → zablokowana od razu (bez grace),
+    - opłacony okres (data_do w przyszłości / bezterminowa) → aktywna,
+    - do GRACE_DNI po data_do → grace (zapisy jeszcze przechodzą, baner),
+    - dalej → zablokowana (READ_ONLY)."""
     s = get_subskrypcja(db)
     if s is None or s.status not in ("aktywna", "trial"):
-        return False
-    return s.data_do is None or s.data_do >= date.today()
+        return "zablokowana"
+    if s.data_do is None:
+        return "aktywna"
+    dzis = date.today()
+    if dzis <= s.data_do:
+        return "aktywna"
+    if dzis <= s.data_do + timedelta(days=GRACE_DNI):
+        return "grace"
+    return "zablokowana"
+
+
+def data_grace(db):
+    """Ostatni dzień, w którym zapisy jeszcze przechodzą (data_do + GRACE_DNI). None = bezterminowa."""
+    s = get_subskrypcja(db)
+    return None if (s is None or s.data_do is None) else s.data_do + timedelta(days=GRACE_DNI)
+
+
+def subskrypcja_aktywna(db) -> bool:
+    """Czy zapisy są dozwolone (aktywna LUB w okresie grace). Używane przez middleware 402."""
+    return stan_subskrypcji(db) != "zablokowana"
 
 
 def get_lokal_config(db) -> models.LokalConfig:

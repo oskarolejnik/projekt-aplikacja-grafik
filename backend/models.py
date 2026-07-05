@@ -615,8 +615,46 @@ class Subskrypcja(Base):
     tier    = Column(String(16), nullable=False, default="free")      # free|basic|pro|premium|enterprise
     status  = Column(String(16), nullable=False, default="aktywna")   # aktywna|trial|wygasla|zawieszona
     data_od = Column(Date, nullable=True)
-    data_do = Column(Date, nullable=True)     # None = bezterminowa
+    data_do = Column(Date, nullable=True)     # None = bezterminowa; koniec opłaconego okresu
     uwagi   = Column(String, nullable=True)
+    # Cena netto override (enterprise / indywidualny rabat); NULL = wg cennika po tier.
+    cena_netto    = Column(Float, nullable=True)
+    # Kredyt z downgrade — pomniejsza kolejną dopłatę/fakturę.
+    saldo_kredytu = Column(Float, nullable=False, default=0.0)
+
+
+class PlatnoscSubskrypcji(Base):
+    """Płatność za subskrypcję lokalu (abonament / dopłata przy upgrade). Osobno od Platnosc
+    (zadatki imprez). Bez realnej bramki — tryb sandbox (link + ręczne „opłacona"); docelowo
+    webhook Stripe/P24 ustawia 'oplacona' i przedłuża Subskrypcja.data_do."""
+    __tablename__ = "platnosci_subskrypcji"
+    id           = Column(Integer, primary_key=True, index=True)
+    rodzaj       = Column(String(16), nullable=False, default="abonament")  # abonament|doplata
+    tier         = Column(String(16), nullable=True)          # tier, którego dotyczy
+    netto        = Column(Float, nullable=False, default=0.0)
+    vat          = Column(Float, nullable=False, default=0.0)
+    brutto       = Column(Float, nullable=False, default=0.0)
+    okres_od     = Column(Date, nullable=True)                # okres abonamentu (na fakturze)
+    okres_do     = Column(Date, nullable=True)
+    status       = Column(String(16), nullable=False, default="oczekuje")   # oczekuje|oplacona|anulowana
+    provider     = Column(String(32), nullable=False, default="sandbox")    # sandbox|stripe|p24
+    external_id  = Column(String, nullable=True, index=True)
+    link         = Column(String, nullable=True)
+    utworzono_at = Column(DateTime, nullable=True)
+    oplacono_at  = Column(DateTime, nullable=True)
+
+
+class HistoriaSubskrypcji(Base):
+    """Audyt zmian subskrypcji (upgrade/downgrade/odnowienie) — rozliczalność i podstawa faktur."""
+    __tablename__ = "historia_subskrypcji"
+    id          = Column(Integer, primary_key=True, index=True)
+    ts          = Column(DateTime, nullable=False)
+    akcja       = Column(String(24), nullable=False)          # upgrade|downgrade|odnowienie|zmiana_statusu
+    tier_z      = Column(String(16), nullable=True)
+    tier_na     = Column(String(16), nullable=True)
+    kwota_netto = Column(Float, nullable=True)                # dopłata (upgrade) / kredyt (downgrade)
+    login       = Column(String(64), nullable=True)
+    szczegoly   = Column(String, nullable=True)
 
 
 class Platnosc(Base):

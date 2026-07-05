@@ -10,11 +10,16 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+import cennik
 import integracje
 import models
+import platnosci_sub
 import schemas
+import subskrypcja_billing
+from auth import require_admin
 from database import get_db
-from deps import get_subskrypcja, subskrypcja_aktywna, get_lokal_config
+from deps import (get_subskrypcja, subskrypcja_aktywna, get_lokal_config,
+                  stan_subskrypcji, data_grace, utcnow_naive)
 
 router = APIRouter()
 
@@ -38,10 +43,21 @@ def instancja_puls(request: Request, db: Session = Depends(get_db)):
 
 
 def _subskrypcja_out(s, db) -> dict:
+    dg = data_grace(db)
+    netto = cennik.cena_netto(s.tier, s.cena_netto)
     return {"tier": s.tier, "status": s.status,
             "data_od": s.data_od.isoformat() if s.data_od else None,
             "data_do": s.data_do.isoformat() if s.data_do else None,
-            "uwagi": s.uwagi, "aktywna": subskrypcja_aktywna(db)}
+            "uwagi": s.uwagi, "aktywna": subskrypcja_aktywna(db),
+            "stan": stan_subskrypcji(db),              # aktywna | grace | zablokowana
+            "data_grace": dg.isoformat() if dg else None,
+            "cena_netto": netto, "cena_brutto": cennik.brutto(netto),
+            "saldo_kredytu": round(s.saldo_kredytu or 0, 2)}
+
+
+def _historia_zmian(db, akcja, tier_z, tier_na, kwota_netto=None, login=None, szczegoly=None):
+    db.add(models.HistoriaSubskrypcji(ts=utcnow_naive(), akcja=akcja, tier_z=tier_z,
+           tier_na=tier_na, kwota_netto=kwota_netto, login=login, szczegoly=szczegoly))
 
 
 def _audit_out(w: models.AuditLog) -> dict:
@@ -60,10 +76,92 @@ def subskrypcja_get(db: Session = Depends(get_db)):
 def subskrypcja_update(data: schemas.SubskrypcjaIn, db: Session = Depends(get_db)):
     """Zmiana subskrypcji (admin) — status/tier/daty. Ustawienie statusu na aktywna odblokowuje zapisy."""
     s = get_subskrypcja(db)
+    stary_tier, stary_status = s.tier, s.status
     for pole, wartosc in data.model_dump(exclude_unset=True).items():
         setattr(s, pole, wartosc)
+    if s.tier != stary_tier:
+        _historia_zmian(db, "zmiana_reczna", stary_tier, s.tier, szczegoly="PUT /api/subskrypcja")
+    elif s.status != stary_status:
+        _historia_zmian(db, "zmiana_statusu", stary_tier, s.tier, szczegoly=f"{stary_status}→{s.status}")
     db.commit(); db.refresh(s)
     return _subskrypcja_out(s, db)
+
+
+@router.get("/api/subskrypcja/upgrade/podglad")
+def upgrade_podglad(tier: str = Query(...), db: Session = Depends(get_db)):
+    """Podgląd zmiany planu (nic nie zapisuje): dopłata za pozostałe dni (proration) lub kredyt."""
+    if tier not in cennik.TIERY:
+        raise HTTPException(400, "Nieznany pakiet.")
+    s = get_subskrypcja(db)
+    return subskrypcja_billing.oblicz_prorate(
+        s.tier, tier, s.data_od, s.data_do,
+        cena_override_nowy=(s.cena_netto if tier == s.tier else None),
+        saldo_kredytu=s.saldo_kredytu or 0)
+
+
+@router.post("/api/subskrypcja/upgrade")
+def upgrade_wykonaj(dane: schemas.UpgradeIn, db: Session = Depends(get_db),
+                    admin: models.User = Depends(require_admin)):
+    """Zmiana planu z proratą. Upgrade: podnosi tier NATYCHMIAST i tworzy płatność-dopłatę
+    (sandbox: link do ręcznego opłacenia). Downgrade: dopisuje kredyt na saldo, obniża tier."""
+    tier = dane.tier
+    if tier not in cennik.TIERY:
+        raise HTTPException(400, "Nieznany pakiet.")
+    s = get_subskrypcja(db)
+    if tier == s.tier:
+        raise HTTPException(400, "Ten pakiet jest już aktywny.")
+    r = subskrypcja_billing.oblicz_prorate(s.tier, tier, s.data_od, s.data_do,
+                                           saldo_kredytu=s.saldo_kredytu or 0)
+    stary = s.tier
+    platnosc = None
+    if r["kierunek"] == "upgrade":
+        s.tier = tier                                   # dostęp do wyższego planu od razu
+        s.saldo_kredytu = round(max(0.0, (s.saldo_kredytu or 0) - r["saldo_kredytu_uzyte"]), 2)
+        if r["doplata_netto"] > 0:
+            platnosc = platnosci_sub.utworz(db, "doplata", tier, r["doplata_netto"],
+                                            okres_od=date.today(), okres_do=s.data_do)
+        _historia_zmian(db, "upgrade", stary, tier, kwota_netto=r["doplata_netto"], login=admin.login)
+    else:  # downgrade — kredyt na saldo, niższy tier
+        s.tier = tier
+        s.saldo_kredytu = round((s.saldo_kredytu or 0) + r["kredyt_netto"], 2)
+        _historia_zmian(db, "downgrade", stary, tier, kwota_netto=r["kredyt_netto"], login=admin.login)
+    db.commit(); db.refresh(s)
+    return {"subskrypcja": _subskrypcja_out(s, db), "prorata": r,
+            "platnosc": ({"external_id": platnosc.external_id, "brutto": platnosc.brutto,
+                          "link": platnosc.link} if platnosc else None)}
+
+
+@router.post("/api/subskrypcja/platnosc/{external_id}/oplac")
+def oplac_sandbox(external_id: str, db: Session = Depends(get_db),
+                  admin: models.User = Depends(require_admin)):
+    """SANDBOX/ręcznie: oznacza płatność subskrypcji jako opłaconą. Abonament przedłuża
+    data_do o miesiąc i odblokowuje instancję. (Docelowo robi to webhook bramki — Faza 4.)"""
+    p = platnosci_sub.oznacz_oplacona(db, external_id)
+    if p is None:
+        raise HTTPException(404, "Brak takiej płatności.")
+    s = get_subskrypcja(db)
+    if p.rodzaj == "abonament":
+        baza = s.data_do if (s.data_do and s.data_do >= date.today()) else date.today()
+        s.data_do = baza + timedelta(days=30)
+        if s.status not in ("aktywna", "trial"):
+            s.status = "aktywna"
+        if not s.data_od:
+            s.data_od = date.today()
+        db.commit(); db.refresh(s)
+    return _subskrypcja_out(s, db)
+
+
+@router.post("/api/subskrypcja/odnow")
+def odnow_abonament(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    """Tworzy płatność za kolejny okres bieżącego pakietu (sandbox: link do opłacenia)."""
+    s = get_subskrypcja(db)
+    netto = cennik.cena_netto(s.tier, s.cena_netto)
+    if netto <= 0:
+        raise HTTPException(400, "Pakiet darmowy nie wymaga opłaty.")
+    baza = s.data_do if (s.data_do and s.data_do >= date.today()) else date.today()
+    p = platnosci_sub.utworz(db, "abonament", s.tier, netto,
+                             okres_od=baza, okres_do=baza + timedelta(days=30))
+    return {"external_id": p.external_id, "brutto": p.brutto, "link": p.link}
 
 
 @router.get("/api/integracje/status")

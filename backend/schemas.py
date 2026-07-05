@@ -419,11 +419,16 @@ class SubskrypcjaIn(BaseModel):
     data_od: Optional[date] = None
     data_do: Optional[date] = None
     uwagi: Optional[str] = None
+    cena_netto: Optional[float] = None      # override (enterprise / rabat); NULL = wg cennika
 
 class PlatnoscIn(BaseModel):
     """Utworzenie płatności zadatku (admin)."""
     termin_id: Optional[int] = None
     kwota: float
+
+class UpgradeIn(BaseModel):
+    """Zmiana pakietu subskrypcji (upgrade z dopłatą / downgrade z kredytem)."""
+    tier: str
 
 # --- MODUŁ REZERWACJI ---
 

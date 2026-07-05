@@ -100,6 +100,39 @@ export default function Ustawienia() {
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
+  // Zmiana planu z dopłatą (proration) + odnowienie abonamentu (sandbox: link do opłacenia).
+  const [nowyTier, setNowyTier] = useState('')
+  const [podglad, setPodglad] = useState(null)     // wynik proraty
+  const [platnoscSub, setPlatnoscSub] = useState(null)  // {external_id, brutto, link}
+  const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'
+
+  const podgladUpgrade = async (tier) => {
+    setNowyTier(tier); setPodglad(null)
+    if (!tier || tier === sub.tier) return
+    try { setPodglad(await api(`/subskrypcja/upgrade/podglad?tier=${tier}`)) }
+    catch (e) { toast(e.message, 'error') }
+  }
+  const wykonajUpgrade = async () => {
+    setBusy(true)
+    try {
+      const r = await api('/subskrypcja/upgrade', 'POST', { tier: nowyTier })
+      setSub(r.subskrypcja); setPlatnoscSub(r.platnosc); setPodglad(null); setNowyTier('')
+      toast(r.platnosc ? 'Plan zmieniony — opłać dopłatę.' : 'Plan zmieniony.', 'success')
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+  const odnow = async () => {
+    setBusy(true)
+    try { setPlatnoscSub(await api('/subskrypcja/odnow', 'POST')); toast('Utworzono płatność za kolejny okres.', 'success') }
+    catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+  const oplacSandbox = async () => {
+    setBusy(true)
+    try {
+      const r = await api(`/subskrypcja/platnosc/${platnoscSub.external_id}/oplac`, 'POST')
+      setSub(r); setPlatnoscSub(null); toast('Zaksięgowano płatność (sandbox).', 'success')
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+
   const zapisz = async () => {
     setBusy(true)
     try {
@@ -352,13 +385,56 @@ export default function Ustawienia() {
 
       {sub && (
         <Card className="p-6 sm:p-8">
-          <SectionHeader title="Subskrypcja / licencja" subtitle="Status instancji. Nieaktywna = tryb tylko do odczytu (zapisy zablokowane)." />
-          <div className="mt-4">
-            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${sub.aktywna ? 'bg-mint/15 text-mint' : 'bg-danger/15 text-danger'}`}>
-              {sub.aktywna ? 'Aktywna — zapisy dozwolone' : 'Nieaktywna — tryb tylko do odczytu'}
+          <SectionHeader title="Subskrypcja / licencja" subtitle="Twój pakiet, płatności i zmiana planu. Po grace instancja przechodzi w tryb tylko do odczytu." />
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              sub.stan === 'aktywna' ? 'bg-mint/15 text-mint' : sub.stan === 'grace' ? 'bg-lemon/15 text-lemon' : 'bg-danger/15 text-danger'}`}>
+              {sub.stan === 'aktywna' ? 'Aktywna — zapisy dozwolone'
+                : sub.stan === 'grace' ? `Po terminie — zapłać do ${sub.data_grace}, potem blokada`
+                : 'Zablokowana — tryb tylko do odczytu'}
+            </span>
+            <span className="text-sm text-muted">Pakiet <b className="text-ink">{sub.tier}</b> · {zl(sub.cena_brutto)}/mc brutto
+              {sub.saldo_kredytu > 0 && <> · kredyt {zl(sub.saldo_kredytu)}</>}
             </span>
           </div>
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+
+          {/* Zmiana planu z dopłatą (proration) */}
+          <div className="mt-5 rounded-xl border border-line bg-surface-2 p-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-xs font-semibold text-muted">Zmień plan
+                <select value={nowyTier} onChange={(e) => podgladUpgrade(e.target.value)} className={`${fld} w-44`}>
+                  <option value="">— wybierz pakiet —</option>
+                  {['free', 'basic', 'pro', 'premium', 'enterprise'].filter((t) => t !== sub.tier)
+                    .map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              <Button variant="ghost" onClick={odnow} disabled={busy}>Odnów abonament</Button>
+            </div>
+            {podglad && podglad.kierunek === 'upgrade' && (
+              <p className="mt-3 text-sm text-ink">
+                Dopłata za pozostałe {podglad.pozostale_dni} dni: <b>{zl(podglad.doplata_brutto)}</b> brutto
+                <span className="text-muted"> (netto {zl(podglad.doplata_netto)}); od następnego okresu {zl(sub.cena_brutto && podglad.nowa_cena_pelna_netto * 1.23)} brutto/mc.</span>
+                <Button className="ml-3" onClick={wykonajUpgrade} disabled={busy}>Zmień i dopłać</Button>
+              </p>
+            )}
+            {podglad && podglad.kierunek === 'downgrade' && (
+              <p className="mt-3 text-sm text-ink">
+                Obniżka planu — kredyt <b>{zl(podglad.kredyt_netto)}</b> netto trafi na saldo (pomniejszy kolejną płatność).
+                <Button className="ml-3" variant="ghost" onClick={wykonajUpgrade} disabled={busy}>Obniż plan</Button>
+              </p>
+            )}
+            {platnoscSub && (
+              <div className="mt-3 rounded-lg border border-mint/30 bg-mint/[0.07] px-3 py-2 text-sm">
+                Płatność {zl(platnoscSub.brutto)} brutto gotowa.{' '}
+                <a href={platnoscSub.link} className="font-semibold text-mint">Otwórz link →</a>
+                <span className="mx-2 text-muted">|</span>
+                <button onClick={oplacSandbox} className="font-semibold text-ink underline">oznacz opłaconą (sandbox)</button>
+              </div>
+            )}
+          </div>
+
+          <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-muted/70">Ręczne (operator)</p>
+          <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label className="text-xs font-semibold text-muted">Status
               <select value={sub.status} onChange={(e) => setS('status', e.target.value)} className={fld}>
                 {['aktywna', 'trial', 'wygasla', 'zawieszona'].map((s) => <option key={s} value={s}>{s}</option>)}
