@@ -4,18 +4,37 @@ Wydzielone z main.py (Rec#5 audytu — dekompozycja monolitu). Ścieżki URL bez
 Autoryzacja (admin) i degradacja READ_ONLY są egzekwowane przez middleware role_guard w main.
 """
 
+import os
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 import integracje
 import models
 import schemas
 from database import get_db
-from deps import get_subskrypcja, subskrypcja_aktywna
+from deps import get_subskrypcja, subskrypcja_aktywna, get_lokal_config
 
 router = APIRouter()
+
+
+@router.get("/api/instancja/puls")
+def instancja_puls(request: Request, db: Session = Depends(get_db)):
+    """Podsumowanie instancji dla panelu floty operatora (instancja-matka). Autoryzacja
+    współdzielonym FLEET_TOKEN (nagłówek X-Fleet-Token) — matka propaguje go do dzieci przez
+    środowisko procesu. Zwraca TYLKO zagregowane, niewrażliwe dane (bez PII, płac, danych gości)."""
+    token = os.getenv("FLEET_TOKEN", "")
+    if not token or request.headers.get("x-fleet-token") != token:
+        raise HTTPException(403, "Brak lub nieprawidłowy token floty.")
+    s = get_subskrypcja(db)
+    return {
+        "nazwa_lokalu": get_lokal_config(db).nazwa_lokalu,
+        "tier": s.tier, "status": s.status, "aktywna": subskrypcja_aktywna(db),
+        "data_do": s.data_do.isoformat() if s.data_do else None,
+        "liczba_uzytkownikow": db.query(models.User).filter_by(aktywny=True).count(),
+        "liczba_pracownikow": db.query(models.Pracownik).count(),
+    }
 
 
 def _subskrypcja_out(s, db) -> dict:

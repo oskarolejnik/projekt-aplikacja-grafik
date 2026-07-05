@@ -151,6 +151,7 @@ TRASY_PUBLICZNE = (
     ("/api/gastro/storna", ("POST",)),           # agent: storna/rabaty (antyfraud)
     ("/api/pos/utarg-dnia", ("POST",)),          # uniwersalny utarg dnia (agent/CSV/ręczny) — auth w handlerze
     ("/api/pos/heartbeat", ("POST",)),           # telemetria agenta — auth w handlerze
+    ("/api/instancja/puls", ("GET",)),           # panel floty: matka odpytuje dzieci (token FLEET_TOKEN w handlerze)
 )
 
 # Wyjątki od degradacji READ_ONLY — zapis dozwolony mimo nieaktywnej subskrypcji:

@@ -66,9 +66,6 @@ def nowy_lokal(dane: NowyLokalIn, request: Request):
 
 @router.get("/api/flota")
 def flota(admin: models.User = Depends(require_admin)):
-    """Panel operatora: instancje floty ze stanem życia procesu."""
-    return {
-        "enabled": provisioning.wlaczony(),
-        "limit": provisioning.LIMIT_FLOTY,
-        "instancje": provisioning.status_floty(),
-    }
+    """Panel operatora: instancje floty + żywy stan subskrypcji (pakiet/status/ważność)
+    zaciągany z każdej instancji, z licznikami wg pakietu i statusu."""
+    return provisioning.flota_z_pulsem()

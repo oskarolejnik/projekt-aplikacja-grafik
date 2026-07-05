@@ -209,6 +209,60 @@ def status_floty() -> list[dict]:
     return out
 
 
+def _fleet_token() -> str:
+    return os.getenv("FLEET_TOKEN", "")
+
+
+def puls_instancji(port: int, token: str, timeout_s: float = 1.5) -> dict | None:
+    """Pobiera podsumowanie żywej instancji (subskrypcja/użytkownicy) przez /api/instancja/puls.
+    Zwraca dict albo None (instancja nie odpowiada / brak tokenu). Best-effort."""
+    if not token:
+        return None
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/instancja/puls",
+                                headers={"X-Fleet-Token": token})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            if r.status == 200:
+                return json.loads(r.read().decode("utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    return None
+
+
+def flota_z_pulsem() -> dict:
+    """Panel operatora: instancje floty + ŻYWY stan subskrypcji (odpytanie dzieci równolegle).
+    Gdy FLEET_TOKEN nieustawiony — sam rejestr + zdrowie procesu (bez subskrypcji)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    instancje = status_floty()
+    token = _fleet_token()
+    if token and instancje:
+        with ThreadPoolExecutor(max_workers=min(8, len(instancje))) as ex:
+            pulsy = list(ex.map(lambda w: puls_instancji(w["port"], token), instancje))
+        for w, p in zip(instancje, pulsy):
+            w["puls"] = p   # None gdy instancja nie odpowiedziała
+
+    # Podsumowanie: liczniki wg pakietu i statusu (tylko z żywych pulsów; fallback = tier z rejestru).
+    wg_pakietu, wg_statusu = {}, {}
+    aktywne = 0
+    for w in instancje:
+        p = w.get("puls") or {}
+        tier = p.get("tier") or w.get("tier") or "—"
+        wg_pakietu[tier] = wg_pakietu.get(tier, 0) + 1
+        if p:
+            wg_statusu[p.get("status", "—")] = wg_statusu.get(p.get("status", "—"), 0) + 1
+            if p.get("aktywna"):
+                aktywne += 1
+    return {
+        "enabled": wlaczony(),
+        "puls_dostepny": bool(token),
+        "limit": LIMIT_FLOTY,
+        "podsumowanie": {"instancji": len(instancje), "aktywnych": aktywne,
+                         "wg_pakietu": wg_pakietu, "wg_statusu": wg_statusu},
+        "instancje": instancje,
+    }
+
+
 def wskrzes_flote() -> int:
     """Best-effort przy starcie matki: podnosi instancje z rejestru, których proces nie żyje.
     Zwraca liczbę wskrzeszonych. Wołane ze startup hooka, gdy provisioning włączony."""

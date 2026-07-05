@@ -37,6 +37,7 @@ import Zgodnosc from './components/tabs/Zgodnosc'
 import ZapytaniaImprez from './components/tabs/ZapytaniaImprez'
 import AntyfraudPos from './components/tabs/AntyfraudPos'
 import UtargPos from './components/tabs/UtargPos'
+import Flota from './components/tabs/Flota'
 
 // Nawigacja dwupoziomowa (feedback: „zakładek jest na tyle, że można się pogubić —
 // najpierw główne kategorie, później ładne listy rozwijane"). Na desktopie górny
@@ -48,6 +49,7 @@ const KATEGORIE = [
   { id: 'kasa', label: 'Kasa i POS', icon: 'clipboard' },
   { id: 'goscie', label: 'Goście', icon: 'pin' },
   { id: 'imprezy', label: 'Imprezy', icon: 'bell' },
+  { id: 'operator', label: 'Operator', icon: 'server' },   // tylko na instancji-matce (panel floty)
 ]
 
 const TABS = [
@@ -87,6 +89,8 @@ const TABS = [
   { id: 'zapytania-imprez', label: 'Zapytania o imprezy', icon: 'sparkles', kat: 'imprezy', title: 'Zapytania o imprezy', Comp: ZapytaniaImprez, modul: 'modul_imprezy' },
   { id: 'zadatki', label: 'Zadatki', icon: 'clipboard', kat: 'imprezy', title: 'Zadatki (KP) — przypisania', Comp: Zadatki, modul: 'modul_imprezy' },
   { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', kat: 'imprezy', title: 'Baza imprez — serwer NAS', Comp: Imprezy, modul: 'modul_imprezy' },
+  // Operator (instancja-matka) — panel floty; widoczny tylko gdy /api/flota → enabled.
+  { id: 'flota', label: 'Flota lokali', icon: 'server', kat: 'operator', title: 'Flota lokali — operator', Comp: Flota, operator: true },
   // Ustawienia — poza kategoriami (przycisk przy profilu / wpis pod akordeonami).
   { id: 'ustawienia', label: 'Ustawienia lokalu', icon: 'office', kat: 'ustawienia', title: 'Ustawienia lokalu', Comp: Ustawienia },
 ]
@@ -103,10 +107,13 @@ export default function Dashboard() {
   const [openAcc, setOpenAcc] = useState('pulpit') // rozwinięty akordeon (mobile)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [cfg, setCfg] = useState({})
+  const [flotaEnabled, setFlotaEnabled] = useState(false)   // panel operatora tylko na matce
   // Konfiguracja lokalu — chowamy zakładki wyłączonych modułów (np. modul_rezerwacje).
   useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
+  // Zakładka „Flota" pojawia się tylko na instancji-matce (samoobsługa włączona).
+  useEffect(() => { api('/flota').then((f) => setFlotaEnabled(!!f.enabled)).catch(() => {}) }, [])
 
-  const visibleTabs = TABS.filter((t) => !t.modul || cfg[t.modul])
+  const visibleTabs = TABS.filter((t) => (!t.modul || cfg[t.modul]) && (!t.operator || flotaEnabled))
   const kategorie = KATEGORIE.filter((k) => visibleTabs.some((t) => t.kat === k.id))
   const current = TABS.find((t) => t.id === active)
   const Active = current.Comp

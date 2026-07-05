@@ -192,7 +192,16 @@ Samoobsługa jest **domyślnie wyłączona** — włącza ją operator w `.env` 
 ```bash
 PROVISIONING_ENABLED=1          # świadoma zgoda operatora
 PROVISIONING_MAX_INSTANCJI=20   # twardy limit floty (opcjonalnie; + limit 3/dzień na IP)
+FLEET_TOKEN=<losowy-sekret>     # opcjonalnie: żywy podgląd subskrypcji w panelu „Flota"
 ```
+
+**Panel operatora „Flota"** (zakładka *Operator → Flota lokali*, widoczna tylko na
+instancji-matce): liczba instancji, podział wg pakietu i statusu subskrypcji, kto ma
+jaki pakiet (nazwa + e-mail), data założenia, czy działa, link do wejścia. Żywy stan
+subskrypcji matka zaciąga z każdej instancji przez `GET /api/instancja/puls`
+(uwierzytelniane wspólnym `FLEET_TOKEN`, który propaguje się do instancji przez
+środowisko procesu). Bez `FLEET_TOKEN` panel pokazuje sam rejestr (pakiet z założenia
++ zdrowie procesu), bez aktualnego statusu subskrypcji.
 
 Lokalnie/desktopowo instancje działają na portach; produkcyjnie ten sam tor spina się
 z reverse proxy (subdomena per instancja).
