@@ -293,15 +293,17 @@ class TerminIn(BaseModel):
 # --- KONFIGURACJA LOKALU (white-label + moduły) ---
 
 class LokalBrandingOut(BaseModel):
-    """Publiczne dane brandingu (bez sekretów) — do strony logowania / PWA."""
+    """Publiczne dane brandingu (bez sekretów) — do strony logowania / PWA.
+    Zawiera też początek tygodnia grafiku: potrzebny KAŻDEMU zalogowanemu (pracownik
+    nie ma dostępu do /api/lokal/config), a nie jest niczym wrażliwym."""
     nazwa_lokalu: str = "Lokalo"
     logo_url: Optional[str] = None
     kolor_primary: Optional[str] = None
+    poczatek_tygodnia: int = 2
     model_config = ConfigDict(from_attributes=True)
 
 class LokalConfigOut(LokalBrandingOut):
     typ_lokalu: Optional[str] = None
-    poczatek_tygodnia: int = 2
     modul_rozliczenia: bool = True
     modul_imprezy: bool = True
     modul_pos: bool = True

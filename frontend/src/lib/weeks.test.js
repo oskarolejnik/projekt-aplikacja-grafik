@@ -43,4 +43,30 @@ describe('generujOpcjeTygodni', () => {
     const idxBiez = opcje.findIndex((o) => o.value === biezacy)
     expect(opcje[idxBiez - 1].label).toContain('Poprzedni tydzień')
   })
+
+  it('bez argumentu startuje w środę (konwencja historyczna)', () => {
+    // ISO date → UTC północ → getUTCDay niezależny od strefy; 3 = środa
+    for (const o of opcje) expect(start(o.value).getUTCDay()).toBe(3)
+  })
+
+  it('poczatek_tygodnia z configu wyznacza dzień startu (0=pon … 6=nie)', () => {
+    // config 0=poniedziałek → getUTCDay()=1; config 6=niedziela → getUTCDay()=0
+    const mapowanie = [[0, 1], [2, 3], [5, 6], [6, 0]]
+    for (const [cfg, js] of mapowanie) {
+      const { opcje: o2 } = generujOpcjeTygodni(cfg)
+      expect(o2).toHaveLength(8)
+      for (const o of o2) {
+        expect(start(o.value).getUTCDay()).toBe(js)
+        expect((koniec(o.value) - start(o.value)) / DZIEN).toBe(6)
+      }
+    }
+  })
+
+  it('wartość spoza zakresu/nie-liczba wraca do środy', () => {
+    for (const zly of [null, undefined, 'x', 9]) {
+      const { opcje: o2 } = generujOpcjeTygodni(zly)
+      // 9 → normalizacja modulo daje 2 (środa); nie-liczby → fallback środa
+      expect(start(o2[0].value).getUTCDay()).toBe(3)
+    }
+  })
 })

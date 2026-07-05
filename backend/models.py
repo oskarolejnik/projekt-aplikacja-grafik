@@ -768,3 +768,34 @@ class Zaproszenie(Base):
     utworzyl_login = Column(String, nullable=True)   # rozliczalność (denormalizacja jak AuditLog)
 
     pracownik = relationship("Pracownik")
+
+
+class UtargDnia(Base):
+    """Dzienny utarg z POS — tor A uniwersalnej integracji (docs/POS-INTEGRACJA.md).
+    Wspólny mianownik WSZYSTKICH źródeł danych sprzedażowych: ręczny wpis w panelu,
+    import CSV, lokalny agent (driver per POS), konektor chmurowy. Upsert po
+    (data, zrodlo) — każde źródło nadpisuje własny wiersz, źródła nie gryzą się."""
+    __tablename__ = "utarg_dnia"
+    __table_args__ = (UniqueConstraint("data", "zrodlo"),)
+    id               = Column(Integer, primary_key=True, index=True)
+    data             = Column(Date, nullable=False, index=True)
+    zrodlo           = Column(String(32), nullable=False, default="reczny")  # reczny|csv|gastro_mssql|dotykacka|...
+    netto            = Column(Float, nullable=False, default=0.0)
+    gotowka          = Column(Float, nullable=True)
+    karta            = Column(Float, nullable=True)
+    liczba_rachunkow = Column(Integer, nullable=True)
+    aktualizacja_at  = Column(DateTime, nullable=False)
+
+
+class AgentStatus(Base):
+    """Zdrowie lokalnego agenta POS (heartbeat) — bez tego agent „umiera po cichu"
+    u klienta. Jeden wiersz per driver; panel pokazuje wersję, capabilities i błędy,
+    alarmuje gdy ostatni sync jest zbyt stary."""
+    __tablename__ = "agent_status"
+    id              = Column(Integer, primary_key=True)
+    driver          = Column(String(48), nullable=False, unique=True)   # np. gastro_mssql
+    wersja          = Column(String(32), nullable=True)
+    capabilities    = Column(JSON, nullable=True)    # np. ["utarg","odbicia","stoly"]
+    ostatni_sync    = Column(DateTime, nullable=True)
+    bledy           = Column(JSON, nullable=True)    # ostatnie błędy agenta (lista stringów)
+    aktualizacja_at = Column(DateTime, nullable=False)

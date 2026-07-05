@@ -53,6 +53,7 @@ from routers.moje import router as moje_router
 from routers.kadry import router as kadry_router
 from routers.zaproszenia import router as zaproszenia_router
 from routers.flota import router as flota_router
+from routers.pos import router as pos_router
 import provisioning
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ app.include_router(moje_router)        # „Moje" /api/me/* — samoobsługa pra
 app.include_router(kadry_router)       # kadry i konta zespołu — users/pracownicy/stanowiska/dyspozycje/urlopy (dekompozycja main — audyt CTO)
 app.include_router(zaproszenia_router) # zaproszenia pracowników do kont — jedyna ścieżka rejestracji (feedback UX)
 app.include_router(flota_router)       # samoobsługowe zakładanie lokali + panel floty (feedback: zero ręcznej pracy)
+app.include_router(pos_router)         # uniwersalne API danych POS: utarg dnia + heartbeat agenta (tor A integracji)
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -147,6 +149,8 @@ TRASY_PUBLICZNE = (
     ("/api/gastro/rozliczenia", ("POST",)),      # agent: rozliczenia kelnerów
     ("/api/gastro/zadatki", ("POST",)),          # agent: zadatki KP
     ("/api/gastro/storna", ("POST",)),           # agent: storna/rabaty (antyfraud)
+    ("/api/pos/utarg-dnia", ("POST",)),          # uniwersalny utarg dnia (agent/CSV/ręczny) — auth w handlerze
+    ("/api/pos/heartbeat", ("POST",)),           # telemetria agenta — auth w handlerze
 )
 
 # Wyjątki od degradacji READ_ONLY — zapis dozwolony mimo nieaktywnej subskrypcji:

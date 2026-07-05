@@ -36,6 +36,7 @@ import Napiwki from './components/tabs/Napiwki'
 import Zgodnosc from './components/tabs/Zgodnosc'
 import ZapytaniaImprez from './components/tabs/ZapytaniaImprez'
 import AntyfraudPos from './components/tabs/AntyfraudPos'
+import UtargPos from './components/tabs/UtargPos'
 
 // Nawigacja dwupoziomowa (feedback: „zakładek jest na tyle, że można się pogubić —
 // najpierw główne kategorie, później ładne listy rozwijane"). Na desktopie górny
@@ -69,6 +70,7 @@ const TABS = [
   { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', kat: 'grafik', title: 'Grafik sprzątania sal', Comp: Sprzatanie, modul: 'modul_sprzatanie' },
   { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', kat: 'grafik', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },
   // Kasa i POS — pieniądze i sygnały z kasy.
+  { id: 'utarg-pos', label: 'Utarg (POS)', icon: 'upload', kat: 'kasa', title: 'Utarg dnia — źródła POS', Comp: UtargPos },
   { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', kat: 'kasa', title: 'Zeszyt kasowy', Comp: ZeszytPanel, modul: 'modul_rozliczenia' },
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', kat: 'kasa', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad, modul: 'modul_rozliczenia' },
   { id: 'napiwki', label: 'Napiwki', icon: 'sparkles', kat: 'kasa', title: 'Napiwki — podział między obsługę', Comp: Napiwki },

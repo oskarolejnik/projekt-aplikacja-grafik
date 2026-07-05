@@ -64,7 +64,9 @@ def test_lokal_branding_publiczny(client):
     assert r.status_code == 200
     body = r.json()
     assert body["nazwa_lokalu"] == "Lokalo"                 # wartość domyślna singletona
-    assert set(body.keys()) == {"nazwa_lokalu", "logo_url", "kolor_primary"}  # bez sekretów
+    # bez sekretów; poczatek_tygodnia jest publiczny — potrzebny każdej roli do opcji tygodni
+    assert set(body.keys()) == {"nazwa_lokalu", "logo_url", "kolor_primary", "poczatek_tygodnia"}
+    assert body["poczatek_tygodnia"] == 2
 
 
 def test_lokal_config_admin_get_i_update(admin_client):
