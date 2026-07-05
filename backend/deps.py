@@ -203,9 +203,31 @@ def _gastro_dla_kelnera(db, pid: int, data: date) -> dict:
     return {"gotowka": round(g, 2), "karta": round(t, 2), "fv": round(fv, 2)}
 
 
+def _pids_sali_dnia(db, data: date) -> set:
+    """Kandydaci do rozliczenia sali danego dnia: grafik Sali + faktycznie pracujący
+    (zamknięte rozliczenie Gastro tego dnia ∩ obsada sali w oknie ±21 dni — radzi sobie
+    z rozjazdem: data zmiany w grafiku ≠ DataOtwarcia rozliczenia w Gastro)."""
+    sala_ids = _sala_stanowisko_ids(db)
+    if not sala_ids:
+        return set()
+    pids = {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
+    sala_staff = {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data >= data - timedelta(days=21),
+        models.PrzydzialZmiany.data <= data + timedelta(days=21),
+        models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
+    gastro_pids = {r.pracownik_id for r in db.query(models.RozliczenieGastro).filter(
+        models.RozliczenieGastro.data == data, models.RozliczenieGastro.pracownik_id.isnot(None)).all()}
+    return pids | (gastro_pids & sala_staff)
+
+
 def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
-    """Get-or-create rozliczenia dnia + dołożenie wierszy kelnerów z grafiku Sali (prefill z Gastro)."""
+    """Get-or-create rozliczenia dnia. Tryb 'indywidualnie': wiersze kelnerów z grafiku Sali
+    (prefill z Gastro). Tryb 'pula': jeden zbiorczy zestaw — prefill z AGREGATU Gastro całej
+    obsady, ustawiany raz przy tworzeniu (żeby nie nadpisywać ręcznych korekt przy każdym GET)."""
+    tryb = get_lokal_config(db).rozliczenia_tryb_kelnera or "indywidualnie"
     roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
+    swiezy = roz is None
     if roz is None:
         roz = models.RozliczenieDnia(data=data, status="robocze", utworzono_at=utcnow_naive(),
                                      terminale=[], kasy=[])
@@ -217,29 +239,25 @@ def _zbuduj_rozliczenie(db, data: date) -> models.RozliczenieDnia:
             # utworzył rozliczenie. Rollback + ponowny odczyt istniejącego zamiast 500.
             db.rollback()
             roz = db.query(models.RozliczenieDnia).filter_by(data=data).first()
-    sala_ids = _sala_stanowisko_ids(db)
-    istn = {k.pracownik_id for k in roz.kelnerzy}
-    pids = set()
-    if sala_ids:
-        # 1) grafik Sali tego dnia
-        pids |= {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
-            models.PrzydzialZmiany.data == data, models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
-        # 2) faktycznie pracujący na sali = zamknięte rozliczenie Gastro tego dnia + obsada sali w oknie
-        #    (radzi sobie z rozjazdem: data zmiany w grafiku ≠ DataOtwarcia rozliczenia w Gastro)
-        sala_staff = {a.pracownik_id for a in db.query(models.PrzydzialZmiany).filter(
-            models.PrzydzialZmiany.data >= data - timedelta(days=21),
-            models.PrzydzialZmiany.data <= data + timedelta(days=21),
-            models.PrzydzialZmiany.stanowisko_id.in_(sala_ids)).all()}
-        gastro_pids = {r.pracownik_id for r in db.query(models.RozliczenieGastro).filter(
-            models.RozliczenieGastro.data == data, models.RozliczenieGastro.pracownik_id.isnot(None)).all()}
-        pids |= (gastro_pids & sala_staff)
-    for pid in pids:
-        if pid in istn:
-            continue
-        g = _gastro_dla_kelnera(db, pid, data)
-        roz.kelnerzy.append(models.RozliczenieKelner(
-            pracownik_id=pid, gotowka=g["gotowka"], karta=g["karta"], fv=g["fv"]))
-        istn.add(pid)
+            swiezy = False
+
+    pids = _pids_sali_dnia(db, data)
+    if tryb == "pula":
+        if swiezy and pids:   # prefill puli agregatem Gastro — tylko przy tworzeniu
+            g = t = fv = 0.0
+            for pid in pids:
+                d = _gastro_dla_kelnera(db, pid, data)
+                g += d["gotowka"]; t += d["karta"]; fv += d["fv"]
+            roz.pula_gotowka = round(g, 2); roz.pula_karta = round(t, 2); roz.pula_fv = round(fv, 2)
+    else:
+        istn = {k.pracownik_id for k in roz.kelnerzy}
+        for pid in pids:
+            if pid in istn:
+                continue
+            g = _gastro_dla_kelnera(db, pid, data)
+            roz.kelnerzy.append(models.RozliczenieKelner(
+                pracownik_id=pid, gotowka=g["gotowka"], karta=g["karta"], fv=g["fv"]))
+            istn.add(pid)
     db.commit(); db.refresh(roz)
     return roz
 

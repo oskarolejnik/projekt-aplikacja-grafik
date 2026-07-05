@@ -43,7 +43,9 @@ export default function RozliczenieDnia() {
 
   useEffect(() => { load() }, [load])
 
+  const trybPula = roz?.tryb_kelnera === 'pula'
   const setRozPole = (patch) => setRoz((r) => ({ ...r, ...patch }))
+  const setPula = (patch) => setRoz((r) => ({ ...r, pula: { ...r.pula, ...patch } }))
   const setKelner = (i, patch) => setRoz((r) => ({ ...r, kelnerzy: r.kelnerzy.map((k, j) => (j === i ? { ...k, ...patch } : k)) }))
   const setPoz = (pole, i, patch) => setRoz((r) => ({ ...r, [pole]: r[pole].map((p, j) => (j === i ? { ...p, ...patch } : p)) }))
   const dodajPoz = (pole) => setRoz((r) => ({ ...r, [pole]: [...(r[pole] || []), { etykieta: '', kwota: '', rewir: '' }] }))
@@ -61,6 +63,11 @@ export default function RozliczenieDnia() {
         })),
         terminale: (roz.terminale || []).map((p) => ({ etykieta: p.etykieta || null, kwota: num(p.kwota), rewir: p.rewir || null })),
         kasy: (roz.kasy || []).map((p) => ({ etykieta: p.etykieta || null, kwota: num(p.kwota), rewir: p.rewir || null })),
+        // Tryb pula: zbiorcze G/T/FV/KW całej zmiany.
+        ...(trybPula ? {
+          pula_gotowka: num(roz.pula?.gotowka), pula_karta: num(roz.pula?.karta),
+          pula_fv: num(roz.pula?.fv), pula_kw: num(roz.pula?.kw),
+        } : {}),
       }
       const zapisany = await api(`/rozliczenie?data=${data}`, 'PUT', body)
       setRoz(zapisany)
@@ -101,34 +108,55 @@ export default function RozliczenieDnia() {
         <div className="grid place-items-center py-12"><Spinner className="h-6 w-6 text-muted" /></div>
       ) : (
         <div className="space-y-6">
-          {/* Kelnerzy — pełna szerokość, G/T/FV od razu widoczne (KW po prawej) */}
-          <div className="overflow-x-auto rounded-xl border border-line">
-            <table className="w-full min-w-[480px] text-sm">
-              <thead>
-                <tr className="bg-surface-2 text-[11px] uppercase tracking-wide text-muted">
-                  <th className="px-3 py-2 text-left font-bold">Kelner</th>
-                  <th className="px-3 py-2 text-right font-bold">Gotówka (G)</th>
-                  <th className="px-3 py-2 text-right font-bold">Karta (T)</th>
-                  <th className="px-3 py-2 text-right font-bold text-mint">FV</th>
-                  <th className="px-3 py-2 text-right font-bold text-muted/70">KW</th>
-                </tr>
-              </thead>
-              <tbody>
-                {roz.kelnerzy.length === 0 && (
-                  <tr><td colSpan={5} className="px-3 py-3 text-center text-muted">Brak kelnerów na Sali tego dnia (sprawdź grafik).</td></tr>
-                )}
-                {roz.kelnerzy.map((k, i) => (
-                  <tr key={k.pracownik_id} className="border-t border-line/60">
-                    <td className="px-3 py-1.5 font-semibold text-ink">{k.pracownik}</td>
-                    <td className="px-3 py-1.5 text-right"><input value={k.gotowka} onChange={(e) => setKelner(i, { gotowka: e.target.value })} className={inpS} /></td>
-                    <td className="px-3 py-1.5 text-right"><input value={k.karta} onChange={(e) => setKelner(i, { karta: e.target.value })} className={inpS} /></td>
-                    <td className="px-3 py-1.5 text-right"><input value={k.fv} onChange={(e) => setKelner(i, { fv: e.target.value })} className={`${inpS} text-mint`} /></td>
-                    <td className="px-3 py-1.5 text-right"><input value={k.kw} onChange={(e) => setKelner(i, { kw: e.target.value })} className={`${inpS} text-muted`} /></td>
+          {trybPula ? (
+            /* Tryb pula — jeden zbiorczy zestaw dla całej zmiany (bez deklaracji per kelner) */
+            <div className="rounded-xl border border-line bg-surface-2 p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-sm font-bold uppercase tracking-wide text-ink">Pula sali</span>
+                <span className="rounded-full bg-mint/15 px-2 py-0.5 text-[11px] font-semibold text-mint">wspólne rozliczenie zmiany</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <label className="text-xs font-semibold text-muted">Gotówka (G)
+                  <input value={roz.pula?.gotowka ?? ''} onChange={(e) => setPula({ gotowka: e.target.value })} className={`${inp} mt-1 w-full text-left`} /></label>
+                <label className="text-xs font-semibold text-muted">Karta (T)
+                  <input value={roz.pula?.karta ?? ''} onChange={(e) => setPula({ karta: e.target.value })} className={`${inp} mt-1 w-full text-left`} /></label>
+                <label className="text-xs font-semibold text-mint">FV
+                  <input value={roz.pula?.fv ?? ''} onChange={(e) => setPula({ fv: e.target.value })} className={`${inp} mt-1 w-full text-left text-mint`} /></label>
+                <label className="text-xs font-semibold text-muted/70">KW
+                  <input value={roz.pula?.kw ?? ''} onChange={(e) => setPula({ kw: e.target.value })} className={`${inp} mt-1 w-full text-left text-muted`} /></label>
+              </div>
+              <p className="mt-2 text-xs text-muted">Prefill z Gastro (suma obsady sali) — skoryguj i zapisz.</p>
+            </div>
+          ) : (
+            /* Kelnerzy — pełna szerokość, G/T/FV od razu widoczne (KW po prawej) */
+            <div className="overflow-x-auto rounded-xl border border-line">
+              <table className="w-full min-w-[480px] text-sm">
+                <thead>
+                  <tr className="bg-surface-2 text-[11px] uppercase tracking-wide text-muted">
+                    <th className="px-3 py-2 text-left font-bold">Kelner</th>
+                    <th className="px-3 py-2 text-right font-bold">Gotówka (G)</th>
+                    <th className="px-3 py-2 text-right font-bold">Karta (T)</th>
+                    <th className="px-3 py-2 text-right font-bold text-mint">FV</th>
+                    <th className="px-3 py-2 text-right font-bold text-muted/70">KW</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {roz.kelnerzy.length === 0 && (
+                    <tr><td colSpan={5} className="px-3 py-3 text-center text-muted">Brak kelnerów na Sali tego dnia (sprawdź grafik).</td></tr>
+                  )}
+                  {roz.kelnerzy.map((k, i) => (
+                    <tr key={k.pracownik_id} className="border-t border-line/60">
+                      <td className="px-3 py-1.5 font-semibold text-ink">{k.pracownik}</td>
+                      <td className="px-3 py-1.5 text-right"><input value={k.gotowka} onChange={(e) => setKelner(i, { gotowka: e.target.value })} className={inpS} /></td>
+                      <td className="px-3 py-1.5 text-right"><input value={k.karta} onChange={(e) => setKelner(i, { karta: e.target.value })} className={inpS} /></td>
+                      <td className="px-3 py-1.5 text-right"><input value={k.fv} onChange={(e) => setKelner(i, { fv: e.target.value })} className={`${inpS} text-mint`} /></td>
+                      <td className="px-3 py-1.5 text-right"><input value={k.kw} onChange={(e) => setKelner(i, { kw: e.target.value })} className={`${inpS} text-muted`} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* LEWA: zadatek + utarg */}

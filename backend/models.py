@@ -363,6 +363,12 @@ class RozliczenieDnia(Base):
     przelew            = Column(Float, nullable=False, default=0.0)               # przelew dnia (admin z palca, poza kasą)
     terminale          = Column(JSON, nullable=True)   # [{"etykieta","kwota","rewir"}]
     kasy               = Column(JSON, nullable=True)    # [{"etykieta","kwota","rewir"}]
+    # Tryb „pula": jeden zbiorczy zestaw G/T/FV/KW dla całej zmiany (bez deklaracji per kelner).
+    # W trybie „indywidualnie" pola puli są nieużywane (dane siedzą w RozliczenieKelner).
+    pula_gotowka       = Column(Float, nullable=False, default=0.0)
+    pula_karta         = Column(Float, nullable=False, default=0.0)
+    pula_fv            = Column(Float, nullable=False, default=0.0)
+    pula_kw            = Column(Float, nullable=False, default=0.0)
     utworzono_at       = Column(DateTime, nullable=True)
     przekazano_szef_at = Column(DateTime, nullable=True)
     push_admin_at      = Column(DateTime, nullable=True)   # push „raport czeka na zatwierdzenie" (raz)

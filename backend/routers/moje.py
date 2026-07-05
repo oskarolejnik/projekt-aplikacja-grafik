@@ -32,7 +32,7 @@ from deps import (
     _zbuduj_rozliczenie,
     utcnow_naive,
 )
-from deps import rewir_dla_pracownika as _rewir_dla_pracownika
+from deps import rewir_dla_pracownika as _rewir_dla_pracownika, get_lokal_config
 from push import VAPID_PUBLIC_KEY, wyslij_push_do_adminow
 
 router = APIRouter()
@@ -416,6 +416,10 @@ def _rozliczenia_oczekujace(db, pid: int):
     więc przycisk „Rozlicz się" pojawia się nawet gdy dzień zmiany ≠ dzień rozliczenia w Gastro."""
     if not pid:
         return []
+    # Tryb „pula": obsługa rozlicza się zbiorczo — pracownik nie ma indywidualnego rozliczenia,
+    # więc nie pokazujemy mu wezwania „Rozlicz się" (endpoint i tak by je odrzucił).
+    if (get_lokal_config(db).rozliczenia_tryb_kelnera or "indywidualnie") == "pula":
+        return []
     sala_ids = _sala_stanowisko_ids(db)
     if not sala_ids:
         return []
@@ -465,6 +469,9 @@ def _kelner_sala_przydzial(db, pid: int, data: date):
 
 @router.get("/api/me/rozliczenie")
 def moje_rozliczenie(data: date = Query(...), user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Tryb „pula": rozlicza się cała zmiana zbiorczo — pracownik nie ma własnego wiersza.
+    if (get_lokal_config(db).rozliczenia_tryb_kelnera or "indywidualnie") == "pula":
+        return {"moze": False}
     if not _kelner_sala_dnia(db, user.pracownik_id, data):
         return {"moze": False}
     roz = _zbuduj_rozliczenie(db, data)
@@ -484,6 +491,8 @@ def moje_rozliczenie(data: date = Query(...), user: models.User = Depends(get_cu
 @router.put("/api/me/rozliczenie", status_code=204)
 def zapisz_moje_rozliczenie(dane: schemas.MojRozliczenieIn, data: date = Query(...),
                             user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if (get_lokal_config(db).rozliczenia_tryb_kelnera or "indywidualnie") == "pula":
+        raise HTTPException(403, "Lokal rozlicza salę zbiorczo (wspólna pula) — indywidualne rozliczenie wyłączone.")
     if not _kelner_sala_dnia(db, user.pracownik_id, data):
         raise HTTPException(403, "Rozliczenie wypełnia kelner sali w dniu swojej zmiany.")
     roz = _zbuduj_rozliczenie(db, data)

@@ -119,6 +119,7 @@ export default function Ustawienia() {
         praca_max_dni_tydzien: Number(cfg.praca_max_dni_tydzien),
         praca_max_dni_miesiac: Number(cfg.praca_max_dni_miesiac),
         impreza_osobne_rozliczenie: cfg.impreza_osobne_rozliczenie,
+        rozliczenia_tryb_kelnera: cfg.rozliczenia_tryb_kelnera || 'indywidualnie',
         rozliczenia_nazwy_kas: kasyText.split(',').map((t) => t.trim()).filter(Boolean),
         rozliczenia_nazwy_terminali: terminaleText.split(',').map((t) => t.trim()).filter(Boolean),
         sale: saleText.split(',').map((t) => t.trim()).filter(Boolean),
@@ -222,6 +223,12 @@ export default function Ustawienia() {
             </span>
             <Toggle on={!!cfg.impreza_osobne_rozliczenie} onChange={(v) => set('impreza_osobne_rozliczenie', v)} />
           </div>
+          <label className="block text-xs font-semibold text-muted">Sposób rozliczania obsługi
+            <select value={cfg.rozliczenia_tryb_kelnera || 'indywidualnie'} onChange={(e) => set('rozliczenia_tryb_kelnera', e.target.value)} className={fld}>
+              <option value="indywidualnie">Każdy kelner rozlicza się sam (wiersz per osoba)</option>
+              <option value="pula">Wspólna pula sali (jedno zbiorcze rozliczenie zmiany)</option>
+            </select>
+          </label>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="text-xs font-semibold text-muted">Kasy — etykiety po przecinku (puste = wolny wpis)
               <input value={kasyText} onChange={(e) => setKasyText(e.target.value)} placeholder="np. Kasa główna, Kasa bar" className={fld} /></label>

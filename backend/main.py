@@ -584,10 +584,28 @@ def _imp_wynikowe(db, roz: models.RozliczenieDnia) -> dict:
     return imp_dla_dnia(db, roz.data)
 
 
+def _tryb_efektywny(db, roz: models.RozliczenieDnia) -> str:
+    """Skąd czytać utarg dnia. Tryb 'pula'/'indywidualnie' z konfiguracji jest GLOBALNY i zmienny,
+    a dane dnia leżą tam, gdzie były zapisane. Żeby zmiana trybu nie wyzerowała utargu na starych
+    dniach — źródło podąża za DANYMI (bieżący tryb rozstrzyga tylko, gdy oba źródła są puste)."""
+    tryb = get_lokal_config(db).rozliczenia_tryb_kelnera or "indywidualnie"
+    ma_pule = bool(roz.pula_gotowka or roz.pula_karta or roz.pula_fv or roz.pula_kw)
+    ma_kelnerow = any(k.gotowka or k.karta or k.fv or k.kw for k in roz.kelnerzy)
+    if tryb == "pula":
+        return "pula" if (ma_pule or not ma_kelnerow) else "indywidualnie"
+    return "pula" if (ma_pule and not ma_kelnerow) else "indywidualnie"
+
+
 def _wynik_rozliczenia(db, roz: models.RozliczenieDnia) -> dict:
-    kelnerzy = [{"gotowka": k.gotowka, "karta": k.karta} for k in roz.kelnerzy]
-    fv = sum(k.fv for k in roz.kelnerzy)
-    kw = sum(k.kw for k in roz.kelnerzy)
+    # Tryb 'pula': jeden syntetyczny „kelner" (zbiorcze G/T) — silnik policz_dzien bez zmian.
+    if _tryb_efektywny(db, roz) == "pula":
+        kelnerzy = [{"gotowka": roz.pula_gotowka or 0, "karta": roz.pula_karta or 0}]
+        fv = roz.pula_fv or 0
+        kw = roz.pula_kw or 0
+    else:
+        kelnerzy = [{"gotowka": k.gotowka, "karta": k.karta} for k in roz.kelnerzy]
+        fv = sum(k.fv for k in roz.kelnerzy)
+        kw = sum(k.kw for k in roz.kelnerzy)
     terminale = [p.get("kwota", 0) for p in (roz.terminale or [])]
     kasy = [p.get("kwota", 0) for p in (roz.kasy or [])]
     return rozliczenia.policz_dzien(kelnerzy=kelnerzy, fv=fv, terminale=terminale, kasy=kasy,
@@ -598,14 +616,20 @@ def _wynik_rozliczenia(db, roz: models.RozliczenieDnia) -> dict:
 
 def _rozliczenie_out(db, roz: models.RozliczenieDnia) -> dict:
     pm = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    # Front renderuje wg EFEKTYWNEGO źródła (nie surowej flagi), więc po zmianie trybu widać
+    # realne dane starego dnia (a nie pustą kartę puli / pustą tabelę).
+    tryb = _tryb_efektywny(db, roz)
     return {
         "data": str(roz.data), "status": roz.status,
+        "tryb_kelnera": tryb,
         "zadatek_gotowka": roz.zadatek_gotowka or 0, "zadatek_karta": roz.zadatek_karta or 0,
         "kp_baza": _kp_dla_dnia(db, roz.data),    # Σ KP z Gastro (podpowiedź do rozbicia)
         "imp_reczny": roz.imp_reczny, "imp_gotowka": roz.imp_gotowka or 0, "imp_karta": roz.imp_karta or 0,
         "przelew": roz.przelew or 0,
         "kelnerzy": [{"pracownik_id": k.pracownik_id, "pracownik": pm.get(k.pracownik_id),
                       "gotowka": k.gotowka, "karta": k.karta, "fv": k.fv, "kw": k.kw} for k in roz.kelnerzy],
+        "pula": {"gotowka": roz.pula_gotowka or 0, "karta": roz.pula_karta or 0,
+                 "fv": roz.pula_fv or 0, "kw": roz.pula_kw or 0},
         "terminale": roz.terminale or [], "kasy": roz.kasy or [],
         "wynik": _wynik_rozliczenia(db, roz),
     }
@@ -627,6 +651,12 @@ def zapisz_rozliczenie(dane: schemas.RozliczenieDniaIn, data: date = Query(...),
     roz.przelew = float(dane.przelew or 0)
     roz.terminale = [p.model_dump() for p in dane.terminale]
     roz.kasy = [p.model_dump() for p in dane.kasy]
+    # Zbiorcza pula sali (tryb 'pula') — zapisywana, gdy front ją przysłał; nieszkodliwa w trybie
+    # indywidualnym (pola puli są tam ignorowane przy liczeniu).
+    if dane.pula_gotowka is not None: roz.pula_gotowka = float(dane.pula_gotowka)
+    if dane.pula_karta is not None: roz.pula_karta = float(dane.pula_karta)
+    if dane.pula_fv is not None: roz.pula_fv = float(dane.pula_fv)
+    if dane.pula_kw is not None: roz.pula_kw = float(dane.pula_kw)
     by_pid = {k.pracownik_id: k for k in roz.kelnerzy}
     for kin in dane.kelnerzy:
         k = by_pid.get(kin.pracownik_id)

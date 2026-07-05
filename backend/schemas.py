@@ -249,6 +249,11 @@ class RozliczenieDniaIn(BaseModel):
     kelnerzy: List[RozliczenieKelnerIn] = []
     terminale: List[PozycjaKasaIn] = []
     kasy: List[PozycjaKasaIn] = []
+    # Zbiorcza pula sali (tryb rozliczenia_tryb_kelnera='pula'); None = pole nie zmieniane.
+    pula_gotowka: Optional[float] = None
+    pula_karta: Optional[float] = None
+    pula_fv: Optional[float] = None
+    pula_kw: Optional[float] = None
 
 class MojRozliczenieIn(BaseModel):
     gotowka: float = 0.0
