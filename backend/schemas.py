@@ -326,6 +326,12 @@ class LokalConfigOut(LokalBrandingOut):
     rozliczenia_nazwy_kas: Optional[List[str]] = None
     rozliczenia_nazwy_terminali: Optional[List[str]] = None
     grafik_cykl: str = "tydzien"
+    sale: Optional[List[str]] = None
+    sprzatanie_sale_codziennie: Optional[List[str]] = None
+    sprzatanie_sala_niedziela: Optional[str] = None
+    imprezy_mapa_sal: Optional[dict] = None
+    imprezy_excel_mapa: Optional[dict] = None
+    zeszyt_kolumny: Optional[List[str]] = None
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -356,6 +362,13 @@ class LokalConfigIn(BaseModel):
     rozliczenia_nazwy_kas: Optional[List[str]] = None
     rozliczenia_nazwy_terminali: Optional[List[str]] = None
     grafik_cykl: Optional[str] = None
+    sale: Optional[List[str]] = None
+    sprzatanie_sale_codziennie: Optional[List[str]] = None
+    # pusty string = reguła niedzieli wyłączona (None = bez zmiany pola)
+    sprzatanie_sala_niedziela: Optional[str] = None
+    imprezy_mapa_sal: Optional[dict] = None
+    imprezy_excel_mapa: Optional[dict] = None
+    zeszyt_kolumny: Optional[List[str]] = None
 
     @field_validator("rozliczenia_tryb_kelnera")
     @classmethod
@@ -371,7 +384,8 @@ class LokalConfigIn(BaseModel):
             raise ValueError("grafik_cykl: dozwolone 'tydzien' lub 'miesiac'")
         return v
 
-    @field_validator("rozliczenia_nazwy_kas", "rozliczenia_nazwy_terminali")
+    @field_validator("rozliczenia_nazwy_kas", "rozliczenia_nazwy_terminali",
+                     "sale", "sprzatanie_sale_codziennie", "zeszyt_kolumny")
     @classmethod
     def _etykiety(cls, v):
         if v is None:
@@ -379,7 +393,18 @@ class LokalConfigIn(BaseModel):
         czyste = [s.strip() for s in v if isinstance(s, str) and s.strip()]
         if len(czyste) > 20:
             raise ValueError("Maksymalnie 20 etykiet.")
-        return czyste or None   # pusta lista = wróć do wolnego wpisu
+        return czyste or None   # pusta lista = wróć do wartości domyślnych
+
+    @field_validator("imprezy_mapa_sal", "imprezy_excel_mapa")
+    @classmethod
+    def _mapy(cls, v):
+        if v is None:
+            return v
+        czysta = {str(k).strip(): str(w).strip() for k, w in v.items()
+                  if str(k).strip() and str(w).strip()}
+        if len(czysta) > 20:
+            raise ValueError("Maksymalnie 20 wpisów mapy.")
+        return czysta or None   # pusta mapa = wróć do wartości domyślnych
 
 class SubskrypcjaIn(BaseModel):
     """Częściowa aktualizacja subskrypcji/licencji instancji (admin)."""

@@ -9,8 +9,10 @@ import { useToast } from '../ui/Toast'
 // Zeszyt kasowy — PRZYCHÓD (SALA z rozliczenia + imprezy auto + ręczne wiersze) − ROZCHÓD
 // (Towar/Koszty/Wypłaty/Inne) → STAN (saldo gotówki narastająco). Admin edytuje; szef czyta.
 const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'
-const KOL = [{ v: 'towar', l: 'Towar' }, { v: 'koszty', l: 'Koszty' }, { v: 'wyplaty', l: 'Wypłaty' }, { v: 'inne', l: 'Inne' }]
-const KOL_L = Object.fromEntries(KOL.map((k) => [k.v, k.l]))
+// Kategorie rozchodu: domyślne (legacy) — lokal może je podmienić w Ustawieniach
+// (zeszyt_kolumny). Wpisy historyczne spoza bieżącej listy wyświetlają surową nazwę.
+const KOL_DOMYSLNE = [{ v: 'towar', l: 'Towar' }, { v: 'koszty', l: 'Koszty' }, { v: 'wyplaty', l: 'Wypłaty' }, { v: 'inne', l: 'Inne' }]
+const KOL_L = Object.fromEntries(KOL_DOMYSLNE.map((k) => [k.v, k.l]))
 const dz = (s) => { const [, m, d] = s.split('-'); return `${d}.${m}` }
 const miesiacTeraz = () => new Date().toISOString().slice(0, 7)
 const granice = (mc) => { const [y, m] = mc.split('-').map(Number); const ost = new Date(y, m, 0).getDate(); return [`${mc}-01`, `${mc}-${String(ost).padStart(2, '0')}`] }
@@ -25,6 +27,13 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
   const [formP, setFormP] = useState({})         // per-dzień formularz przychodu
   const [rozwiniete, setRozwiniete] = useState(() => new Set())   // dni odsłonięte ręcznie (puste)
   const [cfg, setCfg] = useState({ stan_poczatkowy: '', stan_poczatkowy_data: '' })
+  // Kolumny rozchodu z konfiguracji lokalu (szef bez dostępu do configu → defaulty).
+  const [kolumny, setKolumny] = useState(KOL_DOMYSLNE)
+  useEffect(() => {
+    api('/lokal/config')
+      .then((c) => { if (c.zeszyt_kolumny?.length) setKolumny(c.zeszyt_kolumny.map((n) => ({ v: n, l: n }))) })
+      .catch(() => {})
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -50,8 +59,8 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
     const f = formR[data] || {}
     if (!num(f.kwota)) { toast('Podaj kwotę rozchodu.', 'error'); return }
     try {
-      await api('/zeszyt/pozycja', 'POST', { data, kolumna: f.kolumna || 'towar', opis: f.opis || null, kwota: num(f.kwota) })
-      setFormR((s) => ({ ...s, [data]: { kolumna: f.kolumna || 'towar' } })); load()
+      await api('/zeszyt/pozycja', 'POST', { data, kolumna: f.kolumna || kolumny[0].v, opis: f.opis || null, kwota: num(f.kwota) })
+      setFormR((s) => ({ ...s, [data]: { kolumna: f.kolumna || kolumny[0].v } })); load()
     } catch (e) { toast(e.message, 'error') }
   }
   const usunRozchod = async (id) => { try { await api(`/zeszyt/pozycja/${id}`, 'DELETE'); load() } catch (e) { toast(e.message, 'error') } }
@@ -185,8 +194,8 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
                       ))}
                       {!readOnly && (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <select value={fr.kolumna || 'towar'} onChange={(e) => setFR(d.data, { kolumna: e.target.value })} className="rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none">
-                            {KOL.map((k) => <option key={k.v} value={k.v}>{k.l}</option>)}
+                          <select value={fr.kolumna || kolumny[0].v} onChange={(e) => setFR(d.data, { kolumna: e.target.value })} className="rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none">
+                            {kolumny.map((k) => <option key={k.v} value={k.v}>{k.l}</option>)}
                           </select>
                           <input placeholder="opis" value={fr.opis || ''} onChange={(e) => setFR(d.data, { opis: e.target.value })} className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink outline-none" />
                           <input placeholder="kwota" value={fr.kwota || ''} onChange={(e) => setFR(d.data, { kwota: e.target.value })} className={cellInp} />

@@ -217,7 +217,7 @@ def moje_sprzatanie(
     user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     _wymagaj_technicznego(user, db)
-    return {"pozycje": sprzatanie.generuj(db, start, end), "sale": list(sprzatanie.SALE)}
+    return {"pozycje": sprzatanie.generuj(db, start, end), "sale": list(sprzatanie.sale_lokalu(db))}
 
 
 @router.put("/api/me/sprzatanie/zrobione", status_code=204)
@@ -226,7 +226,7 @@ def odhacz_sprzatanie(
     user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     prac = _wymagaj_technicznego(user, db)
-    if dane.sala not in sprzatanie.SALE:
+    if dane.sala not in sprzatanie.sale_lokalu(db):
         raise HTTPException(400, "Nieznana sala.")
     istn = db.query(models.SprzatanieOdhaczenie).filter_by(data=dane.data, sala=dane.sala).first()
     if dane.zrobione and not istn:

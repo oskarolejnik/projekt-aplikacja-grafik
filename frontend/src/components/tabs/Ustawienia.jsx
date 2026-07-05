@@ -39,6 +39,13 @@ export default function Ustawienia() {
   // Etykiety kas/terminali edytowane jako tekst „po przecinku" (puste = wolny wpis w Rozliczeniu dnia).
   const [kasyText, setKasyText] = useState('')
   const [terminaleText, setTerminaleText] = useState('')
+  // Struktura lokalu: listy po przecinku + mapa „kod=Sala" (puste = wartości domyślne/legacy).
+  const [saleText, setSaleText] = useState('')
+  const [saleCodzText, setSaleCodzText] = useState('')
+  const [salaNiedziela, setSalaNiedziela] = useState('')
+  const [mapaSalText, setMapaSalText] = useState('')
+  const [zeszytKolText, setZeszytKolText] = useState('')
+  const [excelMapa, setExcelMapa] = useState({ godzina: 'J1', osoby: 'H8', sala: 'J2' })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -47,6 +54,12 @@ export default function Ustawienia() {
       setCfg(c); setInteg(i.integracje || []); setSub(s)
       setKasyText((c.rozliczenia_nazwy_kas || []).join(', '))
       setTerminaleText((c.rozliczenia_nazwy_terminali || []).join(', '))
+      setSaleText((c.sale || []).join(', '))
+      setSaleCodzText((c.sprzatanie_sale_codziennie || []).join(', '))
+      setSalaNiedziela(c.sprzatanie_sala_niedziela ?? 'Zielona')   // NULL = legacy „Zielona"
+      setMapaSalText(Object.entries(c.imprezy_mapa_sal || {}).map(([k, v]) => `${k}=${v}`).join(', '))
+      setZeszytKolText((c.zeszyt_kolumny || []).join(', '))
+      setExcelMapa({ godzina: 'J1', osoby: 'H8', sala: 'J2', ...(c.imprezy_excel_mapa || {}) })
     } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [toast])
   useEffect(() => { load() }, [load])
@@ -108,6 +121,14 @@ export default function Ustawienia() {
         impreza_osobne_rozliczenie: cfg.impreza_osobne_rozliczenie,
         rozliczenia_nazwy_kas: kasyText.split(',').map((t) => t.trim()).filter(Boolean),
         rozliczenia_nazwy_terminali: terminaleText.split(',').map((t) => t.trim()).filter(Boolean),
+        sale: saleText.split(',').map((t) => t.trim()).filter(Boolean),
+        sprzatanie_sale_codziennie: saleCodzText.split(',').map((t) => t.trim()).filter(Boolean),
+        sprzatanie_sala_niedziela: salaNiedziela.trim(),   // pusty = reguła wyłączona
+        imprezy_mapa_sal: Object.fromEntries(mapaSalText.split(',')
+          .map((p) => p.split('=').map((t) => t.trim()))
+          .filter((p) => p.length === 2 && p[0] && p[1])),
+        zeszyt_kolumny: zeszytKolText.split(',').map((t) => t.trim()).filter(Boolean),
+        imprezy_excel_mapa: excelMapa,
       })
       toast('Zapisano. Odśwież stronę, by zobaczyć zmiany w marce i nawigacji.', 'success')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
@@ -178,6 +199,15 @@ export default function Ustawienia() {
           <label className="text-xs font-semibold text-muted">Sale z minimum 2 obsady (po przecinku)
             <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="R2Piw,R2G" className={fld} /></label>
         </div>
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <label className="text-xs font-semibold text-muted">Komórka Excel: godzina
+            <input value={excelMapa.godzina} onChange={(e) => setExcelMapa((s) => ({ ...s, godzina: e.target.value.toUpperCase() }))} className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Komórka Excel: liczba osób
+            <input value={excelMapa.osoby} onChange={(e) => setExcelMapa((s) => ({ ...s, osoby: e.target.value.toUpperCase() }))} className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Komórka Excel: sala
+            <input value={excelMapa.sala} onChange={(e) => setExcelMapa((s) => ({ ...s, sala: e.target.value.toUpperCase() }))} className={fld} /></label>
+        </div>
+        <p className="mt-2 text-xs text-muted">Komórki dotyczą importu imprez z plików Excel (moduł „Baza imprez") — każdy lokal ma własny szablon.</p>
       </Card>
 
       <Card className="p-6 sm:p-8">
@@ -203,6 +233,26 @@ export default function Ustawienia() {
             wynika z długości list.
           </p>
         </div>
+      </Card>
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Struktura lokalu" subtitle="Sale i reguły sprzątania Twojego lokalu (puste pole = wartości domyślne). Kolejność sal = kolejność wyświetlania." />
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-xs font-semibold text-muted sm:col-span-2">Sale (po przecinku)
+            <input value={saleText} onChange={(e) => setSaleText(e.target.value)} placeholder="np. Sala główna, Ogródek, Antresola" className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Sprzątane codziennie (po przecinku)
+            <input value={saleCodzText} onChange={(e) => setSaleCodzText(e.target.value)} placeholder="np. Sala główna" className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Sala sprzątana w niedzielę (puste = bez reguły)
+            <input value={salaNiedziela} onChange={(e) => setSalaNiedziela(e.target.value)} className={fld} /></label>
+          <label className="text-xs font-semibold text-muted sm:col-span-2">Mapa sal z plików imprez (kod=Sala, po przecinku)
+            <input value={mapaSalText} onChange={(e) => setMapaSalText(e.target.value)} placeholder="np. r2p=Zielona, r2piw=Lustrzana" className={fld} /></label>
+          <label className="text-xs font-semibold text-muted sm:col-span-2">Kolumny rozchodu w zeszycie (po przecinku; puste = Towar, Koszty, Wypłaty, Inne)
+            <input value={zeszytKolText} onChange={(e) => setZeszytKolText(e.target.value)} placeholder="np. towar, koszty, media, wypłaty" className={fld} /></label>
+        </div>
+        <p className="mt-2 text-xs text-muted">
+          Sale napędzają grafik sprzątania i widok stołów; zmiana nazwy sali nie zmienia wpisów
+          historycznych (zostają pod starą nazwą).
+        </p>
       </Card>
 
       <Card className="p-6 sm:p-8">

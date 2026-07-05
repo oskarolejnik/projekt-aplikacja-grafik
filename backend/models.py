@@ -520,6 +520,15 @@ class LokalConfig(Base):
     #     admin przy generowaniu; NULL = brak tokenu (zostaje env RCP_INGEST_TOKEN) ---
     pos_token_hash = Column(String(64), nullable=True)
     pos_token_od   = Column(DateTime, nullable=True)
+    # --- Struktura lokalu (dawniej stałe zaszyte pod jeden lokal; NULL = wartości legacy) ---
+    sale                       = Column(JSON, nullable=True)   # NULL = sale historyczne (sprzatanie.SALE)
+    sprzatanie_sale_codziennie = Column(JSON, nullable=True)   # NULL = ("Parter (R1)","Góra (R1)")
+    # NULL = legacy "Zielona"; pusty string = reguła niedzieli WYŁĄCZONA
+    sprzatanie_sala_niedziela  = Column(String(32), nullable=True)
+    imprezy_mapa_sal           = Column(JSON, nullable=True)   # kod z pliku imprezy → sala; NULL = mapa legacy
+    imprezy_excel_mapa         = Column(JSON, nullable=True)   # NULL = {"godzina":"J1","osoby":"H8","sala":"J2"}
+    zeszyt_kolumny             = Column(JSON, nullable=True)   # NULL = ["towar","koszty","wyplaty","inne"]
+    pos_mapa_rewirow           = Column(JSON, nullable=True)   # NULL = stałe STOLY_* (main.py); patrz docs/POS-INTEGRACJA.md
 
 
 class Stolik(Base):

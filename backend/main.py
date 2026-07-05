@@ -431,14 +431,14 @@ def auth_me(user: models.User = Depends(get_current_user)):
 
 @app.get("/api/sprzatanie")
 def sprzatanie_admin(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
-    return {"pozycje": sprzatanie.generuj(db, start, end), "sale": list(sprzatanie.SALE)}
+    return {"pozycje": sprzatanie.generuj(db, start, end), "sale": list(sprzatanie.sale_lokalu(db))}
 
 
 @app.post("/api/sprzatanie/korekty", status_code=204)
 def korekta_sprzatania(dane: schemas.SprzatanieKorektaIn, db: Session = Depends(get_db)):
     """Dodaj/usuń pozycję sprzątania. Przeciwna akcja do istniejącej korekty KASUJE ją
     (powrót do automatu) — dzięki temu przyciski w UI działają jak przełącznik."""
-    if dane.sala not in sprzatanie.SALE:
+    if dane.sala not in sprzatanie.sale_lokalu(db):
         raise HTTPException(400, "Nieznana sala.")
     if dane.akcja not in ("dodaj", "usun"):
         raise HTTPException(400, "Akcja musi być 'dodaj' albo 'usun'.")
@@ -2363,9 +2363,13 @@ def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session =
             try:
                 wb = openpyxl.load_workbook(file_path, data_only=True)
                 ws = wb.active
-                godz = str(ws['J1'].value).strip() if ws['J1'].value else "Brak"
-                osob = int(ws['H8'].value) if isinstance(ws['H8'].value, (int, float)) else 0
-                sala = str(ws['J2'].value).strip() if ws['J2'].value else "Brak"
+                # Komórki szablonu Excel z konfiguracji lokalu (inne lokale mają inny layout);
+                # NULL = historyczne J1/H8/J2.
+                mapa_xl = get_lokal_config(db).imprezy_excel_mapa or {"godzina": "J1", "osoby": "H8", "sala": "J2"}
+                k_godz, k_osob, k_sala = mapa_xl.get("godzina", "J1"), mapa_xl.get("osoby", "H8"), mapa_xl.get("sala", "J2")
+                godz = str(ws[k_godz].value).strip() if ws[k_godz].value else "Brak"
+                osob = int(ws[k_osob].value) if isinstance(ws[k_osob].value, (int, float)) else 0
+                sala = str(ws[k_sala].value).strip() if ws[k_sala].value else "Brak"
                 wb.close()
             except: bledy += 1; continue
 
@@ -2855,15 +2859,21 @@ def gastro_stoly_ingest(payload: dict, request: Request, db: Session = Depends(g
 
 @app.get("/api/gastro/stoly")
 def gastro_stoly(db: Session = Depends(get_db)):
-    """Aktualny stan stołów (admin + szef): wewnątrz (sale osobno) + na zewnątrz (suma) + wynos."""
+    """Aktualny stan stołów (admin + szef): wewnątrz (sale osobno) + na zewnątrz (suma) + wynos.
+    Mapowanie rewirów POS na widok z konfiguracji lokalu (NULL = stałe historyczne)."""
+    mapa = get_lokal_config(db).pos_mapa_rewirow or {}
+    wewnatrz_def = [(int(nr), str(nazwa)) for nr, nazwa in (mapa.get("wewnatrz") or STOLY_WEWNATRZ)]
+    zewnatrz_nr = [int(x) for x in (mapa.get("zewnatrz") or STOLY_ZEWNATRZ)]
+    wynos_nr = int(mapa["wynos"]) if "wynos" in mapa else STOLY_WYNOS
+
     stan = {s.rewir_nr: s.otwarte for s in db.query(models.StanStolow).all()}
     last = db.query(models.StanStolow).order_by(models.StanStolow.zaktualizowano_at.desc()).first()
-    wewnatrz = [{"nazwa": nazwa, "liczba": stan.get(nr, 0)} for nr, nazwa in STOLY_WEWNATRZ]
+    wewnatrz = [{"nazwa": nazwa, "liczba": stan.get(nr, 0)} for nr, nazwa in wewnatrz_def]
     return {
         "wewnatrz": wewnatrz,
         "wewnatrz_suma": sum(w["liczba"] for w in wewnatrz),
-        "na_zewnatrz": sum(stan.get(nr, 0) for nr in STOLY_ZEWNATRZ),
-        "wynos": stan.get(STOLY_WYNOS, 0),
+        "na_zewnatrz": sum(stan.get(nr, 0) for nr in zewnatrz_nr),
+        "wynos": stan.get(wynos_nr, 0),
         "kuchnia": stan.get(STOLY_KUCHNIA, 0),
         "kuchnia_pozycje": stan.get(STOLY_KUCHNIA_POZYCJE, 0),
         # Znacznik UTC (zapis przez utcnow_naive()) — z offsetem, żeby przeglądarka
