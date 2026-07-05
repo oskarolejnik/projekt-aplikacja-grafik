@@ -17,9 +17,13 @@ def test_nowy_lokal_503_gdy_wylaczony(client):
 
 def test_nowy_lokal_tor_wlaczony(client, monkeypatch):
     monkeypatch.setenv("PROVISIONING_ENABLED", "1")
-    monkeypatch.setattr(provisioning, "utworz_instancje",
-                        lambda nazwa, email, host: {"slug": "testowa-knajpa", "nazwa": nazwa,
-                                                    "url": f"http://{host}:8100/?start"})
+    wywolania = []
+
+    def fake_utworz(nazwa, email, host, tier=None):
+        wywolania.append({"nazwa": nazwa, "email": email, "tier": tier})
+        return {"slug": "testowa-knajpa", "nazwa": nazwa, "url": f"http://{host}:8100/?start"}
+
+    monkeypatch.setattr(provisioning, "utworz_instancje", fake_utworz)
     # status raportuje dostępność i wolne miejsca
     monkeypatch.setattr(provisioning, "wczytaj_rejestr", lambda: [])
     s = client.get("/api/online/nowy-lokal/status").json()
@@ -28,6 +32,13 @@ def test_nowy_lokal_tor_wlaczony(client, monkeypatch):
     r = client.post("/api/online/nowy-lokal", json={"nazwa_lokalu": "Testowa Knajpa", "email": "a@b.pl"})
     assert r.status_code == 201
     assert r.json()["slug"] == "testowa-knajpa" and "/?start" in r.json()["url"]
+    assert wywolania[-1]["tier"] is None   # bez planu — tier zostaje domyślny
+
+    # pakiet z cennika → tier subskrypcji instancji (darmowy→free, pro→pro)
+    client.post("/api/online/nowy-lokal", json={"nazwa_lokalu": "Knajpa Pro", "plan": "pro"})
+    assert wywolania[-1]["tier"] == "pro"
+    client.post("/api/online/nowy-lokal", json={"nazwa_lokalu": "Knajpa Free", "plan": "Darmowy"})
+    assert wywolania[-1]["tier"] == "free"
 
     # walidacja nazwy
     assert client.post("/api/online/nowy-lokal", json={"nazwa_lokalu": "ab"}).status_code == 400
@@ -36,7 +47,7 @@ def test_nowy_lokal_tor_wlaczony(client, monkeypatch):
 def test_nowy_lokal_limit_ip(client, monkeypatch):
     monkeypatch.setenv("PROVISIONING_ENABLED", "1")
     monkeypatch.setattr(provisioning, "utworz_instancje",
-                        lambda nazwa, email, host: {"slug": "x", "nazwa": nazwa, "url": "http://h:1/?start"})
+                        lambda nazwa, email, host, tier=None: {"slug": "x", "nazwa": nazwa, "url": "http://h:1/?start"})
     for i in range(3):
         assert client.post("/api/online/nowy-lokal", json={"nazwa_lokalu": f"Lokal {i} abc"}).status_code == 201
     assert client.post("/api/online/nowy-lokal", json={"nazwa_lokalu": "Za duzo"}).status_code == 429

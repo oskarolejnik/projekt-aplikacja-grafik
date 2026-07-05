@@ -97,6 +97,13 @@ def _reset_ratelimit():
 
 
 @pytest.fixture(autouse=True)
+def _bez_provisioningu(monkeypatch):
+    """Hermetyzacja: deweloperski backend/.env (load_dotenv) może mieć PROVISIONING_ENABLED=1 —
+    testy zakładają default WYŁĄCZONY; testy floty włączają flagę jawnie u siebie."""
+    monkeypatch.delenv("PROVISIONING_ENABLED", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _otwarta_rejestracja(_reset_schema):
     """Produkcyjny default to rejestracja TYLKO z zaproszenia (rejestracja_otwarta=False).
     Duża część istniejących testów zakłada konta przez POST /api/auth/register — włączamy

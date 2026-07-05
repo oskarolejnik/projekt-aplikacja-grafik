@@ -26,10 +26,14 @@ logger = logging.getLogger(__name__)
 
 NOWY_LOKAL_LIMIT_IP_DZIENNY = 3
 
+# Pakiet z cennika (?plan=pro) → tier subskrypcji świeżej instancji.
+PLAN_NA_TIER = {"darmowy": "free", "basic": "basic", "pro": "pro", "premium": "premium"}
+
 
 class NowyLokalIn(BaseModel):
     nazwa_lokalu: str
     email: Optional[str] = None
+    plan: Optional[str] = None
 
 
 @router.get("/api/online/nowy-lokal/status")
@@ -52,8 +56,9 @@ def nowy_lokal(dane: NowyLokalIn, request: Request):
     ip = request.client.host if request.client else "?"
     if not zuzyj_kwote(f"nowy-lokal:{ip}", str(date.today()), NOWY_LOKAL_LIMIT_IP_DZIENNY):
         raise HTTPException(429, "Zbyt wiele lokali z tego adresu dzisiaj — spróbuj jutro.")
+    tier = PLAN_NA_TIER.get((dane.plan or "").strip().lower())
     try:
-        wpis = provisioning.utworz_instancje(nazwa, dane.email, host=request.url.hostname or "127.0.0.1")
+        wpis = provisioning.utworz_instancje(nazwa, dane.email, host=request.url.hostname or "127.0.0.1", tier=tier)
     except RuntimeError as e:
         raise HTTPException(503, str(e))
     return {"slug": wpis["slug"], "url": wpis["url"], "nazwa": wpis["nazwa"]}

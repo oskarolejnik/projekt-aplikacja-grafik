@@ -149,6 +149,25 @@ def zaloz_admina(db, login: str, haslo: str):
     return u
 
 
+TIERY = ("free", "basic", "pro", "premium", "enterprise")
+
+
+def ustaw_tier(db, tier: str):
+    """Ustawia pakiet (tier) subskrypcji instancji — np. wybór z cennika przy samoobsłudze."""
+    import models
+
+    if tier not in TIERY:
+        raise ValueError(f"Nieznany tier '{tier}' (dozwolone: {', '.join(TIERY)}).")
+    s = db.get(models.Subskrypcja, 1)
+    if s is None:
+        s = models.Subskrypcja(id=1)
+        db.add(s)
+    s.tier = tier
+    db.commit()
+    db.refresh(s)
+    return s
+
+
 def ustaw_nazwe_lokalu(db, nazwa: str):
     """Ustawia nazwę lokalu w singletonie LokalConfig (id=1), tworząc go w razie potrzeby."""
     import models
@@ -184,6 +203,8 @@ def main(argv=None) -> int:
                    help="z --init: zainicjuj bazę BEZ konta administratora — świeża instancja "
                         "pokaże kreator (onboarding), w którym klient sam założy konto właściciela "
                         "(tor samoobsługowego provisioningu)")
+    p.add_argument("--tier", default=None, choices=list(TIERY),
+                   help="z --init: pakiet subskrypcji instancji (np. wybór z cennika)")
     p.add_argument("--force", action="store_true", help="nadpisz istniejący .env instancji")
     args = p.parse_args(argv)
 
@@ -223,6 +244,8 @@ def main(argv=None) -> int:
 
     db = database.SessionLocal()
     try:
+        if args.tier:
+            ustaw_tier(db, args.tier)
         if args.bez_admina:
             # Tor samoobsługi: baza gotowa, zero kont → instancja przy pierwszym wejściu
             # pokaże kreator (bootstrap 0-userów), gdzie klient założy konto właściciela.

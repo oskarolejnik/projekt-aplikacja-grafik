@@ -158,7 +158,8 @@ def _czekaj_na_health(port: int, timeout_s: int = HEALTH_TIMEOUT_S) -> bool:
     return False
 
 
-def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.1") -> dict:
+def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.1",
+                     tier: str | None = None) -> dict:
     """Pełny tor samoobsługi: provisioning → start → health → wpis w rejestrze.
     Zwraca wpis rejestru (z URL). Podnosi RuntimeError z czytelnym komunikatem."""
     rejestr = wczytaj_rejestr()
@@ -169,11 +170,11 @@ def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.
     port = przydziel_port(rejestr)
 
     # 1) Provisioning (osobny proces — new_client sam ustawia środowisko init bazy).
-    wynik = subprocess.run(
-        [sys.executable, str(BACKEND_DIR / "new_client.py"), slug,
-         "--nazwa", nazwa or slug, "--init", "--bez-admina"],
-        cwd=str(BACKEND_DIR), capture_output=True, text=True, timeout=180,
-    )
+    polecenie = [sys.executable, str(BACKEND_DIR / "new_client.py"), slug,
+                 "--nazwa", nazwa or slug, "--init", "--bez-admina"]
+    if tier:
+        polecenie += ["--tier", tier]   # pakiet z cennika od razu w subskrypcji instancji
+    wynik = subprocess.run(polecenie, cwd=str(BACKEND_DIR), capture_output=True, text=True, timeout=180)
     if wynik.returncode != 0:
         logger.error("Provisioning %s nie powiódł się: %s", slug, wynik.stderr[-800:])
         raise RuntimeError("Nie udało się przygotować instancji — spróbuj ponownie.")
@@ -188,6 +189,7 @@ def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.
         "slug": slug,
         "nazwa": nazwa or slug,
         "email": (email or "").strip() or None,
+        "tier": tier,
         "port": port,
         "pid": pid,
         "url": f"http://{host}:{port}/?start",

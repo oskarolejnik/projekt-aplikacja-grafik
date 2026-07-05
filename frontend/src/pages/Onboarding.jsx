@@ -124,31 +124,13 @@ export default function Onboarding({ demo = false }) {
     } catch (e) { toast(e.message, 'error'); setBusy(false) }
   }
 
-  // Samoobsługa (finał podglądu): jeśli matka ma włączony provisioning, klient
-  // zakłada lokal JEDNYM KLIKIEM — system stawia mu świeżą instancję i oddaje link.
+  // Finał podglądu: sprawdzamy tylko, czy samoobsługa działa — samo zakładanie
+  // lokalu mieszka na ?start (jeden krótki formularz zamiast drugiego kreatora).
   const [samoobsluga, setSamoobsluga] = useState(null)   // null=sprawdzam, {enabled,...}
-  const [emailKontakt, setEmailKontakt] = useState('')
-  const [stawianie, setStawianie] = useState(false)
-  const [nowyLokal, setNowyLokal] = useState(null)        // {url, nazwa} po sukcesie
   useEffect(() => {
     if (krok !== 'gotowe-demo' || samoobsluga !== null) return
     api('/online/nowy-lokal/status').then(setSamoobsluga).catch(() => setSamoobsluga({ enabled: false }))
   }, [krok, samoobsluga])
-
-  const utworzLokal = async () => {
-    setStawianie(true)
-    try {
-      const r = await api('/online/nowy-lokal', 'POST', {
-        nazwa_lokalu: form.nazwa_lokalu.trim() || 'Mój lokal',
-        email: emailKontakt.trim() || null,
-      })
-      setNowyLokal(r)
-    } catch (e) {
-      toast(e.message, 'error')
-    } finally {
-      setStawianie(false)
-    }
-  }
 
   const posortowane = [...TYPY].sort((a, b) => (b.popularny ? 1 : 0) - (a.popularny ? 1 : 0))
 
@@ -294,54 +276,29 @@ export default function Onboarding({ demo = false }) {
           </div>
         )}
 
-        {/* FINAŁ PODGLĄDU (tylko demo): samoobsługa — system SAM stawia lokal.
-            (Mailto zostaje wyłącznie jako fallback, gdy operator wyłączył provisioning.) */}
+        {/* FINAŁ PODGLĄDU (tylko demo): odsyłamy do krótkiego formularza na ?start —
+            tam system stawia instancję. (Mailto = fallback przy wyłączonym provisioningu.) */}
         {krok === 'gotowe-demo' && (
           <div className="mx-auto max-w-md">
             <div className="card p-6 text-center sm:p-8">
-              {nowyLokal ? (
+              {samoobsluga?.enabled ? (
                 <>
                   <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-mint/15">
                     <Icon name="check" className="h-6 w-6 text-mint" />
                   </span>
                   <h2 className="mt-4 font-display text-xl font-bold text-ink">
-                    Lokal „{nowyLokal.nazwa}" jest gotowy
+                    To był podgląd — Twój lokal założysz w pół minuty
                   </h2>
                   <p className="mt-2 text-sm leading-relaxed text-muted">
-                    Postawiliśmy Twoją własną, czystą instancję. Wejdź i dokończ konfigurację —
-                    kreator założy Ci konto właściciela{PLAN_Z_URL ? ` (pakiet ${PLAN_ETYKIETA[PLAN_Z_URL]})` : ''}.
+                    Podajesz tylko nazwę, a system stawia Ci własną, czystą instancję
+                    (osobna baza, świeże sekrety). Ten kreator przejdziesz raz — już u siebie.
                   </p>
                   <a
-                    href={nowyLokal.url}
+                    href={`?start${PLAN_Z_URL ? `&plan=${PLAN_Z_URL}` : ''}`}
                     className="mt-6 block rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]"
                   >
-                    Wejdź do swojego Lokalo →
+                    Załóż swój lokal →
                   </a>
-                  <p className="mt-3 break-all text-[11px] text-muted/70">{nowyLokal.url}</p>
-                </>
-              ) : samoobsluga?.enabled ? (
-                <>
-                  <h2 className="font-display text-xl font-bold text-ink">
-                    Załóż lokal „{form.nazwa_lokalu || 'Twój lokal'}" teraz
-                  </h2>
-                  <p className="mt-2 text-sm leading-relaxed text-muted">
-                    Jedno kliknięcie: system automatycznie stawia Twoją własną instancję
-                    (osobna baza, świeże sekrety) i przenosi Cię do prawdziwego kreatora.
-                  </p>
-                  <input
-                    value={emailKontakt}
-                    onChange={(e) => setEmailKontakt(e.target.value)}
-                    className={`${fld} mt-5`}
-                    placeholder="E-mail kontaktowy (opcjonalnie)"
-                    autoComplete="email"
-                  />
-                  <button
-                    onClick={utworzLokal}
-                    disabled={stawianie}
-                    className="mt-4 w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60"
-                  >
-                    {stawianie ? 'Stawiamy Twój lokal… (do pół minuty)' : 'Utwórz mój lokal'}
-                  </button>
                 </>
               ) : samoobsluga === null ? (
                 <p className="py-8 text-sm text-muted">Sprawdzam dostępność samoobsługi…</p>

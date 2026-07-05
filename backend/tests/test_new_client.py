@@ -90,3 +90,13 @@ def test_ustaw_nazwe_lokalu_tworzy_singleton(db):
     cfg2 = nc.ustaw_nazwe_lokalu(db, "Nowa Nazwa")
     assert cfg2.id == 1 and cfg2.nazwa_lokalu == "Nowa Nazwa"
     assert db.query(models.LokalConfig).count() == 1
+
+
+def test_ustaw_tier_singleton_i_walidacja(db):
+    s = nc.ustaw_tier(db, "pro")
+    assert s.id == 1 and s.tier == "pro"
+    s2 = nc.ustaw_tier(db, "free")                 # nadpisuje, nie duplikuje
+    assert s2.id == 1 and s2.tier == "free"
+    assert db.query(models.Subskrypcja).count() == 1
+    with pytest.raises(ValueError):
+        nc.ustaw_tier(db, "platinum")
