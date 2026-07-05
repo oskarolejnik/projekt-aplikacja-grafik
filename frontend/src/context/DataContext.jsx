@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { api } from '../lib/api'
-import { generujOpcjeTygodni } from '../lib/weeks'
+import { generujOpcjeCyklu } from '../lib/weeks'
 import { useBranding } from './BrandingContext'
 
 // Współdzielony stan: słowniki (stanowiska, pracownicy) oraz wybrany tydzień.
@@ -8,13 +8,13 @@ import { useBranding } from './BrandingContext'
 const DataContext = createContext(null)
 
 export function DataProvider({ children }) {
-  // Początek tygodnia grafiku z konfiguracji lokalu (publiczny branding — dostępny każdej
-  // roli). Zanim branding dojedzie, generator działa na domyślnej środzie; po zmianie dnia
-  // opcje są przeliczane, a wybrany tydzień wraca na bieżący (stary zakres traci sens).
-  const { poczatek_tygodnia } = useBranding()
+  // Cykl i początek tygodnia grafiku z konfiguracji lokalu (publiczny branding — dostępny każdej
+  // roli). Zanim branding dojedzie, generator działa na domyślnym tygodniu-środzie; po zmianie
+  // opcje są przeliczane, a wybrany okres wraca na bieżący (stary zakres traci sens).
+  const { poczatek_tygodnia, grafik_cykl } = useBranding()
   const { opcje, domyslny, biezacy, przyszly } = useMemo(
-    () => generujOpcjeTygodni(poczatek_tygodnia),
-    [poczatek_tygodnia],
+    () => generujOpcjeCyklu(grafik_cykl, poczatek_tygodnia),
+    [grafik_cykl, poczatek_tygodnia],
   )
   const [week, setWeek] = useState(domyslny)
   const pierwszyRender = useRef(true)

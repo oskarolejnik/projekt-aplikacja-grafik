@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 
 // Branding lokalu (white-label). Pobierany z publicznego /api/lokal/branding przy starcie.
 // Wartości domyślne = neutralna marka produktu (gdy backend nie zwróci konfiguracji).
-const DOMYSLNY = { nazwa_lokalu: 'Lokalo', logo_url: null, kolor_primary: null, poczatek_tygodnia: 2 }
+const DOMYSLNY = { nazwa_lokalu: 'Lokalo', logo_url: null, kolor_primary: null, poczatek_tygodnia: 2, grafik_cykl: 'tydzien' }
 
 const BrandingContext = createContext(DOMYSLNY)
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generujOpcjeTygodni } from './weeks'
+import { generujOpcjeTygodni, generujOpcjeMiesiecy, generujOpcjeCyklu } from './weeks'
 
 const DZIEN = 86400000
 const start = (value) => new Date(value.split('|')[0])
@@ -68,5 +68,44 @@ describe('generujOpcjeTygodni', () => {
       // 9 → normalizacja modulo daje 2 (środa); nie-liczby → fallback środa
       expect(start(o2[0].value).getUTCDay()).toBe(3)
     }
+  })
+})
+
+describe('generujOpcjeMiesiecy', () => {
+  const { opcje, domyslny, biezacy, przyszly } = generujOpcjeMiesiecy()
+
+  it('zwraca 8 miesięcy z poprawnym kształtem', () => {
+    expect(opcje).toHaveLength(8)
+    for (const o of opcje) {
+      expect(o.value).toMatch(/^\d{4}-\d{2}-\d{2}\|\d{4}-\d{2}-\d{2}$/)
+      expect(o.label.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('każda opcja to pełny miesiąc kalendarzowy (1. → ostatni dzień)', () => {
+    for (const o of opcje) {
+      const [s, e] = o.value.split('|')
+      expect(s.slice(8, 10)).toBe('01')                       // start = 1. dnia
+      const [ry, rm] = e.split('-').map(Number)
+      const ostatni = new Date(Date.UTC(ry, rm, 0)).getUTCDate()
+      expect(Number(e.slice(8, 10))).toBe(ostatni)            // koniec = ostatni dzień
+    }
+  })
+
+  it('bieżący = domyślny, tag „Bieżący miesiąc"', () => {
+    expect(biezacy).toBe(domyslny)
+    expect(opcje.find((o) => o.value === biezacy).label).toContain('Bieżący miesiąc')
+    expect(opcje.find((o) => o.value === przyszly).label).toContain('Przyszły miesiąc')
+  })
+})
+
+describe('generujOpcjeCyklu', () => {
+  it('dyspozytor: tydzien vs miesiac', () => {
+    const [ts, te] = generujOpcjeCyklu('tydzien', 2).biezacy.split('|')
+    expect((new Date(te) - new Date(ts)) / DZIEN).toBe(6)     // tydzień = 6 dni różnicy
+    const [ms] = generujOpcjeCyklu('miesiac').biezacy.split('|')
+    expect(ms.slice(8, 10)).toBe('01')                        // miesiąc startuje 1.
+    // domyślnie tydzień
+    expect(generujOpcjeCyklu().biezacy.split('|')[0]).toBe(generujOpcjeTygodni(2).biezacy.split('|')[0])
   })
 })

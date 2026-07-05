@@ -1,7 +1,7 @@
 import { useData } from '../../context/DataContext'
 import { Icon } from '../../lib/icons'
 
-// Wybór tygodnia roboczego (środa–wtorek). Współdzielony przez wszystkie zakładki.
+// Wybór okresu grafiku (tydzień lub miesiąc — wg cyklu lokalu). Współdzielony przez zakładki.
 export function WeekSelect({ className = '' }) {
   const { weeks, week, setWeek } = useData()
   return (
@@ -12,7 +12,7 @@ export function WeekSelect({ className = '' }) {
       <select
         value={week}
         onChange={(e) => setWeek(e.target.value)}
-        aria-label="Wybierz tydzień"
+        aria-label="Wybierz okres grafiku"
         className="field min-w-[280px] cursor-pointer appearance-none pl-9 pr-9 font-semibold"
       >
         {weeks.map((w) => (

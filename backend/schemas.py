@@ -305,6 +305,7 @@ class LokalBrandingOut(BaseModel):
     logo_url: Optional[str] = None
     kolor_primary: Optional[str] = None
     poczatek_tygodnia: int = 2
+    grafik_cykl: str = "tydzien"          # publiczny — pracownik też potrzebuje (ekran grafiku/dyspozycji)
     model_config = ConfigDict(from_attributes=True)
 
 class LokalConfigOut(LokalBrandingOut):
@@ -330,7 +331,7 @@ class LokalConfigOut(LokalBrandingOut):
     rozliczenia_tryb_kelnera: str = "indywidualnie"
     rozliczenia_nazwy_kas: Optional[List[str]] = None
     rozliczenia_nazwy_terminali: Optional[List[str]] = None
-    grafik_cykl: str = "tydzien"
+    # grafik_cykl dziedziczone z LokalBrandingOut (publiczne)
     sale: Optional[List[str]] = None
     sprzatanie_sale_codziennie: Optional[List[str]] = None
     sprzatanie_sala_niedziela: Optional[str] = None

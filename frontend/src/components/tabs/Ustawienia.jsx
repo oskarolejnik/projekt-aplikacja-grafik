@@ -107,6 +107,7 @@ export default function Ustawienia() {
         nazwa_lokalu: cfg.nazwa_lokalu, logo_url: cfg.logo_url || null, kolor_primary: cfg.kolor_primary || null,
         typ_lokalu: cfg.typ_lokalu || null,
         poczatek_tygodnia: Number(cfg.poczatek_tygodnia),
+        grafik_cykl: cfg.grafik_cykl || 'tydzien',
         modul_rezerwacje: cfg.modul_rezerwacje, modul_imprezy: cfg.modul_imprezy,
         modul_rozliczenia: cfg.modul_rozliczenia, modul_pos: cfg.modul_pos, modul_sprzatanie: cfg.modul_sprzatanie,
         rezerwacje_online: cfg.rezerwacje_online, rezerwacje_auto_potwierdzenie: cfg.rezerwacje_auto_potwierdzenie,
@@ -150,8 +151,14 @@ export default function Ustawienia() {
             <input value={cfg.kolor_primary || ''} onChange={(e) => set('kolor_primary', e.target.value)} placeholder="#2bb673" className={fld} /></label>
           <label className="text-xs font-semibold text-muted sm:col-span-2">Logo (URL)
             <input value={cfg.logo_url || ''} onChange={(e) => set('logo_url', e.target.value)} placeholder="https://…/logo.png" className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Cykl grafiku
+            <select value={cfg.grafik_cykl || 'tydzien'} onChange={(e) => set('grafik_cykl', e.target.value)} className={fld}>
+              <option value="tydzien">Tygodniowy</option>
+              <option value="miesiac">Miesięczny (miesiąc kalendarzowy)</option>
+            </select></label>
           <label className="text-xs font-semibold text-muted">Początek tygodnia grafiku
-            <select value={cfg.poczatek_tygodnia} onChange={(e) => set('poczatek_tygodnia', e.target.value)} className={fld}>
+            <select value={cfg.poczatek_tygodnia} onChange={(e) => set('poczatek_tygodnia', e.target.value)}
+                    disabled={cfg.grafik_cykl === 'miesiac'} className={`${fld} disabled:opacity-50`}>
               {DNI.map((d, i) => <option key={i} value={i}>{d}</option>)}
             </select></label>
         </div>
