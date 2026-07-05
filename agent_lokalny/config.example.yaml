@@ -28,10 +28,13 @@ gastro_mssql:
     GROUP BY CAST(d.DataOtwarcia AS DATE)
 
   # Strumień „odbicia" (RCP) — jak w legacy agent.py. Usuń, jeśli nie używasz RCP.
-  # Kolumny: rcp_id, imie_nazwisko, data, wejscie, wyjscie.
+  # Kolumny: rcp_id, imie_nazwisko, pos_pracownik_id (opc.), data, wejscie, wyjscie.
+  # pos_pracownik_id = STABILNY id pracownika w POS — pozwala trwale zmapować go na
+  # pracownika Lokalo (kreator „Integracja POS"), zamiast kruchego dopasowania po imieniu.
   odbicia_sql: |
     SELECT o.ID          AS rcp_id,
            p.Nazwa       AS imie_nazwisko,
+           p.ID          AS pos_pracownik_id,
            CAST(o.Wejscie AS DATE) AS data,
            o.Wejscie     AS wejscie,
            o.Wyjscie     AS wyjscie

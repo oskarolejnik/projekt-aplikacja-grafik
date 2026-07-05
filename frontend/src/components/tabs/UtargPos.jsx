@@ -58,16 +58,33 @@ export default function UtargPos() {
   const [form, setForm] = useState({ data: iso(new Date()), netto: '', gotowka: '', karta: '', liczba_rachunkow: '' })
   const plikRef = useRef(null)
 
+  const [mapa, setMapa] = useState(null)   // { mapowania, nierozpoznani, pracownicy }
+  const [wybor, setWybor] = useState({})   // pos_id -> pracownik_id do przypisania
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const end = iso(new Date())
       const start = iso(new Date(Date.now() - 13 * 86400000))
-      const [s, u] = await Promise.all([api('/pos/status'), api(`/pos/utarg-dnia?start=${start}&end=${end}`)])
-      setStatus(s); setDni(u.dni)
+      const [s, u, m] = await Promise.all([
+        api('/pos/status'), api(`/pos/utarg-dnia?start=${start}&end=${end}`), api('/pos/mapowanie'),
+      ])
+      setStatus(s); setDni(u.dni); setMapa(m)
     } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [toast])
   useEffect(() => { load() }, [load])
+
+  const przypisz = async (n) => {
+    const pracownik_id = Number(wybor[`${n.zrodlo}|${n.pos_id}`])
+    if (!pracownik_id) { toast('Wybierz pracownika.', 'error'); return }
+    try {
+      await api('/pos/mapowanie', 'PUT', { zrodlo: n.zrodlo, pos_id: n.pos_id, pracownik_id, pos_nazwa: n.pos_nazwa })
+      await load(); toast('Zmapowano — historyczne odbicia domknięte.', 'success')
+    } catch (e) { toast(e.message, 'error') }
+  }
+  const usunMapowanie = async (id) => {
+    try { await api(`/pos/mapowanie/${id}`, 'DELETE'); await load() } catch (e) { toast(e.message, 'error') }
+  }
 
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
 
@@ -237,8 +254,8 @@ export default function UtargPos() {
               <label className="text-xs font-semibold text-muted">System POS
                 <select value={driverWybrany} onChange={(e) => setDriverWybrany(e.target.value)} className={`${fld} mt-0.5 w-56`}>
                   <option value="gastro_mssql">Gastro (Softech/LSI, MS SQL)</option>
-                  <option value="" disabled>SOGA (Firebird) — wkrótce</option>
-                  <option value="" disabled>X2System (PostgreSQL) — wkrótce</option>
+                  <option value="soga_firebird">SOGA (Firebird)</option>
+                  <option value="x2_postgres">X2System (PostgreSQL)</option>
                   <option value="" disabled>Dotykačka (chmura) — wkrótce</option>
                 </select>
               </label>
@@ -280,6 +297,50 @@ export default function UtargPos() {
           <span className="text-xs text-muted">Liczba rachunków zasila prognozę ruchu i sugerowaną obsadę.</span>
         </div>
       </Card>
+
+      {/* Mapowanie pracowników POS → Lokalo (krok kreatora) */}
+      {mapa && (!!mapa.nierozpoznani.length || !!mapa.mapowania.length) && (
+        <Card className="p-6 sm:p-8">
+          <SectionHeader title="Mapowanie pracowników POS"
+            subtitle="Gdy dopasowanie po imieniu zawiedzie (zdrobnienia, literówki), wskaż pracownika ręcznie — raz. Godziny z RCP wejdą wtedy do właściwej wypłaty." />
+
+          {!!mapa.nierozpoznani.length && (
+            <div className="mt-4 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-lemon">Do przypisania ({mapa.nierozpoznani.length})</p>
+              {mapa.nierozpoznani.map((n) => (
+                <div key={`${n.zrodlo}|${n.pos_id}`} className="flex flex-wrap items-center gap-2 rounded-xl border border-lemon/30 bg-lemon/[0.06] px-4 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-semibold text-ink">{n.pos_nazwa || '—'}</span>
+                    <span className="ml-2 text-xs text-muted">{n.zrodlo} · id {n.pos_id}</span>
+                  </div>
+                  <select value={wybor[`${n.zrodlo}|${n.pos_id}`] || ''}
+                          onChange={(e) => setWybor((s) => ({ ...s, [`${n.zrodlo}|${n.pos_id}`]: e.target.value }))}
+                          className={`${fld} w-52`}>
+                    <option value="">— wybierz pracownika —</option>
+                    {mapa.pracownicy.map((p) => <option key={p.id} value={p.id}>{p.nazwa}</option>)}
+                  </select>
+                  <Button variant="ghost" onClick={() => przypisz(n)}>Przypisz</Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!!mapa.mapowania.length && (
+            <div className="mt-4 space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Zmapowani ({mapa.mapowania.length})</p>
+              {mapa.mapowania.map((m) => (
+                <div key={m.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-white/[0.02] px-4 py-2">
+                  <span className="text-sm text-ink">{m.pos_nazwa || m.pos_id}</span>
+                  <span className="text-xs text-muted">{m.zrodlo} · id {m.pos_id}</span>
+                  <Icon name="chevronDown" className="h-3.5 w-3.5 -rotate-90 text-muted" />
+                  <span className="text-sm font-semibold text-mint">{m.pracownik}</span>
+                  <button onClick={() => usunMapowanie(m.id)} className="ml-auto text-muted transition hover:text-danger" aria-label="Usuń mapowanie">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Ostatnie 14 dni */}
       <Card className="p-6 sm:p-8">

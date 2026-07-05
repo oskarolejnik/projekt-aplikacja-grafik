@@ -16,10 +16,12 @@ log = logging.getLogger("agent_pos")
 
 WERSJA = "2.0.0"
 
-# capability → (ścieżka API, funkcja budująca payload z listy rekordów)
+# capability → (ścieżka API, funkcja budująca payload z listy rekordów).
+# `zrodlo` (driver_id) leci w obu strumieniach — utarg keyuje po nim wiersz, a odbicia
+# pozwalają chmurze wybrać właściwą mapę pracowników POS→Lokalo.
 STRUMIENIE = {
     "utarg": ("/api/pos/utarg-dnia", lambda dni, zrodlo: {"zrodlo": zrodlo, "dni": dni}),
-    "odbicia": ("/api/rcp/ingest", lambda odbicia, zrodlo: {"odbicia": odbicia}),
+    "odbicia": ("/api/rcp/ingest", lambda odbicia, zrodlo: {"zrodlo": zrodlo, "odbicia": odbicia}),
 }
 
 

@@ -215,3 +215,73 @@ def uniewaznij_token_agenta(db: Session = Depends(get_db),
     cfg.pos_token_od = None
     db.commit()
     logger.info("Unieważniono token agenta POS (admin: %s).", admin.login)
+
+
+# ── Mapowanie pracowników POS → Lokalo (krok kreatora „Integracja POS") ──────────
+
+class MapowanieIn(BaseModel):
+    zrodlo: str
+    pos_id: str
+    pracownik_id: int
+    pos_nazwa: Optional[str] = None
+
+
+@router.get("/api/pos/mapowanie")
+def mapowanie_pracownikow(db: Session = Depends(get_db),
+                          admin: models.User = Depends(auth.require_admin)):
+    """Stan mapowania POS→Lokalo: potwierdzone pary + tożsamości z POS, których dopasowanie
+    po imieniu ZAWIODŁO (odbicia bez pracownika, z realnym pos_id) — do ręcznego przypisania."""
+    pm = {p.id: f"{p.imie} {p.nazwisko}" for p in db.query(models.Pracownik).all()}
+    mapowania = [{
+        "id": m.id, "zrodlo": m.zrodlo, "pos_id": m.pos_id, "pos_nazwa": m.pos_nazwa,
+        "pracownik_id": m.pracownik_id, "pracownik": pm.get(m.pracownik_id),
+    } for m in db.query(models.PracownikPosId).order_by(models.PracownikPosId.zrodlo).all()]
+
+    # Nierozpoznani: odbicia bez pracownika, mające pos_pracownik_id, jeszcze niezmapowane.
+    zmapowane = {(m.zrodlo, m.pos_id) for m in db.query(models.PracownikPosId).all()}
+    nierozpoznani = {}
+    for o in (db.query(models.OdbicieRcp)
+              .filter(models.OdbicieRcp.pracownik_id.is_(None),
+                      models.OdbicieRcp.pos_pracownik_id.isnot(None)).all()):
+        klucz = (o.zrodlo or "", o.pos_pracownik_id)
+        if klucz in zmapowane:
+            continue
+        nierozpoznani.setdefault(klucz, {"zrodlo": o.zrodlo or "", "pos_id": o.pos_pracownik_id,
+                                         "pos_nazwa": o.imie_nazwisko})
+    return {"mapowania": mapowania,
+            "nierozpoznani": list(nierozpoznani.values()),
+            "pracownicy": [{"id": p.id, "nazwa": f"{p.imie} {p.nazwisko}"}
+                           for p in db.query(models.Pracownik).filter_by(aktywny=True)
+                           .order_by(models.Pracownik.nazwisko).all()]}
+
+
+@router.put("/api/pos/mapowanie", status_code=201)
+def zapisz_mapowanie(dane: MapowanieIn, db: Session = Depends(get_db),
+                     admin: models.User = Depends(auth.require_admin)):
+    """Upsert mapowania (zrodlo, pos_id)→pracownik. Dodatkowo domyka wcześniejsze odbicia
+    tej tożsamości (nadaje im pracownika + przelicza — godziny wchodzą wtedy do wypłaty)."""
+    if not db.get(models.Pracownik, dane.pracownik_id):
+        raise HTTPException(404, "Nie ma takiego pracownika.")
+    m = (db.query(models.PracownikPosId)
+         .filter_by(zrodlo=dane.zrodlo, pos_id=dane.pos_id).first())
+    if m is None:
+        m = models.PracownikPosId(zrodlo=dane.zrodlo, pos_id=dane.pos_id)
+        db.add(m)
+    m.pracownik_id = dane.pracownik_id
+    m.pos_nazwa = dane.pos_nazwa
+    # domknij historyczne odbicia tej tożsamości
+    for o in (db.query(models.OdbicieRcp)
+              .filter_by(zrodlo=dane.zrodlo, pos_pracownik_id=dane.pos_id).all()):
+        o.pracownik_id = dane.pracownik_id
+    db.commit()
+    logger.info("Mapowanie POS %s/%s → pracownik %s (admin: %s).",
+                dane.zrodlo, dane.pos_id, dane.pracownik_id, admin.login)
+    return {"ok": True}
+
+
+@router.delete("/api/pos/mapowanie/{mid}", status_code=204)
+def usun_mapowanie(mid: int, db: Session = Depends(get_db),
+                   admin: models.User = Depends(auth.require_admin)):
+    m = db.get(models.PracownikPosId, mid)
+    if m:
+        db.delete(m); db.commit()

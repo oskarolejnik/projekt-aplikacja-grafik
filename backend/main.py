@@ -2649,10 +2649,15 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta RCP.")
 
     odbicia = payload.get("odbicia", []) if isinstance(payload, dict) else []
+    zrodlo = (payload.get("zrodlo") if isinstance(payload, dict) else None) or ""
     mapa = {}
     for p in db.query(models.Pracownik).all():
         mapa.setdefault(_norm_nazwa(f"{p.imie} {p.nazwisko}"), p.id)
         mapa.setdefault(_norm_nazwa(f"{p.nazwisko} {p.imie}"), p.id)
+    # Jawne mapowanie POS→Lokalo (kreator „Integracja POS") ma PIERWSZEŃSTWO nad imieniem —
+    # per źródło, żeby ten sam pos_id z dwóch systemów się nie mylił.
+    mapa_pos = {m.pos_id: m.pracownik_id for m in
+                db.query(models.PracownikPosId).filter_by(zrodlo=zrodlo).all()} if zrodlo else {}
 
     nowe = zakonczone = powiadomienia = 0
     teraz = _teraz_lokalnie()  # do bramki swiezosci powiadomien
@@ -2665,13 +2670,17 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
             continue
         wejscie = _parse_dt(o.get("wejscie"))
         wyjscie = _parse_dt(o.get("wyjscie"))
-        pid = mapa.get(_norm_nazwa(nazwa))
+        pos_pid = o.get("pos_pracownik_id")
+        # jawne mapowanie POS→Lokalo najpierw, potem dopasowanie po imieniu
+        pid = (mapa_pos.get(str(pos_pid)) if pos_pid is not None else None) or mapa.get(_norm_nazwa(nazwa))
 
         rec = db.query(models.OdbicieRcp).filter_by(rcp_id=rcp_id).first()
         if rec is None:
             rec = models.OdbicieRcp(
                 rcp_id=rcp_id, imie_nazwisko=nazwa, pracownik_id=pid, data=d,
                 wejscie=wejscie, wyjscie=wyjscie,
+                pos_pracownik_id=(str(pos_pid) if pos_pid is not None else None),
+                zrodlo=zrodlo or None,
             )
             db.add(rec)
             nowe += 1
@@ -2680,6 +2689,10 @@ def rcp_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
                 rec.imie_nazwisko = nazwa
             if pid is not None:
                 rec.pracownik_id = pid
+            if pos_pid is not None:
+                rec.pos_pracownik_id = str(pos_pid)
+            if zrodlo:
+                rec.zrodlo = zrodlo
             if wejscie:
                 rec.wejscie = wejscie
             if wyjscie:

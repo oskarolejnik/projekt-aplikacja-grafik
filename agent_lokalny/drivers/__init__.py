@@ -1,11 +1,13 @@
 """Rejestr driverów POS. Nowy system = nowy moduł + wpis tutaj (nic więcej)."""
 
 from .gastro_mssql import GastroMssqlDriver
+from .soga_firebird import SogaFirebirdDriver
+from .x2_postgres import X2PostgresDriver
 
 DRIVERY = {
-    GastroMssqlDriver.driver_id: GastroMssqlDriver,
-    # "soga_firebird": ...   (faza 2 — patrz docs/POS-INTEGRACJA.md)
-    # "x2_postgres":   ...   (faza 2)
+    GastroMssqlDriver.driver_id: GastroMssqlDriver,   # Gastro/Softech-LSI, S4H (MSSQL)
+    SogaFirebirdDriver.driver_id: SogaFirebirdDriver,  # SOGA/NSoft (Firebird)
+    X2PostgresDriver.driver_id: X2PostgresDriver,      # X2System/Adith (PostgreSQL)
 }
 
 

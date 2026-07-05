@@ -1,7 +1,10 @@
 # Zależności agenta lokalnego (instaluj na serwerze POS):
 #   pip install -r requirements.txt
 SQLAlchemy>=2.0,<3
-pymssql>=2.2          # sterownik MS SQL Server (wheels z FreeTDS — bez instalacji ODBC)
 requests>=2.28
 python-dotenv>=1.0    # legacy agent.py (.env)
 PyYAML>=6.0           # agent_pos.py (config.yaml)
+# Sterownik bazy — zainstaluj TYLKO ten, którego używa Twój POS:
+pymssql>=2.2          # driver gastro_mssql / S4H (MS SQL; wheels z FreeTDS — bez ODBC)
+# firebird-driver>=1.10   # driver soga_firebird (SOGA/Firebird) — odkomentuj
+# psycopg2-binary>=2.9    # driver x2_postgres (X2System/PostgreSQL) — odkomentuj

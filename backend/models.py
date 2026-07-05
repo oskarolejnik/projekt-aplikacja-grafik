@@ -214,6 +214,10 @@ class OdbicieRcp(Base):
     rcp_id        = Column(String(128), unique=True, nullable=False, index=True)
     imie_nazwisko = Column(String(128), nullable=False)
     pracownik_id  = Column(Integer, ForeignKey("pracownicy.id", ondelete="SET NULL"), nullable=True, index=True)
+    # stabilny id pracownika w POS + źródło (driver) — do trwałego mapowania POS→Lokalo
+    # (kreator „Integracja POS"); NULL dla wdrożeń sprzed fazy 2 mapowania.
+    pos_pracownik_id = Column(String(64), nullable=True)
+    zrodlo        = Column(String(32), nullable=True)
     data          = Column(Date, nullable=False, index=True)
     wejscie       = Column(DateTime, nullable=True)
     wyjscie       = Column(DateTime, nullable=True)
@@ -804,6 +808,21 @@ class UtargDnia(Base):
     karta            = Column(Float, nullable=True)
     liczba_rachunkow = Column(Integer, nullable=True)
     aktualizacja_at  = Column(DateTime, nullable=False)
+
+
+class PracownikPosId(Base):
+    """Trwałe mapowanie identyfikatora pracownika z POS → pracownik Lokalo. Zastępuje kruche
+    dopasowanie po imieniu (duplikaty, zdrobnienia, ogonki) — warunek skalowania na wiele lokali.
+    Ustawiane w kreatorze „Integracja POS" (krok mapowań). Ingest woli mapę jawną, fallback = imię."""
+    __tablename__ = "pracownik_pos_id"
+    __table_args__ = (UniqueConstraint("zrodlo", "pos_id"),)
+    id           = Column(Integer, primary_key=True, index=True)
+    pracownik_id = Column(Integer, ForeignKey("pracownicy.id", ondelete="CASCADE"), nullable=False, index=True)
+    zrodlo       = Column(String(32), nullable=False)   # driver/źródło: gastro_mssql|soga_firebird|...
+    pos_id       = Column(String(64), nullable=False)   # stabilny id użytkownika w POS
+    pos_nazwa    = Column(String(128), nullable=True)   # nazwa z POS (podgląd, nie do dopasowania)
+
+    pracownik = relationship("Pracownik")
 
 
 class AgentStatus(Base):

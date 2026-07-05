@@ -5,10 +5,13 @@ uniwersalnego następcy dzisiejszego `agent_lokalny/` (który obsługuje wyłąc
 
 **Stan wdrożenia:** ✅ tor A (utarg ręczny/CSV + `POST /api/pos/utarg-dnia` + heartbeat + zakładka
 „Utarg (POS)"), ✅ token agenta z panelu (hash w DB, unieważnialny; env `RCP_INGEST_TOKEN` = fallback,
-przyjmowany też na legacy `/api/rcp|gastro/*`), ✅ agent `core+drivers` z driverem `gastro_mssql`
-(`agent_lokalny/agent_pos.py`, config.yaml z panelu) i kreatorem „Podłącz agenta".
-Do zrobienia: drivery SOGA/X2, konektor Dotykačka, KSeF, kolejka offline + auto-update agenta,
-krok mapowań pracowników/rewirów w kreatorze.
+przyjmowany też na legacy `/api/rcp|gastro/*`), ✅ agent `core+drivers` z driverami **`gastro_mssql`,
+`soga_firebird`, `x2_postgres`** (wspólna baza `SqlDriver` — nowy POS = kilka linijek;
+`agent_lokalny/agent_pos.py`, config.yaml z panelu) i kreatorem „Podłącz agenta", ✅ **trwałe mapowanie
+pracowników POS→Lokalo** (`PracownikPosId`, `pos_pracownik_id` w odbiciach → ingest woli mapę jawną,
+fallback = imię; krok mapowań w kreatorze domyka historyczne odbicia).
+Do zrobienia: konektor chmurowy Dotykačka (OAuth+webhooki), KSeF (04.2026, B2B/koszty), kolejka offline
++ auto-update agenta, mapowanie rewirów w kreatorze (backend `pos_mapa_rewirow` gotowy).
 
 ## 1. Mapa rynku POS w Polsce (2025/2026)
 
