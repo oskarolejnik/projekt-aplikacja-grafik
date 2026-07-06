@@ -108,7 +108,7 @@ export default function SekcjaCennik() {
   const slowoRef = useRef(null)
   const glowne = CENNIK.filter((p) => p.mies != null && p.mies > 0)
   const boczne = CENNIK.filter((p) => p.mies === 0 || p.mies == null)
-  useParallax(slowoRef, 0.12)
+  useParallax(slowoRef, 0.12, motionOn())
 
   const anim = motionOn()
   const tiltMove = (e) => {

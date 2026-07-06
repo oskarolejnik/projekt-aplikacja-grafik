@@ -2,11 +2,11 @@
 import { afterEach, describe, it, expect } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import Produkt from './Produkt'
+import Produkt from './ProduktPro'
 
 afterEach(cleanup)
 
-describe('Landing sprzedażowy (Produkt)', () => {
+describe('Landing sprzedażowy (ProduktPro)', () => {
   it('pokazuje hero z propozycją wartości', () => {
     const { container } = render(<Produkt />)
     expect(container.textContent).toContain('jednym systemie')
