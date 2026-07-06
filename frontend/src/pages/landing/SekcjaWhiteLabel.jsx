@@ -2,8 +2,9 @@
 // jak aplikacja wygląda pod marką konkretnego lokalu. Przykłady zmieniają nie
 // tylko kolor: nazwę, kształt znaku, zaokrąglenia (styl), zestaw modułów
 // i CAŁY układ ekranu — bo każdy typ lokalu używa innych modułów na co dzień.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../lib/icons'
+import { gsap, reducedMotion } from './motionPro'
 
 const PRZYKLADY = [
   {
@@ -75,6 +76,18 @@ const PERSONALIZACJE = [
 export default function SekcjaWhiteLabel() {
   const [aktywnyId, setAktywnyId] = useState(PRZYKLADY[0].id)
   const p = PRZYKLADY.find((m) => m.id === aktywnyId) || PRZYKLADY[0]
+  const panelRef = useRef(null)
+  const pierwszy = useRef(true)
+
+  // Zmiana marki = panel PODGLĄDU obraca się w 3D (rotateY flip-in) — brand „przekręca się"
+  // w nową tożsamość. Pierwszy render pomijamy (wejście robi reveal); reduced-motion → bez flipu.
+  useEffect(() => {
+    if (pierwszy.current) { pierwszy.current = false; return }
+    if (reducedMotion() || !panelRef.current) return
+    gsap.fromTo(panelRef.current,
+      { rotateY: 26, opacity: 0.5, scale: 0.965 },
+      { rotateY: 0, opacity: 1, scale: 1, duration: 0.8, ease: 'power3.out', overwrite: true })
+  }, [aktywnyId])
 
   return (
     <section id="white-label" className="relative scroll-mt-20 py-20 sm:py-28">
@@ -136,8 +149,8 @@ export default function SekcjaWhiteLabel() {
               ))}
             </div>
 
-            <div data-rv="" style={{ '--i': 1 }} className="rv-scale mt-4">
-              <div className="glass tilt rounded-3xl p-3 sm:p-4">
+            <div data-rv="" style={{ '--i': 1, perspective: '1200px' }} className="rv-scale mt-4">
+              <div ref={panelRef} className="glass rounded-3xl p-3 sm:p-4" style={{ transformStyle: 'preserve-3d' }}>
                 {/* Topbar aplikacji pod marką lokalu: znak (kształt!) + nazwa */}
                 <div className={`flex items-center justify-between border border-white/[0.08] bg-white/[0.03] px-4 py-3 ${p.radius}`}>
                   <div className="flex items-center gap-2.5">
