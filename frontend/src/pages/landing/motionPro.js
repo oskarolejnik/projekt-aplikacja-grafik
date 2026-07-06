@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect } from 'react'
 import Lenis from 'lenis'
 import { gsap } from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -11,6 +11,11 @@ import 'lenis/dist/lenis.css'
 // treść statycznie widoczna (żadnego ukrywania). Sprzątanie kompletne (destroy/kill/ticker).
 
 gsap.registerPlugin(ScrollTrigger, SplitText)
+
+// Sceny, które ustawiają stan POCZĄTKOWY (ukrycie przed animacją), muszą to zrobić PRZED
+// pierwszym malowaniem — inaczej flash złożonego stanu. Na kliencie useLayoutEffect, na
+// serwerze (gdyby kiedyś SSR) fallback do useEffect.
+const useIsoLayout = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
 export const reducedMotion = () =>
   typeof window !== 'undefined' && !!window.matchMedia &&
@@ -162,7 +167,8 @@ export function useParallax(elRef, speed = 0.12, enabled = true) {
 // ── Dowolna scena GSAP w scope (pinned/scrub) z automatycznym sprzątaniem ──
 // buildFn(gsap, ScrollTrigger) tworzy animacje; wywoływane w gsap.context(scope).
 export function useGsapScene(scopeRef, buildFn, enabled = true) {
-  useEffect(() => {
+  // useLayoutEffect: stan początkowy (ukrycie) aplikuje się PRZED malowaniem → zero flashu.
+  useIsoLayout(() => {
     if (!enabled || reducedMotion() || typeof window === 'undefined') return
     const scope = scopeRef && scopeRef.current
     if (!scope) return

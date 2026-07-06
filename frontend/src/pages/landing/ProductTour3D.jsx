@@ -69,9 +69,15 @@ export default function ProductTour3D() {
           op = clamp(1 + ze / 2300, 0.12, 1)
           blur = clamp(-ze / 300, 0, 8)
         }
-        el.style.opacity = op.toFixed(3)
-        el.style.filter = blur > 0.2 ? `blur(${blur.toFixed(1)}px)` : 'none'
-        el.style.zIndex = String(1000 + Math.round(ze / 8))
+        // Kwantyzacja + cache: filter:blur() jest DROGI (re-rasteryzacja) — piszemy tylko przy
+        // realnej zmianie. Blur skokowo co 0.5px, zIndex/opacity też bez zbędnych zapisów.
+        const last = el._pt || (el._pt = {})
+        const opR = Math.round(op * 100) / 100
+        if (last.op !== opR) { el.style.opacity = String(opR); last.op = opR }
+        const blurR = Math.round(blur * 2) / 2
+        if (last.blur !== blurR) { el.style.filter = blurR > 0.2 ? `blur(${blurR}px)` : 'none'; last.blur = blurR }
+        const zi = 1000 + Math.round(ze / 8)
+        if (last.zi !== zi) { el.style.zIndex = String(zi); last.zi = zi }
       })
       if (fillRef.current) fillRef.current.style.transform = `scaleX(${progress.toFixed(3)})`
       pokazTekst(clamp(Math.round(progress * (N - 1)), 0, N - 1))

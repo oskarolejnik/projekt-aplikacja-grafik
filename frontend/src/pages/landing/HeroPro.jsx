@@ -143,15 +143,15 @@ export default function HeroPro() {
             w perspektywie w stronę kursora (realny parallax). Składa się z głębi na wejściu. */}
         <div ref={stackRef} className="relative mx-auto w-full max-w-md lg:max-w-none" style={{ perspective: '1300px' }}>
           <div ref={tiltRef} className="relative will-change-transform" style={{ transformStyle: 'preserve-3d' }}>
-            <div className="hero-rez absolute -left-14 -top-24 z-0 hidden w-60 will-change-transform xl:block">
+            <div className="hero-rez absolute -left-14 -top-24 z-0 hidden w-60 xl:block">
               <div className="max-h-60 overflow-hidden" style={{ maskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)', WebkitMaskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)' }}>
                 <RezerwacjaVignette />
               </div>
             </div>
-            <div className="hero-grafik relative z-10 will-change-transform">
+            <div className="hero-grafik relative z-10">
               <GrafikVignette />
             </div>
-            <div className="hero-tel absolute -bottom-10 -right-3 z-20 w-36 will-change-transform sm:-right-6 sm:w-40">
+            <div className="hero-tel absolute -bottom-10 -right-3 z-20 w-36 sm:-right-6 sm:w-40">
               <TelefonPortfel />
             </div>
           </div>
