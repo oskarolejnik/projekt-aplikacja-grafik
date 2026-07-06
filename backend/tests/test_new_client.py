@@ -120,6 +120,13 @@ def test_ustaw_tier_oplacony_aktywuje_subskrypcje(db):
     assert s.data_od == date.today() and s.data_do == date.today() + timedelta(days=30)
 
 
+def test_ustaw_trial_14_dni_pelny_dostep(db):
+    from datetime import date, timedelta
+    s = nc.ustaw_trial(db)
+    assert s.status == "trial" and s.tier == "premium"
+    assert s.data_od == date.today() and s.data_do == date.today() + timedelta(days=14)
+
+
 def test_ustaw_konfiguracje_ustawia_typ_i_moduly(db):
     cfg = nc.ustaw_konfiguracje(db, {"typ_lokalu": "pizzeria", "modul_pos": True, "nieznane": "x"})
     assert cfg.typ_lokalu == "pizzeria" and cfg.modul_pos is True

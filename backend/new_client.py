@@ -196,6 +196,25 @@ def ustaw_tier(db, tier: str, *, oplacony: bool = False, dni: int = 30):
     return s
 
 
+def ustaw_trial(db, tier: str = "premium", dni: int = 14):
+    """Uruchamia trial: status=trial + pełny dostęp (tier=premium → wszystkie moduły przez
+    override w deps.moduly_efektywne_dla_sub). Po `dni` dniach instancja sama spada do Free."""
+    import models
+    from datetime import date, timedelta
+
+    s = db.get(models.Subskrypcja, 1)
+    if s is None:
+        s = models.Subskrypcja(id=1)
+        db.add(s)
+    s.tier = tier
+    s.status = "trial"
+    s.data_od = date.today()
+    s.data_do = date.today() + timedelta(days=dni)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
 def ustaw_nazwe_lokalu(db, nazwa: str):
     """Ustawia nazwę lokalu w singletonie LokalConfig (id=1), tworząc go w razie potrzeby."""
     import models
@@ -259,6 +278,9 @@ def main(argv=None) -> int:
                         "(tor samoobsługowego provisioningu)")
     p.add_argument("--tier", default=None, choices=list(TIERY),
                    help="z --init: pakiet subskrypcji instancji (np. wybór z cennika)")
+    p.add_argument("--trial", action="store_true",
+                   help="z --init --email: 14-dniowy trial pełnego dostępu (status=trial, tier=premium) "
+                        "zamiast opłaconego planu — bez płatności")
     p.add_argument("--force", action="store_true", help="nadpisz istniejący .env instancji")
     args = p.parse_args(argv)
 
@@ -306,7 +328,9 @@ def main(argv=None) -> int:
             if not hh:
                 print("Błąd: brak LOKALO_ADMIN_HASLO_HASH w środowisku dla toru --email.", file=sys.stderr)
                 return 1
-            if args.tier:
+            if args.trial:
+                ustaw_trial(db)                       # 14 dni pełnego dostępu, bez płatności
+            elif args.tier:
                 ustaw_tier(db, args.tier, oplacony=True)
             zaloz_admina(db, email=args.email, haslo_hash=hh)
             ustaw_nazwe_lokalu(db, nazwa)

@@ -62,6 +62,22 @@ def test_oplac_idempotentne_nie_stawia_drugiej_instancji(client, monkeypatch):
     assert len(wyw) == 1   # instancja postawiona TYLKO raz
 
 
+def test_rejestracja_trial_stawia_od_razu_bez_platnosci(client, monkeypatch):
+    wyw = []
+    _wlacz(monkeypatch, wyw)
+    r = client.post("/api/online/rejestracja", json={
+        "email": "trial@lokal.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Trial Knajpa",
+        "trial": True, "typ_lokalu": "pizzeria", "moduly": {"modul_imprezy": True}})
+    assert r.status_code == 201, r.text
+    assert r.json()["tryb"] == "trial" and r.json()["status"] == "zrealizowana"
+    assert "/?login" in r.json()["url"]
+    # provisioning wywołany OD RAZU z trial=True + adminem (bez kroku płatności)
+    assert len(wyw) == 1
+    call = wyw[0]
+    assert call["trial"] is True and call["admin_email"] == "trial@lokal.pl" and call["tier"] == "premium"
+    assert call["konfiguracja"]["typ_lokalu"] == "pizzeria"
+
+
 def test_checkout_zero_zl_dla_darmowego(client, monkeypatch):
     wyw = []
     _wlacz(monkeypatch, wyw)

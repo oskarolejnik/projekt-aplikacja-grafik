@@ -84,15 +84,16 @@ export default function Start() {
                 {samoobsluga.enabled ? (
                   <div className="mt-3">
                     <p className="text-sm leading-relaxed text-muted">
-                      Kilka kroków: e-mail i hasło właściciela, typ lokalu i moduły, wybór pakietu.
-                      Po opłaceniu system automatycznie postawi Ci własną instancję z gotowym kontem —
-                      wejdziesz od razu, logując się e-mailem.
+                      <span className="font-semibold text-mint">14 dni pełnego dostępu za darmo, bez karty.</span>{' '}
+                      Kilka kroków: e-mail i hasło właściciela, typ lokalu, plan i moduły. System
+                      automatycznie postawi Ci własną instancję z gotowym kontem — wejdziesz od razu,
+                      logując się e-mailem. Po trialu lokal przechodzi na plan Darmowy (rdzeń działa dalej).
                     </p>
                     <button
                       onClick={() => setPokazKreator(true)}
                       className="mt-4 inline-flex items-center gap-2 rounded-xl bg-mint px-5 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]"
                     >
-                      Zacznij zakładanie <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
+                      Zacznij 14 dni za darmo <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
                     </button>
                   </div>
                 ) : (

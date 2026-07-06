@@ -74,20 +74,23 @@ def nowy_lokal(dane: NowyLokalIn, request: Request):
 # ── Tor z płatnością: kreator → checkout → auto-provision konta + instancji ──────
 
 class RejestracjaIn(BaseModel):
-    """Kreator na matce: dane właściciela + wybrany plan. Konto + instancja powstają
-    DOPIERO po opłaceniu (rejestracja czeka ze statusem 'oczekuje')."""
+    """Kreator na matce: dane właściciela + wybór ścieżki. `trial=True` → 14 dni pełnego Premium
+    bez karty, instancja staje OD RAZU. Inaczej wybrany `plan` → checkout, a konto+instancja
+    powstają dopiero po opłaceniu."""
     email: str
     haslo: str
     nazwa_lokalu: str
-    plan: str
+    plan: Optional[str] = None
+    trial: bool = False
     typ_lokalu: Optional[str] = None
     moduly: Optional[dict] = None
 
 
 @router.post("/api/online/rejestracja", status_code=201)
 def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get_db)):
-    """Publiczne: kreator zapisuje rejestrację oczekującą na płatność i zwraca link do checkoutu.
-    Hasło hashowane TU (na matce, bcrypt) — plaintext nie opuszcza tego procesu."""
+    """Publiczne: dwie ścieżki. TRIAL → stawiamy instancję od razu (14 dni pełnego dostępu, bez
+    płatności). PŁATNY → zapisujemy rejestrację oczekującą i zwracamy link do checkoutu. Hasło
+    hashowane TU (na matce, bcrypt) — plaintext nie opuszcza tego procesu."""
     if not provisioning.wlaczony():
         raise HTTPException(503, "Samoobsługowe zakładanie lokali jest wyłączone na tej instalacji.")
     # Walidacja PRZED limitem — literówka nie zużywa dziennego limitu zakładania lokali.
@@ -96,24 +99,47 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
     nazwa = (dane.nazwa_lokalu or "").strip()
     if len(nazwa) < 3:
         raise HTTPException(400, "Podaj nazwę lokalu (min. 3 znaki).")
-    tier = PLAN_NA_TIER.get((dane.plan or "").strip().lower())
-    if not tier:
-        raise HTTPException(400, "Wybierz pakiet (darmowy, basic, pro lub premium).")
+    if not dane.trial:
+        tier = PLAN_NA_TIER.get((dane.plan or "").strip().lower())
+        if not tier:
+            raise HTTPException(400, "Wybierz pakiet (darmowy, basic, pro lub premium) albo trial.")
     ip = request.client.host if request.client else "?"
     if not zuzyj_kwote(f"rejestracja:{ip}", str(date.today()), NOWY_LOKAL_LIMIT_IP_DZIENNY):
         raise HTTPException(429, "Zbyt wiele prób z tego adresu dzisiaj — spróbuj jutro.")
-    netto = cennik.cena_netto(tier)
+    haslo_hash = hash_password(dane.haslo)
     external_id = secrets.token_urlsafe(24)
+
+    if dane.trial:
+        # 14 dni pełnego Premium bez płatności → instancja staje od razu.
+        rej = models.RejestracjaLokalu(
+            email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
+            moduly=dane.moduly, tier="premium", netto=0.0, status="przetwarzanie",
+            external_id=external_id, utworzono_at=utcnow_naive())
+        db.add(rej); db.commit()
+        konfiguracja = {"typ_lokalu": dane.typ_lokalu}
+        if dane.moduly:
+            konfiguracja.update(dane.moduly)
+        try:
+            wpis = provisioning.utworz_instancje(
+                nazwa, host=request.url.hostname or "127.0.0.1", tier="premium",
+                admin_email=email, admin_haslo_hash=haslo_hash, konfiguracja=konfiguracja, trial=True)
+        except RuntimeError as e:
+            rej.status = "blad"; db.commit()
+            raise HTTPException(503, str(e))
+        rej.status, rej.slug, rej.url = "zrealizowana", wpis["slug"], wpis["url"]
+        rej.zrealizowano_at = utcnow_naive()
+        db.commit()
+        return {"tryb": "trial", "status": "zrealizowana", "url": wpis["url"], "slug": wpis["slug"]}
+
+    # ── tryb płatny: rejestracja oczekująca + link do checkoutu ──
+    netto = cennik.cena_netto(tier)
     rej = models.RejestracjaLokalu(
-        email=email, haslo_hash=hash_password(dane.haslo), nazwa=nazwa,
+        email=email, haslo_hash=haslo_hash, nazwa=nazwa,
         typ_lokalu=dane.typ_lokalu, moduly=dane.moduly, tier=tier, netto=netto,
-        status="oczekuje", external_id=external_id, utworzono_at=utcnow_naive(),
-    )
-    db.add(rej)
-    db.commit()
-    # Link do checkoutu: sandbox (lokalny) teraz; realna bramka (Stripe/P24) później przez flagę.
+        status="oczekuje", external_id=external_id, utworzono_at=utcnow_naive())
+    db.add(rej); db.commit()
     provider = "api" if integracje.skonfigurowane("platnosci") else "sandbox"
-    return {"external_id": external_id, "plan": tier, "brutto": cennik.brutto(netto),
+    return {"tryb": "platny", "external_id": external_id, "plan": tier, "brutto": cennik.brutto(netto),
             "link": f"/?rejestracja-oplac={external_id}", "provider": provider}
 
 
