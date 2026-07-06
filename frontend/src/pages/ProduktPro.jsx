@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { Logo } from '../components/Logo'
-import { useLenisGsap, useReveal, useHeadingReveal, useCountUp, useThreadDraw } from './landing/motionPro'
+import { useLenisGsap, useReveal, useHeadingReveal, useCountUp, useThreadDraw, useScrollRail } from './landing/motionPro'
 import HeroPro from './landing/HeroPro'
 import PainRelief from './landing/PainRelief'
 import ProductTour3D from './landing/ProductTour3D'
@@ -26,14 +26,20 @@ const Nitka = () => (
 
 export default function ProduktPro() {
   const root = useRef(null)
+  const railRef = useRef(null)
   useLenisGsap()
   useReveal(root)
   useHeadingReveal(root)
   useCountUp(root)
   useThreadDraw(root)
+  useScrollRail(railRef)
 
   return (
     <div ref={root} className="lp-noir relative min-h-dvh bg-noc font-switzer text-ink">
+      {/* Złoty pasek postępu scrolla — u samej góry, nad nawigacją. */}
+      <div aria-hidden className="fixed inset-x-0 top-0 z-50 h-[2px] bg-white/[0.04]">
+        <div ref={railRef} className="h-full origin-left bg-gradient-to-r from-zloto/80 to-zloto-2" style={{ transform: 'scaleX(0)' }} />
+      </div>
       {/* Wspólne style kart landingu (szkło/tilt/lift) — sekcje Role/Platformy/WhiteLabel/
           Zaufanie używają klas .glass/.tilt/.lift; muszą być zdefiniowane na poziomie strony
           (dawniej pod .lp w usuniętym Produkt.jsx). Tilt bez kursora = statyczna perspektywa. */}

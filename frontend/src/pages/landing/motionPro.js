@@ -212,6 +212,20 @@ export function useCountUp(scopeRef, enabled = true) {
   }, [scopeRef, enabled])
 }
 
+// ── Złoty pasek postępu scrolla (u samej góry) — scaleX = pozycja na stronie ──
+export function useScrollRail(railRef, enabled = true) {
+  useEffect(() => {
+    if (!enabled || reducedMotion() || typeof window === 'undefined') return
+    const el = railRef && railRef.current
+    if (!el) return
+    const st = ScrollTrigger.create({
+      start: 0, end: 'max',
+      onUpdate: (self) => { el.style.transform = `scaleX(${self.progress.toFixed(3)})` },
+    })
+    return () => st.kill()
+  }, [railRef, enabled])
+}
+
 // ── „Złota nitka" między sekcjami — rysowana L→R przy scrollu (wipe/transition) ──
 // [data-thread] startuje scaleX 0 (origin left) i wysuwa się do pełni. Reduced-motion → pełna.
 export function useThreadDraw(scopeRef, enabled = true) {
