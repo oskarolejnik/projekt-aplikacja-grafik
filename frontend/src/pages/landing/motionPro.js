@@ -117,7 +117,7 @@ function _revealKind(el) {
   return 'up'
 }
 export function useReveal(scopeRef, enabled = true) {
-  useEffect(() => {
+  useIsoLayout(() => {  // przed malowaniem → zero reverse-flash (element nie mignie widoczny)
     if (!enabled || reducedMotion() || typeof window === 'undefined') return
     const scope = (scopeRef && scopeRef.current) || document.body
     const ctx = gsap.context(() => {
@@ -189,7 +189,7 @@ export function useHeadingReveal(scopeRef, enabled = true) {
 
 // ── Count-up liczb [data-count] (opcjonalny data-suffix) przy wejściu w kadr ──
 export function useCountUp(scopeRef, enabled = true) {
-  useEffect(() => {
+  useIsoLayout(() => {  // ustawia „0" przed malowaniem → liczba nie mignie wartością końcową
     if (!enabled || reducedMotion() || typeof window === 'undefined') return
     const scope = (scopeRef && scopeRef.current) || document.body
     const ctx = gsap.context(() => {
@@ -229,7 +229,7 @@ export function useScrollRail(railRef, enabled = true) {
 // ── „Złota nitka" między sekcjami — rysowana L→R przy scrollu (wipe/transition) ──
 // [data-thread] startuje scaleX 0 (origin left) i wysuwa się do pełni. Reduced-motion → pełna.
 export function useThreadDraw(scopeRef, enabled = true) {
-  useEffect(() => {
+  useIsoLayout(() => {  // scaleX 0 przed malowaniem → nitka nie mignie pełna
     if (!enabled || reducedMotion() || typeof window === 'undefined') return
     const scope = (scopeRef && scopeRef.current) || document.body
     const ctx = gsap.context(() => {
