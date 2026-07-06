@@ -18,8 +18,8 @@ const MODULY = [
 const N = MODULY.length
 
 const PERSP = 1500     // głębia perspektywy (px)
-const STEP = 720       // odstęp paneli w osi Z
-const YOFF = 52        // panele głębsze są wyżej → korytarz biegnie po skosie (widać głębię)
+const STEP = 640       // odstęp paneli w osi Z (mniejszy → więcej głębi widać naraz)
+const YOFF = 46        // panele głębsze są wyżej → korytarz biegnie po skosie (widać głębię)
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
 
 export default function ProductTour3D() {
@@ -87,7 +87,7 @@ export default function ProductTour3D() {
     ST.create({
       trigger: sekcjaRef.current,
       start: 'top top',
-      end: () => `+=${window.innerHeight * (N + 0.5)}`,
+      end: () => `+=${window.innerHeight * (N + 1.3)}`,
       pin: stageRef.current,
       anticipatePin: 1,
       invalidateOnRefresh: true,

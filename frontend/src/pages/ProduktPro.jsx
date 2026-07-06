@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { Logo } from '../components/Logo'
-import { useLenisGsap, useReveal, useHeadingReveal, useCountUp } from './landing/motionPro'
+import { useLenisGsap, useReveal, useHeadingReveal, useCountUp, useThreadDraw } from './landing/motionPro'
 import HeroPro from './landing/HeroPro'
 import PainRelief from './landing/PainRelief'
 import ProductTour3D from './landing/ProductTour3D'
@@ -17,12 +17,20 @@ import SekcjaFinal from './landing/SekcjaFinal'
 
 const MAIL = 'mailto:kontakt@grafikpracy.pl'
 
+// „Złota nitka" — hairline dzielący sekcje, rysowany L→R przy scrollu (marka + wipe).
+const Nitka = () => (
+  <div className="mx-auto max-w-6xl px-4 sm:px-6">
+    <div data-thread className="h-px w-full bg-gradient-to-r from-transparent via-zloto/45 to-transparent" />
+  </div>
+)
+
 export default function ProduktPro() {
   const root = useRef(null)
   useLenisGsap()
   useReveal(root)
   useHeadingReveal(root)
   useCountUp(root)
+  useThreadDraw(root)
 
   return (
     <div ref={root} className="lp-noir relative min-h-dvh bg-noc font-switzer text-ink">
@@ -78,9 +86,13 @@ export default function ProduktPro() {
         <PainRelief />
         <ProductTour3D />
         <SekcjaRole />
+        <Nitka />
         <SekcjaPlatformy />
+        <Nitka />
         <SekcjaWhiteLabel />
+        <Nitka />
         <SekcjaCennik />
+        <Nitka />
         <SekcjaZaufanie />
         <SekcjaFinal />
       </main>

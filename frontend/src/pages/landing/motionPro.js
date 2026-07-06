@@ -212,6 +212,25 @@ export function useCountUp(scopeRef, enabled = true) {
   }, [scopeRef, enabled])
 }
 
+// ── „Złota nitka" między sekcjami — rysowana L→R przy scrollu (wipe/transition) ──
+// [data-thread] startuje scaleX 0 (origin left) i wysuwa się do pełni. Reduced-motion → pełna.
+export function useThreadDraw(scopeRef, enabled = true) {
+  useEffect(() => {
+    if (!enabled || reducedMotion() || typeof window === 'undefined') return
+    const scope = (scopeRef && scopeRef.current) || document.body
+    const ctx = gsap.context(() => {
+      gsap.utils.toArray('[data-thread]').forEach((el) => {
+        gsap.set(el, { scaleX: 0, transformOrigin: 'left center' })
+        ScrollTrigger.create({
+          trigger: el, start: 'top 92%', once: true,
+          onEnter: () => gsap.to(el, { scaleX: 1, duration: 1.2, ease: 'power3.inOut' }),
+        })
+      })
+    }, scope)
+    return () => ctx.revert()
+  }, [scopeRef, enabled])
+}
+
 // ── Parallax warstwy: element płynie w osi Y względem scrolla (głębia) ──
 // speed>0 = wolniej (w tył), speed<0 = szybciej (w przód). elRef → element.
 export function useParallax(elRef, speed = 0.12, enabled = true) {
