@@ -17,6 +17,7 @@ const MODULY = [
   ['modul_pos', 'Integracja POS / RCP'],
   ['modul_sprzatanie', 'Grafik sprzątania'],
 ]
+const ETYKIETA_PLANU = { free: 'Darmowy', basic: 'Basic', pro: 'Pro', premium: 'Premium', enterprise: 'Enterprise' }
 const fld = 'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-mint'
 
 function Toggle({ on, onChange }) {
@@ -211,16 +212,29 @@ export default function Ustawienia() {
       </Card>
 
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Moduły" subtitle="Włącz tylko funkcje, których używasz. Wyłączone znikają z nawigacji." />
+        <SectionHeader title="Moduły" subtitle="Włącz tylko funkcje, których używasz. Moduły spoza Twojego planu są zablokowane — odblokujesz je podnosząc pakiet." />
         <div className="mt-4 space-y-2">
-          {MODULY.map(([k, l]) => (
-            <div key={k} className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
-              <span className="text-sm text-ink">{l}</span>
-              <Toggle on={!!cfg[k]} onChange={(v) => (k === 'modul_rezerwacje' && !v)
-                ? setCfg((s) => ({ ...s, modul_rezerwacje: false, rezerwacje_online: false }))
-                : set(k, v)} />
-            </div>
-          ))}
+          {MODULY.map(([k, l]) => {
+            const ok = !sub?.dostepne_moduly || sub.dostepne_moduly.includes(k)
+            const plan = sub?.moduly_wg_planu?.[k]
+            return (
+              <div key={k} className={`flex items-center justify-between rounded-xl border px-4 py-3 ${ok ? 'border-line bg-surface-2' : 'border-line/60 bg-surface-2/40'}`}>
+                <span className="flex items-center gap-2 text-sm text-ink">
+                  {!ok && <Icon name="key" className="h-3.5 w-3.5 text-muted" />}
+                  {l}
+                  {!ok && plan && <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-semibold text-muted">{ETYKIETA_PLANU[plan]}+</span>}
+                </span>
+                {ok ? (
+                  <Toggle on={!!cfg[k]} onChange={(v) => (k === 'modul_rezerwacje' && !v)
+                    ? setCfg((s) => ({ ...s, modul_rezerwacje: false, rezerwacje_online: false }))
+                    : set(k, v)} />
+                ) : (
+                  <button onClick={() => document.getElementById('sekcja-subskrypcja')?.scrollIntoView({ behavior: 'smooth' })}
+                    className="text-xs font-semibold text-mint transition hover:brightness-110">Odblokuj →</button>
+                )}
+              </div>
+            )
+          })}
         </div>
       </Card>
 
@@ -396,9 +410,10 @@ export default function Ustawienia() {
         </div>
       </Card>
 
+      <div id="sekcja-subskrypcja" />
       {sub && (
         <Card className="p-6 sm:p-8">
-          <SectionHeader title="Subskrypcja / licencja" subtitle="Twój pakiet, płatności i zmiana planu. Po grace instancja przechodzi w tryb tylko do odczytu." />
+          <SectionHeader title="Subskrypcja / licencja" subtitle="Twój pakiet, moduły, płatności i zmiana planu. Po grace instancja przechodzi w tryb tylko do odczytu." />
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
               sub.stan === 'aktywna' ? 'bg-mint/15 text-mint' : sub.stan === 'grace' ? 'bg-lemon/15 text-lemon' : 'bg-danger/15 text-danger'}`}>
@@ -406,10 +421,21 @@ export default function Ustawienia() {
                 : sub.stan === 'grace' ? `Po terminie — zapłać do ${sub.data_grace}, potem blokada`
                 : 'Zablokowana — tryb tylko do odczytu'}
             </span>
-            <span className="text-sm text-muted">Pakiet <b className="text-ink">{sub.tier}</b> · {zl(sub.cena_brutto)}/mc brutto
+            {sub.trial_dni != null && (
+              <span className="rounded-full bg-mint/15 px-3 py-1 text-xs font-semibold text-mint">
+                Trial Premium — {sub.trial_dni === 0 ? 'ostatni dzień' : `zostało ${sub.trial_dni} dni`}
+              </span>
+            )}
+            <span className="text-sm text-muted">Pakiet <b className="text-ink">{ETYKIETA_PLANU[sub.tier] || sub.tier}</b> · {zl(sub.cena_brutto)}/mc brutto
               {sub.saldo_kredytu > 0 && <> · kredyt {zl(sub.saldo_kredytu)}</>}
             </span>
           </div>
+          {sub.trial_dni != null && (
+            <p className="mt-2 text-xs leading-relaxed text-muted">
+              Masz teraz pełny dostęp do wszystkich modułów. Po zakończeniu triala lokal przejdzie na plan
+              <b className="text-ink"> Darmowy</b> (rdzeń działa dalej) — wybierz plan poniżej, aby zachować płatne moduły.
+            </p>
+          )}
 
           {/* Zmiana planu z dopłatą (proration) */}
           <div className="mt-5 rounded-xl border border-line bg-surface-2 p-4">
@@ -418,7 +444,7 @@ export default function Ustawienia() {
                 <select value={nowyTier} onChange={(e) => podgladUpgrade(e.target.value)} className={`${fld} w-44`}>
                   <option value="">— wybierz pakiet —</option>
                   {['free', 'basic', 'pro', 'premium', 'enterprise'].filter((t) => t !== sub.tier)
-                    .map((t) => <option key={t} value={t}>{t}</option>)}
+                    .map((t) => <option key={t} value={t}>{ETYKIETA_PLANU[t]}</option>)}
                 </select>
               </label>
               <Button variant="ghost" onClick={odnow} disabled={busy}>Odnów abonament</Button>

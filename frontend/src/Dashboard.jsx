@@ -115,7 +115,11 @@ export default function Dashboard() {
   // Zakładka „Flota" pojawia się tylko na instancji-matce (samoobsługa włączona).
   useEffect(() => { api('/flota').then((f) => setFlotaEnabled(!!f.enabled)).catch(() => {}) }, [])
 
-  const visibleTabs = TABS.filter((t) => (!t.modul || cfg[t.modul]) && (!t.operator || flotaEnabled))
+  // Zakładka modułu widoczna, gdy moduł WŁĄCZONY w configu I ODBLOKOWANY w planie (tier/trial).
+  // Dopóki subskrypcja się nie wczyta (dostepne=undefined) nie chowamy — unikamy migotania.
+  const dostepne = sub?.dostepne_moduly
+  const modulOk = (m) => cfg[m] && (!dostepne || dostepne.includes(m))
+  const visibleTabs = TABS.filter((t) => (!t.modul || modulOk(t.modul)) && (!t.operator || flotaEnabled))
   const kategorie = KATEGORIE.filter((k) => visibleTabs.some((t) => t.kat === k.id))
   const current = TABS.find((t) => t.id === active)
   const Active = current.Comp
@@ -316,6 +320,18 @@ export default function Dashboard() {
             </span>
             <button onClick={() => select('ustawienia')} className="ml-auto rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
               Przejdź do subskrypcji
+            </button>
+          </div>
+        )}
+        {sub && sub.trial_dni != null && (
+          <div className="mx-auto mb-5 flex w-full max-w-7xl flex-wrap items-center gap-2 rounded-xl border border-mint/40 bg-mint/10 px-4 py-3 text-sm text-mint">
+            <Icon name="sparkles" className="h-4 w-4 shrink-0" />
+            <span className="font-semibold">
+              Trial Premium — {sub.trial_dni === 0 ? 'ostatni dzień' : `zostało ${sub.trial_dni} ${sub.trial_dni === 1 ? 'dzień' : 'dni'}`}.
+              Masz pełny dostęp do wszystkich modułów; wybierz plan, żeby ich nie stracić po trialu.
+            </span>
+            <button onClick={() => select('ustawienia')} className="ml-auto rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+              Wybierz plan
             </button>
           </div>
         )}
