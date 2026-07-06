@@ -43,9 +43,9 @@ def test_auth_dziala_mimo_blokady(admin_client):
     admin_client.put("/api/subskrypcja", json={"status": "wygasla"})
     # Rejestracja i logowanie (/api/auth/*) są wyłączone spod blokady.
     r = admin_client.post("/api/auth/register",
-                          json={"login": "userlock", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"})
+                          json={"email": "userlock@lokal.pl", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"})
     assert r.status_code == 201, r.text
-    r2 = admin_client.post("/api/auth/login", json={"login": "userlock", "haslo": "Haslo123!"})
+    r2 = admin_client.post("/api/auth/login", json={"email": "userlock@lokal.pl", "haslo": "Haslo123!"})
     assert r2.status_code == 200
 
 

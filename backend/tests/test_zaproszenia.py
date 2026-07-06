@@ -21,7 +21,7 @@ def test_register_403_gdy_rejestracja_zamknieta(client, db):
     """Produkcyjny default: publiczny register odmawia i kieruje po link."""
     _wylacz_otwarta_rejestracje(db)
     r = client.post("/api/auth/register", json={
-        "login": "nowyprac1", "haslo": "Haslo123!", "imie": "Jan", "nazwisko": "Nowy"})
+        "email": "nowyprac1@lokal.pl", "haslo": "Haslo123!", "imie": "Jan", "nazwisko": "Nowy"})
     assert r.status_code == 403
     assert "zaproszeni" in r.json()["detail"].lower()
 
@@ -51,13 +51,14 @@ def test_pelny_przeplyw_rejestracji_z_linku(admin_client, db):
 
     # Rejestracja z tokenu:
     rej = anon.post(f"/api/online/zaproszenie/{z['token']}/rejestracja",
-                    json={"login": "kubalinkowy", "haslo": "Haslo123!"})
+                    json={"email": "kuba.linkowy@lokal.pl", "haslo": "Haslo123!"})
     assert rej.status_code == 201
     dane = rej.json()
     assert dane["user"]["rola"] == "kuchnia"
+    assert dane["user"]["email"] == "kuba.linkowy@lokal.pl"
 
-    # Konto przypięte do pracownika z zaproszenia:
-    u = db.query(models.User).filter(models.User.login == "kubalinkowy").first()
+    # Konto przypięte do pracownika z zaproszenia (logowanie e-mailem):
+    u = db.query(models.User).filter(models.User.email == "kuba.linkowy@lokal.pl").first()
     assert u is not None and u.pracownik_id == z["pracownik_id"]
 
     # Auto-login działa (token z odpowiedzi otwiera przestrzeń /api/me/*):
@@ -66,7 +67,7 @@ def test_pelny_przeplyw_rejestracji_z_linku(admin_client, db):
 
     # Token jednorazowy:
     drugi = anon.post(f"/api/online/zaproszenie/{z['token']}/rejestracja",
-                      json={"login": "ktosinny1", "haslo": "Haslo123!"})
+                      json={"email": "ktos.inny@lokal.pl", "haslo": "Haslo123!"})
     assert drugi.status_code == 400
 
 
@@ -78,7 +79,7 @@ def test_wygasle_zaproszenie_odmawia(admin_client, db):
     anon = TestClient(main.app)
     assert anon.get(f"/api/online/zaproszenie/{z['token']}").status_code == 400
     r = anon.post(f"/api/online/zaproszenie/{z['token']}/rejestracja",
-                  json={"login": "spozniona1", "haslo": "Haslo123!"})
+                  json={"email": "spozniona@lokal.pl", "haslo": "Haslo123!"})
     assert r.status_code == 400
 
 

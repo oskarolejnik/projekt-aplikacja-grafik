@@ -24,15 +24,16 @@ from typing import List, Optional
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import models
 import schemas
 from auth import create_access_token, hash_password, require_admin
 from database import get_db
-from deps import _norm_nazwa, _user_out, get_lokal_config, utcnow_naive
+from deps import _norm_nazwa, _user_out, get_lokal_config, unikalny_login_z_emaila, utcnow_naive
 from ratelimit import zuzyj_kwote
-from validators import sprawdz_haslo, sprawdz_login
+from validators import sprawdz_haslo, sprawdz_email
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -175,15 +176,16 @@ def rejestracja_z_zaproszenia(token: str, dane: schemas.ZaproszenieRejestracjaIn
         raise HTTPException(429, "Zbyt wiele prób z tego adresu — spróbuj jutro.")
 
     z = _zaproszenie_wazne(db, token)
-    login = sprawdz_login(dane.login)
+    email = sprawdz_email(dane.email)
     sprawdz_haslo(dane.haslo)
-    if db.query(models.User).filter(models.User.login == login).first():
-        raise HTTPException(400, "Ten login jest już zajęty.")
+    if db.query(models.User).filter(func.lower(models.User.email) == email).first():
+        raise HTTPException(400, "Ten e-mail jest już zajęty.")
     if db.query(models.User).filter(models.User.pracownik_id == z.pracownik_id).first():
         raise HTTPException(400, "Ten pracownik ma już konto.")
 
     user = models.User(
-        login=login, haslo_hash=hash_password(dane.haslo),
+        login=unikalny_login_z_emaila(db, email), email=email,
+        haslo_hash=hash_password(dane.haslo),
         rola=z.rola, pracownik_id=z.pracownik_id,
     )
     db.add(user)

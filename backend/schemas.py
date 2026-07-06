@@ -113,11 +113,13 @@ class ImprezaOut(ImprezaBase):
 # --- AUTH / UŻYTKOWNICY ---
 
 class LoginIn(BaseModel):
-    login: str
+    """Logowanie e-mailem (nowe konta) LUB loginem (stare konta bez e-maila) — dokładnie jedno."""
+    email: Optional[str] = None
+    login: Optional[str] = None
     haslo: str
 
 class RegisterIn(BaseModel):
-    login: str
+    email: str
     haslo: str
     imie: str
     nazwisko: str
@@ -130,19 +132,21 @@ class ZaproszenieIn(BaseModel):
     rola: str = "employee"          # employee|kuchnia|szef|szef_kuchni (admin tylko ręcznie)
 
 class ZaproszenieRejestracjaIn(BaseModel):
-    """Rejestracja z linku-zaproszenia: pracownik ustala tylko login i hasło."""
-    login: str
+    """Rejestracja z linku-zaproszenia: pracownik ustala e-mail (login logowania) i hasło."""
+    email: str
     haslo: str
 
 class OnboardingIn(BaseModel):
-    """Pierwsza konfiguracja instancji (samoobsługowy kreator) — tworzy pierwszego admina."""
-    login: str
+    """Pierwsza konfiguracja instancji (samoobsługowy kreator) — tworzy pierwszego admina.
+    Właściciel loguje się e-mailem; wewnętrzny login syntetyzowany z adresu."""
+    email: str
     haslo: str
     nazwa_lokalu: Optional[str] = None
 
 class UserOut(BaseModel):
     id: int
     login: str
+    email: Optional[str] = None
     rola: str
     aktywny: bool = True
     pracownik_id: Optional[int] = None

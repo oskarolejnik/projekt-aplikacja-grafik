@@ -6,6 +6,7 @@ Wydzielone tutaj, aby routery mogły z nich korzystać BEZ importowania main.py
 
 import hashlib
 import os
+import re
 import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -130,13 +131,29 @@ def _jest_sprzataczka(prac: models.Pracownik) -> bool:
 def _user_out(u: models.User) -> schemas.UserOut:
     """Konto użytkownika do odpowiedzi API (współdzielone: auth w main + /api/users w kadrach)."""
     return schemas.UserOut(
-        id=u.id, login=u.login, rola=u.rola, aktywny=bool(u.aktywny),
+        id=u.id, login=u.login, email=u.email, rola=u.rola, aktywny=bool(u.aktywny),
         pracownik_id=u.pracownik_id,
         dzial=u.pracownik.dzial if u.pracownik else None,
         sprzataczka=_jest_sprzataczka(u.pracownik) if u.pracownik else False,
         imie=u.pracownik.imie if u.pracownik else None,
         nazwisko=u.pracownik.nazwisko if u.pracownik else None,
     )
+
+
+def unikalny_login_z_emaila(db, email: str) -> str:
+    """Syntetyzuje wewnętrzny, unikalny `login` dla konta zakładanego e-mailem.
+    Login pozostaje notnull i zasila denormalizacje (audyt/ogłoszenia), ale nie jest już
+    kanałem logowania — użytkownik loguje się e-mailem. Bazujemy na części lokalnej adresu
+    (alfanumeryczna, min. 5 znaków), rozwiązując kolizje sufiksem liczbowym."""
+    baza = re.sub(r"[^a-z0-9]", "", (email or "").split("@")[0].lower()) or "konto"
+    if len(baza) < 5:
+        baza = (baza + "konto")[:5]
+    baza = baza[:56]  # zostaw miejsce na sufiks w limicie 64 znaków
+    kand, i = baza, 1
+    while db.query(models.User).filter(models.User.login == kand).first() is not None:
+        i += 1
+        kand = f"{baza}{i}"
+    return kand
 
 
 # Litery 'ł/Ł' (i kilka innych) NIE rozkładają się przez NFKD — mapujemy je ręcznie,

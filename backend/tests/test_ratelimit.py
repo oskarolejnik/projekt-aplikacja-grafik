@@ -72,18 +72,18 @@ def test_klucze_niezalezne(zegar):
 
 
 # ── integracyjne (endpoint /api/auth/login) ───────────────────────────────────
-def _zarejestruj(client, login):
+def _zarejestruj(client, ident):
     return client.post("/api/auth/register",
-                       json={"login": login, "haslo": "Haslo123!", "imie": "T", "nazwisko": "U"})
+                       json={"email": f"{ident}@lokal.pl", "haslo": "Haslo123!", "imie": "T", "nazwisko": "U"})
 
 
 def test_login_blokuje_po_serii_bledow(client):
     _zarejestruj(client, "brutalny")
     # MAX nieudanych prób -> wszystkie 401 (blokada sprawdzana przed weryfikacją).
     for _ in range(ratelimit.MAX_PROBY):
-        assert client.post("/api/auth/login", json={"login": "brutalny", "haslo": "Zle1!zle"}).status_code == 401
+        assert client.post("/api/auth/login", json={"email": "brutalny@lokal.pl", "haslo": "Zle1!zle"}).status_code == 401
     # Kolejna próba (nawet z poprawnym hasłem) -> 429 z nagłówkiem Retry-After.
-    r = client.post("/api/auth/login", json={"login": "brutalny", "haslo": "Haslo123!"})
+    r = client.post("/api/auth/login", json={"email": "brutalny@lokal.pl", "haslo": "Haslo123!"})
     assert r.status_code == 429
     assert int(r.headers["Retry-After"]) > 0
 
@@ -91,8 +91,8 @@ def test_login_blokuje_po_serii_bledow(client):
 def test_login_sukces_resetuje_licznik(client):
     _zarejestruj(client, "resetowy")
     for _ in range(ratelimit.MAX_PROBY - 1):
-        assert client.post("/api/auth/login", json={"login": "resetowy", "haslo": "Zle1!zle"}).status_code == 401
+        assert client.post("/api/auth/login", json={"email": "resetowy@lokal.pl", "haslo": "Zle1!zle"}).status_code == 401
     # Poprawne logowanie tuż poniżej progu -> 200 i kasuje licznik.
-    assert client.post("/api/auth/login", json={"login": "resetowy", "haslo": "Haslo123!"}).status_code == 200
+    assert client.post("/api/auth/login", json={"email": "resetowy@lokal.pl", "haslo": "Haslo123!"}).status_code == 200
     # Po resecie znów wolno próbować (401, nie 429).
-    assert client.post("/api/auth/login", json={"login": "resetowy", "haslo": "Zle1!zle"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "resetowy@lokal.pl", "haslo": "Zle1!zle"}).status_code == 401

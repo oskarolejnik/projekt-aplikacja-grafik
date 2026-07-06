@@ -12,7 +12,7 @@ const fld = 'w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm t
 export default function Zaproszenie({ token }) {
   const [info, setInfo] = useState(null)      // dane zaproszenia (kogo, dokąd)
   const [blad, setBlad] = useState(null)      // błąd podglądu (wygasłe/użyte/nie istnieje)
-  const [login, setLogin] = useState('')
+  const [email, setEmail] = useState('')
   const [haslo, setHaslo] = useState('')
   const [haslo2, setHaslo2] = useState('')
   const [busy, setBusy] = useState(false)
@@ -27,6 +27,10 @@ export default function Zaproszenie({ token }) {
   const zarejestruj = async (e) => {
     e.preventDefault()
     setFormBlad(null)
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
+      setFormBlad('Podaj prawidłowy adres e-mail.')
+      return
+    }
     if (haslo !== haslo2) {
       setFormBlad('Hasła różnią się od siebie.')
       return
@@ -34,7 +38,7 @@ export default function Zaproszenie({ token }) {
     setBusy(true)
     try {
       const r = await api(`/online/zaproszenie/${encodeURIComponent(token)}/rejestracja`, 'POST', {
-        login: login.trim(),
+        email: email.trim(),
         haslo,
       })
       setToken(r.access_token)
@@ -73,16 +77,16 @@ export default function Zaproszenie({ token }) {
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-muted">
               <span className="font-semibold text-ink">{info.nazwa_lokalu}</span> zaprasza Cię do
-              swojej aplikacji. Ustal login i hasło — grafik, godziny i portfel będą czekać po
+              swojej aplikacji. Ustal e-mail i hasło — grafik, godziny i portfel będą czekać po
               pierwszym zalogowaniu.
             </p>
 
             <div className="mt-6 space-y-4">
               <div>
-                <label className="field-label" htmlFor="zapr-login">Login</label>
-                <input id="zapr-login" value={login} onChange={(e) => setLogin(e.target.value)}
-                       className={fld} autoComplete="username" autoFocus />
-                <span className="mt-1 block text-[11px] text-muted/80">min. 5 znaków, tylko litery i cyfry</span>
+                <label className="field-label" htmlFor="zapr-email">E-mail</label>
+                <input id="zapr-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                       className={fld} autoComplete="email" autoFocus placeholder="np. jan@lokal.pl" />
+                <span className="mt-1 block text-[11px] text-muted/80">nim będziesz się logować do aplikacji</span>
               </div>
               <div>
                 <label className="field-label" htmlFor="zapr-haslo">Hasło</label>

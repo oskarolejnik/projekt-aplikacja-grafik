@@ -67,7 +67,7 @@ const PLAN_ETYKIETA = { darmowy: 'Darmowy', basic: 'Basic', pro: 'Pro', premium:
 export default function Onboarding({ demo = false }) {
   const { toast } = useToast()
   const [krok, setKrok] = useState('konto')
-  const [form, setForm] = useState({ nazwa_lokalu: '', login: '', haslo: '' })
+  const [form, setForm] = useState({ nazwa_lokalu: '', email: '', haslo: '' })
   const [busy, setBusy] = useState(false)
   const [wybranyTyp, setWybranyTyp] = useState(null) // id typu lub 'inny'
   const [moduly, setModuly] = useState(PRESET_INNY)
@@ -79,13 +79,13 @@ export default function Onboarding({ demo = false }) {
   // Krok 1 → bootstrap admina.
   const zalozKonto = async () => {
     if (!form.nazwa_lokalu.trim()) { toast('Podaj nazwę lokalu.', 'error'); return }
-    if (form.login.trim().length < 5) { toast('Login: min. 5 znaków (litery i cyfry).', 'error'); return }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) { toast('Podaj prawidłowy adres e-mail.', 'error'); return }
     if (form.haslo.length < 8) { toast('Hasło: min. 8 znaków (litera + cyfra + znak specjalny).', 'error'); return }
     if (demo) { setKrok('typ'); return }   // podgląd: bez zapisu, idziemy dalej
     setBusy(true)
     try {
       const r = await api('/onboarding/bootstrap', 'POST', {
-        login: form.login.trim(), haslo: form.haslo, nazwa_lokalu: form.nazwa_lokalu.trim(),
+        email: form.email.trim(), haslo: form.haslo, nazwa_lokalu: form.nazwa_lokalu.trim(),
       })
       setToken(r.access_token)
       // Pakiet z cennika → tier subskrypcji (best-effort; operator może zmienić w Ustawieniach).
@@ -173,8 +173,8 @@ export default function Onboarding({ demo = false }) {
               <div className="space-y-3">
                 <label className="block text-xs font-semibold text-muted">Nazwa lokalu
                   <input value={form.nazwa_lokalu} onChange={(e) => set('nazwa_lokalu', e.target.value)} className={fld} placeholder="Moja Restauracja" /></label>
-                <label className="block text-xs font-semibold text-muted">Login administratora
-                  <input value={form.login} onChange={(e) => set('login', e.target.value)} className={fld} placeholder="min. 5 znaków, litery i cyfry" /></label>
+                <label className="block text-xs font-semibold text-muted">E-mail administratora
+                  <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={fld} placeholder="np. jan@lokal.pl — nim się zalogujesz" /></label>
                 <label className="block text-xs font-semibold text-muted">Hasło
                   <input type="password" value={form.haslo} onChange={(e) => set('haslo', e.target.value)} className={fld} placeholder="min. 8 znaków: litera + cyfra + znak specjalny" /></label>
               </div>

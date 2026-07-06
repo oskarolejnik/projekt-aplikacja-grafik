@@ -39,8 +39,12 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false))
   }, [])
 
-  const login = useCallback(async (login, haslo, remember = true) => {
-    const res = await api('/auth/login', 'POST', { login, haslo })
+  // Logowanie e-mailem (nowe konta). Fallback: gdy identyfikator nie wygląda na e-mail
+  // (brak „@") — np. deweloperskie/legacy konto po loginie — wysyłamy go jako `login`.
+  const login = useCallback(async (identyfikator, haslo, remember = true) => {
+    const ident = (identyfikator || '').trim()
+    const body = ident.includes('@') ? { email: ident, haslo } : { login: ident, haslo }
+    const res = await api('/auth/login', 'POST', body)
     setToken(res.access_token, remember)
     setUser(res.user)
     return res.user

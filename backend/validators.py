@@ -17,6 +17,18 @@ from fastapi import HTTPException
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9]{5,}$")
 # Znak specjalny = drukowalny ASCII spoza liter/cyfr (zakresy interpunkcji).
 _SPECIAL_RE = re.compile(r"[!-/:-@\[-`{-~]")
+# E-mail: pragmatyczna walidacja (jeden @, kropka w domenie, bez spacji). Nie RFC 5322 —
+# realna weryfikacja to i tak dostarczalność; tu blokujemy oczywiste literówki.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def sprawdz_email(email: str) -> str:
+    email = (email or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "Podaj adres e-mail.")
+    if len(email) > 255 or not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Wpisz prawidłowy adres e-mail (np. jan@lokal.pl).")
+    return email
 
 
 def sprawdz_login(login: str) -> str:

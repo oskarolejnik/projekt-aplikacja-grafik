@@ -52,7 +52,7 @@ def test_endpoint_oznacz_oplacona(admin_client):
 
 def test_platnosci_tylko_admin(client):
     tok = client.post("/api/auth/register",
-                      json={"login": "kelnerx", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"}).json()["access_token"]
+                      json={"email": "kelnerx@lokal.pl", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"}).json()["access_token"]
     client.headers.update({"Authorization": f"Bearer {tok}"})
     assert client.post("/api/platnosci", json={"kwota": 10}).status_code == 403
     assert client.get("/api/platnosci").status_code == 403

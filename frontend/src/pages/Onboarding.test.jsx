@@ -13,7 +13,7 @@ afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 function wypelnijKonto() {
   fireEvent.change(screen.getByPlaceholderText('Moja Restauracja'), { target: { value: 'Testowa' } })
-  fireEvent.change(screen.getByPlaceholderText(/min. 5 znaków/), { target: { value: 'adminowca' } })
+  fireEvent.change(screen.getByPlaceholderText(/jan@lokal\.pl/), { target: { value: 'admin@testowa.pl' } })
   fireEvent.change(screen.getByPlaceholderText(/min. 8 znaków/), { target: { value: 'Haslo123!' } })
   fireEvent.click(screen.getByText(/Dalej — wybór typu/))
 }
@@ -24,7 +24,7 @@ describe('Kreator lokalu (Onboarding)', () => {
     render(<Onboarding />)
     wypelnijKonto()
     await waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith('/onboarding/bootstrap', 'POST', expect.objectContaining({ login: 'adminowca', nazwa_lokalu: 'Testowa' })))
+      expect(apiMock).toHaveBeenCalledWith('/onboarding/bootstrap', 'POST', expect.objectContaining({ email: 'admin@testowa.pl', nazwa_lokalu: 'Testowa' })))
     expect(setTokenMock).toHaveBeenCalledWith('tok')
     // Krok „typ": widać popularne typy + kartę „Inny".
     expect(await screen.findByText('Pizzeria')).toBeInTheDocument()

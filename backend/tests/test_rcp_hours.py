@@ -600,7 +600,7 @@ def test_rejestracja_konta_podlinkowuje_odbicia(client, db):
     assert db.query(models.OdbicieRcp).filter_by(rcp_id="102").one().pracownik_id is None
 
     r = client.post("/api/auth/register", json={
-        "login": "piotrz", "haslo": "Haslo123!", "imie": "Piotr", "nazwisko": "Zielinski"})
+        "email": "piotrz@lokal.pl", "haslo": "Haslo123!", "imie": "Piotr", "nazwisko": "Zielinski"})
     assert r.status_code == 201
     assert db.query(models.OdbicieRcp).filter_by(rcp_id="102").one().pracownik_id is not None
 
@@ -617,7 +617,7 @@ def test_rejestracja_nie_duplikuje_istniejacego_pracownika(client, db):
     ))
     db.commit()
     r = client.post("/api/auth/register", json={
-        "login": "mkajda", "haslo": "Haslo123!", "imie": "Mateusz", "nazwisko": "Kajda"})
+        "email": "mkajda@lokal.pl", "haslo": "Haslo123!", "imie": "Mateusz", "nazwisko": "Kajda"})
     assert r.status_code == 201
     # nie powstal duplikat
     assert db.query(models.Pracownik).filter_by(nazwisko="Kajda").count() == 1

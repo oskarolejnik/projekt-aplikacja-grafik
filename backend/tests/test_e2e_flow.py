@@ -49,19 +49,19 @@ def test_admin_ma_pelny_dostep(admin_client):
 def test_rejestracja_i_logowanie(client):
     r = client.post(
         "/api/auth/register",
-        json={"login": "janek1", "haslo": "Haslo123!", "imie": "Jan", "nazwisko": "Kowalski"},
+        json={"email": "janek1@lokal.pl", "haslo": "Haslo123!", "imie": "Jan", "nazwisko": "Kowalski"},
     )
     assert r.status_code == 201, r.text
     assert "access_token" in r.json()
-    r2 = client.post("/api/auth/login", json={"login": "janek1", "haslo": "Haslo123!"})
+    r2 = client.post("/api/auth/login", json={"email": "janek1@lokal.pl", "haslo": "Haslo123!"})
     assert r2.status_code == 200
     assert r2.json()["user"]["rola"] == "employee"
 
 
-def test_rejestracja_zbyt_krotki_login(client):
+def test_rejestracja_zly_email(client):
     r = client.post(
         "/api/auth/register",
-        json={"login": "abc", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"},
+        json={"email": "bez-malpy", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"},
     )
     assert r.status_code == 400
 
@@ -69,7 +69,7 @@ def test_rejestracja_zbyt_krotki_login(client):
 def test_rejestracja_slabe_haslo(client):
     r = client.post(
         "/api/auth/register",
-        json={"login": "janek2", "haslo": "slabe", "imie": "A", "nazwisko": "B"},
+        json={"email": "janek2@lokal.pl", "haslo": "slabe", "imie": "A", "nazwisko": "B"},
     )
     assert r.status_code == 400
 
@@ -77,9 +77,9 @@ def test_rejestracja_slabe_haslo(client):
 def test_logowanie_zle_haslo(client):
     client.post(
         "/api/auth/register",
-        json={"login": "ola123", "haslo": "Haslo123!", "imie": "Ola", "nazwisko": "X"},
+        json={"email": "ola123@lokal.pl", "haslo": "Haslo123!", "imie": "Ola", "nazwisko": "X"},
     )
-    r = client.post("/api/auth/login", json={"login": "ola123", "haslo": "ZleHaslo1!"})
+    r = client.post("/api/auth/login", json={"email": "ola123@lokal.pl", "haslo": "ZleHaslo1!"})
     assert r.status_code == 401
 
 

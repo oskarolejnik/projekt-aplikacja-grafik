@@ -9,10 +9,9 @@ import { motion } from 'framer-motion'
 
 // Walidacja po stronie klienta (natychmiastowy feedback). Serwer waliduje ponownie
 // — to ta sama logika, ale front daje od razu czytelny komunikat.
-function walidujRejestracje({ login, haslo, imie, nazwisko }) {
+function walidujRejestracje({ email, haslo, imie, nazwisko }) {
   if (!imie.trim() || !nazwisko.trim()) return 'Podaj imię i nazwisko.'
-  if (login.trim().length < 5) return 'Login musi mieć co najmniej 5 znaków.'
-  if (!/^[A-Za-z0-9]+$/.test(login.trim())) return 'Login: tylko litery i cyfry (bez spacji i polskich znaków).'
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return 'Wpisz prawidłowy adres e-mail (np. jan@lokal.pl).'
   if (haslo.length < 8) return 'Hasło musi mieć co najmniej 8 znaków.'
   if (/[^\x21-\x7e]/.test(haslo)) return 'Hasło: tylko znaki ASCII (bez spacji i polskich liter).'
   if (!/[A-Za-z]/.test(haslo)) return 'Hasło musi zawierać literę.'
@@ -28,7 +27,7 @@ export default function Login({ onClose }) {
   // Rejestracja pracownika odbywa się WYŁĄCZNIE z linku-zaproszenia (?zaproszenie=TOKEN)
   // generowanego przez managera w panelu Konta — ekran logowania nie ma trybu rejestracji.
   const [tryb, setTryb] = useState('login') // 'login' | 'register' (register: tylko historyczne ścieżki)
-  const [loginName, setLoginName] = useState(() => localStorage.getItem('grafik_login') || '')
+  const [loginName, setLoginName] = useState(() => localStorage.getItem('grafik_email') || '')
   const [haslo, setHaslo] = useState('')
   const [imie, setImie] = useState('')
   const [nazwisko, setNazwisko] = useState('')
@@ -56,20 +55,20 @@ export default function Login({ onClose }) {
     setBusy(true)
     try {
       if (rejestracja) {
-        const blad = walidujRejestracje({ login: loginName, haslo, imie, nazwisko })
+        const blad = walidujRejestracje({ email: loginName, haslo, imie, nazwisko })
         if (blad) {
           toast(blad, 'error')
           return
         }
-        await register({ login: loginName.trim(), haslo, imie: imie.trim(), nazwisko: nazwisko.trim() })
+        await register({ email: loginName.trim(), haslo, imie: imie.trim(), nazwisko: nazwisko.trim() })
       } else {
         if (!loginName.trim() || !haslo) {
-          toast('Podaj login i hasło.', 'error')
+          toast('Podaj e-mail i hasło.', 'error')
           return
         }
         await login(loginName.trim(), haslo, zapamietaj)
-        if (zapamietaj) localStorage.setItem('grafik_login', loginName.trim())
-        else localStorage.removeItem('grafik_login')
+        if (zapamietaj) localStorage.setItem('grafik_email', loginName.trim())
+        else localStorage.removeItem('grafik_email')
       }
       // sukces — komponent zniknie wraz z przełączeniem widoku w App
     } catch (err) {
@@ -122,15 +121,16 @@ export default function Login({ onClose }) {
           )}
 
           <label className="flex flex-col gap-1.5">
-            <span className="field-label">Login</span>
+            <span className="field-label">E-mail</span>
             <input
+              type="email"
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
-              autoComplete="username"
+              autoComplete="email"
               className="field"
-              placeholder="np. jankowalski"
+              placeholder="np. jan@lokal.pl"
             />
-            {rejestracja && <span className="text-[11px] text-muted/80">min. 5 znaków, tylko litery i cyfry</span>}
+            {rejestracja && <span className="text-[11px] text-muted/80">na ten adres zalogujesz się do panelu</span>}
           </label>
 
           <label className="flex flex-col gap-1.5">

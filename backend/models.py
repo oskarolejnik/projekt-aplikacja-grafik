@@ -168,7 +168,8 @@ class User(Base):
     __tablename__ = "users"
 
     id           = Column(Integer, primary_key=True, index=True)
-    login        = Column(String(64), unique=True, nullable=False, index=True)
+    login        = Column(String(64), unique=True, nullable=False, index=True)  # wewnętrzny identyfikator (denormalizacje, audyt)
+    email        = Column(String(255), unique=True, nullable=True, index=True)  # kanał logowania (nowe konta); stare konta mają NULL i logują się po login
     haslo_hash   = Column(String(255), nullable=False)          # bcrypt
     rola         = Column(String(16), nullable=False, default="employee")  # 'admin' | 'employee'
     aktywny      = Column(Boolean, default=True)

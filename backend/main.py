@@ -13,7 +13,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
 import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy
@@ -25,13 +25,13 @@ from auth import (
     get_current_user, hash_password, verify_password,
     create_access_token, SECRET_KEY, ALGORITHM,
 )
-from validators import sprawdz_login, sprawdz_haslo
+from validators import sprawdz_login, sprawdz_haslo, sprawdz_email
 from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow
 
 import openpyxl
 
 import settings as app_settings
-from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, token_agenta_ok, rewir_dla_pracownika as _rewir_dla_pracownika
+from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, token_agenta_ok, unikalny_login_z_emaila, rewir_dla_pracownika as _rewir_dla_pracownika
 # Helpery współdzielone z routerami (wyniesione do deps.py — dekompozycja main, audyt CTO):
 from deps import (
     ROZLICZENIA_START, _napiwki_podzial, _norm_nazwa, _przypisz_odbicia_do_pracownika,
@@ -333,19 +333,26 @@ def parse_date(s: str) -> date:
 
 @app.post("/api/auth/login", response_model=schemas.TokenOut)
 def login(dane: schemas.LoginIn, request: Request, db: Session = Depends(get_db)):
-    # Ochrona przed brute-force: limit prób + czasowy lockout (per login+IP oraz per IP).
+    # Logowanie e-mailem (nowe konta) lub loginem (stare konta bez e-maila — fallback).
+    # Ochrona przed brute-force: limit prób + czasowy lockout (per identyfikator+IP oraz per IP).
     ip = request.client.host if request.client else "?"
-    klucze = [f"login:{dane.login}|ip:{ip}", f"ip:{ip}"]
+    ident = ((dane.email or dane.login) or "").strip()
+    if not ident:
+        raise HTTPException(400, "Podaj e-mail i hasło.")
+    klucze = [f"login:{ident.lower()}|ip:{ip}", f"ip:{ip}"]
     for k in klucze:
         blok = ratelimit.pozostala_blokada(k)
         if blok:
             raise HTTPException(429, f"Za dużo prób logowania. Spróbuj ponownie za {blok} s.",
                                 headers={"Retry-After": str(blok)})
-    user = db.query(models.User).filter(models.User.login == dane.login).first()
+    if dane.email:
+        user = db.query(models.User).filter(func.lower(models.User.email) == ident.lower()).first()
+    else:
+        user = db.query(models.User).filter(models.User.login == ident).first()
     if not user or not user.aktywny or not verify_password(dane.haslo, user.haslo_hash):
         for k in klucze:
             ratelimit.zarejestruj_porazke(k)
-        raise HTTPException(401, "Nieprawidłowy login lub hasło.")
+        raise HTTPException(401, "Nieprawidłowy e-mail lub hasło.")
     for k in klucze:
         ratelimit.zarejestruj_sukces(k)
     return schemas.TokenOut(access_token=create_access_token(user), user=_user_out(user))
@@ -359,14 +366,14 @@ def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
     if not get_lokal_config(db).rejestracja_otwarta:
         raise HTTPException(
             403, "Samodzielna rejestracja jest wyłączona — poproś managera o link z zaproszeniem.")
-    login = sprawdz_login(dane.login)        # min 5, tylko [A-Za-z0-9]
+    email = sprawdz_email(dane.email)        # kanał logowania
     sprawdz_haslo(dane.haslo)                 # min 8, litera+cyfra+znak specjalny, ASCII
     imie = (dane.imie or "").strip()
     nazwisko = (dane.nazwisko or "").strip()
     if not imie or not nazwisko:
         raise HTTPException(400, "Podaj imię i nazwisko.")
-    if db.query(models.User).filter(models.User.login == login).first():
-        raise HTTPException(400, "Ten login jest już zajęty.")
+    if db.query(models.User).filter(func.lower(models.User.email) == email).first():
+        raise HTTPException(400, "Ten e-mail jest już zajęty.")
 
     # Nie duplikuj pracownika: jesli istnieje juz ktos o tym samym (znormalizowanym) imieniu
     # i nazwisku BEZ konta (np. zalozony wczesniej albo dopasowany przez RCP) — podepnij konto
@@ -383,7 +390,8 @@ def register(dane: schemas.RegisterIn, db: Session = Depends(get_db)):
         db.add(prac)
         db.flush()  # nadaje prac.id bez commita
     user = models.User(
-        login=login, haslo_hash=hash_password(dane.haslo),
+        login=unikalny_login_z_emaila(db, email), email=email,
+        haslo_hash=hash_password(dane.haslo),
         rola="employee", pracownik_id=prac.id,
     )
     db.add(user)
@@ -409,9 +417,12 @@ def onboarding_bootstrap(dane: schemas.OnboardingIn, db: Session = Depends(get_d
     jakikolwiek użytkownik już istnieje → 409 (ochrona przed przejęciem działającej instancji)."""
     if db.query(models.User).first() is not None:
         raise HTTPException(409, "Onboarding już wykonany — instancja ma administratora.")
-    login = sprawdz_login(dane.login)
+    email = sprawdz_email(dane.email)
     sprawdz_haslo(dane.haslo)
-    admin = models.User(login=login, haslo_hash=hash_password(dane.haslo), rola="admin")
+    admin = models.User(
+        login=unikalny_login_z_emaila(db, email), email=email,
+        haslo_hash=hash_password(dane.haslo), rola="admin",
+    )
     db.add(admin)
     cfg = get_lokal_config(db)
     if dane.nazwa_lokalu and dane.nazwa_lokalu.strip():

@@ -74,6 +74,6 @@ def test_grupowanie_po_emailu_gdy_brak_telefonu(admin_client, db):
 
 def test_crm_tylko_admin(client):
     tok = client.post("/api/auth/register",
-                      json={"login": "kelnerx", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"}).json()["access_token"]
+                      json={"email": "kelnerx@lokal.pl", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"}).json()["access_token"]
     client.headers.update({"Authorization": f"Bearer {tok}"})
     assert client.get("/api/crm/goscie").status_code == 403

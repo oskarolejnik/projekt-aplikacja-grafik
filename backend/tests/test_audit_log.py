@@ -39,7 +39,7 @@ def test_audit_log_filtruje_zakres_dat(admin_client):
 def test_audit_log_tylko_admin(client):
     # Zwykły pracownik nie ma wglądu w dziennik audytu ani w raport płac.
     r = client.post("/api/auth/register",
-                    json={"login": "szeregowy", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"})
+                    json={"email": "szeregowy@lokal.pl", "haslo": "Haslo123!", "imie": "A", "nazwisko": "B"})
     token = r.json()["access_token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
     assert client.get("/api/audit-log").status_code == 403
