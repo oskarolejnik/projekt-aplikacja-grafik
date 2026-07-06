@@ -104,6 +104,22 @@ def _bez_provisioningu(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _subskrypcja_pelna(_reset_schema):
+    """Tier-gating: Free odblokowuje TYLKO rdzeń, więc domyślny plan (free) blokowałby moduły
+    rezerwacji/imprez/POS w większości testów funkcjonalnych. Ustawiamy Premium/aktywna (pełny
+    dostęp), a testy tierów/subskrypcji jawnie nadpisują tier/status u siebie."""
+    from deps import get_subskrypcja
+    s = TestSessionLocal()
+    try:
+        sub = get_subskrypcja(s)
+        sub.tier, sub.status, sub.data_do = "premium", "aktywna", None
+        s.commit()
+    finally:
+        s.close()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _otwarta_rejestracja(_reset_schema):
     """Produkcyjny default to rejestracja TYLKO z zaproszenia (rejestracja_otwarta=False).
     Duża część istniejących testów zakłada konta przez POST /api/auth/register — włączamy

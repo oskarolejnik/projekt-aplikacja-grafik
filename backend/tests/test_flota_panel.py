@@ -21,7 +21,7 @@ def test_puls_zwraca_podsumowanie(client, monkeypatch):
     # niewrażliwe podsumowanie — bez PII/płac
     assert set(b) == {"nazwa_lokalu", "tier", "status", "aktywna", "data_do",
                       "liczba_uzytkownikow", "liczba_pracownikow"}
-    assert b["tier"] == "free" and b["aktywna"] is True             # domyślna subskrypcja
+    assert b["aktywna"] is True and b["tier"] in ("free", "basic", "pro", "premium", "enterprise")
 
 
 def test_flota_agreguje_subskrypcje(admin_client, monkeypatch):

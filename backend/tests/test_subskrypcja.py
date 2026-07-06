@@ -2,10 +2,13 @@
 
 
 def test_domyslnie_aktywna(admin_client):
+    admin_client.put("/api/subskrypcja", json={"tier": "free"})   # baseline planu darmowego
     s = admin_client.get("/api/subskrypcja").json()
     assert s["status"] == "aktywna"
     assert s["tier"] == "free"
     assert s["aktywna"] is True
+    # nowe pola tier-gatingu: Free odblokowuje tylko rdzeń (brak płatnych modułów)
+    assert s["dostepne_moduly"] == [] and s["trial_dni"] is None
 
 
 def test_aktywna_pozwala_zapisywac(admin_client):

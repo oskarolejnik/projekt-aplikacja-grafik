@@ -11,6 +11,7 @@ import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
+import cennik
 import models
 import schemas
 
@@ -83,6 +84,60 @@ def get_lokal_config(db) -> models.LokalConfig:
             db.rollback()
             cfg = db.get(models.LokalConfig, 1)   # wyścig przy pierwszym zapisie — ktoś już utworzył
     return cfg
+
+
+# ── Trial + tier-gating modułów ──────────────────────────────────────────────
+TRIAL_DNI = 14
+
+
+def synchronizuj_subskrypcje(db) -> models.Subskrypcja:
+    """Leniwe przejście po wygaśnięciu triala: trial za data_do → spada do Free (rdzeń dalej
+    działa, płatne moduły blokuje tier-gating — NIE tryb read-only). Idempotentne: po przejściu
+    status!=trial, więc to zwykły odczyt. Woła się z middleware i z odczytów subskrypcji/configu."""
+    s = get_subskrypcja(db)
+    if s.status == "trial" and s.data_do is not None and date.today() > s.data_do:
+        s.tier, s.status, s.data_do = "free", "aktywna", None
+        db.commit(); db.refresh(s)
+    return s
+
+
+def moduly_efektywne_dla_sub(s) -> set:
+    """Moduły DOSTĘPNE wg subskrypcji: trial = wszystkie (pełny Premium); inaczej wg tier."""
+    if s is not None and s.status == "trial":
+        return set(cennik.WSZYSTKIE_MODULY)
+    return cennik.moduly_dostepne(s.tier if s else "free")
+
+
+def dostepne_moduly(db) -> set:
+    """Zbiór modułów odblokowanych przez bieżącą subskrypcję (po ewentualnym trial→free)."""
+    return moduly_efektywne_dla_sub(synchronizuj_subskrypcje(db))
+
+
+def modul_aktywny(db, modul: str) -> bool:
+    """Kanoniczny check tier-gatingu: funkcja modułu jest DOSTĘPNA gdy włączona w configu
+    I odblokowana w planie (tier/trial). NIE sprawdza read-only — degradację zapisów (402 przy
+    nieaktywnej subskrypcji) egzekwuje osobno middleware, żeby odczyty działały w trybie tylko-odczyt."""
+    s = synchronizuj_subskrypcje(db)
+    return bool(getattr(get_lokal_config(db), modul, False)) and modul in moduly_efektywne_dla_sub(s)
+
+
+def dni_trialu(db):
+    """Ile dni triala zostało (do banera). None = nie trial."""
+    s = synchronizuj_subskrypcje(db)
+    if s.status != "trial" or s.data_do is None:
+        return None
+    return max(0, (s.data_do - date.today()).days)
+
+
+def limit_pracownikow_stan(db) -> dict:
+    """Stan limitu aktywnych pracowników wg planu. Trial = jak Premium (bez limitu).
+    {'limit': int|None, 'aktywni': int, 'przekroczony': bool}."""
+    s = synchronizuj_subskrypcje(db)
+    tier = "premium" if s.status == "trial" else s.tier
+    limit = cennik.limit_pracownikow(tier)
+    aktywni = db.query(models.Pracownik).filter(models.Pracownik.aktywny.is_(True)).count()
+    return {"limit": limit, "aktywni": aktywni,
+            "przekroczony": limit is not None and aktywni >= limit}
 
 
 def token_agenta_ok(request, db) -> bool:

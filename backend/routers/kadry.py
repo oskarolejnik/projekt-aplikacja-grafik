@@ -19,6 +19,7 @@ from auth import hash_password
 from database import get_db
 from deps import (
     SPRZATACZKA_NAZWA, _przypisz_odbicia_do_pracownika, _urlop_out, _user_out, utcnow_naive,
+    limit_pracownikow_stan,
 )
 import push
 
@@ -224,6 +225,11 @@ def _ustaw_stawki(db, p, stawki):
 
 @router.post("/api/pracownicy", response_model=schemas.PracownikOut, status_code=201)
 def create_pracownik(data: schemas.PracownikCreate, db: Session = Depends(get_db)):
+    # Limit planu Free na aktywnych pracowników (dźwignia upsellu; Basic+ = bez limitu, trial = Premium).
+    lim = limit_pracownikow_stan(db)
+    if data.aktywny and lim["przekroczony"]:
+        raise HTTPException(402, f"Plan Free obejmuje do {lim['limit']} aktywnych pracowników "
+                                 f"(masz {lim['aktywni']}). Podnieś pakiet do Basic, aby dodać więcej.")
     ostatni = db.query(models.Pracownik).order_by(models.Pracownik.kolejnosc.desc()).first()
     p = models.Pracownik(imie=data.imie, nazwisko=data.nazwisko, aktywny=data.aktywny,
                          kolor=data.kolor, dzial=(data.dzial or "obsluga"),

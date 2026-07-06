@@ -31,7 +31,7 @@ from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow
 import openpyxl
 
 import settings as app_settings
-from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, token_agenta_ok, unikalny_login_z_emaila, rewir_dla_pracownika as _rewir_dla_pracownika
+from deps import get_subskrypcja, subskrypcja_aktywna, utcnow_naive, get_lokal_config, token_agenta_ok, unikalny_login_z_emaila, modul_aktywny, synchronizuj_subskrypcje, rewir_dla_pracownika as _rewir_dla_pracownika
 # Helpery współdzielone z routerami (wyniesione do deps.py — dekompozycja main, audyt CTO):
 from deps import (
     ROZLICZENIA_START, _napiwki_podzial, _norm_nazwa, _przypisz_odbicia_do_pracownika,
@@ -184,6 +184,7 @@ async def role_guard(request: Request, call_next):
     if metoda in ("POST", "PUT", "DELETE", "PATCH") and not _sciezka_na_whitelist(path, READ_ONLY_WYJATKI):
         _db = SessionLocal()
         try:
+            synchronizuj_subskrypcje(_db)   # trial→Free po wygaśnięciu, ZANIM ocenimy READ_ONLY
             if not subskrypcja_aktywna(_db):
                 return JSONResponse(
                     {"detail": "Subskrypcja nieaktywna — instancja działa w trybie tylko do odczytu. "
@@ -536,10 +537,10 @@ def rozpatrz_urlop(uid: int, dane: schemas.UrlopStatusIn, db: Session = Depends(
 
 
 def _wymagaj_modul_imprezy(db: Session = Depends(get_db)):
-    """Bramka feature-flagi: endpointy imprez działają tylko w lokalach z włączonym modułem
-    (dotąd flaga chowała wyłącznie zakładki w UI — backend przyjmował żądania mimo wyłączenia)."""
-    if not get_lokal_config(db).modul_imprezy:
-        raise HTTPException(403, "Moduł imprez jest wyłączony.")
+    """Bramka modułu: endpointy imprez działają tylko gdy moduł włączony I odblokowany w planie
+    (tier-gating: Premium/Enterprise lub trial). Chroni backend niezależnie od ukrywania zakładek."""
+    if not modul_aktywny(db, "modul_imprezy"):
+        raise HTTPException(403, "Moduł imprez jest niedostępny w tym planie — odblokujesz go w pakiecie Premium.")
 
 
 def imp_dla_dnia(db, data: date) -> dict:
@@ -1187,8 +1188,8 @@ DOMYSLNY_SLOT_MIN = 120
 
 
 def _wymagaj_modul_rezerwacje(db: Session = Depends(get_db)):
-    if not get_lokal_config(db).modul_rezerwacje:
-        raise HTTPException(403, "Moduł rezerwacji jest wyłączony.")
+    if not modul_aktywny(db, "modul_rezerwacje"):
+        raise HTTPException(403, "Moduł rezerwacji jest niedostępny w tym planie — odblokujesz go w pakiecie Pro.")
 
 
 def _dodaj_minuty(t: time, minuty: int) -> time:
@@ -1484,8 +1485,7 @@ ONLINE_LIMIT_IP_DZIENNY = 15   # anty-DoS: maks. rezerwacji online/dzień z jedn
 
 
 def _wymagaj_rezerwacje_online(db: Session = Depends(get_db)):
-    cfg = get_lokal_config(db)
-    if not (cfg.modul_rezerwacje and cfg.rezerwacje_online):
+    if not (modul_aktywny(db, "modul_rezerwacje") and modul_aktywny(db, "rezerwacje_online")):
         raise HTTPException(404, "Rezerwacje online są niedostępne.")
 
 

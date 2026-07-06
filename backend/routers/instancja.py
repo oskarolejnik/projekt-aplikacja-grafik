@@ -20,7 +20,8 @@ import subskrypcja_billing
 from auth import require_admin
 from database import get_db
 from deps import (get_subskrypcja, subskrypcja_aktywna, get_lokal_config,
-                  stan_subskrypcji, data_grace, utcnow_naive)
+                  stan_subskrypcji, data_grace, utcnow_naive,
+                  synchronizuj_subskrypcje, dostepne_moduly, dni_trialu, limit_pracownikow_stan)
 
 router = APIRouter()
 
@@ -53,7 +54,13 @@ def _subskrypcja_out(s, db) -> dict:
             "stan": stan_subskrypcji(db),              # aktywna | grace | zablokowana
             "data_grace": dg.isoformat() if dg else None,
             "cena_netto": netto, "cena_brutto": cennik.brutto(netto),
-            "saldo_kredytu": round(s.saldo_kredytu or 0, 2)}
+            "saldo_kredytu": round(s.saldo_kredytu or 0, 2),
+            # ── tier-gating modułów + trial + limit (monetyzacja: pakiety zależne) ──
+            "poziom": cennik.poziom(s.tier),
+            "dostepne_moduly": sorted(dostepne_moduly(db)),   # które moduły odblokowane
+            "moduly_wg_planu": cennik.MODUL_MIN_TIER,         # moduł → min. plan (do upsellu)
+            "trial_dni": dni_trialu(db),                      # None gdy nie trial
+            "limit_pracownikow": limit_pracownikow_stan(db)}
 
 
 def _historia_zmian(db, akcja, tier_z, tier_na, kwota_netto=None, login=None, szczegoly=None):
@@ -69,8 +76,9 @@ def _audit_out(w: models.AuditLog) -> dict:
 
 @router.get("/api/subskrypcja")
 def subskrypcja_get(db: Session = Depends(get_db)):
-    """Status subskrypcji/licencji instancji (admin). `aktywna` = czy zapisy są dozwolone."""
-    return _subskrypcja_out(get_subskrypcja(db), db)
+    """Status subskrypcji/licencji instancji (admin). `aktywna` = czy zapisy są dozwolone.
+    Odczyt synchronizuje trial: po 14 dniach automatycznie spada do Free (rdzeń dalej działa)."""
+    return _subskrypcja_out(synchronizuj_subskrypcje(db), db)
 
 
 @router.put("/api/subskrypcja")
