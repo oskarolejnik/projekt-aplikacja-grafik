@@ -526,6 +526,11 @@ class LokalConfig(Base):
     rozliczenia_nazwy_terminali = Column(JSON, nullable=True)
     # --- Cykl grafiku: 'tydzien' (domyślnie) | 'miesiac' (silnik w przygotowaniu) ---
     grafik_cykl = Column(String(16), nullable=False, default="tydzien")
+    # --- Dane firmowe lokalu jako NABYWCY faktur za subskrypcję (KSeF/FA(3)) ---
+    faktura_nip       = Column(String(16), nullable=True)
+    faktura_nazwa     = Column(String(256), nullable=True)   # pełna nazwa firmy (może różnić się od nazwa_lokalu)
+    faktura_adres_l1  = Column(String(256), nullable=True)   # ulica i numer
+    faktura_adres_l2  = Column(String(256), nullable=True)   # kod pocztowy + miejscowość
     # --- Token agenta POS (kreator „Podłącz POS"): hash SHA-256, plaintext widzi tylko
     #     admin przy generowaniu; NULL = brak tokenu (zostaje env RCP_INGEST_TOKEN) ---
     pos_token_hash = Column(String(64), nullable=True)
@@ -642,6 +647,31 @@ class PlatnoscSubskrypcji(Base):
     link         = Column(String, nullable=True)
     utworzono_at = Column(DateTime, nullable=True)
     oplacono_at  = Column(DateTime, nullable=True)
+
+
+class Faktura(Base):
+    """Faktura VAT za subskrypcję (KSeF/FA(3)). Nabywca = dane firmowe lokalu (snapshot w chwili
+    wystawienia), sprzedawca = operator (z env). XML FA(3) generowany przy wystawieniu; numer KSeF
+    i UPO wpisywane po przyjęciu przez KSeF (tryb produkcyjny) albo mockowane (tryb testowy/stub)."""
+    __tablename__ = "faktury"
+    id            = Column(Integer, primary_key=True, index=True)
+    numer         = Column(String(32), nullable=False, unique=True)   # LOK/2026/07/0001
+    platnosc_id   = Column(Integer, ForeignKey("platnosci_subskrypcji.id", ondelete="SET NULL"), nullable=True)
+    rodzaj        = Column(String(8), nullable=False, default="VAT")   # VAT|KOR|ZAL
+    nabywca_nip   = Column(String(16), nullable=True)
+    nabywca_nazwa = Column(String(256), nullable=True)
+    netto         = Column(Float, nullable=False, default=0.0)
+    vat           = Column(Float, nullable=False, default=0.0)
+    brutto        = Column(Float, nullable=False, default=0.0)
+    okres_od      = Column(Date, nullable=True)
+    okres_do      = Column(Date, nullable=True)
+    opis          = Column(String(512), nullable=True)
+    xml           = Column(String, nullable=True)                      # wygenerowany FA(3)
+    ksef_number   = Column(String(64), nullable=True)                 # numer nadany przez KSeF
+    upo           = Column(String, nullable=True)                      # Urzędowe Poświadczenie Odbioru
+    status_ksef   = Column(String(16), nullable=False, default="roboczy")  # roboczy|wyslana|przyjeta|blad
+    data_wystawienia = Column(Date, nullable=True)
+    utworzono_at  = Column(DateTime, nullable=True)
 
 
 class HistoriaSubskrypcji(Base):

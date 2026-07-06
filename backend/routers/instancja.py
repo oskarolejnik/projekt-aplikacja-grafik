@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 import cennik
+import faktury
 import integracje
 import models
 import platnosci_sub
@@ -148,6 +149,8 @@ def oplac_sandbox(external_id: str, db: Session = Depends(get_db),
         if not s.data_od:
             s.data_od = date.today()
         db.commit(); db.refresh(s)
+    # Faktura VAT (KSeF) za opłaconą płatność — abonament i dopłata (idempotentnie).
+    faktury.wystaw_z_platnosci(db, p)
     return _subskrypcja_out(s, db)
 
 
@@ -162,6 +165,44 @@ def odnow_abonament(db: Session = Depends(get_db), admin: models.User = Depends(
     p = platnosci_sub.utworz(db, "abonament", s.tier, netto,
                              okres_od=baza, okres_do=baza + timedelta(days=30))
     return {"external_id": p.external_id, "brutto": p.brutto, "link": p.link}
+
+
+def _faktura_out(f: models.Faktura) -> dict:
+    return {"id": f.id, "numer": f.numer, "rodzaj": f.rodzaj,
+            "nabywca_nip": f.nabywca_nip, "nabywca_nazwa": f.nabywca_nazwa,
+            "netto": f.netto, "vat": f.vat, "brutto": f.brutto,
+            "okres_od": f.okres_od.isoformat() if f.okres_od else None,
+            "okres_do": f.okres_do.isoformat() if f.okres_do else None,
+            "opis": f.opis, "ksef_number": f.ksef_number, "status_ksef": f.status_ksef,
+            "data_wystawienia": f.data_wystawienia.isoformat() if f.data_wystawienia else None}
+
+
+@router.get("/api/faktury")
+def faktury_lista(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    """Faktury za subskrypcję (najnowsze pierwsze) + tryb KSeF (stub/test/prod)."""
+    import ksef as _ksef
+    rows = db.query(models.Faktura).order_by(models.Faktura.id.desc()).limit(200).all()
+    return {"tryb_ksef": _ksef.tryb(), "faktury": [_faktura_out(f) for f in rows]}
+
+
+@router.get("/api/faktury/{fid}/xml")
+def faktura_xml(fid: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    """Pobranie XML FA(3) faktury (do archiwum / ręcznego wysłania do KSeF)."""
+    from fastapi.responses import Response
+    f = db.get(models.Faktura, fid)
+    if f is None or not f.xml:
+        raise HTTPException(404, "Brak faktury lub XML.")
+    return Response(content=f.xml, media_type="application/xml",
+                    headers={"Content-Disposition": f'attachment; filename="{f.numer.replace("/", "_")}.xml"'})
+
+
+@router.post("/api/faktury/{fid}/wyslij")
+def faktura_wyslij(fid: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    """Ponawia wysyłkę faktury do KSeF (gdy status='blad')."""
+    f = db.get(models.Faktura, fid)
+    if f is None:
+        raise HTTPException(404, "Brak faktury.")
+    return _faktura_out(faktury.wyslij_ponownie(db, f))
 
 
 @router.get("/api/integracje/status")

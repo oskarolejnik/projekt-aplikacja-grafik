@@ -338,6 +338,10 @@ class LokalConfigOut(LokalBrandingOut):
     imprezy_mapa_sal: Optional[dict] = None
     imprezy_excel_mapa: Optional[dict] = None
     zeszyt_kolumny: Optional[List[str]] = None
+    faktura_nip: Optional[str] = None
+    faktura_nazwa: Optional[str] = None
+    faktura_adres_l1: Optional[str] = None
+    faktura_adres_l2: Optional[str] = None
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -375,6 +379,10 @@ class LokalConfigIn(BaseModel):
     imprezy_mapa_sal: Optional[dict] = None
     imprezy_excel_mapa: Optional[dict] = None
     zeszyt_kolumny: Optional[List[str]] = None
+    faktura_nip: Optional[str] = None
+    faktura_nazwa: Optional[str] = None
+    faktura_adres_l1: Optional[str] = None
+    faktura_adres_l2: Optional[str] = None
 
     @field_validator("rozliczenia_tryb_kelnera")
     @classmethod

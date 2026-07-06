@@ -3,7 +3,7 @@ import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
-import { api } from '../../lib/api'
+import { api, pobierzPlik } from '../../lib/api'
 import { useToast } from '../ui/Toast'
 import { TYPY, TYP_PO_ID, znormalizujModuly } from '../../pages/onboarding/typy'
 
@@ -125,12 +125,23 @@ export default function Ustawienia() {
     try { setPlatnoscSub(await api('/subskrypcja/odnow', 'POST')); toast('Utworzono płatność za kolejny okres.', 'success') }
     catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
   }
+  const [faktury, setFaktury] = useState(null)
+  const odswiezFaktury = useCallback(async () => {
+    try { setFaktury(await api('/faktury')) } catch { /* endpoint tylko na instancji z billingiem */ }
+  }, [])
+  useEffect(() => { odswiezFaktury() }, [odswiezFaktury])
+
   const oplacSandbox = async () => {
     setBusy(true)
     try {
       const r = await api(`/subskrypcja/platnosc/${platnoscSub.external_id}/oplac`, 'POST')
-      setSub(r); setPlatnoscSub(null); toast('Zaksięgowano płatność (sandbox).', 'success')
+      setSub(r); setPlatnoscSub(null); await odswiezFaktury()
+      toast('Zaksięgowano płatność (sandbox) — wystawiono fakturę.', 'success')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+  const pobierzFakture = async (f) => {
+    try { await pobierzPlik(`/faktury/${f.id}/xml`, `${f.numer.replace(/\//g, '_')}.xml`) }
+    catch (e) { toast(e.message, 'error') }
   }
 
   const zapisz = async () => {
@@ -164,6 +175,8 @@ export default function Ustawienia() {
           .filter((p) => p.length === 2 && p[0] && p[1])),
         zeszyt_kolumny: zeszytKolText.split(',').map((t) => t.trim()).filter(Boolean),
         imprezy_excel_mapa: excelMapa,
+        faktura_nip: cfg.faktura_nip || null, faktura_nazwa: cfg.faktura_nazwa || null,
+        faktura_adres_l1: cfg.faktura_adres_l1 || null, faktura_adres_l2: cfg.faktura_adres_l2 || null,
       })
       toast('Zapisano. Odśwież stronę, by zobaczyć zmiany w marce i nawigacji.', 'success')
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
@@ -449,6 +462,65 @@ export default function Ustawienia() {
           <div className="mt-4 flex justify-end">
             <Button onClick={zapiszSub} disabled={busy}><Icon name="check" className="h-4 w-4" /> Zapisz subskrypcję</Button>
           </div>
+        </Card>
+      )}
+
+      <Card className="p-6 sm:p-8">
+        <SectionHeader title="Dane do faktury" subtitle="Dane Twojej firmy jako nabywcy faktur za subskrypcję (KSeF). Uzupełnij NIP — bez niego faktura jest niekompletna." />
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-xs font-semibold text-muted">NIP
+            <input value={cfg.faktura_nip || ''} onChange={(e) => set('faktura_nip', e.target.value)} placeholder="1234567890" className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Nazwa firmy
+            <input value={cfg.faktura_nazwa || ''} onChange={(e) => set('faktura_nazwa', e.target.value)} placeholder={cfg.nazwa_lokalu} className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Adres (ulica i nr)
+            <input value={cfg.faktura_adres_l1 || ''} onChange={(e) => set('faktura_adres_l1', e.target.value)} placeholder="ul. Przykładowa 5" className={fld} /></label>
+          <label className="text-xs font-semibold text-muted">Kod pocztowy i miasto
+            <input value={cfg.faktura_adres_l2 || ''} onChange={(e) => set('faktura_adres_l2', e.target.value)} placeholder="00-123 Warszawa" className={fld} /></label>
+        </div>
+        <p className="mt-2 text-xs text-muted">Zapisujesz przyciskiem „Zapisz ustawienia" na dole.</p>
+      </Card>
+
+      {faktury && (
+        <Card className="p-6 sm:p-8">
+          <SectionHeader title="Faktury za subskrypcję"
+            subtitle={`Wystawiane po opłaceniu (KSeF: ${faktury.tryb_ksef === 'stub' ? 'tryb testowy — numery mockowane' : faktury.tryb_ksef}). Pobierz XML FA(3) do archiwum.`} />
+          {faktury.faktury.length === 0 ? (
+            <p className="mt-4 rounded-xl border border-line bg-white/[0.02] px-4 py-3 text-sm text-muted">
+              Brak faktur — pojawią się po pierwszej opłaconej płatności (odnowienie / dopłata).
+            </p>
+          ) : (
+            <div className="mt-4 overflow-x-auto rounded-xl border border-line">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead>
+                  <tr className="bg-surface-2 text-[11px] uppercase tracking-wide text-muted">
+                    <th className="px-3 py-2 text-left font-bold">Numer</th>
+                    <th className="px-3 py-2 text-left font-bold">Data</th>
+                    <th className="px-3 py-2 text-right font-bold">Brutto</th>
+                    <th className="px-3 py-2 text-left font-bold">KSeF</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {faktury.faktury.map((f) => (
+                    <tr key={f.id} className="border-t border-line/60">
+                      <td className="px-3 py-2 font-semibold text-ink">{f.numer}</td>
+                      <td className="px-3 py-2 text-muted">{f.data_wystawienia}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{zl(f.brutto)}</td>
+                      <td className="px-3 py-2">
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          f.status_ksef === 'przyjeta' ? 'bg-mint/15 text-mint' : f.status_ksef === 'blad' ? 'bg-danger/15 text-danger' : 'bg-white/10 text-muted'}`}>
+                          {f.status_ksef}{f.ksef_number ? ` · ${f.ksef_number}` : ''}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button onClick={() => pobierzFakture(f)} className="text-xs font-semibold text-mint">XML</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
 
