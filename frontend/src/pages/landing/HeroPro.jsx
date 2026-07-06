@@ -141,7 +141,11 @@ export default function HeroPro() {
 
         {/* Scena produktu w 3D — panele na różnych głębokościach, cała scena przechyla się
             w perspektywie w stronę kursora (realny parallax). Składa się z głębi na wejściu. */}
-        <div ref={stackRef} className="relative mx-auto w-full max-w-md lg:max-w-none" style={{ perspective: '1300px' }}>
+        {/* max-sm: kotwiczymy perspective-origin do PRAWEJ krawędzi kontenera — panel telefonu
+            (translateZ 110) skaluje się wtedy DO WEWNĄTRZ, nie poza brzeg → koniec ucięcia na
+            telefonie (zmierzony zapas ~10px, niezależny od szerokości 320–430px). Desktop (≥sm)
+            bez zmian: domyślne perspective-origin 50% 50%, perspektywa 1300px. */}
+        <div ref={stackRef} className="relative mx-auto w-full max-w-md max-sm:[perspective-origin:100%_50%] lg:max-w-none" style={{ perspective: '1300px' }}>
           <div ref={tiltRef} className="relative will-change-transform" style={{ transformStyle: 'preserve-3d' }}>
             <div className="hero-rez absolute -left-14 -top-24 z-0 hidden w-60 xl:block">
               <div className="max-h-60 overflow-hidden" style={{ maskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)', WebkitMaskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)' }}>
@@ -151,7 +155,9 @@ export default function HeroPro() {
             <div className="hero-grafik relative z-10">
               <GrafikVignette />
             </div>
-            <div className="hero-tel absolute -bottom-10 -right-3 z-20 w-36 sm:-right-6 sm:w-40">
+            {/* max-sm: na telefonie panel mniejszy (w-32) i wsunięty do wnętrza (right-[10px], apple
+                inset nachodzący na dolny-prawy róg grafiku); ≥sm wraca 1:1 do obecnego wyglądu w rogu. */}
+            <div className="hero-tel absolute -bottom-10 -right-3 z-20 w-36 max-sm:-bottom-6 max-sm:right-[10px] max-sm:w-32 sm:-right-6 sm:w-40">
               <TelefonPortfel />
             </div>
           </div>
