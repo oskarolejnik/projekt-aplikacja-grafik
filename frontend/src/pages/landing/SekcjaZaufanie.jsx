@@ -35,7 +35,7 @@ export default function SekcjaZaufanie() {
     <section id="zaufanie" className="relative scroll-mt-20 py-20 sm:py-28">
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
         <h2
-          data-rv=""
+          data-head=""
           className="font-brand text-3xl font-semibold tracking-tight text-ink sm:text-5xl"
           style={{ textWrap: 'balance' }}
         >
@@ -49,7 +49,7 @@ export default function SekcjaZaufanie() {
         {/* Dwie duże, nierówne karty faktów */}
         <div className="mt-12 grid gap-4 lg:mt-16 lg:grid-cols-5">
           <div data-rv="" className="rv-scale glass tilt rounded-3xl p-7 sm:p-9 lg:col-span-3">
-            <p className="font-brand text-6xl font-semibold tabular-nums tracking-tight text-ink sm:text-7xl">
+            <p data-count="25" data-suffix="+" className="font-brand text-6xl font-semibold tabular-nums tracking-tight text-ink sm:text-7xl">
               25+
             </p>
             <p className="mt-2 font-medium text-ink">modułów w jednym systemie</p>
@@ -75,7 +75,7 @@ export default function SekcjaZaufanie() {
             className="rv-scale glass flex flex-col justify-between rounded-3xl p-7 sm:p-9 lg:col-span-2"
           >
             <div className="flex items-start justify-between gap-4">
-              <p className="font-brand text-6xl font-semibold tabular-nums tracking-tight text-ink sm:text-7xl">
+              <p data-count="500" data-suffix="+" className="font-brand text-6xl font-semibold tabular-nums tracking-tight text-ink sm:text-7xl">
                 500+
               </p>
               <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-muted">

@@ -51,7 +51,7 @@ export default function SekcjaFinal() {
       `}</style>
 
       <section className="py-14">
-        <h2 data-animate className="text-center font-brand text-2xl font-semibold sm:text-3xl">Dla kogo</h2>
+        <h2 data-head className="text-center font-brand text-2xl font-semibold sm:text-3xl">Dla kogo</h2>
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
           {SEGMENTY.map(([ico, t, o]) => (
             <div key={t} data-animate className="lift flex gap-3.5 rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5">
@@ -68,7 +68,7 @@ export default function SekcjaFinal() {
       </section>
 
       <section id="faq" className="scroll-mt-20 py-14">
-        <h2 data-animate className="text-center font-brand text-2xl font-semibold sm:text-3xl">Częste pytania</h2>
+        <h2 data-head className="text-center font-brand text-2xl font-semibold sm:text-3xl">Częste pytania</h2>
         <div data-animate className="mx-auto mt-8 max-w-2xl">
           {FAQ.map(([q, a]) => <FaqItem key={q} q={q} a={a} />)}
         </div>

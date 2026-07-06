@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { Logo } from '../components/Logo'
-import { useLenisGsap, useReveal } from './landing/motionPro'
+import { useLenisGsap, useReveal, useHeadingReveal, useCountUp } from './landing/motionPro'
 import HeroPro from './landing/HeroPro'
 import PainRelief from './landing/PainRelief'
 import ProductTour3D from './landing/ProductTour3D'
@@ -21,6 +21,8 @@ export default function ProduktPro() {
   const root = useRef(null)
   useLenisGsap()
   useReveal(root)
+  useHeadingReveal(root)
+  useCountUp(root)
 
   return (
     <div ref={root} className="lp-noir relative min-h-dvh bg-noc font-switzer text-ink">

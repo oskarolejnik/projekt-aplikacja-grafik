@@ -30,7 +30,7 @@ export default function SekcjaPlatformy() {
     <section id="platformy" className="relative scroll-mt-20 py-20 sm:py-28">
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
         <h2
-          data-rv=""
+          data-head=""
           className="font-brand text-3xl font-semibold tracking-tight text-ink sm:text-5xl"
           style={{ textWrap: 'balance' }}
         >

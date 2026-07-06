@@ -146,6 +146,72 @@ export function useReveal(scopeRef, enabled = true) {
   }, [scopeRef, enabled])
 }
 
+// ── Reveal nagłówków per-linia (SplitText + maska) — sygnatura „apple" na całej stronie ──
+// Nagłówki z [data-head] są dzielone na linie (SplitText mask) i wjeżdżają z dołu przy scrollu.
+// Split PO załadowaniu fontów (podział linii zależy od metryk). Reduced-motion → nietknięte.
+export function useHeadingReveal(scopeRef, enabled = true) {
+  useEffect(() => {
+    if (!enabled || reducedMotion() || typeof window === 'undefined') return
+    const scope = (scopeRef && scopeRef.current) || document.body
+    const splits = []
+    const triggers = []
+    let built = false, killed = false
+    const build = () => {
+      if (built || killed) return
+      built = true
+      gsap.utils.toArray(scope.querySelectorAll('[data-head]')).forEach((el) => {
+        try {
+          // SplitText wymaga realnego layoutu (metryki linii). Poza przeglądarką (jsdom/test)
+          // rzuca/degeneruje — łapiemy, żeby nagłówek po prostu został widoczny.
+          const split = new SplitText(el, { type: 'lines', mask: 'lines' })
+          if (!split.lines || !split.lines.length) return
+          splits.push(split)
+          gsap.set(split.lines, { yPercent: 118 })
+          triggers.push(ScrollTrigger.create({
+            trigger: el, start: 'top 85%', once: true,
+            onEnter: () => gsap.to(split.lines, { yPercent: 0, duration: 0.95, ease: 'power4.out', stagger: 0.11 }),
+          }))
+        } catch (_) { /* brak layoutu → nagłówek zostaje widoczny */ }
+      })
+      ScrollTrigger.refresh()
+    }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(build)
+    else build()
+    const t = window.setTimeout(build, 700)
+    return () => {
+      killed = true
+      clearTimeout(t)
+      triggers.forEach((tr) => tr && tr.kill())
+      splits.forEach((s) => s && s.revert())
+    }
+  }, [scopeRef, enabled])
+}
+
+// ── Count-up liczb [data-count] (opcjonalny data-suffix) przy wejściu w kadr ──
+export function useCountUp(scopeRef, enabled = true) {
+  useEffect(() => {
+    if (!enabled || reducedMotion() || typeof window === 'undefined') return
+    const scope = (scopeRef && scopeRef.current) || document.body
+    const ctx = gsap.context(() => {
+      gsap.utils.toArray('[data-count]').forEach((el) => {
+        const end = parseFloat(el.dataset.count)
+        if (!isFinite(end)) return
+        const suffix = el.dataset.suffix || ''
+        const obj = { v: 0 }
+        el.textContent = '0' + suffix
+        ScrollTrigger.create({
+          trigger: el, start: 'top 88%', once: true,
+          onEnter: () => gsap.to(obj, {
+            v: end, duration: 1.5, ease: 'power2.out',
+            onUpdate: () => { el.textContent = Math.round(obj.v).toLocaleString('pl-PL') + suffix },
+          }),
+        })
+      })
+    }, scope)
+    return () => ctx.revert()
+  }, [scopeRef, enabled])
+}
+
 // ── Parallax warstwy: element płynie w osi Y względem scrolla (głębia) ──
 // speed>0 = wolniej (w tył), speed<0 = szybciej (w przód). elRef → element.
 export function useParallax(elRef, speed = 0.12, enabled = true) {
