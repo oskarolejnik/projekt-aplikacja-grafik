@@ -56,46 +56,50 @@ function Magnes({ href, className = '', children }) {
   )
 }
 
+// Głębia paneli produktu (translateZ). Panel rez z tyłu, grafik na wprost, telefon z przodu.
+const Z_REST = { rez: -90, grafik: 0, tel: 110 }
+
 export default function HeroPro() {
   const scopeRef = useRef(null)
   const stackRef = useRef(null)
+  const tiltRef = useRef(null)
 
-  // Choreografia wejścia (pierwsze ładowanie, nie scroll). gsap.context sprząta sam.
+  // Choreografia wejścia (pierwsze ładowanie). Panele produktu SKŁADAJĄ SIĘ z głębi 3D.
   useGsapScene(scopeRef, (g) => {
     g.set('.hero-line', { yPercent: 115 })
-    g.set(['.hero-sub', '.hero-cta'], { opacity: 0, y: 22 })
+    g.set(['.hero-sub', '.hero-cta', '.hero-cue'], { opacity: 0, y: 22 })
     g.set('.hero-gold', { opacity: 0 })
-    g.set('.hero-stack', { opacity: 0, y: 48, scale: 0.955 })
-    g.set('.hero-float', { opacity: 0, y: 30 })
+    g.set('.hero-rez', { opacity: 0, z: Z_REST.rez, rotateY: 12, rotateZ: -3 })
+    g.set('.hero-grafik', { opacity: 0, z: Z_REST.grafik })
+    g.set('.hero-tel', { opacity: 0, z: Z_REST.tel, rotateY: -8, rotateZ: 1 })
 
     const tl = g.timeline({ defaults: { ease: 'power4.out' } })
     tl.to('.hero-line', { yPercent: 0, duration: 0.95, stagger: 0.12 }, 0.1)
       .to('.hero-gold', { opacity: 1, duration: 0.9, ease: 'power2.out' }, 0.7)
       .to('.hero-sub', { opacity: 1, y: 0, duration: 0.7 }, 0.55)
       .to('.hero-cta', { opacity: 1, y: 0, duration: 0.6 }, 0.7)
-      .to('.hero-stack', { opacity: 1, y: 0, scale: 1, duration: 1.1, ease: 'power3.out' }, 0.45)
-      .to('.hero-float', { opacity: 1, y: 0, duration: 0.8, stagger: 0.12, ease: 'power3.out' }, 0.85)
+      .to('.hero-cue', { opacity: 1, y: 0, duration: 0.6 }, 1.0)
+      // panele wlatują z głębi (z −360 do rest), gasnąc-rozjaśniając, ze staggerem
+      .fromTo('.hero-grafik', { opacity: 0, z: Z_REST.grafik - 360 }, { opacity: 1, z: Z_REST.grafik, duration: 1.15, ease: 'power3.out' }, 0.4)
+      .fromTo('.hero-rez', { opacity: 0, z: Z_REST.rez - 360 }, { opacity: 0.92, z: Z_REST.rez, duration: 1.05, ease: 'power3.out' }, 0.62)
+      .fromTo('.hero-tel', { opacity: 0, z: Z_REST.tel - 360 }, { opacity: 1, z: Z_REST.tel, duration: 1.0, ease: 'power3.out' }, 0.8)
   })
 
-  // Pointer-parallax warstw produktu: głębia sterowana kursorem (płynnie, quickTo).
+  // Pointer: cała scena produktu przechyla się w 3D w stronę kursora (płynnie, quickTo) —
+  // głębia paneli (translateZ) ujawnia się jako realny parallax. Reduced-motion → brak.
   useEffect(() => {
     if (reducedMotion() || typeof window === 'undefined') return
-    const stack = stackRef.current
-    if (!stack) return
-    const warstwy = stack.querySelectorAll('[data-depth]')
-    const setters = Array.from(warstwy).map((el) => ({
-      el,
-      d: parseFloat(el.dataset.depth) || 0,
-      x: gsap.quickTo(el, 'xPercent', { duration: 0.7, ease: 'power3.out' }),
-      y: gsap.quickTo(el, 'yPercent', { duration: 0.7, ease: 'power3.out' }),
-    }))
+    const stack = stackRef.current, tilt = tiltRef.current
+    if (!stack || !tilt) return
+    const rx = gsap.quickTo(tilt, 'rotationX', { duration: 0.8, ease: 'power3.out' })
+    const ry = gsap.quickTo(tilt, 'rotationY', { duration: 0.8, ease: 'power3.out' })
     const onMove = (e) => {
       const r = stack.getBoundingClientRect()
       const dx = (e.clientX - r.left - r.width / 2) / r.width
       const dy = (e.clientY - r.top - r.height / 2) / r.height
-      setters.forEach((s) => { s.x(dx * s.d * 10); s.y(dy * s.d * 10) })
+      ry(dx * 9); rx(-dy * 7)
     }
-    const onLeave = () => setters.forEach((s) => { s.x(0); s.y(0) })
+    const onLeave = () => { rx(0); ry(0) }
     stack.addEventListener('pointermove', onMove)
     stack.addEventListener('pointerleave', onLeave)
     return () => { stack.removeEventListener('pointermove', onMove); stack.removeEventListener('pointerleave', onLeave) }
@@ -105,7 +109,12 @@ export default function HeroPro() {
     <section ref={scopeRef} className="relative overflow-hidden">
       <style>{`
         .hero-magnes { transform: translate(var(--tx,0), var(--ty,0)); transition: transform .35s cubic-bezier(.22,1,.36,1); will-change: transform; }
-        @media (prefers-reduced-motion: reduce) { .hero-magnes { transform: none !important; transition: none !important; } }
+        .hero-cue-dot { animation: heroCue 1.9s cubic-bezier(.22,1,.36,1) infinite; }
+        @keyframes heroCue { 0% { transform: translateY(-12px); opacity: 0 } 28% { opacity: 1 } 100% { transform: translateY(40px); opacity: 0 } }
+        @media (prefers-reduced-motion: reduce) {
+          .hero-magnes { transform: none !important; transition: none !important; }
+          .hero-cue-dot { animation: none; }
+        }
       `}</style>
 
       {/* Ambientowa, dyskretna poświata 3D — desktop-only, leniwe; na mobile zostaje złote światło CSS.
@@ -130,20 +139,28 @@ export default function HeroPro() {
           </div>
         </div>
 
-        {/* Warstwowa scena produktu — głębia + pointer-parallax */}
-        <div ref={stackRef} className="relative mx-auto w-full max-w-md lg:max-w-none">
-          <div className="hero-float absolute -left-14 -top-24 z-0 hidden w-60 -rotate-3 opacity-90 will-change-transform xl:block" data-depth="1.8">
-            <div className="max-h-60 overflow-hidden" style={{ maskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)', WebkitMaskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)' }}>
-              <RezerwacjaVignette />
+        {/* Scena produktu w 3D — panele na różnych głębokościach, cała scena przechyla się
+            w perspektywie w stronę kursora (realny parallax). Składa się z głębi na wejściu. */}
+        <div ref={stackRef} className="relative mx-auto w-full max-w-md lg:max-w-none" style={{ perspective: '1300px' }}>
+          <div ref={tiltRef} className="relative will-change-transform" style={{ transformStyle: 'preserve-3d' }}>
+            <div className="hero-rez absolute -left-14 -top-24 z-0 hidden w-60 will-change-transform xl:block">
+              <div className="max-h-60 overflow-hidden" style={{ maskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)', WebkitMaskImage: 'linear-gradient(180deg,#000 62%,transparent 96%)' }}>
+                <RezerwacjaVignette />
+              </div>
+            </div>
+            <div className="hero-grafik relative z-10 will-change-transform">
+              <GrafikVignette />
+            </div>
+            <div className="hero-tel absolute -bottom-10 -right-3 z-20 w-36 will-change-transform sm:-right-6 sm:w-40">
+              <TelefonPortfel />
             </div>
           </div>
-          <div className="hero-stack relative z-10 will-change-transform" data-depth="0.5">
-            <GrafikVignette />
-          </div>
-          <div className="hero-float absolute -bottom-10 -right-3 z-20 w-36 rotate-1 will-change-transform sm:-right-6 sm:w-40" data-depth="2.6">
-            <TelefonPortfel />
-          </div>
         </div>
+      </div>
+
+      {/* Subtelny cue scrolla — złota kropka schodzi po włoskowatej linii. */}
+      <div aria-hidden className="hero-cue pointer-events-none absolute bottom-6 left-1/2 z-10 hidden h-10 w-px -translate-x-1/2 overflow-hidden bg-white/10 lg:block">
+        <span className="hero-cue-dot absolute inset-x-0 top-0 h-3 bg-zloto" />
       </div>
     </section>
   )
