@@ -38,19 +38,31 @@ export async function zarejestrujPushNatywny() {
     if (perm.receive !== 'granted') return false
 
     // Token przychodzi asynchronicznie zdarzeniem 'registration' — nasłuchujemy raz,
-    // potem wołamy register(), który to zdarzenie wyzwala.
+    // potem wołamy register(), który to zdarzenie wyzwala. KRYTYCZNE: uchwyty listenerów
+    // MUSZĄ być zdejmowane po pierwszym zdarzeniu — funkcja woła się przy każdym montażu
+    // PushButton i każdym kliknięciu, więc bez remove() listenery narastałyby w nieskończoność.
     const token = await new Promise((resolve, reject) => {
       let zalatwione = false
-      Push.addListener('registration', (t) => {
+      let hReg, hErr
+      const sprzataj = () => {
+        try { if (hReg && hReg.remove) hReg.remove() } catch (_) {}
+        try { if (hErr && hErr.remove) hErr.remove() } catch (_) {}
+      }
+      const zakoncz = (fn, arg) => {
         if (zalatwione) return
         zalatwione = true
-        resolve(t && t.value)
-      })
-      Push.addListener('registrationError', (e) => {
-        if (zalatwione) return
-        zalatwione = true
-        reject(new Error(e && e.error ? e.error : 'registrationError'))
-      })
+        sprzataj()
+        fn(arg)
+      }
+      // addListener zwraca Promise<PluginListenerHandle>; callback może odpalić ZANIM
+      // handle się przypisze, więc po przypisaniu ponawiamy sprzątanie, gdy już po sprawie.
+      Promise.resolve(Push.addListener('registration', (t) => zakoncz(resolve, t && t.value)))
+        .then((h) => { hReg = h; if (zalatwione) sprzataj() })
+      Promise.resolve(Push.addListener('registrationError', (e) =>
+        zakoncz(reject, new Error(e && e.error ? e.error : 'registrationError'))))
+        .then((h) => { hErr = h; if (zalatwione) sprzataj() })
+      // Zabezpieczenie: gdyby żadne zdarzenie nie przyszło, nie wisimy w nieskończoność.
+      setTimeout(() => zakoncz(reject, new Error('Przekroczono czas rejestracji powiadomień.')), 30000)
       Push.register()
     })
 
