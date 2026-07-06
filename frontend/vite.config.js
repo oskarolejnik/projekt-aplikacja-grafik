@@ -41,6 +41,15 @@ export default defineConfig({
     }),
   ],
   base: '/',
+  // Jedna kopia Reacta w całym drzewie. @react-three/fiber/drei potrafią wciągnąć drugą
+  // kopię przez pre-bundling Vite → „Invalid hook call / more than one copy of React"
+  // (dev; produkcja dedupuje sama). dedupe wymusza jeden egzemplarz.
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react/jsx-runtime'],
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

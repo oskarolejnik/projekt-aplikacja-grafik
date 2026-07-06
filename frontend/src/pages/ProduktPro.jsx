@@ -23,7 +23,30 @@ export default function ProduktPro() {
   useReveal(root)
 
   return (
-    <div ref={root} className="relative min-h-dvh bg-noc font-switzer text-ink">
+    <div ref={root} className="lp-noir relative min-h-dvh bg-noc font-switzer text-ink">
+      {/* Wspólne style kart landingu (szkło/tilt/lift) — sekcje Role/Platformy/WhiteLabel/
+          Zaufanie używają klas .glass/.tilt/.lift; muszą być zdefiniowane na poziomie strony
+          (dawniej pod .lp w usuniętym Produkt.jsx). Tilt bez kursora = statyczna perspektywa. */}
+      <style>{`
+        .lp-noir { --e: cubic-bezier(.22,1,.36,1); }
+        .lp-noir .glass { border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03);
+          backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 24px 48px -24px rgba(0,0,0,0.55); }
+        .lp-noir .glass:hover { border-color: rgba(255,255,255,0.16); background: rgba(255,255,255,0.055); }
+        .lp-noir .lift { transition: transform .22s var(--e), border-color .22s var(--e), box-shadow .22s var(--e), background-color .22s var(--e); }
+        .lp-noir .lift:hover { transform: translateY(-4px); }
+        .lp-noir .tilt { transition: transform .25s var(--e), border-color .22s var(--e), background-color .22s var(--e), box-shadow .22s var(--e); transform-style: preserve-3d;
+          transform: perspective(950px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)) translateY(var(--ty,0)); }
+        .lp-noir .tilt:hover { --ty: -5px; }
+        .lp-noir .tilt::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .35s var(--e);
+          background: radial-gradient(26rem 26rem at var(--mx,50%) var(--my,50%), rgba(231,207,155,0.05), transparent 62%); }
+        .lp-noir .tilt:hover::after { opacity: 1; }
+        @media (prefers-reduced-motion: reduce) {
+          .lp-noir .lift:hover { transform: none; }
+          .lp-noir .tilt, .lp-noir .tilt:hover { transform: none !important; }
+          .lp-noir .tilt::after { display: none; }
+        }
+      `}</style>
       {/* Statyczne złote światło sceny (≤5%) — jedyny „gradient", pod spodem 3D/treści. */}
       <div aria-hidden className="pointer-events-none fixed inset-0" style={{ background:
         'radial-gradient(64rem 42rem at 16% -8%, rgba(201,169,106,0.06), transparent 62%),' +
@@ -61,7 +84,7 @@ export default function ProduktPro() {
       </main>
 
       <footer className="relative z-10 border-t border-white/[0.06]">
-        <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-xs text-muted/70 sm:flex-row sm:px-6">
+        <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-xs text-muted sm:flex-row sm:px-6">
           <div className="flex items-center gap-2">
             <Logo className="h-6" variant="gradient" />
             <span className="font-brand font-bold text-muted">Lokalo</span>

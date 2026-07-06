@@ -124,7 +124,7 @@ export default function SekcjaCennik() {
     e.currentTarget.style.setProperty('--ry', '0deg')
   }
   const statusRozliczenia = (p) => (okres === 'rok' && p.mies > p.rok)
-    ? <>rozliczane rocznie · <span className="text-muted/60 line-through">{zl(p.mies)} zł/mc</span></>
+    ? <>rozliczane rocznie · <span className="text-muted line-through">{zl(p.mies)} zł/mc</span></>
     : 'rozliczane co miesiąc'
 
   const Cecha = ({ dziecko, featured }) => {
@@ -177,7 +177,7 @@ export default function SekcjaCennik() {
               style={{ transform: okres === 'rok' ? 'translateX(100%)' : 'translateX(0)' }} />
             {[['mies', 'Miesięcznie'], ['rok', 'Rocznie']].map(([k, l]) => (
               <button key={k} onClick={() => setOkres(k)} aria-pressed={okres === k}
-                className={`relative z-10 flex min-w-[8.5rem] items-center justify-center gap-1.5 rounded-full px-4 py-2 font-semibold transition-colors duration-200 ${okres === k ? 'text-ink' : 'text-muted hover:text-ink'}`}>
+                className={`relative z-10 flex min-h-11 min-w-[8.5rem] items-center justify-center gap-1.5 rounded-full px-4 py-2 font-semibold transition-colors duration-200 ${okres === k ? 'text-ink' : 'text-muted hover:text-ink'}`}>
                 {l}
                 {k === 'rok' && <span className="rounded-full bg-zloto/15 px-1.5 py-0.5 text-[10px] font-semibold text-zloto">−2 mies.</span>}
               </button>
@@ -240,7 +240,7 @@ export default function SekcjaCennik() {
 
         <p className="relative z-10 mt-7 text-center text-xs text-muted">
           Ceny netto. Dodatek integracji POS: <span className="text-ink">+149 zł/mc</span>. Płacisz za lokal, nie za osobę.
-          <span className="mt-1 block text-muted/70">Plan zmieniasz lub anulujesz w każdej chwili — moduły włączasz jednym kliknięciem.</span>
+          <span className="mt-1 block text-muted">Plan zmieniasz lub anulujesz w każdej chwili — moduły włączasz jednym kliknięciem.</span>
         </p>
 
         <Porownywarka />

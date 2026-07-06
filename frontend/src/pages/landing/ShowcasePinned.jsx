@@ -81,7 +81,7 @@ export default function ShowcasePinned() {
               <div>
                 <h3 className="font-brand text-2xl font-semibold text-ink">{m.tytul}</h3>
                 <p className="mt-3 max-w-md text-lg text-muted">{m.korzysc}</p>
-                <p className="mt-2 max-w-md text-sm text-muted/70">{m.detal}</p>
+                <p className="mt-2 max-w-md text-sm text-muted">{m.detal}</p>
               </div>
               <div className="mx-auto w-full max-w-md"><m.V /></div>
             </div>
@@ -115,7 +115,7 @@ export default function ShowcasePinned() {
                        className="absolute inset-0 will-change-transform">
                     <h3 className="font-brand text-[clamp(1.6rem,3vw,2.4rem)] font-bold leading-tight text-ink">{m.tytul}</h3>
                     <p className="mt-4 max-w-md text-lg leading-relaxed text-muted">{m.korzysc}</p>
-                    <p className="mt-2 max-w-md text-sm leading-relaxed text-muted/70">{m.detal}</p>
+                    <p className="mt-2 max-w-md text-sm leading-relaxed text-muted">{m.detal}</p>
                   </div>
                 ))}
               </div>

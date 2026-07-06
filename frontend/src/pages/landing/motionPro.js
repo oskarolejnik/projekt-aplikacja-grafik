@@ -90,7 +90,9 @@ export function useLenisGsap(enabled = true) {
       gsap.ticker.remove(onTick)
       gsap.ticker.lagSmoothing(500, 33)
       lenis.destroy()
-      ScrollTrigger.getAll().forEach((s) => s.kill())
+      // NIE zabijamy globalnie ScrollTriggerów — każdy hook (useReveal/useParallax/useGsapScene)
+      // sprząta własne przez gsap.context().revert(). Lenis nie tworzy własnych triggerów.
+      if (import.meta.env && import.meta.env.DEV) delete window.__lenis
     }
   }, [enabled])
 }

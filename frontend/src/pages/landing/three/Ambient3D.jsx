@@ -34,18 +34,26 @@ export default function Ambient3D({ className = '' }) {
   const wrapRef = useRef(null)
   // Płótno MONTUJEMY/odmontowujemy wg widoczności — dynamiczny frameloop 'always'→'never'
   // NIE działa (Canvas cache'uje wartość początkową), więc pauza = odmontowanie (zwalnia GPU).
-  const [inView, setInView] = useState(true)
+  // Start: NIEzamontowane (montujemy dopiero po potwierdzeniu widoczności — brak eager-mountu
+  // przy wejściu z kotwicą pod hero). Odmontowanie ZWLEKANE (~600 ms) → drobny jitter scrolla
+  // na granicy nie thrashuje kontekstów WebGL (R3F v8 niszczy kontekst z 500 ms opóźnieniem).
+  const [inView, setInView] = useState(false)
 
   useEffect(() => {
     if (!ok) return
     const el = wrapRef.current
-    if (!el || !('IntersectionObserver' in window)) return
+    if (!el || !('IntersectionObserver' in window)) { setInView(true); return }
+    let timer = 0
     const io = new IntersectionObserver(
-      ([e]) => setInView(e.isIntersecting),
-      { rootMargin: '160px' },
+      ([e]) => {
+        clearTimeout(timer)
+        if (e.isIntersecting) setInView(true)
+        else timer = window.setTimeout(() => setInView(false), 600)
+      },
+      { rootMargin: '200px' },
     )
     io.observe(el)
-    return () => io.disconnect()
+    return () => { clearTimeout(timer); io.disconnect() }
   }, [ok])
 
   if (!ok) return null
