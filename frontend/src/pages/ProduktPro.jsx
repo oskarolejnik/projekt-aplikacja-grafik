@@ -35,7 +35,7 @@ export default function ProduktPro() {
   useScrollRail(railRef)
 
   return (
-    <div ref={root} className="lp-noir relative min-h-dvh bg-noc font-switzer text-ink">
+    <div ref={root} className="lp-noir relative min-h-dvh overflow-x-clip bg-noc font-switzer text-ink">
       {/* Złoty pasek postępu scrolla — u samej góry, nad nawigacją. */}
       <div aria-hidden className="fixed inset-x-0 top-0 z-50 h-[2px] bg-white/[0.04]">
         <div ref={railRef} className="h-full origin-left bg-gradient-to-r from-zloto/80 to-zloto-2" style={{ transform: 'scaleX(0)' }} />

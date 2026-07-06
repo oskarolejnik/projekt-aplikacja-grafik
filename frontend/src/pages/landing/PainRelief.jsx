@@ -33,16 +33,29 @@ export default function PainRelief() {
       .to('.pr-relief-line', { opacity: 1, y: 0, ease: 'power3.out' }, 0.45)
   }, canPin())
 
-  // ── Statyczny wariant (reduced-motion / mobile / brak JS) ──
+  // ── Wariant mobile / reduced-motion: chaos → ulga jako scroll-story (apple mobile) ──
   if (!canPin()) {
     return (
-      <section className="mx-auto w-full max-w-3xl px-4 py-24 text-center sm:px-6">
-        <p className="font-brand text-xl font-medium text-muted" style={{ textWrap: 'balance' }}>
-          Grafik w niedzielny wieczór. Wypłaty na kalkulatorze. Rezerwacje na trzech kartkach.
+      <section className="mx-auto w-full max-w-2xl px-4 py-20 sm:px-6 sm:py-28">
+        <p data-head className="font-brand text-[clamp(1.5rem,6.5vw,2.2rem)] font-medium leading-tight tracking-tight text-muted" style={{ textWrap: 'balance' }}>
+          Dziś to <span className="text-ink">sześć</span> różnych miejsc.
         </p>
-        <h2 className="mt-6 font-brand text-3xl font-bold sm:text-4xl" style={{ textWrap: 'balance' }}>
-          To znika. <span className="text-zloto">Jeden system</span> prowadzi cały lokal.
-        </h2>
+        <div className="mt-6 flex flex-wrap gap-2.5">
+          {CHAOS.map((c) => (
+            <span key={c.t} data-animate className="rounded-full border border-white/[0.10] bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-muted backdrop-blur-sm sm:text-sm">
+              {c.t}
+            </span>
+          ))}
+        </div>
+        <div data-animate="scale" className="mt-10 flex flex-col items-center gap-5 rounded-[2rem] border border-zloto/25 bg-wegiel px-6 py-11 text-center shadow-cta sm:mt-12 sm:py-14">
+          <div className="inline-flex items-center gap-2.5 rounded-2xl border border-zloto/30 bg-noc/60 px-4 py-2.5">
+            <Logo className="h-6" variant="gradient" />
+            <span className="font-brand text-base font-bold text-ink">Jeden system</span>
+          </div>
+          <h2 className="font-brand text-[clamp(1.9rem,7.5vw,2.9rem)] font-bold leading-[1.05] tracking-tight" style={{ textWrap: 'balance' }}>
+            To znika. <span className="text-zloto">Jeden</span> prowadzi cały lokal.
+          </h2>
+        </div>
       </section>
     )
   }

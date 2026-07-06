@@ -97,21 +97,25 @@ export default function ProductTour3D() {
 
   const anim = canPin()
 
-  // ── Wariant statyczny (reduced-motion / mobile / brak JS) ──
+  // ── Wariant mobile / reduced-motion: premium karty z reveal-on-scroll (apple mobile) ──
   if (!anim) {
     return (
-      <section id="mozliwosci" className="mx-auto w-full max-w-6xl px-4 py-20 sm:px-6">
-        <h2 className="max-w-2xl font-brand text-3xl font-bold sm:text-4xl" style={{ textWrap: 'balance' }}>
+      <section id="mozliwosci" className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
+        <h2 data-head className="font-brand text-[clamp(2rem,7.5vw,3rem)] font-bold leading-[1.05] tracking-tight" style={{ textWrap: 'balance' }}>
           Zobacz system <span className="text-zloto-2">przy pracy</span>.
         </h2>
-        <div className="mt-12 space-y-16">
+        <div className="mt-9 space-y-5 sm:mt-14 sm:space-y-10">
           {MODULY.map((m) => (
-            <div key={m.klucz} className="grid items-center gap-8 lg:grid-cols-2">
-              <div>
-                <h3 className="font-brand text-2xl font-semibold text-ink">{m.tytul}</h3>
-                <p className="mt-3 max-w-md text-lg text-muted">{m.korzysc}</p>
+            <div
+              key={m.klucz}
+              data-animate="scale"
+              className="rounded-[1.75rem] border border-white/[0.08] bg-white/[0.025] p-5 shadow-[0_20px_44px_-28px_rgba(0,0,0,0.6)] sm:grid sm:grid-cols-2 sm:items-center sm:gap-9 sm:p-8"
+            >
+              <div className="sm:order-1">
+                <h3 className="font-brand text-[clamp(1.4rem,6vw,2rem)] font-semibold leading-tight tracking-tight text-ink">{m.tytul}</h3>
+                <p className="mt-2.5 text-[15px] leading-relaxed text-muted sm:text-lg">{m.korzysc}</p>
               </div>
-              <div className="mx-auto w-full max-w-md"><m.V /></div>
+              <div className="mt-5 sm:order-2 sm:mt-0"><m.V /></div>
             </div>
           ))}
         </div>
