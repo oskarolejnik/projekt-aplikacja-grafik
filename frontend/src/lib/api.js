@@ -1,7 +1,31 @@
-// Cienki klient HTTP dla API FastAPI. Względny prefiks /api działa zarówno przy
-// serwowaniu produkcyjnego buildu przez backend, jak i przez proxy Vite w dev.
+// Cienki klient HTTP dla API FastAPI. Względny prefiks /api działa przy serwowaniu
+// buildu przez backend i przez proxy Vite w dev. W aplikacji NATYWNEJ (Capacitor) treść
+// jest bundlowana lokalnie, więc /api uderzałoby w apkę — dlatego baza jest KONFIGUROWALNA:
+// użytkownik podaje adres swojej instancji (ekran „adres instancji"), zapisujemy go i tu doklejamy.
 const API = '/api'
 const TOKEN_KEY = 'grafik_token'
+const API_BASE_KEY = 'lokalo_api_base'
+
+// Web: pusta baza → względne '/api' (bez zmian, zero regresji). Native: pełny URL instancji.
+let API_BASE = (typeof localStorage !== 'undefined' && localStorage.getItem(API_BASE_KEY)) || ''
+export const getApiBase = () => API_BASE
+export const setApiBase = (url) => {
+  API_BASE = (url || '').replace(/\/+$/, '')   // bez końcowego ukośnika
+  if (typeof localStorage !== 'undefined') {
+    if (API_BASE) localStorage.setItem(API_BASE_KEY, API_BASE)
+    else localStorage.removeItem(API_BASE_KEY)
+  }
+}
+const pelnyUrl = (path) => `${API_BASE}${API}${path}`
+
+// Sprawdza, czy pod podanym adresem stoi instancja Lokalo (ekran „adres instancji" w apce).
+export async function sprawdzInstancje(bazowyUrl) {
+  const b = (bazowyUrl || '').replace(/\/+$/, '')
+  try {
+    const r = await fetch(`${b}/api/health`, { method: 'GET' })
+    return r.ok
+  } catch { return false }
+}
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
 // remember=true → sesja trwała (localStorage, przeżywa zamknięcie przeglądarki);
@@ -35,7 +59,7 @@ export async function api(path, method = 'GET', body = null) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
   }
-  const res = await fetch(API + path, opts)
+  const res = await fetch(pelnyUrl(path), opts)
 
   if (res.status === 401) {
     // Token nieważny/wygasł — czyścimy sesję i powiadamiamy aplikację.
@@ -53,7 +77,7 @@ export async function api(path, method = 'GET', body = null) {
 // pliki chronione trzeba ściągać przez fetch → blob → link). Rzuca Error z detalem przy błędzie.
 export async function pobierzPlik(path, nazwaPliku) {
   const token = getToken()
-  const res = await fetch(API + path, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  const res = await fetch(pelnyUrl(path), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
   if (res.status === 401) { setToken(null); if (onUnauthorized) onUnauthorized() }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))

@@ -16,7 +16,9 @@ import Onboarding from './pages/Onboarding'
 import Start from './pages/Start'
 import Produkt from './pages/Produkt'
 import Zaproszenie from './pages/Zaproszenie'
-import { api } from './lib/api'
+import WyborInstancji from './pages/WyborInstancji'
+import { api, getApiBase } from './lib/api'
+import { jestNatywna } from './lib/platforma'
 
 // Publiczne „trasy" wykrywane po query param (bez logowania, poza AuthProvider):
 //   ?rezerwuj → widget rezerwacji gościa,  ?produkt → strona produktu/cennik (marketing),
@@ -71,6 +73,17 @@ function Routed() {
 }
 
 export default function App() {
+  // Aplikacja NATYWNA bez zapisanego adresu instancji → najpierw ekran „adres instancji".
+  // (Na webie jestNatywna()=false i getApiBase()='' → ten warunek nigdy nie zachodzi.)
+  const [maBaze, setMaBaze] = useState(!!getApiBase())
+  if (jestNatywna() && !maBaze) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <WyborInstancji onGotowe={() => setMaBaze(true)} />
+      </MotionConfig>
+    )
+  }
+
   // Strona produktu (marketing/cennik) — statyczna, bez logowania i bez kontekstów instancji.
   if (isProdukt) {
     return (

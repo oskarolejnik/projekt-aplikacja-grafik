@@ -557,6 +557,23 @@ def push_subscribe(sub: dict, user: models.User = Depends(get_current_user), db:
         db.add(models.PushSubscription(user_id=user.id, endpoint=endpoint, p256dh=p256dh, auth=auth))
     db.commit()
 
+@router.post("/api/me/push/register-native", status_code=204)
+def push_register_native(dane: dict, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Rejestracja tokenu powiadomień z aplikacji NATYWNEJ (Capacitor: FCM/APNs).
+    Web Push nie działa w apce natywnej — token urządzenia zapisujemy osobno (PushDeviceToken)."""
+    token = (dane.get("token") or "").strip()
+    platform = (dane.get("platform") or "").strip().lower() or None
+    if not token:
+        raise HTTPException(400, "Brak tokenu powiadomień.")
+    if platform and platform not in ("android", "ios"):
+        platform = None
+    existing = db.query(models.PushDeviceToken).filter_by(token=token).first()
+    if existing:
+        existing.user_id, existing.platform = user.id, platform
+    else:
+        db.add(models.PushDeviceToken(user_id=user.id, token=token, platform=platform))
+    db.commit()
+
 
 # --- GODZINY Z RCP (miesięczne podsumowanie pracownika) ---
 

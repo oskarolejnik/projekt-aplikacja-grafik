@@ -202,6 +202,17 @@ class PushSubscription(Base):
     auth     = Column(String, nullable=False)
 
 
+class PushDeviceToken(Base):
+    """Token powiadomień NATYWNYCH (aplikacja Capacitor). Web Push/VAPID nie działa w apce
+    natywnej — Android idzie przez FCM, iOS przez APNs (pośrednio FCM). Osobny kanał obok
+    PushSubscription; wysyłka w push._wyslij_fcm (wymaga konta Firebase operatora)."""
+    __tablename__ = "push_device_tokens"
+    id       = Column(Integer, primary_key=True, index=True)
+    user_id  = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token    = Column(String, unique=True, nullable=False)
+    platform = Column(String(16), nullable=True)   # android|ios
+
+
 class OdbicieRcp(Base):
     """Odbicie z Rejestracji Czasu Pracy (RCP) — KOPIA wypchnięta na VPS przez lokalnego
     agenta. VPS NIGDY nie łączy się z bazą RCP/Gastro; to jest jego własny, lokalny zapis.

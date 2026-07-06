@@ -1,0 +1,19 @@
+# Zależności i projekty natywne generowane przez Capacitor (regenerowalne: `npx cap add ...`).
+node_modules/
+package-lock.json
+android/
+ios/
+
+# Artefakty buildów natywnych
+*.apk
+*.aab
+*.ipa
+.gradle/
+*.log
+
+# Sekrety mobilne (NIE commitować)
+google-services.json
+GoogleService-Info.plist
+*.keystore
+*.jks
+keystore.properties

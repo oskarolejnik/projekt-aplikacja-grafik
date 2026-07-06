@@ -63,9 +63,37 @@ def _wyslij_do_subskrypcji(db, subskrypcje, tytul: str, tresc: str, url: str) ->
     return wyslano
 
 
+def _wyslij_fcm(db, tokeny, tytul: str, tresc: str, url: str) -> int:
+    """Wysyła powiadomienie do NATYWNYCH tokenów (FCM). Bez konta Firebase (env FCM_*)
+    działa jako no-op (log) — kanał web push i tak dostarcza do przeglądarek/PWA.
+    Realna wysyłka (HTTP v1 API Firebase, service-account) = TODO z kluczami operatora."""
+    tokeny = list(tokeny)
+    if not tokeny:
+        return 0
+    if not os.environ.get("FCM_SERVICE_ACCOUNT") and not os.environ.get("FCM_PROJECT_ID"):
+        logger.info("Push natywny (FCM) pominięty — brak konfiguracji Firebase (FCM_*). Tokenów: %d.", len(tokeny))
+        return 0
+    # TODO(Faza 5 prod): google-auth → token OAuth service-account → POST na
+    #   https://fcm.googleapis.com/v1/projects/<PROJECT>/messages:send z {message:{token, notification, data:{url}}}.
+    #   Kasować tokeny na 404/UNREGISTERED. Do dopięcia z kluczami Firebase operatora.
+    logger.info("FCM skonfigurowany — podłącz realną wysyłkę (TODO). Tokenów: %d.", len(tokeny))
+    return 0
+
+
+def _fan_out(db, user_ids, tytul: str, tresc: str, url: str) -> int:
+    """Wysyła powiadomienie oboma kanałami: Web Push + natywny FCM. user_ids=None → wszyscy."""
+    q_web = db.query(models.PushSubscription)
+    q_nat = db.query(models.PushDeviceToken)
+    if user_ids is not None:
+        q_web = q_web.filter(models.PushSubscription.user_id.in_(user_ids))
+        q_nat = q_nat.filter(models.PushDeviceToken.user_id.in_(user_ids))
+    return (_wyslij_do_subskrypcji(db, q_web.all(), tytul, tresc, url)
+            + _wyslij_fcm(db, q_nat.all(), tytul, tresc, url))
+
+
 def wyslij_push(db, tytul: str, tresc: str, url: str = "/") -> int:
-    """Powiadomienie do WSZYSTKICH subskrypcji (np. publikacja grafiku)."""
-    return _wyslij_do_subskrypcji(db, db.query(models.PushSubscription).all(), tytul, tresc, url)
+    """Powiadomienie do WSZYSTKICH urządzeń (np. publikacja grafiku) — web + natywne."""
+    return _fan_out(db, None, tytul, tresc, url)
 
 
 def wyslij_push_do_pracownika(db, pracownik_id: int, tytul: str, tresc: str, url: str = "/") -> int:
@@ -75,8 +103,7 @@ def wyslij_push_do_pracownika(db, pracownik_id: int, tytul: str, tresc: str, url
     user = db.query(models.User).filter(models.User.pracownik_id == pracownik_id).first()
     if not user:
         return 0
-    subs = db.query(models.PushSubscription).filter(models.PushSubscription.user_id == user.id).all()
-    return _wyslij_do_subskrypcji(db, subs, tytul, tresc, url)
+    return _fan_out(db, [user.id], tytul, tresc, url)
 
 
 def wyslij_push_do_adminow(db, tytul: str, tresc: str, url: str = "/") -> int:
@@ -84,5 +111,4 @@ def wyslij_push_do_adminow(db, tytul: str, tresc: str, url: str = "/") -> int:
     ids = [u.id for u in db.query(models.User).filter(models.User.rola == "admin").all()]
     if not ids:
         return 0
-    subs = db.query(models.PushSubscription).filter(models.PushSubscription.user_id.in_(ids)).all()
-    return _wyslij_do_subskrypcji(db, subs, tytul, tresc, url)
+    return _fan_out(db, ids, tytul, tresc, url)

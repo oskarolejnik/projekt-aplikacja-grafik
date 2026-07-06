@@ -48,6 +48,18 @@ DEV_ORIGINS = [
     "http://127.0.0.1:8000",
 ]
 
+# Origins aplikacji NATYWNEJ (Capacitor). WebView łączy się cross-origin z adresem
+# instancji, więc te originy muszą być dozwolone ZAWSZE (także w produkcji). Bezpieczne:
+# API autoryzuje bearer-tokenem (nie ciasteczkami), więc CORS nie jest tu granicą bezpieczeństwa.
+#   iOS         → capacitor://localhost
+#   Android     → https://localhost (Capacitor 6+) oraz http://localhost (starsze / server.androidScheme)
+NATIVE_ORIGINS = [
+    "capacitor://localhost",
+    "https://localhost",
+    "http://localhost",
+    "ionic://localhost",
+]
+
 
 def cors_origins() -> list[str]:
     """Lista dozwolonych originów dla CORS (secure by default).
@@ -57,11 +69,19 @@ def cors_origins() -> list[str]:
         * produkcja → [] (tylko same-origin; backend serwuje frontend z tego samego
           adresu, więc cross-origin nie jest potrzebny),
         * dev       → lista lokalnych adresów (proxy Vite).
+
+    Do wyniku ZAWSZE dokładamy originy aplikacji natywnej (Capacitor) — apka mobilna
+    łączy się z instancją cross-origin niezależnie od trybu.
     """
     raw = os.environ.get("CORS_ORIGINS")
     if raw is None or raw.strip() == "":
-        return list(DEV_ORIGINS) if IS_DEV else []
-    return [o.strip() for o in raw.split(",") if o.strip()]
+        base = list(DEV_ORIGINS) if IS_DEV else []
+    else:
+        base = [o.strip() for o in raw.split(",") if o.strip()]
+    for o in NATIVE_ORIGINS:
+        if o not in base:
+            base.append(o)
+    return base
 
 
 def _problems() -> tuple[list[str], list[str]]:
