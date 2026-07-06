@@ -131,19 +131,40 @@ def zapisz_env(katalog: Path, tresc: str, *, force: bool = False) -> Path:
     return plik
 
 
-def zaloz_admina(db, login: str, haslo: str):
-    """Tworzy lub awansuje konto administratora w bazie instancji (jak create_admin, ale na sesji)."""
+def zaloz_admina(db, login: str = None, haslo: str = None, *, email: str = None, haslo_hash: str = None):
+    """Tworzy lub awansuje konto administratora w bazie instancji.
+    Dwa tory:
+      • e-mail (samoobsługa z checkoutu): `email` + gotowy `haslo_hash` (bcrypt policzony na matce,
+        bez plaintextu). Wewnętrzny `login` syntetyzowany z adresu. Logowanie e-mailem.
+      • login (operator/CLI): `login` + `haslo` (walidacja + hash lokalnie)."""
     import models
     from auth import hash_password
+    from deps import unikalny_login_z_emaila
 
-    login = sprawdz_login(login)
-    sprawdz_haslo(haslo)
-    u = db.query(models.User).filter(models.User.login == login).first()
-    if u:
-        u.rola, u.aktywny, u.haslo_hash = "admin", True, hash_password(haslo)
+    if email:
+        email = email.strip().lower()
+        if haslo_hash:
+            hh = haslo_hash
+        else:
+            sprawdz_haslo(haslo)
+            hh = hash_password(haslo)
+        u = db.query(models.User).filter(models.User.email == email).first()
+        if u:
+            u.rola, u.aktywny, u.haslo_hash = "admin", True, hh
+            u.login = u.login or unikalny_login_z_emaila(db, email)
+        else:
+            u = models.User(login=unikalny_login_z_emaila(db, email), email=email,
+                            haslo_hash=hh, rola="admin")
+            db.add(u)
     else:
-        u = models.User(login=login, haslo_hash=hash_password(haslo), rola="admin")
-        db.add(u)
+        login = sprawdz_login(login)
+        sprawdz_haslo(haslo)
+        u = db.query(models.User).filter(models.User.login == login).first()
+        if u:
+            u.rola, u.aktywny, u.haslo_hash = "admin", True, hash_password(haslo)
+        else:
+            u = models.User(login=login, haslo_hash=hash_password(haslo), rola="admin")
+            db.add(u)
     db.commit()
     db.refresh(u)
     return u
@@ -152,8 +173,10 @@ def zaloz_admina(db, login: str, haslo: str):
 TIERY = ("free", "basic", "pro", "premium", "enterprise")
 
 
-def ustaw_tier(db, tier: str):
-    """Ustawia pakiet (tier) subskrypcji instancji — np. wybór z cennika przy samoobsłudze."""
+def ustaw_tier(db, tier: str, *, oplacony: bool = False, dni: int = 30):
+    """Ustawia pakiet (tier) subskrypcji instancji — np. wybór z cennika przy samoobsłudze.
+    `oplacony=True` (tor z checkoutu): oznacza subskrypcję jako aktywną i opłaconą na `dni` dni
+    (data_od=dziś, data_do=dziś+dni) — instancja startuje bez trybu tylko-do-odczytu."""
     import models
 
     if tier not in TIERY:
@@ -163,6 +186,11 @@ def ustaw_tier(db, tier: str):
         s = models.Subskrypcja(id=1)
         db.add(s)
     s.tier = tier
+    if oplacony:
+        from datetime import date, timedelta
+        s.status = "aktywna"
+        s.data_od = date.today()
+        s.data_do = date.today() + timedelta(days=dni)
     db.commit()
     db.refresh(s)
     return s
@@ -183,6 +211,30 @@ def ustaw_nazwe_lokalu(db, nazwa: str):
     return cfg
 
 
+_POLA_KONFIGURACJI = ("typ_lokalu", "modul_rezerwacje", "modul_imprezy", "modul_rozliczenia",
+                      "modul_pos", "modul_sprzatanie", "rezerwacje_online")
+
+
+def ustaw_konfiguracje(db, dane: dict):
+    """Ustawia typ lokalu + moduły w LokalConfig (id=1) z presetu kreatora (tor samoobsługi).
+    Best-effort: nieznane/None pola pomijamy. Bez kroku onboardingu w instancji — konfiguracja
+    z kreatora na matce jedzie tu razem z provisioningiem."""
+    import models
+
+    if not dane:
+        return None
+    cfg = db.get(models.LokalConfig, 1)
+    if cfg is None:
+        cfg = models.LokalConfig(id=1)
+        db.add(cfg)
+    for k in _POLA_KONFIGURACJI:
+        if k in dane and dane[k] is not None:
+            setattr(cfg, k, dane[k])
+    db.commit()
+    db.refresh(cfg)
+    return cfg
+
+
 def _domyslny_db_url(katalog: Path) -> str:
     """Domyślnie SQLite w katalogu instancji (działa od ręki). Produkcyjnie zaleca się
     Postgres per instancja: --db-url postgresql+psycopg2://user:haslo@host:5432/grafik_<slug>"""
@@ -194,6 +246,8 @@ def main(argv=None) -> int:
     p.add_argument("slug", help="identyfikator instancji, np. restauracja-pod-lipa")
     p.add_argument("--nazwa", default="", help="nazwa lokalu (white-label), np. \"Restauracja Pod Lipą\"")
     p.add_argument("--admin", default="", help="login administratora (min. 5 znaków alfanumerycznych)")
+    p.add_argument("--email", default="", help="e-mail administratora (tor samoobsługi z checkoutu); "
+                   "hasło przekazywane jako bcrypt przez env LOKALO_ADMIN_HASLO_HASH (nie argv)")
     p.add_argument("--haslo", default="", help="hasło administratora (puste = wygenerowane losowo)")
     p.add_argument("--domena", default=None, help="docelowa domena/subdomena instancji")
     p.add_argument("--db-url", default=None, help="DATABASE_URL (domyślnie SQLite w katalogu instancji)")
@@ -243,14 +297,35 @@ def main(argv=None) -> int:
     database.init_db()
 
     db = database.SessionLocal()
+    admin_login = admin_haslo = None
     try:
-        if args.tier:
-            ustaw_tier(db, args.tier)
-        if args.bez_admina:
-            # Tor samoobsługi: baza gotowa, zero kont → instancja przy pierwszym wejściu
+        if args.email:
+            # Tor samoobsługi z checkoutu: admin zakładany z e-maila (hash przez env, bez plaintextu),
+            # a subskrypcja od razu AKTYWNA/OPŁACONA (instancja startuje bez trybu tylko-do-odczytu).
+            hh = os.environ.get("LOKALO_ADMIN_HASLO_HASH")
+            if not hh:
+                print("Błąd: brak LOKALO_ADMIN_HASLO_HASH w środowisku dla toru --email.", file=sys.stderr)
+                return 1
+            if args.tier:
+                ustaw_tier(db, args.tier, oplacony=True)
+            zaloz_admina(db, email=args.email, haslo_hash=hh)
+            ustaw_nazwe_lokalu(db, nazwa)
+            cfg_json = os.environ.get("LOKALO_CONFIG_JSON")
+            if cfg_json:
+                import json as _json
+                try:
+                    ustaw_konfiguracje(db, _json.loads(cfg_json))
+                except (ValueError, TypeError):
+                    pass  # zła konfiguracja nie blokuje provisioningu
+        elif args.bez_admina:
+            # Tor operatorski/enterprise: baza gotowa, zero kont → instancja przy pierwszym wejściu
             # pokaże kreator (bootstrap 0-userów), gdzie klient założy konto właściciela.
+            if args.tier:
+                ustaw_tier(db, args.tier)
             ustaw_nazwe_lokalu(db, nazwa)
         else:
+            if args.tier:
+                ustaw_tier(db, args.tier)
             admin_login = args.admin or "admin"
             admin_haslo = args.haslo or domyslne_haslo()
             zaloz_admina(db, admin_login, admin_haslo)
@@ -262,7 +337,9 @@ def main(argv=None) -> int:
         db.close()
 
     print(f"[OK] Zainicjowano baze instancji: {db_url}")
-    if args.bez_admina:
+    if args.email:
+        print(f"[OK] Administrator (e-mail): {args.email}")
+    elif args.bez_admina:
         print("[OK] Bez konta administratora — konto wlasciciela zalozy kreator (onboarding).")
     else:
         print(f"[OK] Administrator: login='{admin_login}'")

@@ -100,3 +100,26 @@ def test_ustaw_tier_singleton_i_walidacja(db):
     assert db.query(models.Subskrypcja).count() == 1
     with pytest.raises(ValueError):
         nc.ustaw_tier(db, "platinum")
+
+
+# ── tor samoobsługi z checkoutu: admin e-mailem + subskrypcja opłacona ────────
+def test_zaloz_admina_emailem_uzywa_gotowego_hasha(db):
+    from auth import hash_password, verify_password
+    hh = hash_password("Haslo123!")
+    u = nc.zaloz_admina(db, email="Szef@Lokal.PL", haslo_hash=hh)
+    assert u.email == "szef@lokal.pl"        # znormalizowany
+    assert u.rola == "admin" and u.login     # wewnętrzny login syntetyzowany, niepusty
+    assert u.haslo_hash == hh                # hash przekazany gotowy — bez ponownego liczenia
+    assert verify_password("Haslo123!", u.haslo_hash)
+
+
+def test_ustaw_tier_oplacony_aktywuje_subskrypcje(db):
+    from datetime import date, timedelta
+    s = nc.ustaw_tier(db, "pro", oplacony=True)
+    assert s.tier == "pro" and s.status == "aktywna"
+    assert s.data_od == date.today() and s.data_do == date.today() + timedelta(days=30)
+
+
+def test_ustaw_konfiguracje_ustawia_typ_i_moduly(db):
+    cfg = nc.ustaw_konfiguracje(db, {"typ_lokalu": "pizzeria", "modul_pos": True, "nieznane": "x"})
+    assert cfg.typ_lokalu == "pizzeria" and cfg.modul_pos is True

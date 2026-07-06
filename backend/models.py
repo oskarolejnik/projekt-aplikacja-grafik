@@ -640,6 +640,29 @@ class Subskrypcja(Base):
     saldo_kredytu = Column(Float, nullable=False, default=0.0)
 
 
+class RejestracjaLokalu(Base):
+    """Rejestracja oczekująca na płatność (instancja-MATKA). Kreator zbiera dane właściciela
+    (e-mail + hasło), typ/moduły i wybrany plan, tworzy ten wpis (status=oczekuje) i kieruje do
+    checkoutu. Dopiero po udanej płatności (sandbox lub webhook) provisioning stawia instancję
+    z gotowym adminem i aktywną subskrypcją — wtedy powstaje konto+instancja. haslo_hash liczony
+    na matce (bcrypt), NIGDY plaintext; external_id spina rejestrację z płatnością (idempotencja)."""
+    __tablename__ = "rejestracje_lokalu"
+    id           = Column(Integer, primary_key=True, index=True)
+    email        = Column(String(255), nullable=False, index=True)
+    haslo_hash   = Column(String(255), nullable=False)          # bcrypt (liczony na matce)
+    nazwa        = Column(String(120), nullable=False)
+    typ_lokalu   = Column(String(32), nullable=True)
+    moduly       = Column(JSON, nullable=True)                  # {"modul_rezerwacje":true,...}
+    tier         = Column(String(16), nullable=False, default="free")
+    netto        = Column(Float, nullable=False, default=0.0)
+    status       = Column(String(16), nullable=False, default="oczekuje", index=True)  # oczekuje|zrealizowana|blad
+    external_id  = Column(String, nullable=False, unique=True, index=True)
+    slug         = Column(String(40), nullable=True)
+    url          = Column(String, nullable=True)
+    utworzono_at    = Column(DateTime, nullable=True)
+    zrealizowano_at = Column(DateTime, nullable=True)
+
+
 class PlatnoscSubskrypcji(Base):
     """Płatność za subskrypcję lokalu (abonament / dopłata przy upgrade). Osobno od Platnosc
     (zadatki imprez). Bez realnej bramki — tryb sandbox (link + ręczne „opłacona"); docelowo

@@ -4,25 +4,23 @@ import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
 import { Spinner } from '../components/ui/Spinner'
 import Onboarding from './Onboarding'
+import KreatorLokalu from './KreatorLokalu'
 
-const fld = 'w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm text-ink outline-none transition focus:border-mint'
-
-// Pakiet z cennika (?start&plan=pro) → wysyłany przy zakładaniu instancji,
-// ląduje od razu w subskrypcji świeżego lokalu.
+// Pakiet z cennika (?start&plan=pro) → wstępnie zaznaczony w kroku „plan" kreatora.
 const PLAN = (() => {
   const p = (new URLSearchParams(window.location.search).get('plan') || '').toLowerCase()
   return ['darmowy', 'basic', 'pro', 'premium'].includes(p) ? p : null
 })()
 const PLAN_ETYKIETA = { darmowy: 'Darmowy', basic: 'Basic', pro: 'Pro', premium: 'Premium' }
 
-// ?start — brama „Zacznij za darmo" z landingu. Na świeżej instancji (0 użytkowników)
-// od razu otwiera kreator lokalu. Na działającej: gdy samoobsługa jest włączona,
-// pokazuje KRÓTKI formularz zakładania lokalu (nazwa + e-mail) — pełny kreator
-// odpala się dopiero RAZ, na świeżej instancji (feedback: „kreator pojawia się
-// taki sam dwa razy — nie chciałbym, żeby tak to wyglądało").
+// ?start — brama „Zacznij za darmo" z landingu. Świeża instancja (0 użytkowników) → pełny
+// kreator instancji (fallback operatorski). Działająca instancja z włączoną samoobsługą →
+// kreator lokalu Z PŁATNOŚCIĄ (KreatorLokalu): dane właściciela + plan → checkout → dopiero
+// po opłaceniu backend stawia nową instancję z gotowym adminem i przenosi na ?login.
 export default function Start() {
   const [status, setStatus] = useState(null)           // null = sprawdzam; { potrzebny, nazwa_lokalu }
   const [samoobsluga, setSamoobsluga] = useState(null) // null = sprawdzam; { enabled, ... }
+  const [pokazKreator, setPokazKreator] = useState(false)
   useEffect(() => {
     api('/onboarding/status')
       .then(setStatus)
@@ -32,13 +30,6 @@ export default function Start() {
       .catch(() => setSamoobsluga({ enabled: false }))
   }, [])
 
-  // Krótki formularz samoobsługi.
-  const [nazwaLokalu, setNazwaLokalu] = useState('')
-  const [email, setEmail] = useState('')
-  const [stawianie, setStawianie] = useState(false)
-  const [blad, setBlad] = useState(null)
-  const [nowy, setNowy] = useState(null)               // {url, nazwa} po sukcesie
-
   if (status === null || samoobsluga === null) {
     return (
       <div className="grid min-h-dvh place-items-center bg-bg">
@@ -47,24 +38,13 @@ export default function Start() {
     )
   }
 
-  // Świeża instancja → pełny kreator (konto właściciela + typ lokalu + moduły).
+  // Świeża instancja (operatorska/enterprise, tor --bez-admina) → pełny kreator instancji.
   if (status.potrzebny) return <Onboarding />
 
-  const nazwa = status.nazwa_lokalu || 'ten lokal'
+  // Wybrano „zakładam własny lokal" → kreator z płatnością (osobna, czysta instancja).
+  if (pokazKreator) return <KreatorLokalu planStart={PLAN} />
 
-  const utworz = async () => {
-    if (nazwaLokalu.trim().length < 3) { setBlad('Podaj nazwę lokalu (min. 3 znaki).'); return }
-    setBlad(null)
-    setStawianie(true)
-    try {
-      const r = await api('/online/nowy-lokal', 'POST', {
-        nazwa_lokalu: nazwaLokalu.trim(),
-        email: email.trim() || null,
-        plan: PLAN,
-      })
-      setNowy(r)
-    } catch (e) { setBlad(e.message) } finally { setStawianie(false) }
-  }
+  const nazwa = status.nazwa_lokalu || 'ten lokal'
 
   return (
     <div className="relative min-h-dvh bg-bg text-ink">
@@ -85,7 +65,7 @@ export default function Start() {
         </p>
 
         <div className="mt-7 space-y-4">
-          {/* Ścieżka 1: własny lokal — formularz samoobsługi albo (fallback) podgląd kreatora. */}
+          {/* Ścieżka 1: własny lokal — kreator z płatnością albo (fallback) kontakt. */}
           <div className="card rounded-2xl border-mint/30 p-5">
             <div className="flex items-start gap-4">
               <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-mint/15 text-mint">
@@ -94,7 +74,7 @@ export default function Start() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-display text-base font-bold text-ink">Zakładam własny lokal</span>
-                  {PLAN && samoobsluga.enabled && !nowy && (
+                  {PLAN && samoobsluga.enabled && (
                     <span className="rounded-full bg-mint/20 px-2.5 py-0.5 text-[11px] font-bold text-mint">
                       pakiet {PLAN_ETYKIETA[PLAN]}
                     </span>
@@ -102,71 +82,39 @@ export default function Start() {
                 </div>
 
                 {samoobsluga.enabled ? (
-                  nowy ? (
-                    <div className="mt-3">
-                      <p className="text-sm leading-relaxed text-muted">
-                        Lokal <span className="font-semibold text-ink">„{nowy.nazwa}"</span> jest gotowy — masz
-                        własną, czystą instancję. Wejdź i dokończ konfigurację: kreator założy Ci konto właściciela.
-                      </p>
-                      <a
-                        href={nowy.url}
-                        className="mt-4 block rounded-xl bg-mint px-4 py-3 text-center text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]"
-                      >
-                        Wejdź do swojego Lokalo →
-                      </a>
-                      <p className="mt-2 break-all text-[11px] text-muted/70">{nowy.url}</p>
-                    </div>
-                  ) : (
-                    <div className="mt-3">
-                      <p className="text-sm leading-relaxed text-muted">
-                        Podaj nazwę — system w pół minuty postawi Ci własną instancję (osobna baza, świeże
-                        sekrety). Konto właściciela, typ lokalu i moduły skonfigurujesz już u siebie, w kreatorze.
-                      </p>
-                      <div className="mt-4 space-y-3">
-                        <input
-                          value={nazwaLokalu}
-                          onChange={(e) => setNazwaLokalu(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') utworz() }}
-                          className={fld}
-                          placeholder="Nazwa lokalu, np. Bistro Zdrój"
-                        />
-                        <input
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') utworz() }}
-                          className={fld}
-                          placeholder="E-mail kontaktowy (opcjonalnie)"
-                          autoComplete="email"
-                        />
-                        {blad && <p className="text-xs font-medium text-danger">{blad}</p>}
-                        <button
-                          onClick={utworz}
-                          disabled={stawianie}
-                          className="w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60"
-                        >
-                          {stawianie ? 'Stawiamy Twój lokal… (do pół minuty)' : 'Utwórz mój lokal'}
-                        </button>
-                      </div>
-                      <a
-                        href={`?onboarding${PLAN ? `&plan=${PLAN}` : ''}`}
-                        className="mt-3 inline-block text-xs text-muted transition hover:text-ink"
-                      >
-                        Chcesz najpierw zobaczyć, jak wygląda kreator? Obejrzyj podgląd →
-                      </a>
-                    </div>
-                  )
+                  <div className="mt-3">
+                    <p className="text-sm leading-relaxed text-muted">
+                      Kilka kroków: e-mail i hasło właściciela, typ lokalu i moduły, wybór pakietu.
+                      Po opłaceniu system automatycznie postawi Ci własną instancję z gotowym kontem —
+                      wejdziesz od razu, logując się e-mailem.
+                    </p>
+                    <button
+                      onClick={() => setPokazKreator(true)}
+                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-mint px-5 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]"
+                    >
+                      Zacznij zakładanie <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
+                    </button>
+                  </div>
                 ) : (
                   <div className="mt-1">
                     <p className="text-sm leading-relaxed text-muted">
-                      Kreator poprowadzi Cię przez start: nazwa lokalu, konto właściciela, typ lokalu i moduły.
-                      Kilka minut i panel jest Twój.
+                      Samoobsługowe zakładanie lokali jest wyłączone na tej instalacji — napisz do nas,
+                      a przygotujemy Ci instancję. Kreator (podgląd) pokaże, jak wygląda konfiguracja.
                     </p>
-                    <a
-                      href={`?onboarding${PLAN ? `&plan=${PLAN}` : ''}`}
-                      className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-mint"
-                    >
-                      Otwórz kreator lokalu <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
-                    </a>
+                    <div className="mt-3 flex flex-wrap gap-3">
+                      <a
+                        href={`mailto:kontakt@grafikpracy.pl?subject=${encodeURIComponent('Nowy lokal na Lokalo')}`}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-mint px-4 py-2.5 text-sm font-semibold text-bg transition hover:brightness-105"
+                      >
+                        Napisz do nas
+                      </a>
+                      <a
+                        href={`?onboarding${PLAN ? `&plan=${PLAN}` : ''}`}
+                        className="inline-flex items-center gap-1.5 text-sm font-semibold text-mint"
+                      >
+                        Zobacz podgląd kreatora <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
+                      </a>
+                    </div>
                   </div>
                 )}
               </div>
@@ -184,7 +132,7 @@ export default function Start() {
             <span className="min-w-0 flex-1">
               <span className="block font-display text-base font-bold text-ink">Mam już konto</span>
               <span className="mt-1 block text-sm leading-relaxed text-muted">
-                Wracasz do panelu lokalu {nazwa}? Zaloguj się jak zwykle. (Konto pracownika? Zakłada się
+                Wracasz do panelu lokalu {nazwa}? Zaloguj się e-mailem. (Konto pracownika? Zakłada się
                 z linku-zaproszenia od managera.)
               </span>
               <span className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-ink">

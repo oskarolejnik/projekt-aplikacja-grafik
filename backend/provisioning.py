@@ -159,22 +159,38 @@ def _czekaj_na_health(port: int, timeout_s: int = HEALTH_TIMEOUT_S) -> bool:
 
 
 def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.1",
-                     tier: str | None = None) -> dict:
+                     tier: str | None = None, admin_email: str | None = None,
+                     admin_haslo_hash: str | None = None, konfiguracja: dict | None = None) -> dict:
     """Pełny tor samoobsługi: provisioning → start → health → wpis w rejestrze.
-    Zwraca wpis rejestru (z URL). Podnosi RuntimeError z czytelnym komunikatem."""
+    Zwraca wpis rejestru (z URL). Podnosi RuntimeError z czytelnym komunikatem.
+
+    Gdy podano `admin_email` + `admin_haslo_hash` (tor z checkoutu): instancja powstaje OD RAZU
+    z kontem właściciela i aktywną, opłaconą subskrypcją — właściciel trafia na `?login` i loguje
+    się e-mailem. Bez nich — stary tor `--bez-admina` (kreator zakłada konto w instancji, `?start`).
+    Hasło NIGDY nie idzie w argv (widoczne w tasklist) — przekazujemy bcrypt przez env podprocesu."""
     rejestr = wczytaj_rejestr()
     if len(rejestr) >= LIMIT_FLOTY:
         raise RuntimeError("Osiągnięto limit liczby instancji — skontaktuj się z operatorem.")
 
     slug = slug_z_nazwy(nazwa, {w["slug"] for w in rejestr})
     port = przydziel_port(rejestr)
+    z_adminem = bool(admin_email and admin_haslo_hash)
 
     # 1) Provisioning (osobny proces — new_client sam ustawia środowisko init bazy).
     polecenie = [sys.executable, str(BACKEND_DIR / "new_client.py"), slug,
-                 "--nazwa", nazwa or slug, "--init", "--bez-admina"]
+                 "--nazwa", nazwa or slug, "--init"]
+    env = None
+    if z_adminem:
+        polecenie += ["--email", admin_email]
+        env = {**os.environ, "LOKALO_ADMIN_HASLO_HASH": admin_haslo_hash}  # hash poza argv
+        if konfiguracja:
+            env["LOKALO_CONFIG_JSON"] = json.dumps(konfiguracja)  # typ+moduły z kreatora
+    else:
+        polecenie += ["--bez-admina"]
     if tier:
         polecenie += ["--tier", tier]   # pakiet z cennika od razu w subskrypcji instancji
-    wynik = subprocess.run(polecenie, cwd=str(BACKEND_DIR), capture_output=True, text=True, timeout=180)
+    wynik = subprocess.run(polecenie, cwd=str(BACKEND_DIR), capture_output=True, text=True,
+                           timeout=180, env=env)
     if wynik.returncode != 0:
         logger.error("Provisioning %s nie powiódł się: %s", slug, wynik.stderr[-800:])
         raise RuntimeError("Nie udało się przygotować instancji — spróbuj ponownie.")
@@ -188,11 +204,11 @@ def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.
     wpis = {
         "slug": slug,
         "nazwa": nazwa or slug,
-        "email": (email or "").strip() or None,
+        "email": (admin_email or email or "").strip() or None,
         "tier": tier,
         "port": port,
         "pid": pid,
-        "url": f"http://{host}:{port}/?start",
+        "url": f"http://{host}:{port}/?{'login' if z_adminem else 'start'}",
         "utworzono_at": utcnow_naive().isoformat(),
     }
     rejestr.append(wpis)
