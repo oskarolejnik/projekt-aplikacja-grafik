@@ -97,31 +97,42 @@ export function useLenisGsap(enabled = true) {
   }, [enabled])
 }
 
-// ── Reveal przy wejściu w kadr ──
-// Elementy z [data-animate] (opcjonalnie ="up|left|right|scale") wjeżdżają raz.
-// gsap.context skopiowany do scope → rewert sprząta wszystko przy odmontowaniu.
+// ── Reveal przy wejściu w kadr (apple-like) ──
+// Obsługuje ZARÓWNO [data-animate] (="up|left|right|scale") JAK I stary [data-rv]
+// (wariant z klas rv-l/rv-r/rv-scale) — dzięki temu sekcje Role/Platformy/WhiteLabel/
+// Zaufanie/Cennik ożywają bez edycji każdego pliku. Po wejściu CZYŚCIMY inline transform
+// (clearProps), żeby nie nadpisać CSS-owego tiltu kart (.tilt używa własnego transformu).
+const REVEAL_SEL = '[data-animate], [data-rv]'
+function _revealKind(el) {
+  if (el.dataset.animate) return el.dataset.animate
+  if (el.classList.contains('rv-l')) return 'left'
+  if (el.classList.contains('rv-r')) return 'right'
+  if (el.classList.contains('rv-scale')) return 'scale'
+  return 'up'
+}
 export function useReveal(scopeRef, enabled = true) {
   useEffect(() => {
     if (!enabled || reducedMotion() || typeof window === 'undefined') return
     const scope = (scopeRef && scopeRef.current) || document.body
     const ctx = gsap.context(() => {
       const set = (el) => {
-        const kind = el.dataset.animate || 'up'
+        const kind = _revealKind(el)
         const from = { opacity: 0, willChange: 'transform, opacity' }
-        if (kind === 'up') from.y = 34
-        else if (kind === 'left') from.x = -46
-        else if (kind === 'right') from.x = 46
-        else if (kind === 'scale') { from.y = 26; from.scale = 0.965 }
+        if (kind === 'up') from.y = 46
+        else if (kind === 'left') from.x = -52
+        else if (kind === 'right') from.x = 52
+        else if (kind === 'scale') { from.y = 34; from.scale = 0.955 }
         gsap.set(el, from)
       }
-      gsap.utils.toArray('[data-animate]').forEach(set)
-      ScrollTrigger.batch('[data-animate]', {
-        start: 'top 88%',
+      gsap.utils.toArray(REVEAL_SEL).forEach(set)
+      ScrollTrigger.batch(REVEAL_SEL, {
+        start: 'top 86%',
         onEnter: (batch) =>
           gsap.to(batch, {
             opacity: 1, x: 0, y: 0, scale: 1,
-            duration: 0.85, ease: 'power3.out', stagger: 0.09, overwrite: true,
-            onComplete: () => batch.forEach((el) => { el.style.willChange = 'auto' }),
+            duration: 0.9, ease: 'power3.out', stagger: 0.08, overwrite: true,
+            // clearProps transform → oddajemy kontrolę CSS (tilt/hover) po odsłonięciu.
+            onComplete: () => gsap.set(batch, { clearProps: 'transform,willChange' }),
           }),
       })
     }, scope)

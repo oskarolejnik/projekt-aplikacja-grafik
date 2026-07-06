@@ -12,11 +12,12 @@ function Odlamek({ position, scale, rot, speed = 1, detail = 0, color = '#C9A96A
   const ref = useRef()
   useFrame((_, dt) => {
     if (!ref.current) return
-    ref.current.rotation.x += dt * 0.05 * speed
-    ref.current.rotation.y += dt * 0.07 * speed
+    // Bardzo powolny obrót — ma sprawiać wrażenie „prawie nieruchomego" (nie latać).
+    ref.current.rotation.x += dt * 0.018 * speed
+    ref.current.rotation.y += dt * 0.024 * speed
   })
   return (
-    <Float speed={1.1 * speed} rotationIntensity={0.5} floatIntensity={0.9}>
+    <Float speed={0.5 * speed} rotationIntensity={0.15} floatIntensity={0.3}>
       <mesh ref={ref} position={position} scale={scale} rotation={rot}>
         <icosahedronGeometry args={[1, detail]} />
         <meshStandardMaterial color={color} metalness={1} roughness={roughness} flatShading />
@@ -27,11 +28,11 @@ function Odlamek({ position, scale, rot, speed = 1, detail = 0, color = '#C9A96A
 
 function Piescien() {
   const ref = useRef()
-  useFrame((_, dt) => { if (ref.current) ref.current.rotation.z += dt * 0.04 })
+  useFrame((_, dt) => { if (ref.current) ref.current.rotation.z += dt * 0.015 })
   return (
-    <Float speed={0.7} rotationIntensity={0.25} floatIntensity={0.5}>
-      <mesh ref={ref} position={[1.7, -0.7, -2.2]} rotation={[1.1, 0.3, 0]}>
-        <torusGeometry args={[1.5, 0.05, 24, 96]} />
+    <Float speed={0.35} rotationIntensity={0.1} floatIntensity={0.25}>
+      <mesh ref={ref} position={[1.8, -0.5, -2.4]} rotation={[1.1, 0.3, 0]}>
+        <torusGeometry args={[1.6, 0.045, 24, 96]} />
         <meshStandardMaterial color="#E7CF9B" metalness={1} roughness={0.22} />
       </mesh>
     </Float>
@@ -47,13 +48,13 @@ export default function Scene({ frameloop = 'always' }) {
       camera={{ position: [0, 0, 6], fov: 42 }}
       style={{ background: 'transparent' }}
     >
-      <ambientLight intensity={0.35} />
-      <directionalLight position={[3, 4, 2]} intensity={1.1} color="#E7CF9B" />
-      <pointLight position={[-4, -2, 1]} intensity={18} color="#5EA8FF" distance={14} />
+      <ambientLight intensity={0.3} />
+      <directionalLight position={[3, 4, 2]} intensity={1.0} color="#E7CF9B" />
+      <pointLight position={[-4, -2, 1]} intensity={14} color="#5EA8FF" distance={14} />
 
-      <Odlamek position={[-2.1, 0.6, 0]} scale={1.15} rot={[0.4, 0.8, 0.1]} speed={1} />
-      <Odlamek position={[2.2, 1.0, -1]} scale={0.7} rot={[1.2, 0.2, 0.5]} speed={1.35} color="#E7CF9B" roughness={0.24} />
-      <Odlamek position={[0.2, -1.4, -0.5]} scale={0.5} rot={[0.2, 1.1, 0.3]} speed={0.8} />
+      {/* Mniej brył, dalej w tle — spokojna, dyskretna scena zamiast „latających kształtów". */}
+      <Odlamek position={[-2.0, 0.7, -0.8]} scale={1.0} rot={[0.4, 0.8, 0.1]} speed={1} />
+      <Odlamek position={[2.1, 1.1, -1.6]} scale={0.6} rot={[1.2, 0.2, 0.5]} speed={1.15} color="#E7CF9B" roughness={0.24} />
       <Piescien />
 
       {/* Środowisko z Lightformerów (BEZ zewnętrznego HDR) — daje metalowi co odbijać. */}

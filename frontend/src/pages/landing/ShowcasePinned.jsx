@@ -2,66 +2,64 @@ import { useRef } from 'react'
 import { GrafikVignette, WyplataVignette, KasaVignette, RezerwacjaVignette, ImprezyVignette } from './Vignettes'
 import { useGsapScene, canPin } from './motionPro'
 
-// Sekcja-bohater „Zobacz system przy pracy" — pinned feature-scroll (Apple/Linear):
-// scena stoi w miejscu, a scroll przełącza kolejne moduły produktu (scrub). Jedna wielka
-// powierzchnia po prawej, korzyść jednym zdaniem po lewej, złoty pasek postępu z boku.
-// Reduced-motion / brak JS → statyczna, pionowa lista modułów (pełna treść, zero pinów).
+// Sekcja-bohater „Zobacz system przy pracy" — pinned, kinowa (Apple-like): scena stoi,
+// a scroll przełącza moduły produktu. Kompozycja WYŚRODKOWANA: wielki nagłówek + jedno
+// zdanie korzyści + duże okno produktu (bohater), które WJEŻDŻA z dołu (slide+scale+blur).
+// Reduced-motion / mobile / brak JS → statyczna, pionowa lista modułów.
 
 const MODULY = [
-  { klucz: 'grafik', tytul: 'Grafik układa się sam', korzysc: 'Tydzień pracy w 10 minut zamiast w niedzielny wieczór.',
-    detal: 'Kwalifikacje, dyspozycyjność i prawo pracy pilnowane automatycznie.', V: GrafikVignette },
-  { klucz: 'wyplaty', tytul: 'Godziny z RCP → wypłaty', korzysc: 'Koniec miesiąca bez kalkulatora — co do minuty.',
-    detal: 'Odbicia spinają się ze stawkami; księgowa dostaje gotowy eksport.', V: WyplataVignette },
-  { klucz: 'kasa', tytul: 'Rozliczenie dnia się zgadza', korzysc: 'Różnica kasowa podświetla się, zanim urośnie.',
-    detal: 'Utarg z POS kontra terminal i gotówka — anomalie łapane od razu.', V: KasaVignette },
-  { klucz: 'rezerwacje', tytul: 'Rezerwacje wpadają same', korzysc: 'Stoliki online bez prowizji, plan sali pod ręką.',
-    detal: 'Gość rezerwuje sam, Ty widzisz salę i scoring no-show.', V: RezerwacjaVignette },
-  { klucz: 'imprezy', tytul: 'Wesela i imprezy pod kontrolą', korzysc: 'Zapytanie zamykasz w minuty, nie w dni.',
-    detal: 'Szkic oferty AI, zadatki z kasy, portal Pary Młodej z listą gości.', V: ImprezyVignette },
+  { klucz: 'grafik',     tytul: 'Grafik układa się sam',        korzysc: 'Tydzień pracy w 10 minut, nie w niedzielny wieczór.', V: GrafikVignette },
+  { klucz: 'wyplaty',    tytul: 'Godziny z RCP → wypłaty',      korzysc: 'Koniec miesiąca bez kalkulatora — co do minuty.',      V: WyplataVignette },
+  { klucz: 'kasa',       tytul: 'Rozliczenie dnia się zgadza',  korzysc: 'Różnica kasowa świeci, zanim urośnie.',                V: KasaVignette },
+  { klucz: 'rezerwacje', tytul: 'Rezerwacje wpadają same',      korzysc: 'Stoliki online bez prowizji, plan sali pod ręką.',     V: RezerwacjaVignette },
+  { klucz: 'imprezy',    tytul: 'Wesela i imprezy pod kontrolą', korzysc: 'Zapytanie zamykasz w minuty, nie w dni.',             V: ImprezyVignette },
 ]
 const N = MODULY.length
 
 export default function ShowcasePinned() {
   const sekcjaRef = useRef(null)
   const stageRef = useRef(null)
-  const tekstRefs = useRef([])
-  const ekranRefs = useRef([])
+  const naglRefs = useRef([])
+  const korRefs = useRef([])
+  const oknoRefs = useRef([])
   const kropkaRefs = useRef([])
   const fillRef = useRef(null)
   const aktywny = useRef(0)
 
   useGsapScene(sekcjaRef, (g, ST) => {
-    const teksty = tekstRefs.current
-    const ekrany = ekranRefs.current
-    const kropki = kropkaRefs.current
+    const nagl = naglRefs.current, kor = korRefs.current, okna = oknoRefs.current, kropki = kropkaRefs.current
 
-    // Stan początkowy: tylko moduł 0 widoczny.
-    teksty.forEach((el, i) => g.set(el, { opacity: i === 0 ? 1 : 0, y: i === 0 ? 0 : 24 }))
-    ekrany.forEach((el, i) => g.set(el, { opacity: i === 0 ? 1 : 0, y: i === 0 ? 0 : 40, scale: i === 0 ? 1 : 0.96 }))
+    // Stan początkowy: moduł 0 widoczny, reszta poniżej i rozmyta.
+    nagl.forEach((el, i) => g.set(el, { opacity: i === 0 ? 1 : 0, y: i === 0 ? 0 : 40 }))
+    kor.forEach((el, i) => g.set(el, { opacity: i === 0 ? 1 : 0, y: i === 0 ? 0 : 30 }))
+    okna.forEach((el, i) => g.set(el, { opacity: i === 0 ? 1 : 0, y: i === 0 ? 0 : 70, scale: i === 0 ? 1 : 0.9, filter: i === 0 ? 'blur(0px)' : 'blur(12px)' }))
 
     const pokaz = (idx) => {
       if (idx === aktywny.current) return
-      const poprz = aktywny.current
+      const p = aktywny.current
       aktywny.current = idx
-      g.to(teksty[poprz], { opacity: 0, y: -18, duration: 0.4, ease: 'power2.in' })
-      g.to(ekrany[poprz], { opacity: 0, y: -30, scale: 0.97, duration: 0.45, ease: 'power2.in' })
-      g.fromTo(teksty[idx], { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: 'power3.out', delay: 0.05 })
-      g.fromTo(ekrany[idx], { opacity: 0, y: 40, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.6, ease: 'power3.out', delay: 0.05 })
+      // Wyjście poprzedniego — do góry, gaśnie, lekko w tył.
+      g.to(nagl[p], { opacity: 0, y: -34, duration: 0.4, ease: 'power2.in' })
+      g.to(kor[p], { opacity: 0, y: -24, duration: 0.4, ease: 'power2.in' })
+      g.to(okna[p], { opacity: 0, y: -50, scale: 0.97, filter: 'blur(8px)', duration: 0.45, ease: 'power2.in' })
+      // Wejście nowego — z dołu, wyostrza się (blur→0), skala rośnie. „Apple arrival".
+      g.fromTo(nagl[idx], { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay: 0.08 })
+      g.fromTo(kor[idx], { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out', delay: 0.14 })
+      g.fromTo(okna[idx], { opacity: 0, y: 70, scale: 0.9, filter: 'blur(12px)' }, { opacity: 1, y: 0, scale: 1, filter: 'blur(0px)', duration: 0.75, ease: 'power3.out', delay: 0.06 })
       kropki.forEach((k, i) => k && k.classList.toggle('aktywna', i === idx))
     }
 
     ST.create({
       trigger: sekcjaRef.current,
       start: 'top top',
-      end: () => `+=${window.innerHeight * (N - 0.35)}`,
+      end: () => `+=${window.innerHeight * N}`,
       pin: stageRef.current,
       anticipatePin: 1,
       invalidateOnRefresh: true,
       onUpdate: (self) => {
-        const seg = self.progress * N
-        const idx = Math.max(0, Math.min(N - 1, Math.floor(seg)))
+        const idx = Math.max(0, Math.min(N - 1, Math.floor(self.progress * N * 0.999)))
         pokaz(idx)
-        if (fillRef.current) fillRef.current.style.transform = `scaleY(${self.progress})`
+        if (fillRef.current) fillRef.current.style.transform = `scaleX(${self.progress})`
       },
     })
   }, canPin())
@@ -81,7 +79,6 @@ export default function ShowcasePinned() {
               <div>
                 <h3 className="font-brand text-2xl font-semibold text-ink">{m.tytul}</h3>
                 <p className="mt-3 max-w-md text-lg text-muted">{m.korzysc}</p>
-                <p className="mt-2 max-w-md text-sm text-muted">{m.detal}</p>
               </div>
               <div className="mx-auto w-full max-w-md"><m.V /></div>
             </div>
@@ -95,49 +92,46 @@ export default function ShowcasePinned() {
     <section ref={sekcjaRef} id="mozliwosci" className="relative">
       <h2 className="sr-only">Zobacz system przy pracy</h2>
       <style>{`
-        .sc-dot { transition: background-color .3s, transform .3s; }
-        .sc-dot.aktywna { background-color: #C9A96A; transform: scale(1.5); }
-        .sc-dot.aktywna ~ .sc-label, .sc-dot.aktywna + .sc-label { color: #F4F4F5; }
+        .sc-dot { height: 6px; width: 6px; border-radius: 999px; background: rgba(255,255,255,0.22); transition: background-color .35s, width .35s; }
+        .sc-dot.aktywna { background-color: #C9A96A; width: 22px; }
       `}</style>
-      <div ref={stageRef} className="relative flex h-dvh items-center overflow-hidden">
-        <div className="mx-auto grid w-full max-w-6xl items-center gap-10 px-4 sm:px-6 lg:grid-cols-[0.9fr_1.1fr]">
-          {/* Lewa kolumna: pasek postępu + zmieniający się tekst */}
-          <div className="relative flex gap-6">
-            {/* Pionowy pasek postępu ze złotym wypełnieniem */}
-            <div className="relative hidden w-px shrink-0 bg-white/[0.10] sm:block" style={{ minHeight: '11rem' }}>
-              <div ref={fillRef} className="absolute inset-x-0 top-0 h-full origin-top bg-zloto" style={{ transform: 'scaleY(0)' }} />
+      <div ref={stageRef} className="relative flex h-dvh flex-col items-center justify-center overflow-hidden px-6">
+        {/* Nagłówki (stos, wymieniane) */}
+        <div className="relative h-[3.4rem] w-full max-w-3xl text-center sm:h-[4rem]">
+          {MODULY.map((m, i) => (
+            <h3 key={m.klucz} ref={(el) => (naglRefs.current[i] = el)}
+                className="absolute inset-x-0 top-0 font-brand text-[clamp(1.7rem,4vw,3rem)] font-bold leading-tight tracking-tight text-ink will-change-transform">
+              {m.tytul}
+            </h3>
+          ))}
+        </div>
+        {/* Korzyść (stos, wymieniane) */}
+        <div className="relative mt-3 h-[3.5rem] w-full max-w-xl text-center sm:mt-4">
+          {MODULY.map((m, i) => (
+            <p key={m.klucz} ref={(el) => (korRefs.current[i] = el)}
+               className="absolute inset-x-0 top-0 font-switzer text-[clamp(1rem,1.6vw,1.25rem)] leading-relaxed text-muted will-change-transform">
+              {m.korzysc}
+            </p>
+          ))}
+        </div>
+        {/* Wielkie okno produktu — bohater sekcji (stos, wjeżdża z dołu) */}
+        <div className="relative mt-8 h-[19rem] w-full max-w-xl sm:mt-10 sm:h-[23rem]">
+          {MODULY.map((m, i) => (
+            <div key={m.klucz} ref={(el) => (oknoRefs.current[i] = el)}
+                 className="absolute inset-0 flex items-center justify-center will-change-transform">
+              <div className="w-full"><m.V /></div>
             </div>
-            <div className="min-w-0">
-              <p className="mb-6 font-brand text-sm font-semibold text-muted">Zobacz system <span className="text-zloto">przy pracy</span></p>
-              <div className="relative min-h-[13rem]">
-                {MODULY.map((m, i) => (
-                  <div key={m.klucz} ref={(el) => (tekstRefs.current[i] = el)}
-                       className="absolute inset-0 will-change-transform">
-                    <h3 className="font-brand text-[clamp(1.6rem,3vw,2.4rem)] font-bold leading-tight text-ink">{m.tytul}</h3>
-                    <p className="mt-4 max-w-md text-lg leading-relaxed text-muted">{m.korzysc}</p>
-                    <p className="mt-2 max-w-md text-sm leading-relaxed text-muted">{m.detal}</p>
-                  </div>
-                ))}
-              </div>
-              {/* Kropki modułów */}
-              <div className="mt-8 flex items-center gap-2.5">
-                {MODULY.map((m, i) => (
-                  <span key={m.klucz} ref={(el) => (kropkaRefs.current[i] = el)}
-                        className={`sc-dot h-1.5 w-1.5 rounded-full bg-white/25 ${i === 0 ? 'aktywna' : ''}`} />
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Prawa kolumna: duża powierzchnia produktu (moduły w stosie, crossfade) */}
-          <div className="relative mx-auto h-[22rem] w-full max-w-lg sm:h-[26rem]">
-            {MODULY.map((m, i) => (
-              <div key={m.klucz} ref={(el) => (ekranRefs.current[i] = el)}
-                   className="absolute inset-0 flex items-center will-change-transform">
-                <div className="w-full"><m.V /></div>
-              </div>
-            ))}
-          </div>
+          ))}
+        </div>
+        {/* Kropki postępu */}
+        <div className="mt-9 flex items-center gap-2.5">
+          {MODULY.map((m, i) => (
+            <span key={m.klucz} ref={(el) => (kropkaRefs.current[i] = el)} className={`sc-dot ${i === 0 ? 'aktywna' : ''}`} />
+          ))}
+        </div>
+        {/* Cienki złoty pasek postępu na dole sceny */}
+        <div className="absolute inset-x-0 bottom-0 h-[2px] bg-white/[0.06]">
+          <div ref={fillRef} className="h-full origin-left bg-zloto" style={{ transform: 'scaleX(0)' }} />
         </div>
       </div>
     </section>
