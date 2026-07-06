@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import Lenis from 'lenis'
 import { gsap } from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
+import { SplitText } from 'gsap/SplitText'
 import 'lenis/dist/lenis.css'
 
 // Infrastruktura motion premium landingu „Lokalo Noir": Lenis (smooth-scroll) spięty
@@ -9,7 +10,7 @@ import 'lenis/dist/lenis.css'
 // bezwzględnie respektuje prefers-reduced-motion — wtedy zero Lenis, zero scrubu,
 // treść statycznie widoczna (żadnego ukrywania). Sprzątanie kompletne (destroy/kill/ticker).
 
-gsap.registerPlugin(ScrollTrigger)
+gsap.registerPlugin(ScrollTrigger, SplitText)
 
 export const reducedMotion = () =>
   typeof window !== 'undefined' && !!window.matchMedia &&
@@ -170,4 +171,4 @@ export function useGsapScene(scopeRef, buildFn, enabled = true) {
   }, [scopeRef, enabled]) // eslint-disable-line react-hooks/exhaustive-deps
 }
 
-export { gsap, ScrollTrigger }
+export { gsap, ScrollTrigger, SplitText }

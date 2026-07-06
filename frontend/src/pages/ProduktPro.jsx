@@ -3,7 +3,7 @@ import { Logo } from '../components/Logo'
 import { useLenisGsap, useReveal } from './landing/motionPro'
 import HeroPro from './landing/HeroPro'
 import PainRelief from './landing/PainRelief'
-import ShowcasePinned from './landing/ShowcasePinned'
+import ProductTour3D from './landing/ProductTour3D'
 import SekcjaRole from './landing/SekcjaRole'
 import SekcjaPlatformy from './landing/SekcjaPlatformy'
 import SekcjaWhiteLabel from './landing/SekcjaWhiteLabel'
@@ -74,7 +74,7 @@ export default function ProduktPro() {
       <main className="relative z-10">
         <HeroPro />
         <PainRelief />
-        <ShowcasePinned />
+        <ProductTour3D />
         <SekcjaRole />
         <SekcjaPlatformy />
         <SekcjaWhiteLabel />
