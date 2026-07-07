@@ -28,6 +28,14 @@ def test_dezaktywacja_konta_uniewaznia_token_natychmiast(admin, db):
     assert c.get("/api/subskrypcja", headers=tok).status_code == 401   # dezaktywowany → odmowa
 
 
+def test_naglowki_bezpieczenstwa_na_kazdej_odpowiedzi(client):
+    """M3: X-Frame-Options / nosniff / Referrer-Policy na każdej odpowiedzi (też publicznej)."""
+    r = client.get("/api/health")
+    assert r.headers.get("X-Frame-Options") == "DENY"
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert r.headers.get("Referrer-Policy") == "no-referrer"
+
+
 def test_degradacja_roli_dziala_natychmiast(admin, db):
     """H2: obniżenie roli admin→employee natychmiast odbiera dostęp do endpointów admina."""
     tok = {"Authorization": f"Bearer {create_access_token(admin)}"}

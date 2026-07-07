@@ -18,9 +18,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import cennik
+import integracje
 import models
 import provisioning
 from auth import hash_password, require_admin
@@ -76,12 +78,12 @@ def nowy_lokal(dane: NowyLokalIn, request: Request):
 
 class KartaIn(BaseModel):
     """Dane karty z kreatora (TRYB TESTOWY/sandbox). Matka liczy z nich odcisk (fingerprint) do
-    dedup i ostatnie 4 cyfry, a numeru (PAN) NIE przechowuje. Docelowo: tokenizacja po stronie
-    klienta (Stripe Elements) — numer nigdy nie dociera do serwera, fingerprint/token daje Stripe."""
+    dedup i ostatnie 4 cyfry, a numeru (PAN) NIE przechowuje. ⚠ PCI DSS: serwer NIE przyjmuje CVC
+    (przechowywanie/logowanie CVC jest zabronione — Req. 3.2). Docelowo: tokenizacja po stronie
+    klienta (Stripe Elements) — PAN nigdy nie dociera do serwera, fingerprint/token daje Stripe."""
     numer: str
     exp_miesiac: Optional[int] = None
     exp_rok: Optional[int] = None
-    cvc: Optional[str] = None
 
 
 class RejestracjaIn(BaseModel):
@@ -109,10 +111,9 @@ def _przetworz_karte(karta: "KartaIn") -> tuple[str, str, str]:
     r = int(karta.exp_rok or 0)
     if r < 100:
         r += 2000
-    cvc = re.sub(r"\D", "", karta.cvc or "")
     dzis = date.today()
-    if not (1 <= m <= 12) or r < dzis.year or (r == dzis.year and m < dzis.month) or len(cvc) not in (3, 4):
-        raise HTTPException(400, "Sprawdź datę ważności i kod CVC karty.")
+    if not (1 <= m <= 12) or r < dzis.year or (r == dzis.year and m < dzis.month):
+        raise HTTPException(400, "Sprawdź datę ważności karty.")
     fingerprint = hashlib.sha256(numer.encode()).hexdigest()
     return fingerprint, numer[-4:], "sandbox_" + secrets.token_hex(12)
 
@@ -196,7 +197,12 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
         moduly=dane.moduly, tier=tier, netto=cennik.cena_netto(tier), status="przetwarzanie",
         external_id=external_id, karta_token=token, karta_ostatnie4=ostatnie4,
         karta_fingerprint=fingerprint, utworzono_at=utcnow_naive())
-    wpis = _postaw(rej, tier=tier, trial=True, karta_token=token, karta_ostatnie4=ostatnie4)
+    try:
+        wpis = _postaw(rej, tier=tier, trial=True, karta_token=token, karta_ostatnie4=ostatnie4)
+    except IntegrityError:
+        # Wyścig: druga równoległa rejestracja z tą samą kartą — częściowy UNIQUE odrzucił zapis.
+        db.rollback()
+        raise HTTPException(409, "Ta karta była już użyta do rozpoczęcia okresu próbnego.")
     return {"tryb": "trial-karta", "status": "zrealizowana", "url": wpis["url"], "slug": wpis["slug"],
             "plan": tier, "karta_ostatnie4": ostatnie4}
 
@@ -205,6 +211,9 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
 def rejestracja_oplac(external_id: str, request: Request, db: Session = Depends(get_db)):
     """Sandbox: potwierdzenie płatności → provisioning instancji z gotowym adminem i aktywną
     subskrypcją. IDEMPOTENTNE: podwójne wywołanie nie stawia drugiej instancji (klucz: status)."""
+    # Z podłączoną bramką „opłacenie" musi potwierdzać podpisany webhook, nie to ręczne wywołanie.
+    if integracje.skonfigurowane("platnosci"):
+        raise HTTPException(403, "Potwierdzenie płatności następuje przez webhook bramki, nie ręcznie.")
     rej = db.query(models.RejestracjaLokalu).filter_by(external_id=external_id).first()
     if rej is None:
         raise HTTPException(404, "Nie znaleziono rejestracji.")

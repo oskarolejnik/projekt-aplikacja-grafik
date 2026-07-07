@@ -2,7 +2,7 @@
 
 from sqlalchemy import (
     Column, Integer, String, Boolean, Date, Time, DateTime, Float, JSON,
-    ForeignKey, Table, UniqueConstraint
+    ForeignKey, Table, UniqueConstraint, Index, text
 )
 from sqlalchemy.orm import relationship, declarative_base
 
@@ -672,6 +672,14 @@ class RejestracjaLokalu(Base):
     karta_token       = Column(String(64), nullable=True)
     karta_ostatnie4   = Column(String(4), nullable=True)
     karta_fingerprint = Column(String(64), nullable=True, index=True)
+    __table_args__ = (
+        # Jedna karta = jeden AKTYWNY trial — dedup na poziomie bazy domyka wyścig TOCTOU
+        # (dwa równoległe /rejestracja z tą samą kartą). Częściowy indeks: obejmuje tylko statusy
+        # w toku/zrealizowane, więc 'blad' oraz brak karty (NULL) nie blokują ponownej próby.
+        Index("uq_rejestracje_karta_aktywne", "karta_fingerprint", unique=True,
+              sqlite_where=text("karta_fingerprint IS NOT NULL AND status IN ('przetwarzanie','zrealizowana')"),
+              postgresql_where=text("karta_fingerprint IS NOT NULL AND status IN ('przetwarzanie','zrealizowana')")),
+    )
 
 
 class PlatnoscSubskrypcji(Base):

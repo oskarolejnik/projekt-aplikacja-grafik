@@ -65,7 +65,7 @@ export default function KreatorLokalu({ planStart = null }) {
   const [wybranyTyp, setWybranyTyp] = useState(null)
   const [moduly, setModuly] = useState(PRESET_INNY)
   const [wybor, setWybor] = useState(PLAN_PO_ID[planStart] ? planStart : 'pro')
-  const [karta, setKarta] = useState({ numer: '', exp: '', cvc: '' })
+  const [karta, setKarta] = useState({ numer: '', exp: '' })
   const [busy, setBusy] = useState(false)
   const [blad, setBlad] = useState(null)
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
@@ -125,14 +125,15 @@ export default function KreatorLokalu({ planStart = null }) {
   const rozpocznijTrial = async () => {
     const numer = karta.numer.replace(/\s/g, '')
     const m = karta.exp.match(/^\s*(\d{1,2})\s*\/\s*(\d{2,4})\s*$/)
-    if (numer.replace(/\D/g, '').length < 12 || !m || karta.cvc.replace(/\D/g, '').length < 3) {
-      setBlad('Sprawdź dane karty: numer, ważność MM/RR i kod CVC.'); return
+    if (numer.replace(/\D/g, '').length < 12 || !m) {
+      setBlad('Sprawdź dane karty: numer i ważność (MM/RR).'); return
     }
     setBlad(null); setBusy(true); setKrok('stawianie')
     try {
+      // Bez CVC — kodu zabezpieczającego nie wysyłamy do serwera (wymóg PCI DSS).
       const r = await api('/online/rejestracja', 'POST', {
         ...wspolne(), plan: wybor,
-        karta: { numer, exp_miesiac: Number(m[1]), exp_rok: Number(m[2]), cvc: karta.cvc.trim() },
+        karta: { numer, exp_miesiac: Number(m[1]), exp_rok: Number(m[2]) },
       })
       window.location.href = r.url
     } catch (e) { setBlad(e.message); setKrok('karta') } finally { setBusy(false) }
@@ -295,15 +296,11 @@ export default function KreatorLokalu({ planStart = null }) {
               <div className="mt-5 space-y-3">
                 <label className="block text-xs font-semibold text-muted">Numer karty
                   <input value={karta.numer} onChange={(e) => setK('numer', e.target.value)} inputMode="numeric" autoComplete="cc-number" className={fld} placeholder="4242 4242 4242 4242" /></label>
-                <div className="flex gap-3">
-                  <label className="block flex-1 text-xs font-semibold text-muted">Ważność (MM/RR)
-                    <input value={karta.exp} onChange={(e) => setK('exp', e.target.value)} inputMode="numeric" autoComplete="cc-exp" className={fld} placeholder="12/30" /></label>
-                  <label className="block w-24 text-xs font-semibold text-muted">CVC
-                    <input value={karta.cvc} onChange={(e) => setK('cvc', e.target.value)} inputMode="numeric" autoComplete="cc-csc" className={fld} placeholder="123" /></label>
-                </div>
+                <label className="block text-xs font-semibold text-muted">Ważność (MM/RR)
+                  <input value={karta.exp} onChange={(e) => setK('exp', e.target.value)} inputMode="numeric" autoComplete="cc-exp" className={fld} placeholder="12/30" /></label>
               </div>
               <p className="mt-3 flex items-center gap-1.5 text-[11px] text-muted">
-                <Icon name="key" className="h-3 w-3 text-mint" /> Tryb testowy — użyj 4242 4242 4242 4242. Prawdziwe płatności po wpięciu bramki.
+                <Icon name="key" className="h-3 w-3 text-mint" /> Tryb testowy — użyj 4242 4242 4242 4242. Kodu CVC nie prosimy (bezpieczeństwo). Prawdziwe płatności po wpięciu bramki.
               </p>
               {blad && <p className="mt-3 text-xs font-medium text-danger">{blad}</p>}
               <button onClick={rozpocznijTrial} disabled={busy}

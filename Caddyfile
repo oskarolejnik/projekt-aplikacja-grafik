@@ -3,5 +3,14 @@
 # Dla prawdziwej domeny z DNS → Caddy sam pobiera i odnawia certyfikat TLS.
 {$DOMENA:localhost} {
 	encode zstd gzip
+	# Nagłówki bezpieczeństwa na warstwie TLS (HSTS wiarygodny tu — Caddy widzi realny https).
+	# Dubluje nagłówki aplikacji (defense-in-depth); usuwa nagłówek Server (mniej info-disclosure).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
 	reverse_proxy app:8000
 }

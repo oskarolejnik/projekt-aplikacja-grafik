@@ -57,7 +57,14 @@ from routers.pos import router as pos_router
 import provisioning
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Scheduler API")
+# Swagger UI + schemat OpenAPI wyłączone w produkcji (nie ujawniaj pełnej mapy API — tras
+# płatności, floty, ingestu, schematu karty). W dev/test dostępne do pracy (CWE-200).
+app = FastAPI(
+    title="Lokalo API",
+    docs_url="/docs" if app_settings.IS_DEV else None,
+    redoc_url="/redoc" if app_settings.IS_DEV else None,
+    openapi_url="/openapi.json" if app_settings.IS_DEV else None,
+)
 app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status integracji (Rec#5: dekompozycja main)
 app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
 app.include_router(platnosci_router)   # płatności zadatków online (Rec#7)
@@ -224,6 +231,21 @@ async def role_guard(request: Request, call_next):
     if metoda == "GET" and _sciezka_na_whitelist(path, OVERSIGHT_GET.get(rola, ())):
         return await call_next(request)
     return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
+
+
+# Nagłówki bezpieczeństwa na KAŻDEJ odpowiedzi (też statyki SPA i odmowy z role_guard).
+# Zarejestrowany PO role_guard → jest warstwą zewnętrzną, więc obejmuje jego wczesne 401/403/402.
+# HSTS tylko w produkcji (dev bywa po http). CSP celowo pominięta tu (łamie SPA Vite/three/gsap) —
+# antyclickjacking daje X-Frame-Options; CSP wprowadzać osobno w trybie report-only (CWE-693/1021).
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if not app_settings.IS_DEV:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 # Nazwa „ukrytego" stanowiska, na które trafiają zmiany z grafiku KUCHNI. Pracownik kuchni

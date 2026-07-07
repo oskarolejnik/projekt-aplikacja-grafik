@@ -25,6 +25,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 import urllib.request
@@ -34,6 +35,11 @@ from deps import utcnow_naive
 from new_client import waliduj_slug
 
 logger = logging.getLogger(__name__)
+
+# Serializacja całego provisioningu: jeden lokal stawiany naraz. Domyka wyścig na rejestrze/portach
+# (CWE-362) i ogranicza równoległość — kilkanaście żądań nie spawnuje kilkunastu uvicornów naraz
+# (CWE-400, DoS hosta). Kolejne żądania czekają na zwolnienie (endpoint /oplac + polling już istnieją).
+_PROVISION_LOCK = threading.Lock()
 
 BACKEND_DIR = Path(__file__).resolve().parent
 INSTANCES_DIR = BACKEND_DIR / "instances"
@@ -63,8 +69,12 @@ def wczytaj_rejestr() -> list[dict]:
 
 
 def zapisz_rejestr(rejestr: list[dict]) -> None:
+    """Zapis ATOMOWY (tmp w tym samym katalogu + os.replace) — samo write_text NIE jest atomowe,
+    więc równoległy/przerwany zapis mógł zostawić uszkodzony/obcięty registry.json."""
     INSTANCES_DIR.mkdir(parents=True, exist_ok=True)
-    REGISTRY.write_text(json.dumps(rejestr, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = REGISTRY.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rejestr, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, REGISTRY)   # atomowe na Windows i POSIX
 
 
 def _pid_zyje(pid: int | None) -> bool:
@@ -163,11 +173,19 @@ def _czekaj_na_health(port: int, timeout_s: int = HEALTH_TIMEOUT_S) -> bool:
     return False
 
 
-def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.1",
-                     tier: str | None = None, admin_email: str | None = None,
-                     admin_haslo_hash: str | None = None, konfiguracja: dict | None = None,
-                     trial: bool = False, karta_token: str | None = None,
-                     karta_ostatnie4: str | None = None) -> dict:
+def utworz_instancje(*args, **kwargs) -> dict:
+    """Serializowany provisioning: cały cykl (rejestr → port → subprocess → health → zapis) biegnie
+    pod globalnym lockiem, więc równoległe żądania nie kolidują na porcie/rejestrze ani nie spawnują
+    wielu uvicornów naraz. Sygnatura i logika w _provision_impl."""
+    with _PROVISION_LOCK:
+        return _provision_impl(*args, **kwargs)
+
+
+def _provision_impl(nazwa: str, email: str | None = None, host: str = "127.0.0.1",
+                    tier: str | None = None, admin_email: str | None = None,
+                    admin_haslo_hash: str | None = None, konfiguracja: dict | None = None,
+                    trial: bool = False, karta_token: str | None = None,
+                    karta_ostatnie4: str | None = None) -> dict:
     """Pełny tor samoobsługi: provisioning → start → health → wpis w rejestrze.
     Zwraca wpis rejestru (z URL). Podnosi RuntimeError z czytelnym komunikatem.
 

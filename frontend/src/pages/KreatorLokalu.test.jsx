@@ -28,13 +28,14 @@ describe('KreatorLokalu (plany + karta na trialu)', () => {
     fireEvent.click(await screen.findByText(/Dalej — karta/))     // moduły → karta (plan płatny)
     fireEvent.change(await screen.findByPlaceholderText(/4242 4242 4242 4242/), { target: { value: '4242 4242 4242 4242' } })
     fireEvent.change(screen.getByPlaceholderText('12/30'), { target: { value: '12/30' } })
-    fireEvent.change(screen.getByPlaceholderText('123'), { target: { value: '123' } })
+    // Brak pola CVC — nie wysyłamy kodu zabezpieczającego (PCI DSS).
+    expect(screen.queryByPlaceholderText('123')).not.toBeInTheDocument()
     fireEvent.click(screen.getByText(/Rozpocznij 14 dni za darmo/))
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
       '/online/rejestracja', 'POST',
       expect.objectContaining({
         email: 'wlasciciel@lokal.pl', plan: 'pro', nazwa_lokalu: 'Moja Knajpa',
-        karta: expect.objectContaining({ exp_miesiac: 12, exp_rok: 30, cvc: '123' }),
+        karta: { numer: '4242424242424242', exp_miesiac: 12, exp_rok: 30 },
       })))
   })
 

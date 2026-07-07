@@ -148,6 +148,11 @@ def oplac_sandbox(external_id: str, db: Session = Depends(get_db),
                   admin: models.User = Depends(require_admin)):
     """SANDBOX/ręcznie: oznacza płatność subskrypcji jako opłaconą. Abonament przedłuża
     data_do o miesiąc i odblokowuje instancję. (Docelowo robi to webhook bramki — Faza 4.)"""
+    # Po wpięciu realnej bramki aktywacja NIE może pochodzić z ręcznego wywołania admina (obejście
+    # płatności) — tylko z podpisanego webhooka. W sandboxie (brak bramki) działa jak demo.
+    if integracje.skonfigurowane("platnosci"):
+        raise HTTPException(403, "Ręczne oznaczanie płatności jest wyłączone — z podłączoną bramką "
+                                 "aktywacja subskrypcji następuje wyłącznie z jej podpisanego webhooka.")
     p = platnosci_sub.oznacz_oplacona(db, external_id)
     if p is None:
         raise HTTPException(404, "Brak takiej płatności.")
