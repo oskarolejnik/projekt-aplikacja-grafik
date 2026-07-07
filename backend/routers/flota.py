@@ -9,7 +9,9 @@ Panel operatora: GET /api/flota (admin) — rejestr instancji ze stanem procesó
 (zalążek „panelu super-admina nad flotą" z audytu CTO).
 """
 
+import hashlib
 import logging
+import re
 import secrets
 from datetime import date
 from typing import Optional
@@ -19,7 +21,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import cennik
-import integracje
 import models
 import provisioning
 from auth import hash_password, require_admin
@@ -73,24 +74,54 @@ def nowy_lokal(dane: NowyLokalIn, request: Request):
 
 # ── Tor z płatnością: kreator → checkout → auto-provision konta + instancji ──────
 
+class KartaIn(BaseModel):
+    """Dane karty z kreatora (TRYB TESTOWY/sandbox). Matka liczy z nich odcisk (fingerprint) do
+    dedup i ostatnie 4 cyfry, a numeru (PAN) NIE przechowuje. Docelowo: tokenizacja po stronie
+    klienta (Stripe Elements) — numer nigdy nie dociera do serwera, fingerprint/token daje Stripe."""
+    numer: str
+    exp_miesiac: Optional[int] = None
+    exp_rok: Optional[int] = None
+    cvc: Optional[str] = None
+
+
 class RejestracjaIn(BaseModel):
-    """Kreator na matce: dane właściciela + wybór ścieżki. `trial=True` → 14 dni pełnego Premium
-    bez karty, instancja staje OD RAZU. Inaczej wybrany `plan` → checkout, a konto+instancja
-    powstają dopiero po opłaceniu."""
+    """Kreator na matce: dane właściciela + wybór planu. DARMOWY → instancja od razu (bez karty).
+    PŁATNY (basic/pro/premium) → wymaga `karta`: 14 dni za darmo, po nich AUTO-OBCIĄŻENIE planu;
+    jedna karta = jeden trial (dedup). `trial=True` = stary tor operatorski (premium bez karty)."""
     email: str
     haslo: str
     nazwa_lokalu: str
     plan: Optional[str] = None
     trial: bool = False
+    karta: Optional[KartaIn] = None
     typ_lokalu: Optional[str] = None
     moduly: Optional[dict] = None
 
 
+def _przetworz_karte(karta: "KartaIn") -> tuple[str, str, str]:
+    """SANDBOX: z danych karty testowej liczy (fingerprint, ostatnie4, token). Numer (PAN) NIE
+    jest nigdzie zapisywany — tylko sha256 (dedup) + 4 cyfry + udawany token. Realny Stripe
+    podmienia to na tokenizację po stronie klienta. Walidacja: długość, data ważności, CVC."""
+    numer = re.sub(r"\D", "", karta.numer or "")
+    if not (12 <= len(numer) <= 19):
+        raise HTTPException(400, "Podaj prawidłowy numer karty.")
+    m = int(karta.exp_miesiac or 0)
+    r = int(karta.exp_rok or 0)
+    if r < 100:
+        r += 2000
+    cvc = re.sub(r"\D", "", karta.cvc or "")
+    dzis = date.today()
+    if not (1 <= m <= 12) or r < dzis.year or (r == dzis.year and m < dzis.month) or len(cvc) not in (3, 4):
+        raise HTTPException(400, "Sprawdź datę ważności i kod CVC karty.")
+    fingerprint = hashlib.sha256(numer.encode()).hexdigest()
+    return fingerprint, numer[-4:], "sandbox_" + secrets.token_hex(12)
+
+
 @router.post("/api/online/rejestracja", status_code=201)
 def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get_db)):
-    """Publiczne: dwie ścieżki. TRIAL → stawiamy instancję od razu (14 dni pełnego dostępu, bez
-    płatności). PŁATNY → zapisujemy rejestrację oczekującą i zwracamy link do checkoutu. Hasło
-    hashowane TU (na matce, bcrypt) — plaintext nie opuszcza tego procesu."""
+    """Publiczne: stawia instancję OD RAZU. DARMOWY → aktywny plan Free (bez karty). PŁATNY →
+    wymaga karty: 14-dniowy trial, po którym instancja sama się obciąża i przechodzi na plan.
+    Jedna karta = jeden trial (dedup po odcisku). Hasło i token karty poza plaintextem/argv."""
     if not provisioning.wlaczony():
         raise HTTPException(503, "Samoobsługowe zakładanie lokali jest wyłączone na tej instalacji.")
     # Walidacja PRZED limitem — literówka nie zużywa dziennego limitu zakładania lokali.
@@ -99,48 +130,75 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
     nazwa = (dane.nazwa_lokalu or "").strip()
     if len(nazwa) < 3:
         raise HTTPException(400, "Podaj nazwę lokalu (min. 3 znaki).")
+    plan = (dane.plan or "").strip().lower()
     if not dane.trial:
-        tier = PLAN_NA_TIER.get((dane.plan or "").strip().lower())
+        tier = PLAN_NA_TIER.get(plan)
         if not tier:
-            raise HTTPException(400, "Wybierz pakiet (darmowy, basic, pro lub premium) albo trial.")
+            raise HTTPException(400, "Wybierz pakiet (darmowy, basic, pro lub premium).")
     ip = request.client.host if request.client else "?"
     if not zuzyj_kwote(f"rejestracja:{ip}", str(date.today()), NOWY_LOKAL_LIMIT_IP_DZIENNY):
         raise HTTPException(429, "Zbyt wiele prób z tego adresu dzisiaj — spróbuj jutro.")
     haslo_hash = hash_password(dane.haslo)
-    external_id = secrets.token_urlsafe(24)
+    host = request.url.hostname or "127.0.0.1"
+    konfiguracja = {"typ_lokalu": dane.typ_lokalu}
+    if dane.moduly:
+        konfiguracja.update(dane.moduly)
 
-    if dane.trial:
-        # 14 dni pełnego Premium bez płatności → instancja staje od razu.
-        rej = models.RejestracjaLokalu(
-            email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
-            moduly=dane.moduly, tier="premium", netto=0.0, status="przetwarzanie",
-            external_id=external_id, utworzono_at=utcnow_naive())
+    def _postaw(rej: models.RejestracjaLokalu, **prov) -> dict:
+        """Zapis rejestracji + provisioning instancji; ustawia zrealizowana/blad. Wspólne dla
+        wszystkich torów, żeby uniknąć powtórzeń i rozjazdu obsługi błędu."""
         db.add(rej); db.commit()
-        konfiguracja = {"typ_lokalu": dane.typ_lokalu}
-        if dane.moduly:
-            konfiguracja.update(dane.moduly)
         try:
             wpis = provisioning.utworz_instancje(
-                nazwa, host=request.url.hostname or "127.0.0.1", tier="premium",
-                admin_email=email, admin_haslo_hash=haslo_hash, konfiguracja=konfiguracja, trial=True)
+                nazwa, host=host, admin_email=email, admin_haslo_hash=haslo_hash,
+                konfiguracja=konfiguracja, **prov)
         except RuntimeError as e:
             rej.status = "blad"; db.commit()
             raise HTTPException(503, str(e))
         rej.status, rej.slug, rej.url = "zrealizowana", wpis["slug"], wpis["url"]
         rej.zrealizowano_at = utcnow_naive()
         db.commit()
+        return wpis
+
+    external_id = secrets.token_urlsafe(24)
+
+    # 1) Stary tor operatorski: trial pełnego Premium bez karty (CLI/enterprise); po nim → Free.
+    if dane.trial:
+        rej = models.RejestracjaLokalu(
+            email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
+            moduly=dane.moduly, tier="premium", netto=0.0, status="przetwarzanie",
+            external_id=external_id, utworzono_at=utcnow_naive())
+        wpis = _postaw(rej, tier="premium", trial=True)
         return {"tryb": "trial", "status": "zrealizowana", "url": wpis["url"], "slug": wpis["slug"]}
 
-    # ── tryb płatny: rejestracja oczekująca + link do checkoutu ──
-    netto = cennik.cena_netto(tier)
+    # 2) Plan DARMOWY: instancja od razu, aktywny Free, bez karty i bez triala.
+    if tier == "free":
+        rej = models.RejestracjaLokalu(
+            email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
+            moduly=dane.moduly, tier="free", netto=0.0, status="przetwarzanie",
+            external_id=external_id, utworzono_at=utcnow_naive())
+        wpis = _postaw(rej, tier="free")
+        return {"tryb": "darmowy", "status": "zrealizowana", "url": wpis["url"], "slug": wpis["slug"], "plan": "free"}
+
+    # 3) Plan PŁATNY: karta wymagana → 14 dni za darmo → auto-obciążenie po trialu. Dedup po karcie.
+    if dane.karta is None:
+        raise HTTPException(400, "Podaj dane karty — plan płatny zaczyna się od 14 dni za darmo, "
+                                 "obciążymy ją dopiero po 14 dniach (możesz anulować wcześniej).")
+    fingerprint, ostatnie4, token = _przetworz_karte(dane.karta)
+    uzyta = db.query(models.RejestracjaLokalu).filter(
+        models.RejestracjaLokalu.karta_fingerprint == fingerprint,
+        models.RejestracjaLokalu.status.in_(("przetwarzanie", "zrealizowana")),
+    ).first()
+    if uzyta is not None:
+        raise HTTPException(409, "Ta karta była już użyta do rozpoczęcia okresu próbnego.")
     rej = models.RejestracjaLokalu(
-        email=email, haslo_hash=haslo_hash, nazwa=nazwa,
-        typ_lokalu=dane.typ_lokalu, moduly=dane.moduly, tier=tier, netto=netto,
-        status="oczekuje", external_id=external_id, utworzono_at=utcnow_naive())
-    db.add(rej); db.commit()
-    provider = "api" if integracje.skonfigurowane("platnosci") else "sandbox"
-    return {"tryb": "platny", "external_id": external_id, "plan": tier, "brutto": cennik.brutto(netto),
-            "link": f"/?rejestracja-oplac={external_id}", "provider": provider}
+        email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
+        moduly=dane.moduly, tier=tier, netto=cennik.cena_netto(tier), status="przetwarzanie",
+        external_id=external_id, karta_token=token, karta_ostatnie4=ostatnie4,
+        karta_fingerprint=fingerprint, utworzono_at=utcnow_naive())
+    wpis = _postaw(rej, tier=tier, trial=True, karta_token=token, karta_ostatnie4=ostatnie4)
+    return {"tryb": "trial-karta", "status": "zrealizowana", "url": wpis["url"], "slug": wpis["slug"],
+            "plan": tier, "karta_ostatnie4": ostatnie4}
 
 
 @router.post("/api/online/rejestracja/{external_id}/oplac")

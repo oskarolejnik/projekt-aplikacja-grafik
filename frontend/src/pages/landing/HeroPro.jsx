@@ -139,7 +139,7 @@ export default function HeroPro() {
           </div>
           <p className="hero-cta mt-3 flex items-center gap-2 text-xs text-muted">
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-zloto" />
-            Pierwsze 14 dni pełnego Premium za darmo — bez karty.
+            Pierwsze 14 dni za darmo — obciążamy dopiero po 14 dniach.
           </p>
         </div>
 

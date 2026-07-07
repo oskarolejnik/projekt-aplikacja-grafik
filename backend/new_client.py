@@ -196,9 +196,11 @@ def ustaw_tier(db, tier: str, *, oplacony: bool = False, dni: int = 30):
     return s
 
 
-def ustaw_trial(db, tier: str = "premium", dni: int = 14):
-    """Uruchamia trial: status=trial + pełny dostęp (tier=premium → wszystkie moduły przez
-    override w deps.moduly_efektywne_dla_sub). Po `dni` dniach instancja sama spada do Free."""
+def ustaw_trial(db, tier: str = "premium", dni: int = 14, *, karta_token=None, karta_ostatnie4=None):
+    """Uruchamia trial: status=trial + pełny dostęp podczas triala (override w
+    deps.moduly_efektywne_dla_sub). `tier` = plan, na który trial przejdzie po `dni` dniach.
+    Gdy podano `karta_token` (plan płatny) — po trialu następuje auto-obciążenie i przejście na
+    ten plan (deps.synchronizuj_subskrypcje); bez karty (stary trial) — spadek do Free."""
     import models
     from datetime import date, timedelta
 
@@ -210,6 +212,8 @@ def ustaw_trial(db, tier: str = "premium", dni: int = 14):
     s.status = "trial"
     s.data_od = date.today()
     s.data_do = date.today() + timedelta(days=dni)
+    s.karta_token = karta_token
+    s.karta_ostatnie4 = karta_ostatnie4
     db.commit()
     db.refresh(s)
     return s
@@ -329,9 +333,14 @@ def main(argv=None) -> int:
                 print("Błąd: brak LOKALO_ADMIN_HASLO_HASH w środowisku dla toru --email.", file=sys.stderr)
                 return 1
             if args.trial:
-                ustaw_trial(db)                       # 14 dni pełnego dostępu, bez płatności
+                # 14 dni pełnego dostępu; tier = plan po trialu. Karta (plan płatny) przez env
+                # → po trialu auto-obciążenie tego planu. Bez tieru = stary trial (premium→Free).
+                ustaw_trial(db, tier=args.tier or "premium",
+                            karta_token=os.environ.get("LOKALO_KARTA_TOKEN"),
+                            karta_ostatnie4=os.environ.get("LOKALO_KARTA_OSTATNIE4"))
             elif args.tier:
-                ustaw_tier(db, args.tier, oplacony=True)
+                # Free = bezterminowy plan darmowy (bez daty końca); płatny = opłacony okres 30 dni.
+                ustaw_tier(db, args.tier, oplacony=(args.tier != "free"))
             zaloz_admina(db, email=args.email, haslo_hash=hh)
             ustaw_nazwe_lokalu(db, nazwa)
             cfg_json = os.environ.get("LOKALO_CONFIG_JSON")

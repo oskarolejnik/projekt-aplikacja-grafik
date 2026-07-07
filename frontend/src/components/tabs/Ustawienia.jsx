@@ -423,7 +423,7 @@ export default function Ustawienia() {
             </span>
             {sub.trial_dni != null && (
               <span className="rounded-full bg-mint/15 px-3 py-1 text-xs font-semibold text-mint">
-                Trial Premium — {sub.trial_dni === 0 ? 'ostatni dzień' : `zostało ${sub.trial_dni} dni`}
+                14 dni za darmo — {sub.trial_dni === 0 ? 'ostatni dzień' : `zostało ${sub.trial_dni} dni`}
               </span>
             )}
             <span className="text-sm text-muted">Pakiet <b className="text-ink">{ETYKIETA_PLANU[sub.tier] || sub.tier}</b> · {zl(sub.cena_brutto)}/mc brutto
@@ -432,8 +432,15 @@ export default function Ustawienia() {
           </div>
           {sub.trial_dni != null && (
             <p className="mt-2 text-xs leading-relaxed text-muted">
-              Masz teraz pełny dostęp do wszystkich modułów. Po zakończeniu triala lokal przejdzie na plan
-              <b className="text-ink"> Darmowy</b> (rdzeń działa dalej) — wybierz plan poniżej, aby zachować płatne moduły.
+              {sub.trial_auto_obciazenie ? (
+                <>Masz pełny dostęp do wszystkich modułów. Po 14 dniach plan
+                  <b className="text-ink"> {ETYKIETA_PLANU[sub.tier] || sub.tier}</b> włączy się automatycznie —
+                  obciążymy kartę{sub.karta_ostatnie4 ? <> •••• {sub.karta_ostatnie4}</> : null}. Nie chcesz kontynuować?
+                  Anuluj przed końcem triala.</>
+              ) : (
+                <>Masz teraz pełny dostęp do wszystkich modułów. Po zakończeniu triala lokal przejdzie na plan
+                  <b className="text-ink"> Darmowy</b> (rdzeń działa dalej) — wybierz plan poniżej, aby zachować płatne moduły.</>
+              )}
             </p>
           )}
 

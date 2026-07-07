@@ -638,6 +638,11 @@ class Subskrypcja(Base):
     cena_netto    = Column(Float, nullable=True)
     # Kredyt z downgrade — pomniejsza kolejną dopłatę/fakturę.
     saldo_kredytu = Column(Float, nullable=False, default=0.0)
+    # Metoda płatności zapięta w trialu → auto-obciążenie po 14 dniach. Token = referencja metody
+    # (sandbox: udawany; docelowo Stripe pm_...). NIGDY nie trzymamy numeru karty (PAN) — tylko
+    # ostatnie 4 cyfry (do wyświetlenia) i token (do obciążenia po trialu).
+    karta_token     = Column(String(64), nullable=True)
+    karta_ostatnie4 = Column(String(4), nullable=True)
 
 
 class RejestracjaLokalu(Base):
@@ -655,12 +660,18 @@ class RejestracjaLokalu(Base):
     moduly       = Column(JSON, nullable=True)                  # {"modul_rezerwacje":true,...}
     tier         = Column(String(16), nullable=False, default="free")
     netto        = Column(Float, nullable=False, default=0.0)
-    status       = Column(String(16), nullable=False, default="oczekuje", index=True)  # oczekuje|zrealizowana|blad
+    status       = Column(String(16), nullable=False, default="oczekuje", index=True)  # oczekuje|przetwarzanie|zrealizowana|blad
     external_id  = Column(String, nullable=False, unique=True, index=True)
     slug         = Column(String(40), nullable=True)
     url          = Column(String, nullable=True)
     utworzono_at    = Column(DateTime, nullable=True)
     zrealizowano_at = Column(DateTime, nullable=True)
+    # Karta zapięta na trial planu płatnego (auto-obciążenie po 14 dniach). karta_fingerprint =
+    # sha256(numer) → dedup: jedna karta = jeden trial (koniec wykorzystywania triala dwa razy).
+    # PAN NIE jest przechowywany; token/ostatnie4 jadą do instancji, fingerprint zostaje na matce.
+    karta_token       = Column(String(64), nullable=True)
+    karta_ostatnie4   = Column(String(4), nullable=True)
+    karta_fingerprint = Column(String(64), nullable=True, index=True)
 
 
 class PlatnoscSubskrypcji(Base):

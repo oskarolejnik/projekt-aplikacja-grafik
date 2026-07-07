@@ -60,6 +60,9 @@ def _subskrypcja_out(s, db) -> dict:
             "dostepne_moduly": sorted(dostepne_moduly(db)),   # które moduły odblokowane
             "moduly_wg_planu": cennik.MODUL_MIN_TIER,         # moduł → min. plan (do upsellu)
             "trial_dni": dni_trialu(db),                      # None gdy nie trial
+            # Trial z zapiętą kartą → po 14 dniach AUTO-OBCIĄŻENIE planu (transparentność):
+            "karta_ostatnie4": s.karta_ostatnie4,             # None gdy brak karty
+            "trial_auto_obciazenie": bool(s.status == "trial" and s.karta_token),
             "limit_pracownikow": limit_pracownikow_stan(db)}
 
 

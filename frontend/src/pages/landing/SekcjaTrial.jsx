@@ -11,21 +11,21 @@ const KROKI = [
     ton: 'text-zloto',
     kropka: 'border-zloto/40',
     ety: 'Dziś',
-    txt: 'Zakładasz lokal i od razu masz pełny Premium — wszystkie moduły, bez podawania karty.',
+    txt: 'Wybierasz plan i podajesz kartę. Masz 14 dni pełnego dostępu — dziś nie pobieramy ani grosza.',
   },
   {
     dzien: '14',
     ton: 'text-ink',
     kropka: 'border-white/20',
-    ety: 'Po dwóch tygodniach',
-    txt: 'Widzisz, że system działa u Ciebie. Wybierasz plan skrojony pod swój lokal.',
+    ety: 'Po 14 dniach',
+    txt: 'Plan włącza się automatycznie i karta zostaje obciążona. Rezygnujesz? Anuluj wcześniej.',
   },
   {
     dzien: '∞',
     ton: 'text-mint',
     kropka: 'border-mint/40',
-    ety: 'Zawsze',
-    txt: 'Nic nie wybierasz? Schodzisz na plan Darmowy. Twoje dane zostają na miejscu.',
+    ety: 'Bez zobowiązań',
+    txt: 'Wolisz bez karty? Plan Darmowy działa zawsze — 0 zł, rdzeń w komplecie.',
   },
 ]
 
@@ -42,9 +42,9 @@ export default function SekcjaTrial() {
             Pierwsze <span className="text-zloto">14 dni</span> bierzesz na próbę.
           </h2>
           <p data-rv="" style={{ '--i': 1 }} className="mt-4 text-muted sm:text-lg">
-            Bez karty i bez ryzyka. Zaczynasz od{' '}
-            <em className="font-editorial italic font-medium text-zloto-2">pełnego Premium</em> —
-            zostajesz dopiero wtedy, gdy zobaczysz, że działa u Ciebie.
+            14 dni <em className="font-editorial italic font-medium text-zloto-2">pełnego dostępu</em>,
+            zero opłat z góry. Kartę obciążamy dopiero po dwóch tygodniach — anuluj wcześniej i nie
+            pobierzemy nic.
           </p>
         </div>
 
@@ -85,7 +85,7 @@ export default function SekcjaTrial() {
             Zacznij za darmo
           </a>
           <span className="text-xs text-muted">
-            Konto zakładasz w minutę. Karta niepotrzebna, dopóki sam nie zdecydujesz.
+            Konto zakładasz w minutę. Obciążamy dopiero po 14 dniach — anuluj, kiedy chcesz.
           </span>
         </div>
       </div>

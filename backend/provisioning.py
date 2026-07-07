@@ -161,7 +161,8 @@ def _czekaj_na_health(port: int, timeout_s: int = HEALTH_TIMEOUT_S) -> bool:
 def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.1",
                      tier: str | None = None, admin_email: str | None = None,
                      admin_haslo_hash: str | None = None, konfiguracja: dict | None = None,
-                     trial: bool = False) -> dict:
+                     trial: bool = False, karta_token: str | None = None,
+                     karta_ostatnie4: str | None = None) -> dict:
     """Pełny tor samoobsługi: provisioning → start → health → wpis w rejestrze.
     Zwraca wpis rejestru (z URL). Podnosi RuntimeError z czytelnym komunikatem.
 
@@ -183,9 +184,14 @@ def utworz_instancje(nazwa: str, email: str | None = None, host: str = "127.0.0.
     env = None
     if z_adminem:
         polecenie += ["--email", admin_email]
-        if trial:
-            polecenie += ["--trial"]   # 14 dni pełnego dostępu, bez płatności
         env = {**os.environ, "LOKALO_ADMIN_HASLO_HASH": admin_haslo_hash}  # hash poza argv
+        if trial:
+            polecenie += ["--trial"]   # 14 dni pełnego dostępu; po trialu auto-obciążenie planu
+            # Token metody płatności poza argv (jak hash) — instancja obciąży ją po 14 dniach.
+            if karta_token:
+                env["LOKALO_KARTA_TOKEN"] = karta_token
+            if karta_ostatnie4:
+                env["LOKALO_KARTA_OSTATNIE4"] = karta_ostatnie4
         if konfiguracja:
             env["LOKALO_CONFIG_JSON"] = json.dumps(konfiguracja)  # typ+moduły z kreatora
     else:

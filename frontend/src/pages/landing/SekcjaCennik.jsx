@@ -186,7 +186,7 @@ export default function SekcjaCennik() {
         </div>
 
         <p className="relative z-10 mx-auto mt-5 max-w-md text-center text-sm leading-relaxed text-muted">
-          Każdy plan startuje od <span className="font-semibold text-zloto">14 dni pełnego Premium</span> — bez karty.
+          Każdy płatny plan startuje od <span className="font-semibold text-zloto">14 dni za darmo</span> — obciążamy dopiero po 14 dniach.
         </p>
 
         <div className="relative z-10 mx-auto mt-10 grid max-w-5xl gap-5 lg:grid-cols-3 lg:items-stretch lg:gap-6 lg:pt-6">

@@ -90,13 +90,33 @@ def get_lokal_config(db) -> models.LokalConfig:
 TRIAL_DNI = 14
 
 
+def _obciaz_po_trialu(db, s) -> None:
+    """Auto-obciążenie po wygaśnięciu triala planu płatnego (karta zapięta): trial → aktywna,
+    opłacony okres +30 dni, tier ZOSTAJE (plan wybrany przy zakładaniu). Zapisuje wpis audytu
+    w HistoriaSubskrypcji. SANDBOX: realnego pobrania nie ma dopóki nie wpięty Stripe — wtedy
+    ten punkt obciąża zapisaną metodę (karta_token). Nie commituje (robi to wołający)."""
+    netto = cennik.cena_netto(s.tier, s.cena_netto)
+    s.status = "aktywna"
+    s.data_od = date.today()
+    s.data_do = date.today() + timedelta(days=30)
+    db.add(models.HistoriaSubskrypcji(
+        ts=utcnow_naive(), akcja="odnowienie", tier_z=s.tier, tier_na=s.tier, kwota_netto=netto,
+        szczegoly=f"Auto-obciążenie po 14-dniowym trialu (karta •••• {s.karta_ostatnie4 or '????'})"))
+
+
 def synchronizuj_subskrypcje(db) -> models.Subskrypcja:
-    """Leniwe przejście po wygaśnięciu triala: trial za data_do → spada do Free (rdzeń dalej
-    działa, płatne moduły blokuje tier-gating — NIE tryb read-only). Idempotentne: po przejściu
-    status!=trial, więc to zwykły odczyt. Woła się z middleware i z odczytów subskrypcji/configu."""
+    """Leniwe przejście po wygaśnięciu triala (woła middleware + odczyty subskrypcji/configu):
+    - trial z zapiętą KARTĄ (plan płatny) → auto-obciążenie i przejście na aktywny plan (tier
+      zostaje, +30 dni) — „po dwóch tygodniach ściąga z konta",
+    - trial BEZ karty (stary/darmowy trial) → spada do Free (rdzeń działa, płatne moduły blokuje
+      tier-gating — NIE read-only).
+    Idempotentne: po przejściu status!=trial, więc kolejne wywołania to zwykły odczyt."""
     s = get_subskrypcja(db)
     if s.status == "trial" and s.data_do is not None and date.today() > s.data_do:
-        s.tier, s.status, s.data_do = "free", "aktywna", None
+        if s.karta_token:
+            _obciaz_po_trialu(db, s)
+        else:
+            s.tier, s.status, s.data_do = "free", "aktywna", None
         db.commit(); db.refresh(s)
     return s
 
