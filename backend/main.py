@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -1293,6 +1293,16 @@ def _dlugosc_dla(db, data, godz_od, liczba_osob) -> int:
     return _turn_time(_serwis_dla_godziny(db, data, godz_od), liczba_osob)
 
 
+def _stoly_terminu(t) -> set:
+    """Wszystkie stoły zajmowane przez rezerwację: wiodący (stolik_id) + składowe kombinacji."""
+    stoly = set()
+    if t.stolik_id:
+        stoly.add(t.stolik_id)
+    for i in (t.stoliki_dodatkowe or []):
+        stoly.add(int(i))
+    return stoly
+
+
 def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomin_id=None):
     """Walidacja rezerwacji stolika: pojemność + brak kolizji w oknie [godz_od, godz_do].
     Zwraca policzone godz_do. Bez stolika/godziny nie ma okna kolizji."""
@@ -1308,11 +1318,13 @@ def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomi
     if godz_do is None:
         godz_do = _dodaj_minuty(godz_od, _dlugosc_dla(db, data, godz_od, liczba_osob))
     q = db.query(models.Termin).filter(
-        models.Termin.stolik_id == stolik_id, models.Termin.data == data,
+        models.Termin.rodzaj == "stolik", models.Termin.data == data,
         models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
     if pomin_id is not None:
         q = q.filter(models.Termin.id != pomin_id)
     for r in q.all():
+        if stolik_id not in _stoly_terminu(r):       # także gdy stół jest składową kombinacji innej rezerwacji
+            continue
         r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
         if godz_od < r_do and r.godz_od < godz_do:   # nachodzą
             raise HTTPException(409, f"Stolik zajęty w tym czasie (kolizja od {r.godz_od.strftime('%H:%M')}).")
@@ -1325,7 +1337,9 @@ def _hm(t):
 
 def _rezerwacja_out(t: models.Termin) -> dict:
     return {"id": t.id, "data": str(t.data), "godz_od": _hm(t.godz_od), "godz_do": _hm(t.godz_do),
-            "stolik_id": t.stolik_id, "nazwisko": t.nazwisko, "telefon": t.telefon, "email": t.email,
+            "stolik_id": t.stolik_id, "stoliki_dodatkowe": t.stoliki_dodatkowe or [],
+            "auto_przydzielony": bool(t.auto_przydzielony),
+            "nazwisko": t.nazwisko, "telefon": t.telefon, "email": t.email,
             "liczba_osob": t.liczba_osob, "notatka": t.notatka, "status": t.status,
             "zadatek": t.zadatek or 0, "kanal": t.kanal}
 
@@ -1445,6 +1459,47 @@ def usun_kombinacje(kid: int, db: Session = Depends(get_db)):
     k = db.get(models.KombinacjaStolow, kid)
     if k:
         db.delete(k); db.commit()
+
+
+# ── Silnik sadzania (best-fit + kombinacje): SUGESTIA + AUTO ──────────────────
+@app.get("/api/host/sugestia-stolika", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), osoby: int = 2,
+                          strefa: Optional[str] = None, db: Session = Depends(get_db)):
+    """Top-3 propozycje stołu/kombinacji dla grupy — host akceptuje jedną (tryb SUGESTIA)."""
+    osoby = max(1, osoby)
+    serwis = _serwis_dla_godziny(db, data, godz_od)
+    godz_do = _dodaj_minuty(godz_od, _turn_time(serwis, osoby))
+    zajete = _zajete_stoly(db, data, godz_od, godz_do)
+    pref = {"strefa": strefa} if strefa else None
+    kandydaci = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
+                                zajete=zajete, preferencje=pref)
+    return {"data": str(data), "godz_od": _hm(godz_od), "godz_do": _hm(godz_do),
+            "osoby": osoby, "kandydaci": kandydaci}
+
+
+@app.post("/api/rezerwacje-stolik/{rid}/auto-przydziel", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def auto_przydziel_stolik(rid: int, db: Session = Depends(get_db)):
+    """Silnik sam dobiera najlepszy stół/kombinację dla rezerwacji (tryb AUTO). 409 gdy brak miejsca."""
+    t = db.get(models.Termin, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    if not t.godz_od:
+        raise HTTPException(400, "Rezerwacja bez godziny — nie można dobrać stołu.")
+    osoby = max(1, t.liczba_osob or 1)
+    serwis = _serwis_dla_godziny(db, t.data, t.godz_od)
+    godz_do = t.godz_do or _dodaj_minuty(t.godz_od, _turn_time(serwis, osoby))
+    zajete = _zajete_stoly(db, t.data, t.godz_od, godz_do, pomin_id=rid)
+    wynik = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
+                            zajete=zajete, limit=1)
+    if not wynik:
+        raise HTTPException(409, "Brak wolnego stołu dla tej grupy w tym czasie.")
+    wybrany = wynik[0]
+    t.stolik_id = wybrany["stoliki"][0]
+    t.stoliki_dodatkowe = (wybrany["stoliki"][1:] or None)
+    t.godz_do = godz_do
+    t.auto_przydzielony = True
+    db.commit(); db.refresh(t)
+    return {"rezerwacja": _rezerwacja_out(t), "przydzial": wybrany}
 
 
 # ── Godziny otwarcia ─────────────────────────────────────────────────────────
@@ -1682,13 +1737,34 @@ def _pacing_pelny(db, data, godz_od, serwis, osoby) -> bool:
 
 
 def _stolik_zajety(db, data, stolik_id, godz_od, godz_do) -> bool:
-    for r in db.query(models.Termin).filter(
-            models.Termin.stolik_id == stolik_id, models.Termin.data == data,
-            models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).all():
+    return stolik_id in _zajete_stoly(db, data, godz_od, godz_do)
+
+
+def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
+    """Zbiór id stołów zajętych w oknie [godz_od, godz_do] — wliczając stoły składowe kombinacji."""
+    zajete = set()
+    q = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik", models.Termin.data == data,
+        models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
+    if pomin_id is not None:
+        q = q.filter(models.Termin.id != pomin_id)
+    for r in q.all():
         r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
         if godz_od < r_do and r.godz_od < godz_do:
-            return True
-    return False
+            zajete |= _stoly_terminu(r)
+    return zajete
+
+
+def _stoly_do_seating(db):
+    return [{"id": s.id, "nazwa": s.nazwa, "pojemnosc": s.pojemnosc, "pojemnosc_min": s.pojemnosc_min,
+             "cechy": s.cechy or [], "priorytet": s.priorytet or 0, "strefa": s.strefa}
+            for s in db.query(models.Stolik).filter_by(aktywny=True).all()]
+
+
+def _kombinacje_do_seating(db):
+    return [{"id": k.id, "nazwa": k.nazwa, "stoliki": k.stoliki or [],
+             "pojemnosc_min": k.pojemnosc_min, "pojemnosc_max": k.pojemnosc_max}
+            for k in db.query(models.KombinacjaStolow).filter_by(aktywna=True).all()]
 
 
 def _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby):

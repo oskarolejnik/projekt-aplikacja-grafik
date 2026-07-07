@@ -328,6 +328,9 @@ class Termin(Base):
     token_potwierdzenia = Column(String, nullable=True, index=True)  # link gościa (potwierdź/odwołaj) bez logowania
     potwierdzono_at     = Column(DateTime, nullable=True)
     odwolano_at         = Column(DateTime, nullable=True)
+    # Kombinacja stołów: stolik_id = wiodący, stoliki_dodatkowe = pozostałe stoły złączki (JSON lista id).
+    stoliki_dodatkowe   = Column(JSON, nullable=True)
+    auto_przydzielony   = Column(Boolean, nullable=True)   # audyt: stół dobrał silnik sadzania, nie człowiek
 
 
 class ZamowienieSprzataczki(Base):
