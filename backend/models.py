@@ -577,15 +577,24 @@ class Stolik(Base):
 
 
 class GodzinyOtwarcia(Base):
-    """Godziny otwarcia i parametry slotów per dzień tygodnia (moduł rezerwacji)."""
+    """Serwis rezerwacyjny (okno przyjęć) per dzień tygodnia — kilka wierszy na dzień = lunch/kolacja.
+    Historycznie „godziny otwarcia"; rozszerzone o turn-time zależny od grupy i pacing (limit coverów)."""
     __tablename__ = "godziny_otwarcia"
     id                = Column(Integer, primary_key=True, index=True)
     dzien_tygodnia    = Column(Integer, nullable=False)        # 0=poniedziałek … 6=niedziela
     godz_od           = Column(Time, nullable=False)
     godz_do           = Column(Time, nullable=False)
     ostatni_zasiadek  = Column(Time, nullable=True)            # ostatnia możliwa godzina rezerwacji
-    dlugosc_slotu_min = Column(Integer, nullable=False, default=120)
+    dlugosc_slotu_min = Column(Integer, nullable=False, default=120)   # krok siatki + bazowy turn-time
     aktywny           = Column(Boolean, nullable=False, default=True)
+    nazwa             = Column(String(32), nullable=True)      # etykieta serwisu: „Lunch"/„Kolacja" (NULL = jeden serwis dnia)
+    # Turn-time zależny od wielkości grupy: [{"do_osob":2,"min":90},{"do_osob":6,"min":120}] rosnąco.
+    # NULL → używamy dlugosc_slotu_min (zachowanie historyczne).
+    turn_time_progi   = Column(JSON, nullable=True)
+    # Pacing: limit rezerwacji/osób startujących w oknie pacing_okno_min (NULL = bez limitu / krok slotu).
+    pacing_max_rez    = Column(Integer, nullable=True)
+    pacing_max_osob   = Column(Integer, nullable=True)
+    pacing_okno_min   = Column(Integer, nullable=True)
 
 
 class ListaOczekujacych(Base):

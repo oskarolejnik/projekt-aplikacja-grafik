@@ -1252,9 +1252,45 @@ def _dodaj_minuty(t: time, minuty: int) -> time:
     return time(total // 60, total % 60)
 
 
-def _slot_dlugosc(db, data: date) -> int:
-    go = db.query(models.GodzinyOtwarcia).filter_by(dzien_tygodnia=data.weekday(), aktywny=True).first()
-    return go.dlugosc_slotu_min if go else DOMYSLNY_SLOT_MIN
+def _serwisy_dnia(db, data: date):
+    """Wszystkie aktywne serwisy (okna przyjęć) danego dnia tygodnia, posortowane po godz_od.
+    Kilka wierszy = lunch + kolacja."""
+    return (db.query(models.GodzinyOtwarcia)
+            .filter_by(dzien_tygodnia=data.weekday(), aktywny=True)
+            .order_by(models.GodzinyOtwarcia.godz_od).all())
+
+
+def _serwis_dla_godziny(db, data, godz_od):
+    """Serwis, którego okno przyjęć obejmuje godz_od (w [godz_od, ostatni_zasiadek||godz_do]).
+    Fallback = pierwszy serwis dnia (zachowuje historyczne zachowanie 'jeden slot dla dnia')."""
+    if godz_od is None:
+        return None
+    serwisy = _serwisy_dnia(db, data)
+    for s in serwisy:
+        last = s.ostatni_zasiadek or s.godz_do
+        if s.godz_od <= godz_od <= last:
+            return s
+    return serwisy[0] if serwisy else None
+
+
+def _turn_time(serwis, liczba_osob) -> int:
+    """Czas zasiadku (min) dla serwisu i wielkości grupy. Progi = [{do_osob,min}] rosnąco;
+    NULL → dlugosc_slotu_min (fallback DOMYSLNY_SLOT_MIN)."""
+    baza = (getattr(serwis, "dlugosc_slotu_min", None) if serwis else None) or DOMYSLNY_SLOT_MIN
+    progi = getattr(serwis, "turn_time_progi", None) if serwis else None
+    if not progi:
+        return baza
+    osoby = max(1, liczba_osob or 1)
+    progi = sorted(progi, key=lambda p: p.get("do_osob", 0))
+    for prog in progi:
+        if osoby <= prog.get("do_osob", 0):
+            return int(prog.get("min") or baza)
+    return int(progi[-1].get("min") or baza)   # większa grupa niż najwyższy próg → najdłuższy zasiadek
+
+
+def _dlugosc_dla(db, data, godz_od, liczba_osob) -> int:
+    """Długość zasiadku dla rezerwacji: turn-time serwisu obejmującego godz_od wg wielkości grupy."""
+    return _turn_time(_serwis_dla_godziny(db, data, godz_od), liczba_osob)
 
 
 def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomin_id=None):
@@ -1270,14 +1306,14 @@ def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomi
     if godz_od is None:
         return godz_do
     if godz_do is None:
-        godz_do = _dodaj_minuty(godz_od, _slot_dlugosc(db, data))
+        godz_do = _dodaj_minuty(godz_od, _dlugosc_dla(db, data, godz_od, liczba_osob))
     q = db.query(models.Termin).filter(
         models.Termin.stolik_id == stolik_id, models.Termin.data == data,
         models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
     if pomin_id is not None:
         q = q.filter(models.Termin.id != pomin_id)
     for r in q.all():
-        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _slot_dlugosc(db, data))
+        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
         if godz_od < r_do and r.godz_od < godz_do:   # nachodzą
             raise HTTPException(409, f"Stolik zajęty w tym czasie (kolizja od {r.godz_od.strftime('%H:%M')}).")
     return godz_do
@@ -1544,25 +1580,54 @@ def _wymagaj_rezerwacje_online(db: Session = Depends(get_db)):
 
 
 def _sloty_dnia(db, data: date):
-    """(lista godzin slotów, długość slotu w min) wg GodzinyOtwarcia dla dnia. Pusta gdy zamknięte."""
-    go = db.query(models.GodzinyOtwarcia).filter_by(dzien_tygodnia=data.weekday(), aktywny=True).first()
-    if not go:
-        return [], DOMYSLNY_SLOT_MIN
-    krok = go.dlugosc_slotu_min or DOMYSLNY_SLOT_MIN
-    last = go.ostatni_zasiadek or go.godz_do
-    start_m, last_m = go.godz_od.hour * 60 + go.godz_od.minute, last.hour * 60 + last.minute
-    sloty, m = [], start_m
-    while m <= last_m:
-        sloty.append(time(m // 60, m % 60))
-        m += krok
-    return sloty, krok
+    """Lista (godzina_slotu, serwis) ze WSZYSTKICH aktywnych serwisów dnia (lunch+kolacja).
+    Pusta gdy zamknięte. Duplikaty godzin scalane (wcześniejszy serwis wygrywa)."""
+    pary, widziane = [], set()
+    for s in _serwisy_dnia(db, data):
+        krok = s.dlugosc_slotu_min or DOMYSLNY_SLOT_MIN
+        last = s.ostatni_zasiadek or s.godz_do
+        m, last_m = s.godz_od.hour * 60 + s.godz_od.minute, last.hour * 60 + last.minute
+        while m <= last_m:
+            t = time(m // 60, m % 60)
+            if t not in widziane:
+                widziane.add(t)
+                pary.append((t, s))
+            m += krok
+    pary.sort(key=lambda p: p[0])
+    return pary
+
+
+def _pacing_pelny(db, data, godz_od, serwis, osoby) -> bool:
+    """Czy limit coverów serwisu jest wyczerpany dla slotu o godz_od (dołożenie rezerwacji na
+    'osoby' przekroczyłoby pacing_max_rez lub pacing_max_osob). Liczy aktywne rezerwacje
+    stolikowe startujące w oknie [godz_od, godz_od+okno). Brak limitów → nigdy pełny."""
+    if serwis is None:
+        return False
+    max_rez, max_osob = serwis.pacing_max_rez, serwis.pacing_max_osob
+    if not max_rez and not max_osob:
+        return False
+    okno = serwis.pacing_okno_min or serwis.dlugosc_slotu_min or DOMYSLNY_SLOT_MIN
+    start_m = godz_od.hour * 60 + godz_od.minute
+    ile_rez, ile_osob = 0, 0
+    for r in db.query(models.Termin).filter(
+            models.Termin.rodzaj == "stolik", models.Termin.data == data,
+            models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).all():
+        r_m = r.godz_od.hour * 60 + r.godz_od.minute
+        if start_m <= r_m < start_m + okno:
+            ile_rez += 1
+            ile_osob += (r.liczba_osob or 0)
+    if max_rez and ile_rez + 1 > max_rez:
+        return True
+    if max_osob and ile_osob + max(1, osoby or 1) > max_osob:
+        return True
+    return False
 
 
 def _stolik_zajety(db, data, stolik_id, godz_od, godz_do) -> bool:
     for r in db.query(models.Termin).filter(
             models.Termin.stolik_id == stolik_id, models.Termin.data == data,
             models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).all():
-        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _slot_dlugosc(db, data))
+        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
         if godz_od < r_do and r.godz_od < godz_do:
             return True
     return False
@@ -1593,13 +1658,17 @@ def _rez_po_tokenie(db, token: str):
 def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Depends(get_db)):
     """Publicznie: wolne sloty na dany dzień (godzina → liczba wolnych stolików dla 'osoby')."""
     osoby = max(1, osoby)
-    sloty, krok = _sloty_dnia(db, data)
+    pary = _sloty_dnia(db, data)
     stoliki = [s for s in db.query(models.Stolik).filter_by(aktywny=True).all() if (s.pojemnosc or 0) >= osoby]
     out = []
-    for g in sloty:
-        g_do = _dodaj_minuty(g, krok)
-        wolne = sum(1 for s in stoliki if not _stolik_zajety(db, data, s.id, g, g_do))
-        out.append({"godz_od": _hm(g), "wolne": wolne})
+    for g, serwis in pary:
+        g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
+        wolne_stoly = sum(1 for s in stoliki if not _stolik_zajety(db, data, s.id, g, g_do))
+        pacing_pelny = _pacing_pelny(db, data, g, serwis, osoby)
+        # 'wolne' = efektywnie wolne (0 gdy pacing wyczerpany) — zgodne wstecznie z widgetem gościa.
+        out.append({"godz_od": _hm(g), "wolne": (0 if pacing_pelny else wolne_stoly),
+                    "wolne_stoly": wolne_stoly, "pacing_pelny": pacing_pelny,
+                    "serwis": (serwis.nazwa if serwis and serwis.nazwa else None)})
     return {"data": str(data), "osoby": osoby, "sloty": out}
 
 
@@ -1634,7 +1703,10 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Se
         if ile >= ONLINE_LIMIT_DZIENNY:
             raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online.")
 
-    godz_do = _dodaj_minuty(dane.godz_od, _slot_dlugosc(db, dane.data))
+    serwis = _serwis_dla_godziny(db, dane.data, dane.godz_od)
+    if _pacing_pelny(db, dane.data, dane.godz_od, serwis, dane.liczba_osob):
+        raise HTTPException(409, "Brak miejsc w wybranym czasie (limit rezerwacji online).")
+    godz_do = _dodaj_minuty(dane.godz_od, _turn_time(serwis, dane.liczba_osob))
     stolik = _wybierz_wolny_stolik(db, dane.data, dane.godz_od, godz_do, dane.liczba_osob)
     if not stolik:
         raise HTTPException(409, "Brak wolnego stolika w wybranym czasie.")

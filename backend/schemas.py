@@ -463,6 +463,28 @@ class GodzinyOtwarciaIn(BaseModel):
     ostatni_zasiadek: Optional[time] = None
     dlugosc_slotu_min: int = 120
     aktywny: bool = True
+    nazwa: Optional[str] = None                       # etykieta serwisu (Lunch/Kolacja)
+    turn_time_progi: Optional[List[dict]] = None       # [{do_osob,min}] — czas zasiadku wg grupy
+    pacing_max_rez: Optional[int] = None               # limit rezerwacji na okno pacingu
+    pacing_max_osob: Optional[int] = None              # limit osób na okno pacingu
+    pacing_okno_min: Optional[int] = None              # długość okna pacingu (min); NULL = krok slotu
+
+    @field_validator("turn_time_progi")
+    @classmethod
+    def _waliduj_progi(cls, v):
+        """Sanityzacja progów turn-time: {do_osob>0, min>0}, posortowane rosnąco po do_osob."""
+        if not v:
+            return None
+        out = []
+        for p in v:
+            if not isinstance(p, dict):
+                continue
+            do = int(p.get("do_osob") or 0)
+            mn = int(p.get("min") or 0)
+            if do > 0 and mn > 0:
+                out.append({"do_osob": do, "min": mn})
+        out.sort(key=lambda x: x["do_osob"])
+        return out or None
 class GodzinyOtwarciaOut(GodzinyOtwarciaIn):
     id: int
     model_config = ConfigDict(from_attributes=True)
