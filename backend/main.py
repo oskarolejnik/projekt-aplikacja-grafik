@@ -1389,6 +1389,64 @@ def usun_stolik(sid: int, db: Session = Depends(get_db)):
         db.delete(s); db.commit()
 
 
+# ── Kombinacje stołów (predefiniowane łączenie pod większe grupy) ─────────────
+def _waliduj_sklad_kombinacji(db, stoliki):
+    """Deduplikuje id stołów, wymaga ≥2 różnych i sprawdza, że istnieją. Zwraca listę id."""
+    ids = []
+    for x in (stoliki or []):
+        xi = int(x)
+        if xi not in ids:
+            ids.append(xi)
+    if len(ids) < 2:
+        raise HTTPException(400, "Kombinacja musi łączyć co najmniej 2 różne stoły.")
+    for sid in ids:
+        if not db.get(models.Stolik, sid):
+            raise HTTPException(400, f"Nieznany stolik (id={sid}).")
+    return ids
+
+
+def _suma_pojemnosci(db, ids) -> int:
+    return sum((db.get(models.Stolik, i).pojemnosc or 0) for i in ids)
+
+
+@app.get("/api/kombinacje", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_kombinacje(db: Session = Depends(get_db)):
+    rows = db.query(models.KombinacjaStolow).order_by(
+        models.KombinacjaStolow.priorytet, models.KombinacjaStolow.id).all()
+    return {"kombinacje": [schemas.KombinacjaStolowOut.model_validate(k).model_dump() for k in rows]}
+
+
+@app.post("/api/kombinacje", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def dodaj_kombinacje(dane: schemas.KombinacjaStolowIn, db: Session = Depends(get_db)):
+    ids = _waliduj_sklad_kombinacji(db, dane.stoliki)
+    k = models.KombinacjaStolow(
+        nazwa=dane.nazwa.strip(), stoliki=ids, pojemnosc_min=dane.pojemnosc_min,
+        pojemnosc_max=(dane.pojemnosc_max or _suma_pojemnosci(db, ids)),
+        aktywna=dane.aktywna, priorytet=dane.priorytet)
+    db.add(k); db.commit(); db.refresh(k)
+    return schemas.KombinacjaStolowOut.model_validate(k).model_dump()
+
+
+@app.put("/api/kombinacje/{kid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def edytuj_kombinacje(kid: int, dane: schemas.KombinacjaStolowIn, db: Session = Depends(get_db)):
+    k = db.get(models.KombinacjaStolow, kid)
+    if not k:
+        raise HTTPException(404, "Brak kombinacji.")
+    ids = _waliduj_sklad_kombinacji(db, dane.stoliki)
+    k.nazwa = dane.nazwa.strip(); k.stoliki = ids; k.pojemnosc_min = dane.pojemnosc_min
+    k.pojemnosc_max = (dane.pojemnosc_max or _suma_pojemnosci(db, ids))
+    k.aktywna = dane.aktywna; k.priorytet = dane.priorytet
+    db.commit(); db.refresh(k)
+    return schemas.KombinacjaStolowOut.model_validate(k).model_dump()
+
+
+@app.delete("/api/kombinacje/{kid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def usun_kombinacje(kid: int, db: Session = Depends(get_db)):
+    k = db.get(models.KombinacjaStolow, kid)
+    if k:
+        db.delete(k); db.commit()
+
+
 # ── Godziny otwarcia ─────────────────────────────────────────────────────────
 @app.get("/api/godziny-otwarcia", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def get_godziny_otwarcia(db: Session = Depends(get_db)):

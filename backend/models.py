@@ -574,6 +574,25 @@ class Stolik(Base):
     plan_y    = Column(Integer, nullable=True)
     # Powiązanie z rewirem POS (StanStolow.rewir_nr) — live obłożenie z Gastro. NULL = brak podpięcia.
     rewir_nr  = Column(Integer, nullable=True)
+    # --- Rozszerzenia pod silnik sadzania (Slice 2) ---
+    pojemnosc_min = Column(Integer, nullable=True)     # min. sensowna wielkość grupy; NULL = 1
+    ksztalt       = Column(String(16), nullable=True)  # kwadrat/okragly/prostokat (render planu)
+    cechy         = Column(JSON, nullable=True)        # ["okno","loza","ogrod","dostepny"]
+    priorytet     = Column(Integer, nullable=True)     # kolejność sadzania (mniej = wcześniej); NULL = 0
+
+
+class KombinacjaStolow(Base):
+    """Predefiniowana kombinacja stołów do łączenia pod większe grupy (np. S1+S2 = 6 os.).
+    Host jawnie definiuje, które stoły wolno łączyć — silnik sadzania buduje z tego kandydatów
+    dla dużych grup. `stoliki` = lista id stołów składowych (JSON)."""
+    __tablename__ = "kombinacje_stolow"
+    id            = Column(Integer, primary_key=True, index=True)
+    nazwa         = Column(String(64), nullable=False)          # np. „S1+S2"
+    stoliki       = Column(JSON, nullable=False)                # [id_stolika, …] (≥2)
+    pojemnosc_min = Column(Integer, nullable=True)              # min. grupa dla kombinacji; NULL = 1
+    pojemnosc_max = Column(Integer, nullable=False, default=0)  # suma pojemności składowych (lub override)
+    aktywna       = Column(Boolean, nullable=False, default=True)
+    priorytet     = Column(Integer, nullable=False, default=0)  # kolejność preferencji (mniej = wcześniej)
 
 
 class GodzinyOtwarcia(Base):

@@ -452,7 +452,23 @@ class StolikIn(BaseModel):
     aktywny: bool = True
     kolejnosc: int = 0
     rewir_nr: Optional[int] = None   # powiązanie z rewirem POS (live obłożenie)
+    pojemnosc_min: Optional[int] = None            # min. wielkość grupy (seating); NULL = 1
+    ksztalt: Optional[str] = None                  # kwadrat/okragly/prostokat
+    cechy: Optional[List[str]] = None              # ["okno","loza","ogrod","dostepny"]
+    priorytet: Optional[int] = None                # kolejność sadzania (mniej = wcześniej)
 class StolikOut(StolikIn):
+    id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class KombinacjaStolowIn(BaseModel):
+    """Predefiniowana kombinacja stołów (łączenie pod większe grupy)."""
+    nazwa: str
+    stoliki: List[int]                             # id stołów składowych (≥2, walidowane w endpoincie)
+    pojemnosc_min: Optional[int] = None
+    pojemnosc_max: Optional[int] = None            # None → suma pojemności składowych
+    aktywna: bool = True
+    priorytet: int = 0
+class KombinacjaStolowOut(KombinacjaStolowIn):
     id: int
     model_config = ConfigDict(from_attributes=True)
 

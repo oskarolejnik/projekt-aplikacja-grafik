@@ -71,15 +71,21 @@ def plan_sali(data: date = Query(None), db: Session = Depends(get_db)):
         }
         out.append({
             "id": s.id, "nazwa": s.nazwa, "strefa": s.strefa, "pojemnosc": s.pojemnosc,
+            "pojemnosc_min": s.pojemnosc_min, "ksztalt": s.ksztalt, "cechy": s.cechy or [],
             "aktywny": s.aktywny, "plan_x": s.plan_x, "plan_y": s.plan_y, "rewir_nr": s.rewir_nr,
             "status": status, "rezerwacje": [_rez_out(t) for t in rez], "live": live,
         })
 
+    kombinacje = db.query(models.KombinacjaStolow).filter_by(aktywna=True).order_by(
+        models.KombinacjaStolow.priorytet, models.KombinacjaStolow.id).all()
     strefy = sorted({s.strefa for s in stoliki if s.strefa})
     return {
         "data": str(dzien),
         "strefy": strefy,
         "stoliki": out,
+        "kombinacje": [{"id": k.id, "nazwa": k.nazwa, "stoliki": k.stoliki or [],
+                        "pojemnosc_min": k.pojemnosc_min, "pojemnosc_max": k.pojemnosc_max}
+                       for k in kombinacje],
         "podsumowanie": {
             "wolne": sum(1 for s in out if s["status"] == "wolny"),
             "zarezerwowane": sum(1 for s in out if s["status"] in ("zarezerwowany", "potwierdzony")),
