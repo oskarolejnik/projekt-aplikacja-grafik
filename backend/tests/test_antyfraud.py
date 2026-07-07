@@ -23,14 +23,14 @@ def _zdarzenie(i, nazwa="Jan Kowalski", typ="storno", kwota=25.0, dni_temu=3):
 
 def test_ingest_wymaga_tokena(client, monkeypatch):
     monkeypatch.setenv("RCP_INGEST_TOKEN", "test-rcp-token")
-    monkeypatch.setattr(mod, "RCP_INGEST_TOKEN", "test-rcp-token")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "test-rcp-token")
     assert _ingest(client, [], headers={}).status_code == 401
     assert _ingest(client, [], headers={"X-RCP-Token": "zly"}).status_code == 401
     assert _ingest(client, []).status_code == 200
 
 
 def test_ingest_upsert_i_mapowanie_pracownika(client, db, monkeypatch):
-    monkeypatch.setattr(mod, "RCP_INGEST_TOKEN", "test-rcp-token")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "test-rcp-token")
     p = factories.PracownikFactory(imie="Jan", nazwisko="Kowalski")
     r = _ingest(client, [_zdarzenie(1), _zdarzenie(2, typ="rabat", kwota=15)])
     assert r.status_code == 200 and r.json()["przyjeto"] == 2
@@ -44,7 +44,7 @@ def test_ingest_upsert_i_mapowanie_pracownika(client, db, monkeypatch):
 
 
 def test_ingest_kwota_zawsze_dodatnia_i_typ_walidowany(client, db, monkeypatch):
-    monkeypatch.setattr(mod, "RCP_INGEST_TOKEN", "test-rcp-token")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "test-rcp-token")
     _ingest(client, [dict(_zdarzenie(7), kwota=-45.0, typ="dziwny")])
     rec = db.get(models.StornoGastro, "guid-7")
     assert rec.kwota == 45.0 and rec.typ == "storno"
@@ -54,7 +54,7 @@ def test_ingest_kwota_zawsze_dodatnia_i_typ_walidowany(client, db, monkeypatch):
 
 def _seed_zespol(client, monkeypatch):
     """3 kelnerów „normalnych" (2 zdarzenia) + 1 odstający (12 zdarzeń po 40 zł)."""
-    monkeypatch.setattr(mod, "RCP_INGEST_TOKEN", "test-rcp-token")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "test-rcp-token")
     storna, i = [], 0
     for nazwa in ("Anna Nowak", "Piotr Wiśniewski", "Ewa Szymańska"):
         for _ in range(2):
@@ -79,7 +79,7 @@ def test_podsumowanie_flaguje_odstajacego(admin_client, monkeypatch):
 
 def test_malo_zdarzen_bez_flagi(admin_client, monkeypatch):
     """Nawet „odstający" z <5 zdarzeniami nie jest flagowany (szum małych liczb)."""
-    monkeypatch.setattr(mod, "RCP_INGEST_TOKEN", "test-rcp-token")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "test-rcp-token")
     _ingest(admin_client, [_zdarzenie(1, nazwa="A B"), _zdarzenie(2, nazwa="C D"),
                            _zdarzenie(3, nazwa="E F", kwota=500)])
     w = admin_client.get("/api/antyfraud/podsumowanie").json()
@@ -96,7 +96,7 @@ def test_podsumowanie_tylko_admin(client):
 
 
 def test_zakres_dat_filtruje(admin_client, monkeypatch):
-    monkeypatch.setattr(mod, "RCP_INGEST_TOKEN", "test-rcp-token")
+    monkeypatch.setenv("RCP_INGEST_TOKEN", "test-rcp-token")
     _ingest(admin_client, [_zdarzenie(1, dni_temu=3), _zdarzenie(2, dni_temu=100)])
     w = admin_client.get("/api/antyfraud/podsumowanie").json()          # domyślnie 30 dni
     assert w["zespol"]["zdarzen"] == 1

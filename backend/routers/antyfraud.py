@@ -21,13 +21,10 @@ import ai
 import models
 from auth import require_admin
 from database import get_db
-from deps import utcnow_naive
+from deps import utcnow_naive, token_agenta_ok
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# Jak w main.py: stały token agenta (X-RCP-Token) czytany ze środowiska.
-RCP_INGEST_TOKEN = os.environ.get("RCP_INGEST_TOKEN", "")
 
 TYPY = ("storno", "rabat", "anulacja")
 MIN_ZDARZEN_DO_FLAGI = 5      # poniżej tego progu nie flagujemy (szum małych liczb)
@@ -53,7 +50,9 @@ def _norm_nazwa(s: str) -> str:
 def gastro_storna_ingest(payload: dict, request: Request, db: Session = Depends(get_db)):
     """Storna/rabaty/anulacje z Gastro. Upsert po id (GUID). Payload:
     {"storna": [{id, data, imie_nazwisko, typ, kwota, opis?, godzina?}]}"""
-    if not RCP_INGEST_TOKEN or request.headers.get("x-rcp-token") != RCP_INGEST_TOKEN:
+    # Kanoniczny check (jak reszta ingestu): token z panelu (rotowalny, hash) LUB env, w stałym
+    # czasie i akceptujący X-RCP-Token oraz Bearer — koniec lokalnego env-only porównania (L16/L1).
+    if not token_agenta_ok(request, db):
         raise HTTPException(401, "Nieprawidłowy lub brakujący token agenta.")
     mapa = {}
     for p in db.query(models.Pracownik).all():

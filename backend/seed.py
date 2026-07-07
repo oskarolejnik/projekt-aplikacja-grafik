@@ -1,10 +1,14 @@
-"""Dane startowe — uruchom raz: python seed.py"""
+"""Dane startowe (DEV) — uruchom raz: python seed.py. Tworzy konta ze słabymi hasłami demo,
+więc DOZWOLONY TYLKO w APP_ENV=development (blokada przed przypadkowym uruchomieniem na produkcji)."""
 
 from database import SessionLocal, init_db
 import models
+import settings
 from datetime import date
 
 def seed():
+    if not settings.IS_DEV:
+        raise SystemExit("seed.py jest dozwolony tylko w APP_ENV=development (tworzy słabe konta demo).")
     init_db()
     db = SessionLocal()
 

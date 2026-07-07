@@ -130,8 +130,8 @@ def _problems() -> tuple[list[str], list[str]]:
 
     raw_cors = os.environ.get("CORS_ORIGINS", "")
     if not IS_DEV and raw_cors.strip() == "*":
-        warnings.append(
-            "CORS_ORIGINS='*' w trybie produkcyjnym — ogranicz do adresu frontendu "
+        errors.append(
+            "CORS_ORIGINS='*' w trybie produkcyjnym jest niedozwolone — ogranicz do adresu frontendu "
             "(albo zostaw puste: backend serwuje frontend z tego samego adresu)."
         )
 

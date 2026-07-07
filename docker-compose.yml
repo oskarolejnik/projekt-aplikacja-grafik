@@ -10,7 +10,9 @@ services:
       POSTGRES_PASSWORD: grafik
       POSTGRES_DB: grafik
     ports:
-      - "5432:5432"
+      # Tylko localhost — baza dev nie nasłuchuje na wszystkich interfejsach (0.0.0.0), więc
+      # domyślne hasło grafik:grafik nie jest wystawione do sieci (L6).
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

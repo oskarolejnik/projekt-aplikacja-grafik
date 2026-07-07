@@ -7,6 +7,7 @@ Wydzielone tutaj, aby routery mogły z nich korzystać BEZ importowania main.py
 import hashlib
 import os
 import re
+import secrets
 import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -172,11 +173,13 @@ def token_agenta_ok(request, db) -> bool:
             podany = naglowek[7:]
     if not podany:
         return False
+    # Porównania w STAŁYM czasie (secrets.compare_digest) — brak kanału timing na sekretnym tokenie.
     env_token = os.environ.get("RCP_INGEST_TOKEN", "")
-    if env_token and podany == env_token:
+    if env_token and secrets.compare_digest(podany, env_token):
         return True
     hash_db = getattr(get_lokal_config(db), "pos_token_hash", None)
-    return bool(hash_db) and hashlib.sha256(podany.encode("utf-8")).hexdigest() == hash_db
+    return bool(hash_db) and secrets.compare_digest(
+        hashlib.sha256(podany.encode("utf-8")).hexdigest(), hash_db)
 
 
 def rewir_dla_pracownika(rewir):

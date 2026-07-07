@@ -31,8 +31,9 @@ def instancja_puls(request: Request, db: Session = Depends(get_db)):
     """Podsumowanie instancji dla panelu floty operatora (instancja-matka). Autoryzacja
     współdzielonym FLEET_TOKEN (nagłówek X-Fleet-Token) — matka propaguje go do dzieci przez
     środowisko procesu. Zwraca TYLKO zagregowane, niewrażliwe dane (bez PII, płac, danych gości)."""
+    import secrets
     token = os.getenv("FLEET_TOKEN", "")
-    if not token or request.headers.get("x-fleet-token") != token:
+    if not token or not secrets.compare_digest(request.headers.get("x-fleet-token") or "", token):
         raise HTTPException(403, "Brak lub nieprawidłowy token floty.")
     s = get_subskrypcja(db)
     return {

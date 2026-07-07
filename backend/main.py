@@ -54,6 +54,7 @@ from routers.kadry import router as kadry_router
 from routers.zaproszenia import router as zaproszenia_router
 from routers.flota import router as flota_router
 from routers.pos import router as pos_router
+from routers.rodo import router as rodo_router
 import provisioning
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status int
 app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
 app.include_router(platnosci_router)   # płatności zadatków online (Rec#7)
 app.include_router(crm_router)         # CRM gości / scoring no-show (roadmapa v1.5)
+app.include_router(rodo_router)        # RODO — eksport/anonimizacja gościa + retencja (audyt bezp.)
 app.include_router(gielda_router)      # giełda wymiany zmian (roadmapa v1.5)
 app.include_router(plan_sali_router)   # plan sali — rozmieszczenie stolików + status (roadmapa v1.5)
 app.include_router(ogloszenia_router)  # ogłoszenia zespołowe — tablica manager→pracownicy (roadmapa v1.5)
@@ -163,7 +165,7 @@ TRASY_PUBLICZNE = (
 
 # Wyjątki od degradacji READ_ONLY — zapis dozwolony mimo nieaktywnej subskrypcji:
 # logowanie, kreator pierwszej konfiguracji, przedłużenie subskrypcji, health.
-READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health")
+READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health", "/api/rodo")
 
 # Przestrzenie, w których rola nadzorcza ma PEŁNY dostęp (też zapisy). Każdy taki
 # endpoint sam pilnuje, że dotyczy wyłącznie swojej domeny (np. grafik kuchni).
@@ -366,6 +368,17 @@ def parse_date(s: str) -> date:
 # AUTORYZACJA / UŻYTKOWNICY
 # ═══════════════════════════════════════════════════════════════════════════
 
+_DUMMY_HASH = None
+
+
+def _dummy_hash() -> str:
+    """Stały bcrypt-hash do wyrównania czasu logowania, gdy konto nie istnieje (liczony raz)."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password("wyrownanie-czasu-logowania")
+    return _DUMMY_HASH
+
+
 @app.post("/api/auth/login", response_model=schemas.TokenOut)
 def login(dane: schemas.LoginIn, request: Request, db: Session = Depends(get_db)):
     # Logowanie e-mailem (nowe konta) lub loginem (stare konta bez e-maila — fallback).
@@ -384,7 +397,14 @@ def login(dane: schemas.LoginIn, request: Request, db: Session = Depends(get_db)
         user = db.query(models.User).filter(func.lower(models.User.email) == ident.lower()).first()
     else:
         user = db.query(models.User).filter(models.User.login == ident).first()
-    if not user or not user.aktywny or not verify_password(dane.haslo, user.haslo_hash):
+    # Stały czas odpowiedzi niezależnie od istnienia konta — inaczej brak bcrypt dla nieznanego
+    # e-maila daje rzędowy skok czasu = enumeracja kont timingiem (CWE-208). Zawsze liczymy bcrypt.
+    if user and user.aktywny:
+        ok = verify_password(dane.haslo, user.haslo_hash)
+    else:
+        verify_password(dane.haslo, _dummy_hash())
+        ok = False
+    if not ok:
         for k in klucze:
             ratelimit.zarejestruj_porazke(k)
         raise HTTPException(401, "Nieprawidłowy e-mail lub hasło.")
