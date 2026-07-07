@@ -1056,6 +1056,20 @@ def zapisz_napiwki(dane: schemas.NapiwkiIn, data: date = Query(...), db: Session
 _DNI_TYG = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 
 
+def _zabukowane_7dni(db, today):
+    """Zabukowane rezerwacje stolikowe na najbliższe 7 dni (per data): liczba (≈ rachunki) i covery
+    (osoby). Zasila prognozę realnymi bukowaniami — floor przez max(), nie sumę (historia już
+    zawiera zrealizowane rezerwacje → sumowanie zawyżałoby = double counting)."""
+    rez = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik", models.Termin.status.in_(REZ_AKTYWNE),
+        models.Termin.data > today, models.Termin.data <= today + timedelta(days=7)).all()
+    agg = defaultdict(lambda: {"rezerwacje": 0, "covery": 0})
+    for t in rez:
+        agg[t.data]["rezerwacje"] += 1
+        agg[t.data]["covery"] += (t.liczba_osob or 0)
+    return agg
+
+
 @app.get("/api/prognoza-ruchu")
 def prognoza_ruchu(dni: int = 90, db: Session = Depends(get_db)):
     """Prognoza ruchu (liczba rachunków) z historii: średnia per dzień tygodnia, trend
@@ -1090,12 +1104,17 @@ def prognoza_ruchu(dni: int = 90, db: Session = Depends(get_db)):
     cfg = get_lokal_config(db)
     na_osobe = max(1, int(cfg.obsada_rachunki_na_osobe or 20))
     obsada_min = max(1, int(cfg.obsada_min or 1))
+    zab = _zabukowane_7dni(db, today)
     projekcja = []
     for i in range(1, 8):
         d = today + timedelta(days=i)
         prog = srednie.get(d.weekday(), 0)
-        obsada = max(obsada_min, math.ceil(prog / na_osobe)) if prog else obsada_min
+        z = zab.get(d, {"rezerwacje": 0, "covery": 0})
+        prog_eff = max(prog, z["rezerwacje"])   # rezerwacja ≈ rachunek; max = brak double-count z historią
+        obsada = max(obsada_min, math.ceil(prog_eff / na_osobe)) if prog_eff else obsada_min
         projekcja.append({"data": str(d), "nazwa": _DNI_TYG[d.weekday()], "prognoza": prog,
+                          "covery_zabukowane": z["covery"], "rezerwacje_zabukowane": z["rezerwacje"],
+                          "zrodlo": ("rezerwacje" if z["rezerwacje"] > prog else "historia"),
                           "sugerowana_obsada": obsada})
     return {"okres_dni": dni, "probek": len(rows),
             "srednia_dzienna": round(sum(int(r.liczba or 0) for r in rows) / len(rows), 1) if rows else 0,
@@ -1120,12 +1139,17 @@ def _projekcja_obsady(db):
     cfg = get_lokal_config(db)
     na_osobe = max(1, int(cfg.obsada_rachunki_na_osobe or 20))
     obsada_min = max(1, int(cfg.obsada_min or 1))
+    zab = _zabukowane_7dni(db, today)
     out = []
     for i in range(1, 8):
         d = today + timedelta(days=i)
         prog = srednie.get(d.weekday(), 0)
-        obsada = max(obsada_min, math.ceil(prog / na_osobe)) if prog else obsada_min
+        z = zab.get(d, {"rezerwacje": 0, "covery": 0})
+        prog_eff = max(prog, z["rezerwacje"])   # floor rezerwacjami (max, nie suma — bez double-count)
+        obsada = max(obsada_min, math.ceil(prog_eff / na_osobe)) if prog_eff else obsada_min
         out.append({"data": str(d), "nazwa": _DNI_TYG[d.weekday()], "prognoza": prog,
+                    "covery_zabukowane": z["covery"], "rezerwacje_zabukowane": z["rezerwacje"],
+                    "zrodlo": ("rezerwacje" if z["rezerwacje"] > prog else "historia"),
                     "sugerowana_obsada": obsada})
     return out
 
