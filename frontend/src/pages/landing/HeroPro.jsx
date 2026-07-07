@@ -137,6 +137,10 @@ export default function HeroPro() {
             <Magnes href="?start" className="rounded-xl bg-zloto px-6 py-3.5 text-sm font-semibold text-noc transition-colors hover:bg-zloto-2">Zacznij za darmo</Magnes>
             <a href={`${MAIL}?subject=Demo%20Lokalo`} className="rounded-xl border border-white/[0.12] px-6 py-3.5 text-sm font-semibold text-ink transition hover:bg-white/[0.06] active:scale-[0.98]">Umów demo</a>
           </div>
+          <p className="hero-cta mt-3 flex items-center gap-2 text-xs text-muted">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-zloto" />
+            Pierwsze 14 dni pełnego Premium za darmo — bez karty.
+          </p>
         </div>
 
         {/* Scena produktu w 3D — panele na różnych głębokościach, cała scena przechyla się
