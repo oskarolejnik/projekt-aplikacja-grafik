@@ -639,7 +639,31 @@ class ListaOczekujacych(Base):
     status          = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|zrealizowany|odwolany
     utworzono_at    = Column(DateTime, nullable=False)
     zrealizowano_at = Column(DateTime, nullable=True)
-    termin_id       = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True)
+    termin_id       = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True)   # przypisany termin
+
+
+class ProfilGoscia(Base):
+    """Trwały profil gościa (nadbudowa nad grupowaniem CRM po telefonie): tagi/VIP, alergie,
+    preferencje, okazje. Statystyki wizyt NADAL liczone w locie z Termin — tu tylko to, czego
+    nie da się policzyć. Klucz = sha256 znormalizowanego telefonu (NIE plaintext — inaczej PII
+    wyciekłaby przez indeks). Alergie/notatka = dane wrażliwe → EncryptedString (RODO art. 9)."""
+    __tablename__ = "profile_gosci"
+    id                 = Column(Integer, primary_key=True, index=True)
+    klucz_hash         = Column(String(64), unique=True, index=True, nullable=False)  # sha256(klucz CRM)
+    nazwisko           = Column(String(128), nullable=True)                # cache do listy
+    telefon            = Column(EncryptedString(512), nullable=True)       # PII szyfrowane
+    email              = Column(EncryptedString(512), nullable=True)
+    tagi               = Column(JSON, nullable=True)                       # ["VIP","stały","alergik"]
+    vip                = Column(Boolean, nullable=False, default=False)    # ręczny override (obok auto: odbyte≥5)
+    alergie            = Column(EncryptedString(512), nullable=True)       # RODO art. 9 (zdrowie) — szyfrowane
+    dieta              = Column(String(128), nullable=True)
+    preferowana_strefa = Column(String(64), nullable=True)
+    notatka            = Column(EncryptedString(1024), nullable=True)      # szyfrowane
+    okazja_typ         = Column(String(32), nullable=True)                 # urodziny/rocznica
+    okazja_data        = Column(String(5), nullable=True)                  # „MM-DD" (dzień+miesiąc)
+    marketing_zgoda    = Column(Boolean, nullable=False, default=False)    # podstawa przypomnień o okazjach
+    utworzono_at       = Column(DateTime, nullable=True)
+    zaktualizowano_at  = Column(DateTime, nullable=True)
 
 
 class AuditLog(Base):

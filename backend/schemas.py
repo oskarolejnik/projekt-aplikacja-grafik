@@ -527,6 +527,19 @@ class HostFazaIn(BaseModel):
 class HostStolikIn(BaseModel):
     stolik_id: int                 # ręczny przydział/przeniesienie na konkretny stół
 
+class ProfilGosciaIn(BaseModel):
+    """Profil gościa 360 (upsert). Alergie/notatka = dane wrażliwe (szyfrowane at-rest)."""
+    nazwisko: Optional[str] = None
+    tagi: Optional[List[str]] = None
+    vip: bool = False
+    alergie: Optional[str] = None
+    dieta: Optional[str] = None
+    preferowana_strefa: Optional[str] = None
+    notatka: Optional[str] = None
+    okazja_typ: Optional[str] = None
+    okazja_data: Optional[str] = None          # „MM-DD"
+    marketing_zgoda: bool = False
+
 class ListaOczekujacychIn(BaseModel):
     data: date
     godz_od: Optional[time] = None
