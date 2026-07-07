@@ -3,6 +3,7 @@ import { Logo } from '../components/Logo'
 import { useLenisGsap, useReveal, useHeadingReveal, useCountUp, useThreadDraw, useScrollRail } from './landing/motionPro'
 import HeroPro from './landing/HeroPro'
 import PainRelief from './landing/PainRelief'
+import SekcjaTrial from './landing/SekcjaTrial'
 import ProductTour3D from './landing/ProductTour3D'
 import SekcjaRole from './landing/SekcjaRole'
 import SekcjaPlatformy from './landing/SekcjaPlatformy'
@@ -90,6 +91,8 @@ export default function ProduktPro() {
       <main className="relative z-10">
         <HeroPro />
         <PainRelief />
+        <SekcjaTrial />
+        <Nitka />
         <ProductTour3D />
         <SekcjaRole />
         <Nitka />

@@ -74,7 +74,7 @@ export default function SekcjaPlatformy() {
           className="font-brand text-3xl font-semibold tracking-tight text-ink sm:text-5xl"
           style={{ textWrap: 'balance' }}
         >
-          Działa <span className="text-zloto">wszędzie</span>, gdzie Twój zespół.
+          Działa <span className="whitespace-nowrap"><span className="text-zloto">wszędzie</span>,</span> gdzie Twój zespół.
         </h2>
         <p data-rv="" style={{ '--i': 1 }} className="mt-4 max-w-2xl text-muted">
           Personel ma aplikację zawsze pod ręką — instaluje się prosto z przeglądarki,{' '}

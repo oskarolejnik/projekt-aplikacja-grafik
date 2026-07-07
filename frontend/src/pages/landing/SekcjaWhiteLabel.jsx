@@ -10,6 +10,7 @@ const PRZYKLADY = [
   {
     id: 'p1',
     przycisk: 'Przykład 1',
+    krotka: 'Restauracja',
     lokal: 'Trattoria Nonna',
     podtytul: 'restauracja z ogródkiem',
     kolor: '#C96A6A',
@@ -31,6 +32,7 @@ const PRZYKLADY = [
   {
     id: 'p2',
     przycisk: 'Przykład 2',
+    krotka: 'Bar',
     lokal: 'Bar Neon',
     podtytul: 'bar szybkiej obsługi',
     kolor: '#9DC4B1',
@@ -49,6 +51,7 @@ const PRZYKLADY = [
   {
     id: 'p3',
     przycisk: 'Przykład 3',
+    krotka: 'Dom weselny',
     lokal: 'Hotel Aurum',
     podtytul: 'dom weselny przy hotelu',
     kolor: '#C9A96A',
@@ -130,23 +133,37 @@ export default function SekcjaWhiteLabel() {
 
           {/* Prawa kolumna: interaktywny podgląd zmiany marki */}
           <div>
-            <div data-rv="" className="rv-r flex flex-wrap gap-2" role="group" aria-label="Wybierz przykładową konfigurację">
-              {PRZYKLADY.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setAktywnyId(m.id)}
-                  aria-pressed={m.id === aktywnyId}
-                  className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors duration-300 ${
-                    m.id === aktywnyId
-                      ? 'border-white/[0.16] bg-white/[0.06] text-ink'
-                      : 'border-white/[0.08] bg-white/[0.02] text-muted hover:bg-white/[0.04] hover:text-ink'
-                  }`}
-                >
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: m.kolor }} />
-                  {m.przycisk}
-                </button>
-              ))}
+            {/* Segmentowy przełącznik marek — równe pola, wspólny tor (zamiast zawijających
+                się „pigułek"). Etykiety = typ lokalu (sens > „Przykład 1"); na telefonie
+                pełna szerokość 3 kolumny, na desktopie zwarty inline. */}
+            <div
+              data-rv=""
+              className="rv-r relative grid grid-cols-3 gap-1.5 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-1.5 sm:inline-grid sm:auto-cols-max sm:grid-flow-col"
+              role="group"
+              aria-label="Wybierz przykładową konfigurację"
+            >
+              {PRZYKLADY.map((m) => {
+                const on = m.id === aktywnyId
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setAktywnyId(m.id)}
+                    aria-pressed={on}
+                    className={`flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-2 text-xs font-semibold transition-colors duration-200 sm:px-4 sm:text-[13px] ${
+                      on
+                        ? 'bg-white/[0.07] text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                        : 'text-muted hover:text-ink'
+                    }`}
+                  >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full transition-transform duration-300"
+                      style={{ backgroundColor: m.kolor, transform: on ? 'scale(1.3)' : 'scale(1)' }}
+                    />
+                    {m.krotka}
+                  </button>
+                )
+              })}
             </div>
 
             <div data-rv="" style={{ '--i': 1, perspective: '1200px' }} className="rv-scale mt-4">

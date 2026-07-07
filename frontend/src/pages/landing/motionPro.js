@@ -26,11 +26,13 @@ export const reducedMotion = () =>
 export const motionOn = () =>
   typeof window !== 'undefined' && 'IntersectionObserver' in window && !reducedMotion()
 
-// Czy używać sekcji PINNED (scroll-storytelling). Tylko desktop z myszą i ≥1024px —
-// na dotyku/mobile pin bywa janky (pasek adresu zmienia wysokość viewportu, dotyk klei się
-// do przypiętej sceny), więc tam pokazujemy statyczny wariant sekcji.
+// Czy używać sekcji PINNED (scroll-storytelling). Włączone także na mobile (feedback: „chcę
+// tych animacji ze scrollem tak jak na desktopie") — sceny są scrubowane (nie snap-pin), więc
+// pasek adresu iOS/Androida ich nie szarpie; ScrollTrigger pinuje na natywnym scrollu.
+// Wyłączamy jedynie przy prefers-reduced-motion / braku IntersectionObserver (motionOn) oraz na
+// bardzo wąskich ekranach (<360px), gdzie kompozycje 3D by się dusiły.
 export const canPin = () =>
-  motionOn() && !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches) && window.innerWidth >= 1024
+  motionOn() && window.innerWidth >= 360
 
 // ── Globalny smooth-scroll (Lenis) spięty z tickerem GSAP i ScrollTrigger ──
 // Zwraca cleanup. Native scroll przy reduced-motion. Kotwice #hash płyną przez Lenis.

@@ -185,11 +185,8 @@ export default function SekcjaCennik() {
           </div>
         </div>
 
-        <p className="relative z-10 mx-auto mt-5 flex max-w-xl items-center justify-center gap-2 text-center text-sm text-muted">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-zloto/25 bg-zloto/[0.08] px-3 py-1 text-xs font-semibold text-zloto">
-            <span className="h-1.5 w-1.5 rounded-full bg-zloto" /> 14 dni za darmo
-          </span>
-          Każdy plan zaczyna od 14 dni pełnego Premium — bez karty.
+        <p className="relative z-10 mx-auto mt-5 max-w-md text-center text-sm leading-relaxed text-muted">
+          Każdy plan startuje od <span className="font-semibold text-zloto">14 dni pełnego Premium</span> — bez karty.
         </p>
 
         <div className="relative z-10 mx-auto mt-10 grid max-w-5xl gap-5 lg:grid-cols-3 lg:items-stretch lg:gap-6 lg:pt-6">
