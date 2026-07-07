@@ -27,6 +27,7 @@ import StolyLive from './components/tabs/StolyLive'
 import Rezerwacje from './components/tabs/Rezerwacje'
 import RezerwacjeStolik from './components/tabs/RezerwacjeStolik'
 import WidokHosta from './components/tabs/WidokHosta'
+import AnalitykaRezerwacji from './components/tabs/AnalitykaRezerwacji'
 import CrmGoscie from './components/tabs/CrmGoscie'
 import GieldaZmian from './components/tabs/GieldaZmian'
 import PlanSali from './components/tabs/PlanSali'
@@ -85,6 +86,7 @@ const TABS = [
   { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', kat: 'goscie', title: 'Rezerwacje stolików', Comp: RezerwacjeStolik, modul: 'modul_rezerwacje' },
   { id: 'plan-sali', label: 'Plan sali', icon: 'office', kat: 'goscie', title: 'Plan sali — rozmieszczenie stolików', Comp: PlanSali, modul: 'modul_rezerwacje' },
   { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', Comp: CrmGoscie, modul: 'modul_rezerwacje' },
+  { id: 'analityka-rezerwacji', label: 'Analityka rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Analityka rezerwacji — covery, no-show, szczyty', Comp: AnalitykaRezerwacji, modul: 'modul_rezerwacje' },
   { id: 'rezerwacje', label: 'Rezerwacje (ruch)', icon: 'calendar', kat: 'goscie', title: 'Rezerwacje — ruch (30 dni)', Comp: Rezerwacje },
   // Imprezy — eventy, zapytania, zadatki.
   { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', kat: 'imprezy', title: 'Kalendarz imprez', Comp: KalendarzImprez, modul: 'modul_imprezy' },

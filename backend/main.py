@@ -41,6 +41,7 @@ from routers.instancja import router as instancja_router
 from routers.lokal import router as lokal_router
 from routers.platnosci import router as platnosci_router
 from routers.crm import router as crm_router
+from routers.analityka_rezerwacji import router as analityka_rezerwacji_router
 from routers.gielda import router as gielda_router
 from routers.plan_sali import router as plan_sali_router
 from routers.ogloszenia import router as ogloszenia_router
@@ -70,6 +71,7 @@ app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status int
 app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
 app.include_router(platnosci_router)   # płatności zadatków online (Rec#7)
 app.include_router(crm_router)         # CRM gości / scoring no-show (roadmapa v1.5)
+app.include_router(analityka_rezerwacji_router)   # analityka rezerwacji (covery/no-show/szczyty)
 app.include_router(rodo_router)        # RODO — eksport/anonimizacja gościa + retencja (audyt bezp.)
 app.include_router(gielda_router)      # giełda wymiany zmian (roadmapa v1.5)
 app.include_router(plan_sali_router)   # plan sali — rozmieszczenie stolików + status (roadmapa v1.5)
