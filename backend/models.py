@@ -331,6 +331,11 @@ class Termin(Base):
     # Kombinacja stołów: stolik_id = wiodący, stoliki_dodatkowe = pozostałe stoły złączki (JSON lista id).
     stoliki_dodatkowe   = Column(JSON, nullable=True)
     auto_przydzielony   = Column(Boolean, nullable=True)   # audyt: stół dobrał silnik sadzania, nie człowiek
+    # --- Faza operacyjna hosta (obok status księgowego): przybyl→posadzony→rachunek→oplacony→wyszedl ---
+    faza_hosta      = Column(String(16), nullable=True)    # NULL = jeszcze nie przyszedł
+    host_arrived_at = Column(DateTime, nullable=True)
+    host_seated_at  = Column(DateTime, nullable=True)      # do timera obrotu na mapie sali
+    host_left_at    = Column(DateTime, nullable=True)
 
 
 class ZamowienieSprzataczki(Base):

@@ -1240,6 +1240,18 @@ REZ_PRZEJSCIA = {
 REZ_AKTYWNE = ("rezerwacja", "potwierdzona")   # blokują stolik (liczą się do kolizji)
 DOMYSLNY_SLOT_MIN = 120
 
+# Faza operacyjna hosta (obok status księgowego). NULL = jeszcze nie przyszedł.
+HOST_FAZY = ("przybyl", "posadzony", "rachunek", "oplacony", "wyszedl")
+HOST_PRZEJSCIA = {
+    None:         {"przybyl", "posadzony"},           # z niczego: przyjście lub od razu posadzenie
+    "przybyl":    {"posadzony", "wyszedl"},
+    "posadzony":  {"rachunek", "oplacony", "wyszedl"},
+    "rachunek":   {"oplacony", "wyszedl"},
+    "oplacony":   {"wyszedl"},
+    "wyszedl":    set(),
+}
+HOST_NA_SALI = ("posadzony", "rachunek", "oplacony")
+
 
 def _wymagaj_modul_rezerwacje(db: Session = Depends(get_db)):
     if not modul_aktywny(db, "modul_rezerwacje"):
@@ -1500,6 +1512,90 @@ def auto_przydziel_stolik(rid: int, db: Session = Depends(get_db)):
     t.auto_przydzielony = True
     db.commit(); db.refresh(t)
     return {"rezerwacja": _rezerwacja_out(t), "przydzial": wybrany}
+
+
+# ── Widok hosta: kolejka dnia + fazy operacyjne + przydział stołu ─────────────
+def _host_out(t: models.Termin, teraz=None) -> dict:
+    wpis = _rezerwacja_out(t)
+    wpis["faza_hosta"] = t.faza_hosta
+    if t.faza_hosta in HOST_NA_SALI and t.host_seated_at and teraz:
+        wpis["minuty_od_posadzenia"] = max(0, int((teraz - t.host_seated_at).total_seconds() // 60))
+    return wpis
+
+
+@app.get("/api/host/kolejka", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_kolejka(data: date = Query(None), db: Session = Depends(get_db)):
+    """Widok hosta na dzień: nadchodzący / na sali (z timerem obrotu) / zakończeni + waitlista."""
+    dzien = data or date.today()
+    teraz = utcnow_naive()
+    rez = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik", models.Termin.data == dzien).order_by(models.Termin.godz_od).all()
+    nadchodzace, na_sali, zakonczone = [], [], []
+    for t in rez:
+        if t.status == "odwolana":
+            continue                                   # anulowane nie zaśmiecają widoku hosta
+        wpis = _host_out(t, teraz)
+        if t.faza_hosta == "wyszedl" or t.status in ("odbyla", "no_show"):
+            zakonczone.append(wpis)
+        elif t.faza_hosta in HOST_NA_SALI:
+            na_sali.append(wpis)
+        else:
+            nadchodzace.append(wpis)
+    waitlista = [{"id": w.id, "nazwisko": w.nazwisko, "godz_od": _hm(w.godz_od), "liczba_osob": w.liczba_osob}
+                 for w in db.query(models.ListaOczekujacych).filter_by(data=dzien, status="oczekuje")
+                 .order_by(models.ListaOczekujacych.id).all()]
+    return {
+        "data": str(dzien), "nadchodzace": nadchodzace, "na_sali": na_sali,
+        "zakonczone": zakonczone, "waitlista": waitlista,
+        "podsumowanie": {"nadchodzace": len(nadchodzace), "na_sali": len(na_sali),
+                         "zakonczone": len(zakonczone), "waitlista": len(waitlista),
+                         "coverow_na_sali": sum((w.get("liczba_osob") or 0) for w in na_sali)},
+    }
+
+
+@app.post("/api/host/rezerwacja/{rid}/faza", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_zmien_faze(rid: int, dane: schemas.HostFazaIn, db: Session = Depends(get_db)):
+    """Zmiana fazy operacyjnej (przybył/posadzony/rachunek/opłacony/wyszedł) z walidacją przejść.
+    'posadzony' potwierdza rezerwację; 'wyszedł' domyka ją jako odbytą (status księgowy)."""
+    t = db.get(models.Termin, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    faza = (dane.faza or "").strip()
+    if faza not in HOST_FAZY:
+        raise HTTPException(400, "Nieznana faza.")
+    if faza not in HOST_PRZEJSCIA.get(t.faza_hosta, set()):
+        raise HTTPException(409, f"Niedozwolone przejście fazy {t.faza_hosta or '—'} → {faza}.")
+    teraz = utcnow_naive()
+    t.faza_hosta = faza
+    if faza == "przybyl":
+        t.host_arrived_at = teraz
+    elif faza == "posadzony":
+        t.host_seated_at = teraz
+        if t.status == "rezerwacja":
+            t.status = "potwierdzona"; t.potwierdzono_at = teraz
+    elif faza == "wyszedl":
+        t.host_left_at = teraz
+        if t.status in REZ_AKTYWNE:
+            t.status = "odbyla"
+    db.commit(); db.refresh(t)
+    return _host_out(t, teraz)
+
+
+@app.post("/api/host/rezerwacja/{rid}/przydziel-stolik", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_przydziel_stolik(rid: int, dane: schemas.HostStolikIn, db: Session = Depends(get_db)):
+    """Ręczny przydział/przeniesienie rezerwacji na konkretny stół (walidacja pojemności + kolizji)."""
+    t = db.get(models.Termin, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    if not t.godz_od:
+        raise HTTPException(400, "Rezerwacja bez godziny — nie można przydzielić stołu.")
+    godz_do = t.godz_do or _dodaj_minuty(t.godz_od, _dlugosc_dla(db, t.data, t.godz_od, t.liczba_osob))
+    _waliduj_rezerwacje(db, t.data, t.godz_od, godz_do, dane.stolik_id, t.liczba_osob, pomin_id=rid)
+    t.stolik_id = dane.stolik_id
+    t.stoliki_dodatkowe = None          # ręczny pojedynczy stół kasuje wcześniejszą kombinację
+    t.godz_do = godz_do
+    db.commit(); db.refresh(t)
+    return _host_out(t, utcnow_naive())
 
 
 # ── Godziny otwarcia ─────────────────────────────────────────────────────────

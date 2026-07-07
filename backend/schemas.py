@@ -521,6 +521,12 @@ class RezerwacjaIn(BaseModel):
 class RezerwacjaStatusIn(BaseModel):
     status: str                    # potwierdzona | odbyla | no_show | odwolana
 
+class HostFazaIn(BaseModel):
+    faza: str                      # przybyl | posadzony | rachunek | oplacony | wyszedl
+
+class HostStolikIn(BaseModel):
+    stolik_id: int                 # ręczny przydział/przeniesienie na konkretny stół
+
 class ListaOczekujacychIn(BaseModel):
     data: date
     godz_od: Optional[time] = None
