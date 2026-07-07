@@ -1,0 +1,210 @@
+import { useEffect, useState, useCallback } from 'react'
+import { Card, SectionHeader } from '../ui/Card'
+import { Button } from '../ui/Button'
+import { Spinner } from '../ui/Spinner'
+import { Icon } from '../../lib/icons'
+import { api } from '../../lib/api'
+import { useToast } from '../ui/Toast'
+
+// Widok hosta — operacyjna tablica dnia: nadchodzący → na sali (timer obrotu) → zakończeni.
+// Jedno kliknięcie „Posadź" dobiera stół silnikiem best-fit (auto) albo sadza na wybranym.
+// Backend: /api/host/kolejka, /api/host/rezerwacja/{id}/faza|przydziel-stolik, /api/rezerwacje-stolik/{id}/auto-przydziel.
+
+const dzisISO = () => new Date().toISOString().slice(0, 10)
+const fld = 'rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-mint'
+
+// Kolor timera obrotu: mięta < 90 min, cytryna 90–119, czerwień ≥ 120 (przekroczony zasiadek).
+const timerKolor = (m) => (m == null ? 'text-muted' : m >= 120 ? 'text-danger' : m >= 90 ? 'text-lemon' : 'text-mint')
+
+const FAZA_META = {
+  posadzony: { l: 'Na sali', kol: 'bg-mint/15 text-mint' },
+  rachunek: { l: 'Rachunek', kol: 'bg-lemon/15 text-lemon' },
+  oplacony: { l: 'Opłacony', kol: 'bg-white/10 text-ink' },
+}
+
+export default function WidokHosta() {
+  const { toast } = useToast()
+  const [data, setData] = useState(dzisISO())
+  const [kolejka, setKolejka] = useState(null)
+  const [stoliki, setStoliki] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [pick, setPick] = useState({})          // { [rid]: stolik_id } — ręczny wybór stołu
+
+  const load = useCallback(async (quiet) => {
+    if (!quiet) setLoading(true)
+    try {
+      const [kk, ss] = await Promise.all([api(`/host/kolejka?data=${data}`), api('/stoliki')])
+      setKolejka(kk); setStoliki(ss.stoliki || [])
+    } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
+  }, [data, toast])
+
+  useEffect(() => { load() }, [load])
+  // Cicha aktualizacja timerów obrotu co 30 s (bez migotania spinnera).
+  useEffect(() => { const id = setInterval(() => load(true), 30000); return () => clearInterval(id) }, [load])
+
+  const przesun = (delta) => { const d = new Date(data); d.setDate(d.getDate() + delta); setData(d.toISOString().slice(0, 10)) }
+  const stolikNazwa = (id) => stoliki.find((s) => s.id === id)?.nazwa || `#${id}`
+  const stoleLabel = (r) => {
+    const ids = [r.stolik_id, ...(r.stoliki_dodatkowe || [])].filter(Boolean)
+    return ids.length ? ids.map(stolikNazwa).join(' + ') : null
+  }
+
+  const posadz = async (r) => {
+    try {
+      const sid = pick[r.id]
+      if (sid) await api(`/host/rezerwacja/${r.id}/przydziel-stolik`, 'POST', { stolik_id: Number(sid) })
+      else if (!r.stolik_id) await api(`/rezerwacje-stolik/${r.id}/auto-przydziel`, 'POST')
+      await api(`/host/rezerwacja/${r.id}/faza`, 'POST', { faza: 'posadzony' })
+      toast('Posadzono.', 'success'); setPick((p) => ({ ...p, [r.id]: '' })); load()
+    } catch (e) { toast(e.message, 'error') }
+  }
+  const faza = async (r, f) => {
+    try { await api(`/host/rezerwacja/${r.id}/faza`, 'POST', { faza: f }); load() }
+    catch (e) { toast(e.message, 'error') }
+  }
+
+  const dataLabel = new Date(data).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })
+  const P = kolejka?.podsumowanie || {}
+  const wolneStoly = stoliki.filter((s) => s.aktywny)
+
+  return (
+    <Card className="p-6 sm:p-8">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <SectionHeader title="Widok hosta" subtitle="Operacyjna tablica dnia: kto nadchodzi, kto na sali, timer obrotu. „Posadź” dobiera stół automatycznie." />
+        <div className="flex items-center gap-2">
+          <button onClick={() => przesun(-1)} aria-label="Poprzedni dzień" className="rounded-lg border border-line px-3 py-1.5 text-lg leading-none text-muted hover:text-ink">‹</button>
+          <input type="date" value={data} onChange={(e) => setData(e.target.value)} className={fld} />
+          <button onClick={() => przesun(1)} aria-label="Następny dzień" className="rounded-lg border border-line px-3 py-1.5 text-lg leading-none text-muted hover:text-ink">›</button>
+          <button onClick={() => setData(dzisISO())} className="rounded-lg border border-line px-2.5 py-1.5 text-xs font-semibold text-muted hover:text-ink">dziś</button>
+        </div>
+      </div>
+
+      {/* Podsumowanie dnia */}
+      <div className="mb-5 flex flex-wrap gap-2.5">
+        <Kafelek ikona="clock" etykieta="Nadchodzący" wartosc={P.nadchodzace ?? 0} />
+        <Kafelek ikona="users" etykieta="Na sali" wartosc={P.na_sali ?? 0} akcent />
+        <Kafelek ikona="sparkles" etykieta="Covery na sali" wartosc={P.coverow_na_sali ?? 0} />
+        <Kafelek ikona="check" etykieta="Zakończeni" wartosc={P.zakonczone ?? 0} />
+        <span className="ml-auto self-center text-sm font-medium capitalize text-muted">{dataLabel}</span>
+      </div>
+
+      {loading ? (
+        <div className="grid place-items-center py-16"><Spinner className="h-6 w-6 text-muted" /></div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-3">
+          {/* Nadchodzący */}
+          <Lane tytul="Nadchodzący" licznik={kolejka?.nadchodzace?.length || 0}>
+            {(kolejka?.nadchodzace || []).length === 0 && <Pusto>Nikt nie czeka na wejście.</Pusto>}
+            {(kolejka?.nadchodzace || []).map((r) => (
+              <div key={r.id} className="rounded-xl border border-line bg-surface-2 px-3.5 py-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-display text-sm font-bold tabular-nums text-ink">{r.godz_od || '—'}</span>
+                  {r.faza_hosta === 'przybyl' && <span className="rounded-full bg-lemon/15 px-2 py-0.5 text-[11px] font-semibold text-lemon">Przybył</span>}
+                </div>
+                <div className="mt-0.5 text-sm font-semibold text-ink">{r.nazwisko}</div>
+                <div className="text-xs text-muted">
+                  {r.liczba_osob ? `${r.liczba_osob} os.` : ''}{stoleLabel(r) ? ` · stół ${stoleLabel(r)}` : ' · bez stołu'}
+                </div>
+                <div className="mt-2.5 flex items-center gap-1.5">
+                  <select value={pick[r.id] || ''} onChange={(e) => setPick((p) => ({ ...p, [r.id]: e.target.value }))} className={`${fld} min-w-0 flex-1`} title="Wybierz stół ręcznie (puste = auto)">
+                    <option value="">auto (best-fit)</option>
+                    {wolneStoly.map((s) => <option key={s.id} value={s.id}>{s.nazwa} · {s.pojemnosc} os.</option>)}
+                  </select>
+                  <Button onClick={() => posadz(r)} className="shrink-0 px-3 py-1.5 text-xs"><Icon name="check" className="h-4 w-4" /> Posadź</Button>
+                </div>
+              </div>
+            ))}
+          </Lane>
+
+          {/* Na sali */}
+          <Lane tytul="Na sali" licznik={kolejka?.na_sali?.length || 0} akcent>
+            {(kolejka?.na_sali || []).length === 0 && <Pusto>Sala pusta.</Pusto>}
+            {(kolejka?.na_sali || []).map((r) => {
+              const meta = FAZA_META[r.faza_hosta] || FAZA_META.posadzony
+              return (
+                <div key={r.id} className="rounded-xl border border-line bg-surface-2 px-3.5 py-3">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm font-semibold text-ink">{r.nazwisko}</span>
+                    <span className={`shrink-0 font-display text-sm font-bold tabular-nums ${timerKolor(r.minuty_od_posadzenia)}`}>
+                      {r.minuty_od_posadzenia != null ? `${r.minuty_od_posadzenia}′` : ''}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
+                    <span className="rounded bg-white/[0.06] px-1.5 py-0.5 font-semibold text-ink">{stoleLabel(r) || '—'}</span>
+                    {r.liczba_osob ? <span>{r.liczba_osob} os.</span> : null}
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta.kol}`}>{meta.l}</span>
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    {r.faza_hosta === 'posadzony' && <FazaBtn onClick={() => faza(r, 'rachunek')} ikona="clipboard">Rachunek</FazaBtn>}
+                    {(r.faza_hosta === 'posadzony' || r.faza_hosta === 'rachunek') && <FazaBtn onClick={() => faza(r, 'oplacony')} ikona="check">Opłacony</FazaBtn>}
+                    <FazaBtn onClick={() => faza(r, 'wyszedl')} ikona="close" wyroznij>Wyszedł</FazaBtn>
+                  </div>
+                </div>
+              )
+            })}
+          </Lane>
+
+          {/* Zakończeni + waitlista */}
+          <Lane tytul="Zakończeni" licznik={kolejka?.zakonczone?.length || 0} przygaszony>
+            {(kolejka?.zakonczone || []).length === 0 && <Pusto>Jeszcze nikt nie wyszedł.</Pusto>}
+            {(kolejka?.zakonczone || []).map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-2 rounded-lg border border-line/60 px-3 py-2 text-sm">
+                <span className="text-muted"><span className="font-medium text-ink/80">{r.nazwisko}</span>{stoleLabel(r) ? ` · ${stoleLabel(r)}` : ''}</span>
+                <span className="text-[11px] text-muted">{r.status === 'no_show' ? 'nie przyszli' : 'odbyła się'}</span>
+              </div>
+            ))}
+            {(kolejka?.waitlista || []).length > 0 && (
+              <div className="mt-3 border-t border-line pt-3">
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">Lista oczekujących</div>
+                {kolejka.waitlista.map((w) => (
+                  <div key={w.id} className="flex items-center justify-between gap-2 py-1 text-sm">
+                    <span className="text-ink/80">{w.nazwisko}</span>
+                    <span className="text-xs text-muted">{[w.godz_od, w.liczba_osob ? `${w.liczba_osob} os.` : ''].filter(Boolean).join(' · ')}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Lane>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function Kafelek({ ikona, etykieta, wartosc, akcent }) {
+  return (
+    <div className={`flex items-center gap-2.5 rounded-xl border px-3.5 py-2 ${akcent ? 'border-mint/30 bg-mint/[0.07]' : 'border-line bg-surface-2'}`}>
+      <Icon name={ikona} className={`h-4 w-4 ${akcent ? 'text-mint' : 'text-muted'}`} />
+      <div>
+        <div className="font-display text-lg font-bold leading-none tabular-nums text-ink">{wartosc}</div>
+        <div className="text-[11px] text-muted">{etykieta}</div>
+      </div>
+    </div>
+  )
+}
+
+function Lane({ tytul, licznik, akcent, przygaszony, children }) {
+  return (
+    <div className={`rounded-2xl border p-3 ${akcent ? 'border-mint/25 bg-mint/[0.04]' : 'border-line bg-surface/40'}`}>
+      <div className="mb-2.5 flex items-center gap-2 px-1">
+        <h3 className={`font-display text-sm font-bold ${przygaszony ? 'text-muted' : 'text-ink'}`}>{tytul}</h3>
+        <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted">{licznik}</span>
+      </div>
+      <div className="space-y-2">{children}</div>
+    </div>
+  )
+}
+
+function Pusto({ children }) {
+  return <div className="rounded-xl border border-dashed border-line px-3 py-8 text-center text-xs text-muted">{children}</div>
+}
+
+function FazaBtn({ onClick, ikona, children, wyroznij }) {
+  return (
+    <button onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${
+        wyroznij ? 'border-line text-muted hover:border-danger/40 hover:text-danger' : 'border-line text-muted hover:text-ink'}`}>
+      <Icon name={ikona} className="h-3.5 w-3.5" /> {children}
+    </button>
+  )
+}

@@ -26,6 +26,7 @@ import Zadatki from './components/tabs/Zadatki'
 import StolyLive from './components/tabs/StolyLive'
 import Rezerwacje from './components/tabs/Rezerwacje'
 import RezerwacjeStolik from './components/tabs/RezerwacjeStolik'
+import WidokHosta from './components/tabs/WidokHosta'
 import CrmGoscie from './components/tabs/CrmGoscie'
 import GieldaZmian from './components/tabs/GieldaZmian'
 import PlanSali from './components/tabs/PlanSali'
@@ -80,6 +81,7 @@ const TABS = [
   { id: 'antyfraud', label: 'Antyfraud POS', icon: 'warning', kat: 'kasa', title: 'Antyfraud POS — storna i rabaty', Comp: AntyfraudPos, modul: 'modul_pos' },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', kat: 'kasa', title: 'Eksport danych', Comp: Eksport },
   // Goście — rezerwacje i relacje.
+  { id: 'widok-hosta', label: 'Widok hosta', icon: 'users', kat: 'goscie', title: 'Widok hosta — kolejka dnia i sadzanie', Comp: WidokHosta, modul: 'modul_rezerwacje' },
   { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', kat: 'goscie', title: 'Rezerwacje stolików', Comp: RezerwacjeStolik, modul: 'modul_rezerwacje' },
   { id: 'plan-sali', label: 'Plan sali', icon: 'office', kat: 'goscie', title: 'Plan sali — rozmieszczenie stolików', Comp: PlanSali, modul: 'modul_rezerwacje' },
   { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', Comp: CrmGoscie, modul: 'modul_rezerwacje' },
