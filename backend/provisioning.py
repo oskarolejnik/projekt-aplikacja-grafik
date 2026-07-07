@@ -134,8 +134,13 @@ def uruchom_instancje(slug: str, port: int) -> int:
     """Startuje proces uvicorn instancji; zwraca PID. Log w instances/<slug>/uvicorn.log."""
     katalog = INSTANCES_DIR / slug
     log = open(katalog / "uvicorn.log", "ab")
+    # --proxy-headers: w docelowej architekturze dziecko stoi za reverse proxy (subdomeny),
+    # więc rate-limity muszą liczyć realne IP klienta z X-Forwarded-For. Zaufane proxy z env
+    # FORWARDED_ALLOW_IPS (proxy na tym samym hoście → domyślnie 127.0.0.1).
+    fwd = os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(port)],
+        [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(port),
+         "--proxy-headers", "--forwarded-allow-ips", fwd],
         cwd=str(BACKEND_DIR),
         env=_env_instancji(katalog, port),
         stdout=log, stderr=subprocess.STDOUT,

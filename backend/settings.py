@@ -100,6 +100,15 @@ def _problems() -> tuple[list[str], list[str]]:
             f"SECRET_KEY jest krótki ({len(secret)} znaków) — zalecane min. {_MIN_SECRET_LEN}."
         )
 
+    enc = os.environ.get("ENCRYPTION_KEY", "").strip()
+    if not enc:
+        errors.append(
+            "ENCRYPTION_KEY nie jest ustawiony — PII gości (telefon, e-mail) byłoby zapisywane "
+            "JAWNYM TEKSTEM (bez szyfrowania at-rest, RODO art. 32). Ustaw długi, losowy klucz "
+            '(np. python -c "import secrets; print(secrets.token_urlsafe(48))") i NIE zmieniaj go '
+            "po pierwszym zapisie danych."
+        )
+
     rcp = os.environ.get("RCP_INGEST_TOKEN", "")
     if rcp in _INSECURE_RCP_TOKENS:
         errors.append(

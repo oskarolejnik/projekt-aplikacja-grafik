@@ -204,7 +204,19 @@ async def role_guard(request: Request, call_next):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
-    rola = payload.get("rola")
+    # Egzekwuj BIEŻĄCY stan konta z bazy — NIE ufaj roli wmrożonej w token (CWE-613). Dzięki temu
+    # dezaktywacja (User.aktywny=False) i degradacja roli działają natychmiast, a nie dopiero po
+    # wygaśnięciu tokenu. Większość endpointów admina jest chroniona wyłącznie tym middlewarem.
+    _db = SessionLocal()
+    try:
+        _user = _db.get(models.User, int(payload.get("sub") or 0))
+    except (TypeError, ValueError):
+        _user = None
+    finally:
+        _db.close()
+    if _user is None or not _user.aktywny:
+        return JSONResponse({"detail": "Konto nieaktywne lub nie istnieje."}, status_code=401)
+    rola = _user.rola
     if path.startswith("/api/me/") or rola == "admin":
         return await call_next(request)
     if _sciezka_na_whitelist(path, ROLA_PELNA_PRZESTRZEN.get(rola, ())):

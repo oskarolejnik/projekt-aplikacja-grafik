@@ -27,6 +27,11 @@ services:
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-grafik}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-grafik}
       SECRET_KEY: ${SECRET_KEY:?ustaw SECRET_KEY w pliku .env}
+      # Wymagany: szyfrowanie PII gości at-rest. Brak = odmowa startu (RODO art. 32).
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ustaw ENCRYPTION_KEY w pliku .env}
+      # Zaufane proxy dla X-Forwarded-For (rate-limity liczą realne IP klienta). App jest
+      # osiągalna wyłącznie przez Caddy w prywatnej sieci compose → '*' jest tu bezpieczne.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
       RCP_INGEST_TOKEN: ${RCP_INGEST_TOKEN:-}
       TOKEN_TTL_MINUTES: ${TOKEN_TTL_MINUTES:-720}
       CORS_ORIGINS: ${CORS_ORIGINS:-}

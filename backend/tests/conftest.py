@@ -28,6 +28,10 @@ os.environ.setdefault("TOKEN_TTL_MINUTES", "720")
 # X-RCP-Token="test-rcp-token", więc token w środowisku (np. RCP_INGEST_TOKEN ustawiony
 # w CI) NIE MOŻE go nadpisywać — inaczej ingest jest odrzucany i testy padają tylko w CI.
 os.environ["RCP_INGEST_TOKEN"] = "test-rcp-token"
+# Klucz szyfrowania at-rest — WYMAGANY od czasu utwardzenia (settings.validate_critical_secrets).
+# Ustawiony na stałą wartość testową: walidacja przechodzi, a szyfrowanie PII jest realnie
+# ćwiczone (kolumny EncryptedString zapisują szyfrogram, ORM odszyfrowuje transparentnie).
+os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-do-not-use-in-prod-0123456789")
 os.environ["DATABASE_URL"] = "sqlite://"
 
 from sqlalchemy import create_engine  # noqa: E402

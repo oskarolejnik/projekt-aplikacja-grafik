@@ -57,6 +57,10 @@ def generuj_sekrety() -> dict:
     return {
         "SECRET_KEY": secrets.token_urlsafe(48),       # 64 znaki — daleko ponad próg bezpieczeństwa
         "RCP_INGEST_TOKEN": secrets.token_urlsafe(32),  # token agenta POS (ten sam po stronie agenta)
+        # Klucz szyfrowania PII gości at-rest (Fernet). MUSI być generowany, inaczej instancja
+        # startuje w trybie passthrough i zapisuje telefon/e-mail gości jawnym tekstem (RODO art. 32).
+        # UWAGA: STAŁY po pierwszym zapisie — zmiana klucza uniemożliwi odszyfrowanie danych.
+        "ENCRYPTION_KEY": secrets.token_urlsafe(48),
     }
 
 
@@ -91,6 +95,10 @@ DATABASE_URL={db_url}
 # Sekret JWT — unikalny dla tej instancji.
 SECRET_KEY={sekrety['SECRET_KEY']}
 TOKEN_TTL_MINUTES=720
+
+# Klucz szyfrowania PII gości at-rest (Fernet) — WYMAGANY. Bez niego telefon/e-mail gości
+# byłyby zapisywane jawnym tekstem. STAŁY: nie zmieniaj po pierwszym zapisie danych.
+ENCRYPTION_KEY={sekrety.get('ENCRYPTION_KEY', '')}
 
 # Puste = tylko same-origin (backend serwuje frontend spod tej samej domeny).
 CORS_ORIGINS=

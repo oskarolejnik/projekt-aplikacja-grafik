@@ -35,4 +35,8 @@ USER grafik
 
 EXPOSE 8000
 # init_db() na starcie aplikacji wykonuje migracje Alembic (upgrade head) automatycznie.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers + --forwarded-allow-ips: za reverse proxy (Caddy) rate-limity liczą REALNE IP
+# klienta (X-Forwarded-For), a nie adres proxy — inaczej cała flota dzieli jeden kubełek (masowy
+# lockout-DoS) lub, przy '*' bez ograniczeń, atakujący spoofuje IP i omija limit. Zaufane proxy
+# podaje FORWARDED_ALLOW_IPS (compose ustawia je na sieć Caddy); domyślnie restrykcyjnie 127.0.0.1.
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]

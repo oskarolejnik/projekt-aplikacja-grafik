@@ -22,9 +22,10 @@ def test_waliduj_slug_odrzuca(zly):
 # ── sekrety ───────────────────────────────────────────────────────────────────
 def test_generuj_sekrety_bezpieczne_i_unikalne():
     a, b = nc.generuj_sekrety(), nc.generuj_sekrety()
-    assert set(a) == {"SECRET_KEY", "RCP_INGEST_TOKEN"}
+    assert set(a) == {"SECRET_KEY", "RCP_INGEST_TOKEN", "ENCRYPTION_KEY"}
     assert a["SECRET_KEY"] != b["SECRET_KEY"]            # losowe przy każdym wywołaniu
     assert a["RCP_INGEST_TOKEN"] != b["RCP_INGEST_TOKEN"]
+    assert a["ENCRYPTION_KEY"] != b["ENCRYPTION_KEY"] and len(a["ENCRYPTION_KEY"]) >= 32
     assert len(a["SECRET_KEY"]) >= 32
     # Wygenerowane sekrety NIE mogą trafić na listę niebezpiecznych z settings (fail-fast by je odrzucił).
     assert a["SECRET_KEY"] not in settings._INSECURE_SECRET_KEYS
@@ -39,12 +40,14 @@ def test_domyslne_haslo_przechodzi_walidacje():
 
 # ── render .env ───────────────────────────────────────────────────────────────
 def test_renderuj_env_produkcyjny_i_z_sekretami():
-    sek = {"SECRET_KEY": "AAAA-bardzo-dlugi-sekret-instancji-xyz", "RCP_INGEST_TOKEN": "RCP-token-instancji-123"}
+    sek = {"SECRET_KEY": "AAAA-bardzo-dlugi-sekret-instancji-xyz", "RCP_INGEST_TOKEN": "RCP-token-instancji-123",
+           "ENCRYPTION_KEY": "ENC-klucz-szyfrowania-instancji-xyz"}
     env = nc.renderuj_env("bistro-verde", nazwa="Bistro Verde", domena="bistroverde.pl",
                           db_url="sqlite:///./x.db", sekrety=sek)
     assert "APP_ENV=production" in env
     assert f"SECRET_KEY={sek['SECRET_KEY']}" in env
     assert f"RCP_INGEST_TOKEN={sek['RCP_INGEST_TOKEN']}" in env
+    assert f"ENCRYPTION_KEY={sek['ENCRYPTION_KEY']}" in env    # PII szyfrowane at-rest od startu
     assert "DATABASE_URL=sqlite:///./x.db" in env
     assert "bistroverde.pl" in env
     # Żadnych niebezpiecznych placeholderów z .env.example.
