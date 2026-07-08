@@ -51,6 +51,29 @@ def test_odwolanie_realokuje_auto_na_lepszy_stol(admin_client):
     assert g["stolik_id"] == s3 and g["stoliki_dodatkowe"] == []
 
 
+def test_reopt_nie_dubluje_stolu_dwoch_rezerwacji(admin_client):
+    """Regresja: gdy DWIE auto-rezerwacje nachodzą na to samo zwolnione okno, re-optymalizacja
+    nie może posadzić obu na tym samym zwolnionym stole. Sesja ma autoflush=False — bezpieczeństwo
+    zależy od tożsamościowej mapy ORM (przydział poprzedniej rezerwacji w pętli jest już widoczny)."""
+    x = _stolik(admin_client, "X", 3)                 # dokładnie na grupę 3 (nadmiar 0 → najtańszy)
+    z, w = _stolik(admin_client, "Z", 2), _stolik(admin_client, "W", 2)
+    v, u = _stolik(admin_client, "V", 2), _stolik(admin_client, "U", 2)
+    for a, b in [(z, w), (v, u)]:
+        assert admin_client.post("/api/sasiedztwo", json={"stolik_a": a, "stolik_b": b}).status_code == 201
+    blok = _rez(admin_client, DZIEN, "18:00", 3, stolik_id=x, nazwisko="Blokada")
+    r_a = _rez(admin_client, DZIEN, "18:00", 3, nazwisko="A")
+    r_b = _rez(admin_client, DZIEN, "18:00", 3, nazwisko="B")
+    # A → kombinacja [Z,W], B → kombinacja [V,U] (X zajęty blokadą)
+    assert set(admin_client.post(f"/api/rezerwacje-stolik/{r_a}/auto-przydziel").json()["przydzial"]["stoliki"]) == {z, w}
+    assert set(admin_client.post(f"/api/rezerwacje-stolik/{r_b}/auto-przydziel").json()["przydzial"]["stoliki"]) == {v, u}
+    # odwołanie blokady zwalnia X (cap 3) → jedna z rezerwacji może na niego przeskoczyć — ale NIE OBIE
+    assert admin_client.post(f"/api/rezerwacje-stolik/{blok}/status", json={"status": "odwolana"}).status_code == 200
+    ga, gb = _rez_out(admin_client, DZIEN, r_a), _rez_out(admin_client, DZIEN, r_b)
+    stoly_a = set([ga["stolik_id"]] + ga["stoliki_dodatkowe"])
+    stoly_b = set([gb["stolik_id"]] + gb["stoliki_dodatkowe"])
+    assert not (stoly_a & stoly_b), f"Podwójna rezerwacja stołu: A={stoly_a} B={stoly_b}"
+
+
 def test_posadzonej_nie_ruszamy(admin_client):
     s1, s2, s3, blok, grupa = _scenariusz_kombinacja(admin_client)
     # gość z grupy już posadzony na S1+S2 → obrót w toku, re-alokacja go pomija
