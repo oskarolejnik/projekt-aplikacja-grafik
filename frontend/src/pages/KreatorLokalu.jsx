@@ -149,8 +149,8 @@ export default function KreatorLokalu({ planStart = null }) {
   const zgodaBox = (
     <label className="mb-4 flex cursor-pointer items-start gap-2.5 rounded-xl border border-line bg-surface-2 px-3.5 py-3 text-xs leading-relaxed text-muted">
       <input type="checkbox" checked={zgoda} onChange={(e) => setZgoda(e.target.checked)} className="mt-0.5 accent-mint" />
-      <span>Akceptuję <a href="/regulamin" target="_blank" rel="noreferrer" className="text-mint underline">Regulamin</a>,{' '}
-        <a href="/polityka" target="_blank" rel="noreferrer" className="text-mint underline">Politykę prywatności</a> oraz
+      <span>Akceptuję <a href="/?regulamin" target="_blank" rel="noreferrer" className="text-mint underline">Regulamin</a>,{' '}
+        <a href="/?polityka" target="_blank" rel="noreferrer" className="text-mint underline">Politykę prywatności</a> oraz
         Umowę powierzenia przetwarzania danych osobowych.</span>
     </label>
   )

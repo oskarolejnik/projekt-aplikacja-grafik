@@ -17,6 +17,7 @@ import Start from './pages/Start'
 import Produkt from './pages/ProduktPro'
 import Zaproszenie from './pages/Zaproszenie'
 import WyborInstancji from './pages/WyborInstancji'
+import Dokument from './pages/Dokument'
 import { api, getApiBase } from './lib/api'
 import { jestNatywna } from './lib/platforma'
 
@@ -30,6 +31,8 @@ const isProdukt = _params.has('produkt')
 const isLogin = _params.has('login')   // ?login → ekran logowania (landing marketingowy prowadzi tu z „Zaloguj")
 const isStart = _params.has('start')   // ?start → kreator lokalu (świeża instancja) lub rozjazd „co dalej"
 const isOnboardingParam = _params.has('onboarding')   // ?onboarding → kreator zawsze (na zajętej instancji: podgląd demo)
+const isPolityka = _params.has('polityka')            // ?polityka → publiczna Polityka prywatności
+const isRegulamin = _params.has('regulamin')          // ?regulamin → publiczny Regulamin
 const zaproszenieToken = _params.get('zaproszenie')   // ?zaproszenie=TOKEN → rejestracja pracownika z linku
 
 // Routing wg stanu zalogowania i roli:
@@ -84,6 +87,14 @@ export default function App() {
     )
   }
 
+  // Dokumenty prawne — publiczne, statyczne, bez logowania (linkowane ze stopki i kreatora).
+  if (isPolityka || isRegulamin) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <Dokument ktory={isRegulamin ? 'regulamin' : 'polityka'} />
+      </MotionConfig>
+    )
+  }
   // Strona produktu (marketing/cennik) — statyczna, bez logowania i bez kontekstów instancji.
   if (isProdukt) {
     return (

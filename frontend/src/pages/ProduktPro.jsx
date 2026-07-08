@@ -11,6 +11,7 @@ import SekcjaWhiteLabel from './landing/SekcjaWhiteLabel'
 import SekcjaCennik from './landing/SekcjaCennik'
 import SekcjaZaufanie from './landing/SekcjaZaufanie'
 import SekcjaFinal from './landing/SekcjaFinal'
+import BanerCookies from '../components/BanerCookies'
 
 // Landing „Lokalo Noir" v4 — premium, scroll-storytelling (Lenis + GSAP + subtelne 3D).
 // Rejestr BRAND: ciepła czerń (noc/wegiel) + złota nitka (zloto). Ekrany produktu w winietach
@@ -112,9 +113,14 @@ export default function ProduktPro() {
             <Logo className="h-6" variant="gradient" />
             <span className="font-brand font-bold text-muted">Lokalo</span>
           </div>
-          <span>© Lokalo — oprogramowanie własnościowe. Wszelkie prawa zastrzeżone.</span>
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-center">
+            <a href="/?regulamin" className="transition hover:text-ink">Regulamin</a>
+            <a href="/?polityka" className="transition hover:text-ink">Polityka prywatności</a>
+            <span>© Lokalo — oprogramowanie własnościowe.</span>
+          </div>
         </div>
       </footer>
+      <BanerCookies />
     </div>
   )
 }
