@@ -602,6 +602,12 @@ class OnlineRezerwacjaIn(BaseModel):
     email: Optional[str] = None
     notatka: Optional[str] = None
 
+class OnlineEdytujIn(BaseModel):
+    """Zmiana rezerwacji online z magic-linka (token). Puste pola = bez zmiany."""
+    data: Optional[date] = None
+    godz_od: Optional[time] = None
+    liczba_osob: Optional[int] = None
+
 # --- ZGODNOŚĆ LOKALU (badania pracowników + terminy lokalu) ---
 
 class DokumentZgodnosciIn(BaseModel):

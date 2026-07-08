@@ -2151,15 +2151,40 @@ def _kombinacje_do_seating(db):
             for k in db.query(models.KombinacjaStolow).filter_by(aktywna=True).all()]
 
 
-def _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby):
-    """Najmniejszy wolny aktywny stolik mieszczący 'osoby' w oknie [godz_od, godz_do]. None gdy brak."""
+def _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby, pomin_id=None):
+    """Najmniejszy wolny aktywny stolik mieszczący 'osoby' w oknie [godz_od, godz_do]. None gdy brak.
+    pomin_id = id rezerwacji, której NIE wliczać do zajętości (edycja własnej rezerwacji)."""
+    zajete = _zajete_stoly(db, data, godz_od, godz_do, pomin_id=pomin_id)
     kandydaci = sorted([s for s in db.query(models.Stolik).filter_by(aktywny=True).all()
                         if (s.pojemnosc or 0) >= max(1, osoby or 1)],
                        key=lambda s: (s.pojemnosc, s.id))
     for s in kandydaci:
-        if not _stolik_zajety(db, data, s.id, godz_od, godz_do):
+        if s.id not in zajete:
             return s
     return None
+
+
+def _pierwszy_wolny_slot(db, data, osoby, cfg, teraz_lok):
+    """Pierwszy slot dnia z wolnym stołem dla 'osoby' (respektuje blackout/cutoff/pacing). None gdy brak."""
+    stoliki = [s for s in db.query(models.Stolik).filter_by(aktywny=True).all() if (s.pojemnosc or 0) >= osoby]
+    if not stoliki:
+        return None
+    for g, serwis in _sloty_dnia(db, data):                     # blackout → [] (pusto, sam znika)
+        if cfg.rez_cutoff_min and (datetime.combine(data, g) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
+            continue
+        if _pacing_pelny(db, data, g, serwis, osoby):
+            continue
+        g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
+        if any(not _stolik_zajety(db, data, s.id, g, g_do) for s in stoliki):
+            return (g, serwis)
+    return None
+
+
+def _sprawdz_okno_anulacji(cfg, t, teraz_lok):
+    """Egzekwuje rez_anulacja_do_h: zmiany/anulacji online nie później niż X h przed terminem (0 = zawsze)."""
+    if cfg.rez_anulacja_do_h and t.godz_od:
+        if (datetime.combine(t.data, t.godz_od) - teraz_lok) < timedelta(hours=cfg.rez_anulacja_do_h):
+            raise HTTPException(400, f"Zmiany/anulacji można dokonać najpóźniej {cfg.rez_anulacja_do_h} h przed terminem.")
 
 
 def _online_rez_out(t: models.Termin, stolik=None) -> dict:
@@ -2194,6 +2219,28 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
                     "wolne_stoly": wolne_stoly, "pacing_pelny": pacing_pelny,
                     "serwis": (serwis.nazwa if serwis and serwis.nazwa else None)})
     return {"data": str(data), "osoby": osoby, "sloty": out}
+
+
+@app.get("/api/online/najblizszy-termin", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_najblizszy_termin(osoby: int = 2, od: Optional[date] = None, dni: int = 14,
+                             db: Session = Depends(get_db)):
+    """Publicznie: pierwszy dzień (od 'od', domyślnie dziś) z wolnym stołem dla 'osoby'. Skanuje do
+    'dni' w przód, respektując okno wyprzedzenia. Zwraca {data, slot:{godz_od,serwis}} lub {data:null}."""
+    osoby = max(1, osoby)
+    cfg = get_lokal_config(db)
+    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    start = max(od or teraz_lok.date(), teraz_lok.date())          # nigdy wstecz
+    limit_dni = max(1, min(int(dni or 14), 60))                    # twardy limit skanowania
+    for i in range(limit_dni):
+        d = start + timedelta(days=i)
+        if cfg.rez_okno_wyprzedzenia_dni and d > teraz_lok.date() + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
+            break                                                  # poza oknem — dalej nie warto skanować
+        slot = _pierwszy_wolny_slot(db, d, osoby, cfg, teraz_lok)
+        if slot:
+            g, serwis = slot
+            return {"data": str(d), "osoby": osoby,
+                    "slot": {"godz_od": _hm(g), "serwis": (serwis.nazwa if serwis and serwis.nazwa else None)}}
+    return {"data": None, "osoby": osoby, "slot": None}
 
 
 @app.post("/api/online/rezerwacja", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
@@ -2319,8 +2366,59 @@ def online_rezerwacja_odwolaj(token: str, db: Session = Depends(get_db)):
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
     if t.status in REZ_AKTYWNE:
+        teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+        _sprawdz_okno_anulacji(get_lokal_config(db), t, teraz_lok)   # egzekwuj rez_anulacja_do_h
+        stolik_wolny = _stoly_terminu(t)
         t.status = "odwolana"; t.odwolano_at = utcnow_naive(); db.commit(); db.refresh(t)
+        if stolik_wolny and t.godz_od:                               # zwolniony stół → re-optymalizacja
+            _po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
     return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
+
+
+@app.post("/api/online/rezerwacja/{token}/edytuj", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Session = Depends(get_db)):
+    """Publicznie (magic-link): zmiana terminu/liczby osób. Egzekwuje politykę (okno anulacji, okno
+    wyprzedzenia, cutoff, min/max grupa, blackout) i re-alokuje stół. 409 gdy brak miejsca."""
+    t = _rez_po_tokenie(db, token)
+    if not t:
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    if t.status not in REZ_AKTYWNE:
+        raise HTTPException(409, "Tej rezerwacji nie można już zmienić.")
+    if t.faza_hosta is not None:
+        raise HTTPException(409, "Rezerwacja jest w trakcie obsługi na sali.")
+    cfg = get_lokal_config(db)
+    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    _sprawdz_okno_anulacji(cfg, t, teraz_lok)                        # za późno na zmianę → 400
+    data = dane.data or t.data
+    godz_od = dane.godz_od or t.godz_od
+    osoby = max(1, dane.liczba_osob or t.liczba_osob or 1)
+    if godz_od is None:
+        raise HTTPException(400, "Rezerwacja bez godziny — nie można zmienić.")
+    if data < teraz_lok.date():
+        raise HTTPException(400, "Nie można przenieść rezerwacji wstecz.")
+    if cfg.rez_okno_wyprzedzenia_dni and data > teraz_lok.date() + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
+        raise HTTPException(400, f"Termin poza oknem {cfg.rez_okno_wyprzedzenia_dni} dni.")
+    if osoby < cfg.rez_min_grupa_online or (cfg.rez_max_grupa_online and osoby > cfg.rez_max_grupa_online):
+        raise HTTPException(400, "Liczba osób poza zakresem dozwolonym online.")
+    if _jest_blackout(db, data):
+        raise HTTPException(409, "W tym dniu nie przyjmujemy rezerwacji online.")
+    if cfg.rez_cutoff_min and (datetime.combine(data, godz_od) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
+        raise HTTPException(409, "Zbyt późno na wybrany termin.")
+    zmiana_slotu = (data != t.data or godz_od != t.godz_od)
+    serwis = _serwis_dla_godziny(db, data, godz_od)
+    if zmiana_slotu and _pacing_pelny(db, data, godz_od, serwis, osoby):   # przy zmianie slotu — pacing (bez samoblokady)
+        raise HTTPException(409, "Brak miejsc w wybranym czasie.")
+    godz_do = _dodaj_minuty(godz_od, _turn_time(serwis, osoby))
+    stolik = _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby, pomin_id=t.id)   # pomiń własny stół
+    if not stolik:
+        raise HTTPException(409, "Brak wolnego stolika dla nowego terminu.")
+    stary_okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
+    t.data = data; t.godz_od = godz_od; t.godz_do = godz_do; t.liczba_osob = osoby
+    t.stolik_id = stolik.id; t.stoliki_dodatkowe = None
+    db.commit(); db.refresh(t)
+    if stary_okno and (stary_okno[0], _hm(stary_okno[1])) != (data, _hm(godz_od)):
+        _po_zwolnieniu_stolu(db, *stary_okno)                        # stary termin zwolniony → re-optymalizacja
+    return _online_rez_out(t, stolik)
 
 
 # --- PUBLIKACJA GRAFIKU (admin — chronione middleware) ---
