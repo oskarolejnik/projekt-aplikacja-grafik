@@ -13,7 +13,6 @@ import { hhmm } from '../../lib/format'
 function StanowiskoRow({ s, i = 0, onChanged }) {
   const { toast, confirm } = useToast()
   const [nazwa, setNazwa] = useState(s.nazwa)
-  const [weekend, setWeekend] = useState(s.tylko_weekend)
   const [wszyscy, setWszyscy] = useState(!!s.widoczny_dla_wszystkich)
   const [grupa, setGrupa] = useState(s.grupa_widocznosci || '')
   const [busy, setBusy] = useState(false)
@@ -22,7 +21,7 @@ function StanowiskoRow({ s, i = 0, onChanged }) {
     setBusy(true)
     try {
       await api(`/stanowiska/${s.id}`, 'PUT', {
-        nazwa: nazwa.trim(), tylko_weekend: weekend,
+        nazwa: nazwa.trim(), tylko_weekend: s.tylko_weekend,   // pole ukryte w UI — zachowaj dotychczasową wartość
         widoczny_dla_wszystkich: wszyscy, grupa_widocznosci: grupa.trim() || null,
       })
       toast('Zapisano zmiany.', 'success')
@@ -49,10 +48,6 @@ function StanowiskoRow({ s, i = 0, onChanged }) {
         <label className="flex flex-1 flex-col gap-1.5">
           <span className="field-label">Nazwa stanowiska <span className="font-mono text-muted/60">#{s.id}</span></span>
           <input value={nazwa} onChange={(e) => setNazwa(e.target.value)} className="field" />
-        </label>
-        <label className="flex items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
-          <input type="checkbox" checked={weekend} onChange={(e) => setWeekend(e.target.checked)} className="h-4 w-4 accent-mint" />
-          Tylko weekend
         </label>
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" onClick={zapisz} disabled={busy}>
@@ -86,7 +81,6 @@ export default function Stanowiska() {
   const { stanowiska, reloadDicts } = useData()
   const { toast } = useToast()
   const [nowa, setNowa] = useState('')
-  const [nowaWeekend, setNowaWeekend] = useState(false)
   const [nowaWszyscy, setNowaWszyscy] = useState(false)
   const [nowaGrupa, setNowaGrupa] = useState('')
   const [pkStan, setPkStan] = useState('')
@@ -101,11 +95,10 @@ export default function Stanowiska() {
     if (!nowa.trim()) return
     try {
       await api('/stanowiska', 'POST', {
-        nazwa: nowa.trim(), tylko_weekend: nowaWeekend,
+        nazwa: nowa.trim(), tylko_weekend: false,
         widoczny_dla_wszystkich: nowaWszyscy, grupa_widocznosci: nowaGrupa.trim() || null,
       })
       setNowa('')
-      setNowaWeekend(false)
       setNowaWszyscy(false)
       setNowaGrupa('')
       reloadDicts()
@@ -157,10 +150,6 @@ export default function Stanowiska() {
             placeholder="Np. Sala, Bar…"
             className="field"
           />
-          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
-            <input type="checkbox" checked={nowaWeekend} onChange={(e) => setNowaWeekend(e.target.checked)} className="h-4 w-4 accent-mint" />
-            Tylko weekend
-          </label>
           <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
             <input type="checkbox" checked={nowaWszyscy} onChange={(e) => setNowaWszyscy(e.target.checked)} className="h-4 w-4 accent-mint" />
             Widoczny dla wszystkich (np. Menadżer)
