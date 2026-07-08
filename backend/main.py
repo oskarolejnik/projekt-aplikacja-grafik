@@ -1285,8 +1285,9 @@ def _wymagaj_modul_rezerwacje(db: Session = Depends(get_db)):
 
 
 def _dodaj_minuty(t: time, minuty: int) -> time:
-    """t + minuty, obcięte do tej samej doby (rezerwacje nie przechodzą przez północ w MVP)."""
-    total = min(t.hour * 60 + t.minute + minuty, 23 * 60 + 59)
+    """t + minuty, obcięte do tej samej doby [00:00, 23:59] (bez przejścia przez północ w MVP;
+    ujemne minuty dozwolone — dla bufora cofającego początek okna, clamp do 00:00)."""
+    total = min(max(0, t.hour * 60 + t.minute + minuty), 23 * 60 + 59)
     return time(total // 60, total % 60)
 
 
@@ -1312,6 +1313,12 @@ def _serwisy_dnia(db, data: date):
         pacing_max_rez=(wzor.pacing_max_rez if wzor else None),
         pacing_max_osob=(wzor.pacing_max_osob if wzor else None),
         pacing_okno_min=(wzor.pacing_okno_min if wzor else None))]
+
+
+def _jest_blackout(db, data) -> bool:
+    """Czy dzień ma JAWNY blackout (WyjatekKalendarza). Puste GodzinyOtwarcia ≠ blackout — brak
+    skonfigurowanych godzin to historycznie 'otwarte' (rezerwacja dozwolona z DOMYSLNY turn-time)."""
+    return db.query(models.WyjatekKalendarza).filter_by(data=data, typ="blackout").first() is not None
 
 
 def _serwis_dla_godziny(db, data, godz_od):
@@ -1371,6 +1378,7 @@ def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomi
         return godz_do
     if godz_do is None:
         godz_do = _dodaj_minuty(godz_od, _dlugosc_dla(db, data, godz_od, liczba_osob))
+    bufor = get_lokal_config(db).rez_bufor_min or 0     # bufor sprzątania między rezerwacjami
     q = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == data,
         models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
@@ -1380,7 +1388,8 @@ def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomi
         if stolik_id not in _stoly_terminu(r):       # także gdy stół jest składową kombinacji innej rezerwacji
             continue
         r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
-        if godz_od < r_do and r.godz_od < godz_do:   # nachodzą
+        r_do_buf, r_od_buf = _dodaj_minuty(r_do, bufor), _dodaj_minuty(r.godz_od, -bufor)
+        if godz_od < r_do_buf and r_od_buf < godz_do:   # nachodzą (z buforem sprzątania)
             raise HTTPException(409, f"Stolik zajęty w tym czasie (kolizja od {r.godz_od.strftime('%H:%M')}).")
     return godz_do
 
@@ -1915,6 +1924,7 @@ def _stolik_zajety(db, data, stolik_id, godz_od, godz_do) -> bool:
 def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
     """Zbiór id stołów zajętych w oknie [godz_od, godz_do] — wliczając stoły składowe kombinacji."""
     zajete = set()
+    bufor = get_lokal_config(db).rez_bufor_min or 0     # bufor sprzątania między rezerwacjami
     q = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == data,
         models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
@@ -1922,7 +1932,8 @@ def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
         q = q.filter(models.Termin.id != pomin_id)
     for r in q.all():
         r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
-        if godz_od < r_do and r.godz_od < godz_do:
+        r_do_buf, r_od_buf = _dodaj_minuty(r_do, bufor), _dodaj_minuty(r.godz_od, -bufor)
+        if godz_od < r_do_buf and r_od_buf < godz_do:
             zajete |= _stoly_terminu(r)
     return zajete
 
@@ -1964,10 +1975,16 @@ def _rez_po_tokenie(db, token: str):
 def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Depends(get_db)):
     """Publicznie: wolne sloty na dany dzień (godzina → liczba wolnych stolików dla 'osoby')."""
     osoby = max(1, osoby)
-    pary = _sloty_dnia(db, data)
+    cfg = get_lokal_config(db)
+    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    if cfg.rez_okno_wyprzedzenia_dni and data > teraz_lok.date() + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
+        return {"data": str(data), "osoby": osoby, "sloty": []}       # poza oknem wyprzedzenia
+    pary = _sloty_dnia(db, data)                                       # blackout → [] (znika sam)
     stoliki = [s for s in db.query(models.Stolik).filter_by(aktywny=True).all() if (s.pojemnosc or 0) >= osoby]
     out = []
     for g, serwis in pary:
+        if cfg.rez_cutoff_min and (datetime.combine(data, g) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
+            continue                                                   # slot po cutoffie — nie pokazuj
         g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
         wolne_stoly = sum(1 for s in stoliki if not _stolik_zajety(db, data, s.id, g, g_do))
         pacing_pelny = _pacing_pelny(db, data, g, serwis, osoby)
@@ -1987,9 +2004,23 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Se
         raise HTTPException(400, "Liczba osób musi być dodatnia.")
     # Data „dziś" wg strefy LOKALU (nie UTC hosta) — inaczej w oknie nocnym (po północy lokalnej,
     # przed północą UTC) bramka „wstecz" i dobowy klucz limitu liczyły zły dzień.
-    dzis_lokalnie = (_teraz_lokalnie() or datetime.now(timezone.utc)).date()
+    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    dzis_lokalnie = teraz_lok.date()
     if dane.data < dzis_lokalnie:
         raise HTTPException(400, "Nie można rezerwować wstecz.")
+    # Polityka rezerwacji (S1) — bramki przed limitem IP, by odrzucenie nie zużywało kwoty.
+    cfg = get_lokal_config(db)
+    if cfg.rez_okno_wyprzedzenia_dni and dane.data > dzis_lokalnie + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
+        raise HTTPException(400, f"Rezerwacje można składać najwyżej {cfg.rez_okno_wyprzedzenia_dni} dni w przód.")
+    if (dane.liczba_osob or 0) < cfg.rez_min_grupa_online or \
+            (cfg.rez_max_grupa_online and dane.liczba_osob > cfg.rez_max_grupa_online):
+        raise HTTPException(400, "Liczba osób poza zakresem dozwolonym dla rezerwacji online.")
+    if _jest_blackout(db, dane.data):
+        raise HTTPException(409, "W tym dniu nie przyjmujemy rezerwacji online.")   # jawny blackout
+    if cfg.rez_cutoff_min:
+        start = datetime.combine(dane.data, dane.godz_od)
+        if (start - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
+            raise HTTPException(409, "Zbyt późno na rezerwację online w tym terminie.")
     # Anty-DoS: twardy limit rezerwacji/dzień z jednego IP — działa NIEZALEŻNIE od telefonu/e-maila
     # (bez tego atakujący pomijał limit poniżej, wysyłając rezerwacje bez danych kontaktu). Stan
     # w pamięci procesu (jak limiter logowania); klucz po realnym adresie klienta.
