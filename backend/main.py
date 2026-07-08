@@ -3,6 +3,7 @@ import io
 import re
 import os
 import math
+import hashlib
 import logging
 import secrets
 from datetime import date, time, timedelta, datetime, timezone
@@ -1630,11 +1631,38 @@ def auto_przydziel_stolik(rid: int, db: Session = Depends(get_db)):
 
 
 # ── Widok hosta: kolejka dnia + fazy operacyjne + przydział stołu ─────────────
-def _host_out(t: models.Termin, teraz=None) -> dict:
+def _crm_hash(t) -> str:
+    """sha256 klucza CRM gościa (telefon→e-mail→nazwisko) — wzorzec z routers/crm.py: join do
+    ProfilGoscia bez plaintextu PII w bazie."""
+    klucz = (sms._normalizuj_numer(t.telefon or "") or (t.email or "").strip().lower()
+             or (t.nazwisko or "").strip().lower())
+    return hashlib.sha256(klucz.strip().encode("utf-8")).hexdigest()
+
+
+def _profile_dla_terminow(db, terminy):
+    """Mapa {klucz_hash: ProfilGoscia} dla listy terminów — JEDNO zapytanie po hashach (bez PII w SQL)."""
+    hashe = {_crm_hash(t) for t in terminy}
+    if not hashe:
+        return {}
+    return {p.klucz_hash: p for p in db.query(models.ProfilGoscia)
+            .filter(models.ProfilGoscia.klucz_hash.in_(hashe)).all()}
+
+
+def _flagi_profilu(p):
+    """Skrót flag gościa (VIP/alergie/okazja/tagi) dla widoku hosta. Endpoint admin-only → PII (alergie)
+    dozwolone, ale zwracane oszczędnie. None gdy brak profilu."""
+    if not p:
+        return None
+    return {"vip": bool(p.vip), "ma_alergie": bool(p.alergie), "alergie": p.alergie or None,
+            "okazja_typ": p.okazja_typ, "okazja_data": p.okazja_data, "tagi": p.tagi or []}
+
+
+def _host_out(t: models.Termin, teraz=None, profil=None) -> dict:
     wpis = _rezerwacja_out(t)
     wpis["faza_hosta"] = t.faza_hosta
     if t.faza_hosta in HOST_NA_SALI and t.host_seated_at and teraz:
         wpis["minuty_od_posadzenia"] = max(0, int((teraz - t.host_seated_at).total_seconds() // 60))
+    wpis["gosc"] = _flagi_profilu(profil)
     return wpis
 
 
@@ -1645,11 +1673,12 @@ def host_kolejka(data: date = Query(None), db: Session = Depends(get_db)):
     teraz = utcnow_naive()
     rez = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == dzien).order_by(models.Termin.godz_od).all()
+    profile = _profile_dla_terminow(db, rez)           # {hash: ProfilGoscia} — flagi VIP/alergie/okazja
     nadchodzace, na_sali, zakonczone = [], [], []
     for t in rez:
         if t.status == "odwolana":
             continue                                   # anulowane nie zaśmiecają widoku hosta
-        wpis = _host_out(t, teraz)
+        wpis = _host_out(t, teraz, profile.get(_crm_hash(t)))
         if t.faza_hosta == "wyszedl" or t.status in ("odbyla", "no_show"):
             zakonczone.append(wpis)
         elif t.faza_hosta in HOST_NA_SALI:
@@ -1666,6 +1695,28 @@ def host_kolejka(data: date = Query(None), db: Session = Depends(get_db)):
                          "zakonczone": len(zakonczone), "waitlista": len(waitlista),
                          "coverow_na_sali": sum((w.get("liczba_osob") or 0) for w in na_sali)},
     }
+
+
+@app.get("/api/host/os-czasu", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_os_czasu(data: date = Query(None), db: Session = Depends(get_db)):
+    """Oś czasu hosta: stoły × godziny + paski zajętości. Rezerwacje dnia rozbite na stoły składowe
+    (kombinacja → osobny pasek na każdym stole), żeby front narysował siatkę obrotu."""
+    dzien = data or date.today()
+    stoly = [{"id": s.id, "nazwa": s.nazwa, "sekcja": s.sekcja or s.strefa, "strefa": s.strefa}
+             for s in db.query(models.Stolik).filter_by(aktywny=True)
+             .order_by(models.Stolik.kolejnosc, models.Stolik.id).all()]
+    godziny = [_hm(g) for g, _ in _sloty_dnia(db, dzien)]
+    zajetosci = []
+    rez = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik", models.Termin.data == dzien,
+        models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).order_by(models.Termin.godz_od).all()
+    for t in rez:
+        godz_do = t.godz_do or _dodaj_minuty(t.godz_od, _dlugosc_dla(db, dzien, t.godz_od, t.liczba_osob))
+        for sid in sorted(_stoly_terminu(t)):
+            zajetosci.append({"stolik_id": sid, "godz_od": _hm(t.godz_od), "godz_do": _hm(godz_do),
+                              "rezerwacja_id": t.id, "nazwisko": t.nazwisko,
+                              "liczba_osob": t.liczba_osob, "faza_hosta": t.faza_hosta})
+    return {"data": str(dzien), "stoly": stoly, "godziny": godziny, "zajetosci": zajetosci}
 
 
 @app.post("/api/host/rezerwacja/{rid}/faza", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
