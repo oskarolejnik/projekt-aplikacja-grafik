@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
+import { Hint } from '../ui/Hint'
 import { Button } from '../ui/Button'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
@@ -63,16 +64,16 @@ function StanowiskoRow({ s, i = 0, onChanged }) {
         <label className="flex items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm font-medium text-ink">
           <input type="checkbox" checked={wszyscy} onChange={(e) => setWszyscy(e.target.checked)} className="h-4 w-4 accent-mint" />
           Widoczny dla wszystkich
+          <Hint>Każdy pracownik widzi, kto z tego stanowiska pracuje (np. Menadżer).</Hint>
         </label>
         <label className="flex flex-1 flex-col gap-1.5">
-          <span className="field-label">Grupa widoczności</span>
+          <span className="field-label flex items-center gap-1.5">
+            Grupa widoczności
+            <Hint>Stanowiska z tą samą nazwą grupy widzą się wzajemnie (np. KOMP i Wydawka).</Hint>
+          </span>
           <input value={grupa} onChange={(e) => setGrupa(e.target.value)} placeholder="np. komp-wydawka" className="field" />
         </label>
       </div>
-      <p className="mt-2 text-[11px] leading-snug text-muted/70">
-        „Widoczny dla wszystkich" — każdy pracownik widzi, kto z tego stanowiska pracuje (np. Menadżer).
-        „Grupa widoczności" — stanowiska z tą samą nazwą grupy widzą się wzajemnie (np. KOMP i Wydawka).
-      </p>
     </div>
   )
 }
