@@ -1291,11 +1291,27 @@ def _dodaj_minuty(t: time, minuty: int) -> time:
 
 
 def _serwisy_dnia(db, data: date):
-    """Wszystkie aktywne serwisy (okna przyjęć) danego dnia tygodnia, posortowane po godz_od.
-    Kilka wierszy = lunch + kolacja."""
-    return (db.query(models.GodzinyOtwarcia)
+    """Serwisy (okna przyjęć) danego dnia — z wierszy GodzinyOtwarcia wg dnia tygodnia (lunch+kolacja),
+    z NADPISANIEM przez WyjatekKalendarza dla tej daty: blackout → [] (zamknięte); godziny_specjalne →
+    jeden syntetyczny serwis wg wyjątku (turn-time/pacing dziedziczone z bazowego serwisu dnia)."""
+    baza = (db.query(models.GodzinyOtwarcia)
             .filter_by(dzien_tygodnia=data.weekday(), aktywny=True)
             .order_by(models.GodzinyOtwarcia.godz_od).all())
+    wyjatki = db.query(models.WyjatekKalendarza).filter_by(data=data).all()
+    if any(w.typ == "blackout" for w in wyjatki):
+        return []
+    spec = next((w for w in wyjatki if w.typ == "godziny_specjalne" and w.godz_od and w.godz_do), None)
+    if spec is None:
+        return baza
+    wzor = baza[0] if baza else None
+    return [models.GodzinyOtwarcia(
+        dzien_tygodnia=data.weekday(), aktywny=True, nazwa=spec.nazwa,
+        godz_od=spec.godz_od, godz_do=spec.godz_do, ostatni_zasiadek=spec.ostatni_zasiadek,
+        dlugosc_slotu_min=(spec.dlugosc_slotu_min or (wzor.dlugosc_slotu_min if wzor else DOMYSLNY_SLOT_MIN)),
+        turn_time_progi=(wzor.turn_time_progi if wzor else None),
+        pacing_max_rez=(wzor.pacing_max_rez if wzor else None),
+        pacing_max_osob=(wzor.pacing_max_osob if wzor else None),
+        pacing_okno_min=(wzor.pacing_okno_min if wzor else None))]
 
 
 def _serwis_dla_godziny(db, data, godz_od):
@@ -1497,6 +1513,40 @@ def usun_kombinacje(kid: int, db: Session = Depends(get_db)):
     k = db.get(models.KombinacjaStolow, kid)
     if k:
         db.delete(k); db.commit()
+
+
+# ── Wyjątki kalendarza (blackouty / godziny specjalne per dzień) ──────────────
+_WYJ_TYPY = ("blackout", "godziny_specjalne")
+
+
+@app.get("/api/wyjatki-kalendarza", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_wyjatki_kalendarza(od: date = Query(None), do: date = Query(None), db: Session = Depends(get_db)):
+    q = db.query(models.WyjatekKalendarza)
+    if od:
+        q = q.filter(models.WyjatekKalendarza.data >= od)
+    if do:
+        q = q.filter(models.WyjatekKalendarza.data <= do)
+    rows = q.order_by(models.WyjatekKalendarza.data).all()
+    return {"wyjatki": [schemas.WyjatekKalendarzaOut.model_validate(w).model_dump() for w in rows]}
+
+
+@app.post("/api/wyjatki-kalendarza", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def dodaj_wyjatek_kalendarza(dane: schemas.WyjatekKalendarzaIn, db: Session = Depends(get_db)):
+    typ = (dane.typ or "").strip()
+    if typ not in _WYJ_TYPY:
+        raise HTTPException(400, "typ musi być 'blackout' lub 'godziny_specjalne'.")
+    if typ == "godziny_specjalne" and not (dane.godz_od and dane.godz_do):
+        raise HTTPException(400, "Godziny specjalne wymagają godz_od i godz_do.")
+    w = models.WyjatekKalendarza(**{**dane.model_dump(), "typ": typ})
+    db.add(w); db.commit(); db.refresh(w)
+    return schemas.WyjatekKalendarzaOut.model_validate(w).model_dump()
+
+
+@app.delete("/api/wyjatki-kalendarza/{wid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def usun_wyjatek_kalendarza(wid: int, db: Session = Depends(get_db)):
+    w = db.get(models.WyjatekKalendarza, wid)
+    if w:
+        db.delete(w); db.commit()
 
 
 # ── Silnik sadzania (best-fit + kombinacje): SUGESTIA + AUTO ──────────────────

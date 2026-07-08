@@ -321,6 +321,13 @@ class LokalConfigOut(LokalBrandingOut):
     modul_rezerwacje: bool = True
     rezerwacje_online: bool = False
     rezerwacje_auto_potwierdzenie: bool = False
+    rez_okno_wyprzedzenia_dni: int = 0
+    rez_cutoff_min: int = 0
+    rez_min_grupa_online: int = 1
+    rez_max_grupa_online: int = 0
+    rez_bufor_min: int = 0
+    rez_anulacja_do_h: int = 0
+    rez_no_show_po_min: int = 0
     rejestracja_otwarta: bool = False
     impreza_osoby_na_obsluge: int = 15
     impreza_wyprzedzenie_min: int = 120
@@ -361,6 +368,13 @@ class LokalConfigIn(BaseModel):
     modul_rezerwacje: Optional[bool] = None
     rezerwacje_online: Optional[bool] = None
     rezerwacje_auto_potwierdzenie: Optional[bool] = None
+    rez_okno_wyprzedzenia_dni: Optional[int] = None
+    rez_cutoff_min: Optional[int] = None
+    rez_min_grupa_online: Optional[int] = None
+    rez_max_grupa_online: Optional[int] = None
+    rez_bufor_min: Optional[int] = None
+    rez_anulacja_do_h: Optional[int] = None
+    rez_no_show_po_min: Optional[int] = None
     rejestracja_otwarta: Optional[bool] = None
     impreza_osoby_na_obsluge: Optional[int] = None
     impreza_wyprzedzenie_min: Optional[int] = None
@@ -502,6 +516,19 @@ class GodzinyOtwarciaIn(BaseModel):
         out.sort(key=lambda x: x["do_osob"])
         return out or None
 class GodzinyOtwarciaOut(GodzinyOtwarciaIn):
+    id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class WyjatekKalendarzaIn(BaseModel):
+    """Nadpisanie dnia: blackout (zamknięte) lub godziny_specjalne (inne okno/slot)."""
+    data: date
+    typ: str                                   # blackout | godziny_specjalne
+    godz_od: Optional[time] = None
+    godz_do: Optional[time] = None
+    ostatni_zasiadek: Optional[time] = None
+    dlugosc_slotu_min: Optional[int] = None
+    nazwa: Optional[str] = None
+class WyjatekKalendarzaOut(WyjatekKalendarzaIn):
     id: int
     model_config = ConfigDict(from_attributes=True)
 

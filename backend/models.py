@@ -517,6 +517,14 @@ class LokalConfig(Base):
     # --- Rezerwacje online (publiczny widget) ---
     rezerwacje_online             = Column(Boolean, nullable=False, default=False)  # gość rezerwuje bez logowania
     rezerwacje_auto_potwierdzenie = Column(Boolean, nullable=False, default=False)  # online od razu 'potwierdzona'
+    # --- Polityka rezerwacji (v2). Defaulty = polityka wyłączona (zachowanie historyczne). ---
+    rez_okno_wyprzedzenia_dni = Column(Integer, nullable=False, default=0)   # max dni w przód (0 = bez limitu)
+    rez_cutoff_min            = Column(Integer, nullable=False, default=0)   # min. minut przed slotem (0 = wyłączone)
+    rez_min_grupa_online      = Column(Integer, nullable=False, default=1)   # min. wielkość grupy online
+    rez_max_grupa_online      = Column(Integer, nullable=False, default=0)   # max grupa online (0 = bez limitu)
+    rez_bufor_min             = Column(Integer, nullable=False, default=0)   # bufor sprzątania między rezerwacjami
+    rez_anulacja_do_h         = Column(Integer, nullable=False, default=0)   # anulacja online do X h przed (0 = zawsze)
+    rez_no_show_po_min        = Column(Integer, nullable=False, default=0)   # auto-no-show po X min od godz_od (0 = off)
     # --- Konta zespołu ---
     # False (domyślnie) = publiczna samodzielna rejestracja pracownika WYŁĄCZONA:
     # konto zakłada się wyłącznie z linku-zaproszenia wygenerowanego przez managera.
@@ -622,6 +630,20 @@ class GodzinyOtwarcia(Base):
     pacing_max_rez    = Column(Integer, nullable=True)
     pacing_max_osob   = Column(Integer, nullable=True)
     pacing_okno_min   = Column(Integer, nullable=True)
+
+
+class WyjatekKalendarza(Base):
+    """Nadpisanie parametrów rezerwacji na konkretny dzień: blackout (zamknięte) lub godziny
+    specjalne (inne okno/slot). Ma pierwszeństwo nad GodzinyOtwarcia w _serwisy_dnia."""
+    __tablename__ = "wyjatki_kalendarza"
+    id                = Column(Integer, primary_key=True, index=True)
+    data              = Column(Date, nullable=False, index=True)
+    typ               = Column(String(16), nullable=False)      # blackout | godziny_specjalne
+    godz_od           = Column(Time, nullable=True)             # dla godziny_specjalne
+    godz_do           = Column(Time, nullable=True)
+    ostatni_zasiadek  = Column(Time, nullable=True)
+    dlugosc_slotu_min = Column(Integer, nullable=True)
+    nazwa             = Column(String(64), nullable=True)       # np. „Sylwester", „Wielkanoc"
 
 
 class ListaOczekujacych(Base):
