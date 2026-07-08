@@ -470,6 +470,7 @@ class StolikIn(BaseModel):
     ksztalt: Optional[str] = None                  # kwadrat/okragly/prostokat
     cechy: Optional[List[str]] = None              # ["okno","loza","ogrod","dostepny"]
     priorytet: Optional[int] = None                # kolejność sadzania (mniej = wcześniej)
+    sekcja: Optional[str] = None                   # sekcja kelnerska (balans obłożenia)
 class StolikOut(StolikIn):
     id: int
     model_config = ConfigDict(from_attributes=True)
@@ -485,6 +486,11 @@ class KombinacjaStolowIn(BaseModel):
 class KombinacjaStolowOut(KombinacjaStolowIn):
     id: int
     model_config = ConfigDict(from_attributes=True)
+
+class SasiedztwoStolowIn(BaseModel):
+    """Krawędź grafu sąsiedztwa (para stołów, które da się złączyć)."""
+    stolik_a: int
+    stolik_b: int
 
 class GodzinyOtwarciaIn(BaseModel):
     dzien_tygodnia: int            # 0=poniedziałek … 6=niedziela

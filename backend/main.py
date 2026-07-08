@@ -1558,6 +1558,34 @@ def usun_wyjatek_kalendarza(wid: int, db: Session = Depends(get_db)):
         db.delete(w); db.commit()
 
 
+# ── Graf sąsiedztwa stołów (auto-kombinacje w silniku) ────────────────────────
+@app.get("/api/sasiedztwo", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_sasiedztwo(db: Session = Depends(get_db)):
+    rows = db.query(models.SasiedztwoStolow).order_by(models.SasiedztwoStolow.id).all()
+    return {"krawedzie": [{"id": k.id, "stolik_a": k.stolik_a, "stolik_b": k.stolik_b} for k in rows]}
+
+
+@app.post("/api/sasiedztwo", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def dodaj_sasiedztwo(dane: schemas.SasiedztwoStolowIn, db: Session = Depends(get_db)):
+    a, b = sorted((int(dane.stolik_a), int(dane.stolik_b)))     # normalizacja a<b (graf nieskierowany)
+    if a == b:
+        raise HTTPException(400, "Sąsiedztwo łączy dwa RÓŻNE stoły.")
+    if not db.get(models.Stolik, a) or not db.get(models.Stolik, b):
+        raise HTTPException(400, "Nieznany stolik.")
+    if db.query(models.SasiedztwoStolow).filter_by(stolik_a=a, stolik_b=b).first():
+        raise HTTPException(409, "Ta para stołów już sąsiaduje.")
+    k = models.SasiedztwoStolow(stolik_a=a, stolik_b=b)
+    db.add(k); db.commit(); db.refresh(k)
+    return {"id": k.id, "stolik_a": k.stolik_a, "stolik_b": k.stolik_b}
+
+
+@app.delete("/api/sasiedztwo/{kid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def usun_sasiedztwo(kid: int, db: Session = Depends(get_db)):
+    k = db.get(models.SasiedztwoStolow, kid)
+    if k:
+        db.delete(k); db.commit()
+
+
 # ── Silnik sadzania (best-fit + kombinacje): SUGESTIA + AUTO ──────────────────
 @app.get("/api/host/sugestia-stolika", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), osoby: int = 2,
@@ -1569,7 +1597,8 @@ def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), o
     zajete = _zajete_stoly(db, data, godz_od, godz_do)
     pref = {"strefa": strefa} if strefa else None
     kandydaci = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
-                                zajete=zajete, preferencje=pref)
+                                zajete=zajete, preferencje=pref, sasiedztwo=_sasiedztwo_do_seating(db),
+                                obciazenie_sekcji=_obciazenie_sekcji(db, data, godz_od, godz_do))
     return {"data": str(data), "godz_od": _hm(godz_od), "godz_do": _hm(godz_do),
             "osoby": osoby, "kandydaci": kandydaci}
 
@@ -1587,7 +1616,8 @@ def auto_przydziel_stolik(rid: int, db: Session = Depends(get_db)):
     godz_do = t.godz_do or _dodaj_minuty(t.godz_od, _turn_time(serwis, osoby))
     zajete = _zajete_stoly(db, t.data, t.godz_od, godz_do, pomin_id=rid)
     wynik = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
-                            zajete=zajete, limit=1)
+                            zajete=zajete, limit=1, sasiedztwo=_sasiedztwo_do_seating(db),
+                            obciazenie_sekcji=_obciazenie_sekcji(db, t.data, t.godz_od, godz_do))
     if not wynik:
         raise HTTPException(409, "Brak wolnego stołu dla tej grupy w tym czasie.")
     wybrany = wynik[0]
@@ -1940,8 +1970,27 @@ def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
 
 def _stoly_do_seating(db):
     return [{"id": s.id, "nazwa": s.nazwa, "pojemnosc": s.pojemnosc, "pojemnosc_min": s.pojemnosc_min,
-             "cechy": s.cechy or [], "priorytet": s.priorytet or 0, "strefa": s.strefa}
+             "cechy": s.cechy or [], "priorytet": s.priorytet or 0, "strefa": s.strefa,
+             "sekcja": s.sekcja or s.strefa}
             for s in db.query(models.Stolik).filter_by(aktywny=True).all()]
+
+
+def _sasiedztwo_do_seating(db):
+    """Krawędzie grafu sąsiedztwa dla silnika (auto-kombinacje)."""
+    return [(k.stolik_a, k.stolik_b) for k in db.query(models.SasiedztwoStolow).all()]
+
+
+def _obciazenie_sekcji(db, data, godz_od, godz_do):
+    """Ile stołów zajętych per sekcja kelnerska w oknie — do balansu obłożenia w silniku."""
+    zajete = _zajete_stoly(db, data, godz_od, godz_do)
+    if not zajete:
+        return {}
+    obc = {}
+    for s in db.query(models.Stolik).filter(models.Stolik.id.in_(zajete)).all():
+        sek = s.sekcja or s.strefa
+        if sek:
+            obc[sek] = obc.get(sek, 0) + 1
+    return obc
 
 
 def _kombinacje_do_seating(db):

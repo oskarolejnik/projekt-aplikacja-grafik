@@ -595,6 +595,7 @@ class Stolik(Base):
     ksztalt       = Column(String(16), nullable=True)  # kwadrat/okragly/prostokat (render planu)
     cechy         = Column(JSON, nullable=True)        # ["okno","loza","ogrod","dostepny"]
     priorytet     = Column(Integer, nullable=True)     # kolejność sadzania (mniej = wcześniej); NULL = 0
+    sekcja        = Column(String(32), nullable=True)  # sekcja kelnerska (do balansu); NULL = fallback do strefy
 
 
 class KombinacjaStolow(Base):
@@ -609,6 +610,16 @@ class KombinacjaStolow(Base):
     pojemnosc_max = Column(Integer, nullable=False, default=0)  # suma pojemności składowych (lub override)
     aktywna       = Column(Boolean, nullable=False, default=True)
     priorytet     = Column(Integer, nullable=False, default=0)  # kolejność preferencji (mniej = wcześniej)
+
+
+class SasiedztwoStolow(Base):
+    """Krawędź grafu sąsiedztwa (które stoły fizycznie da się złączyć). Nieskierowana —
+    normalizowana stolik_a < stolik_b. Silnik sadzania auto-generuje z niej kombinacje dla dużych grup."""
+    __tablename__ = "sasiedztwo_stolow"
+    id       = Column(Integer, primary_key=True, index=True)
+    stolik_a = Column(Integer, ForeignKey("stoliki.id", ondelete="CASCADE"), nullable=False)
+    stolik_b = Column(Integer, ForeignKey("stoliki.id", ondelete="CASCADE"), nullable=False)
+    __table_args__ = (UniqueConstraint("stolik_a", "stolik_b", name="uq_sasiedztwo_para"),)
 
 
 class GodzinyOtwarcia(Base):
