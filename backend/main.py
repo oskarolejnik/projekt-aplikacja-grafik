@@ -1693,6 +1693,8 @@ def host_zmien_faze(rid: int, dane: schemas.HostFazaIn, db: Session = Depends(ge
         if t.status in REZ_AKTYWNE:
             t.status = "odbyla"
     db.commit(); db.refresh(t)
+    if faza == "wyszedl" and t.godz_od:                    # obrót zakończony → stół wolny
+        _po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
     return _host_out(t, teraz)
 
 
@@ -1783,6 +1785,76 @@ def edytuj_rezerwacje_stolik(rid: int, dane: schemas.RezerwacjaIn, db: Session =
     return _rezerwacja_out(t)
 
 
+def _koniec_okna(db, t) -> time:
+    """Godzina końca okna rezerwacji (godz_do jawne albo z długości slotu dla grupy)."""
+    return t.godz_do or _dodaj_minuty(t.godz_od, _dlugosc_dla(db, t.data, t.godz_od, t.liczba_osob))
+
+
+def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
+    """Re-optymalizacja po zwolnieniu stołu (odwołanie / no-show / wyjście / usunięcie).
+
+    Auto-przydzielone rezerwacje tego dnia, które JESZCZE nie są na sali i nachodzą na zwolnione
+    okno, mogą przeskoczyć na tańszy stół (np. z kombinacji na pojedynczy stół, który się zwolnił).
+    Posadzonych gości nie ruszamy. Zwraca też wpisy listy oczekujących pasujące do okna — jako
+    propozycję dla hosta (realizacja pozostaje ręczna)."""
+    przesadzone = []
+    auto = (db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik", models.Termin.data == data,
+        models.Termin.auto_przydzielony.is_(True),
+        models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).all())
+    for t in auto:
+        if t.faza_hosta in HOST_NA_SALI:                 # już posadzony — obrót w toku, nie przenoś
+            continue
+        t_do = _koniec_okna(db, t)
+        if not (t.godz_od < godz_do and godz_od < t_do):  # nie nachodzi na zwolnione okno
+            continue
+        osoby = max(1, t.liczba_osob or 1)
+        obecne = _stoly_terminu(t)
+        zajete = _zajete_stoly(db, data, t.godz_od, t_do, pomin_id=t.id)
+        wynik = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
+                                zajete=zajete, limit=0, sasiedztwo=_sasiedztwo_do_seating(db),
+                                obciazenie_sekcji=_obciazenie_sekcji(db, data, t.godz_od, t_do))
+        if not wynik:
+            continue
+        najlepszy = wynik[0]
+        obecny_koszt = next((k["koszt"] for k in wynik if set(k["stoliki"]) == obecne), None)
+        if set(najlepszy["stoliki"]) != obecne and (obecny_koszt is None or najlepszy["koszt"] < obecny_koszt):
+            t.stolik_id = najlepszy["stoliki"][0]
+            t.stoliki_dodatkowe = (najlepszy["stoliki"][1:] or None)
+            przesadzone.append(t.id)
+    if przesadzone:
+        db.commit()
+    propozycje = [w for w in db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.data == data,
+        models.ListaOczekujacych.status == "oczekuje").all()
+        if w.godz_od is None or (godz_od <= w.godz_od <= godz_do)]
+    return {"przesadzone": przesadzone, "propozycje_waitlisty": [_lista_out(w) for w in propozycje]}
+
+
+@app.post("/api/host/auto-no-show", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_auto_no_show(data: date = Query(...), db: Session = Depends(get_db)):
+    """Oznacza jako no_show rezerwacje, które nie przyszły: minęło godz_od + rez_no_show_po_min,
+    a faza_hosta pusta (gość się nie pojawił). Idempotentne. No-op gdy rez_no_show_po_min=0.
+    Każde zwolnienie uruchamia re-optymalizację auto-przydziałów."""
+    prog = get_lokal_config(db).rez_no_show_po_min or 0
+    if prog <= 0:
+        return {"oznaczone": []}
+    teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    oznaczone = []
+    for t in (db.query(models.Termin).filter(
+            models.Termin.rodzaj == "stolik", models.Termin.data == data,
+            models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None),
+            models.Termin.faza_hosta.is_(None)).all()):
+        if datetime.combine(t.data, _dodaj_minuty(t.godz_od, prog)) < teraz:
+            t.status = "no_show"
+            oznaczone.append((t.id, t.data, t.godz_od, _koniec_okna(db, t)))
+    if oznaczone:
+        db.commit()
+        for _, d, od, do in oznaczone:
+            _po_zwolnieniu_stolu(db, d, od, do)
+    return {"oznaczone": [rid for rid, *_ in oznaczone]}
+
+
 @app.post("/api/rezerwacje-stolik/{rid}/status", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, db: Session = Depends(get_db)):
     t = db.get(models.Termin, rid)
@@ -1799,6 +1871,8 @@ def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, d
     elif nowy == "odwolana":
         t.odwolano_at = utcnow_naive()
     db.commit(); db.refresh(t)
+    if nowy in ("odwolana", "no_show") and t.godz_od:     # stół się zwolnił → re-optymalizacja
+        _po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
     return _rezerwacja_out(t)
 
 
@@ -1806,7 +1880,10 @@ def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, d
 def usun_rezerwacje_stolik(rid: int, db: Session = Depends(get_db)):
     t = db.get(models.Termin, rid)
     if t and t.rodzaj == "stolik":
+        okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
         db.delete(t); db.commit()
+        if okno:
+            _po_zwolnieniu_stolu(db, *okno)
 
 
 @app.post("/api/rezerwacje-stolik/{rid}/wyslij-potwierdzenie", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
