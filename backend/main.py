@@ -1193,7 +1193,8 @@ def _termin_out(t: models.Termin, zadatek_kp: float = 0.0) -> dict:
 @app.get("/api/terminy", dependencies=[Depends(_wymagaj_modul_imprezy)])
 def get_terminy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     rows = (db.query(models.Termin)
-            .filter(models.Termin.data >= start, models.Termin.data <= end)
+            .filter(models.Termin.data >= start, models.Termin.data <= end,
+                    models.Termin.rodzaj != "stolik")     # kalendarz imprez ≠ rezerwacje stolików (osobne byty)
             .order_by(models.Termin.data.asc(), models.Termin.id.asc()).all())
     kp_sum = {}
     ids = [t.id for t in rows]
@@ -1207,7 +1208,7 @@ def get_terminy(start: date = Query(...), end: date = Query(...), db: Session = 
 def dodaj_termin(dane: schemas.TerminIn, db: Session = Depends(get_db)):
     t = models.Termin(data=dane.data, nazwisko=dane.nazwisko.strip(), typ=dane.typ,
                       liczba_osob=dane.liczba_osob, telefon=dane.telefon, sala=dane.sala,
-                      notatka=dane.notatka, status=dane.status or "rezerwacja",
+                      notatka=dane.notatka, status=dane.status or "rezerwacja", rodzaj="impreza",
                       zadatek=float(dane.zadatek or 0), utworzono_at=utcnow_naive())
     db.add(t); db.commit(); db.refresh(t)
     return _termin_out(t)
@@ -1216,7 +1217,7 @@ def dodaj_termin(dane: schemas.TerminIn, db: Session = Depends(get_db)):
 @app.put("/api/terminy/{termin_id}", dependencies=[Depends(_wymagaj_modul_imprezy)])
 def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(get_db)):
     t = db.get(models.Termin, termin_id)
-    if not t:
+    if not t or t.rodzaj == "stolik":            # rezerwacji stolika nie edytuje się przez API imprez
         raise HTTPException(404, "Brak terminu.")
     stara_data = t.data
     t.data = dane.data; t.nazwisko = dane.nazwisko.strip(); t.typ = dane.typ
@@ -1238,6 +1239,8 @@ def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(
 @app.delete("/api/terminy/{termin_id}", status_code=204, dependencies=[Depends(_wymagaj_modul_imprezy)])
 def usun_termin(termin_id: int, db: Session = Depends(get_db)):
     t = db.get(models.Termin, termin_id)
+    if t and t.rodzaj == "stolik":               # rezerwacji stolika nie kasuje się przez API imprez
+        raise HTTPException(404, "Brak terminu.")
     if t:
         for z in db.query(models.KpZadatek).filter_by(termin_id=termin_id).all():
             z.termin_id = None       # odepnij zadatki (zostają w skrzynce)

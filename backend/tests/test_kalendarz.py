@@ -1,8 +1,29 @@
 """Kalendarz imprez — CRUD terminów + parsowanie/dopasowanie zadatków KP."""
 
+import datetime as dt
 from datetime import date
 
 import factories
+import models
+
+
+def test_kalendarz_imprez_nie_pokazuje_rezerwacji_stolikow(admin_client, db):
+    """Kalendarz imprez i rezerwacje stolików to OSOBNE byty (choć obie na encji Termin).
+    /api/terminy zwraca tylko imprezy (rodzaj≠stolik); rezerwacji stolika nie da się też
+    edytować/usunąć przez API imprez."""
+    d = factories.dzien(0)
+    admin_client.post("/api/terminy", json={"data": str(d), "nazwisko": "Wesele Nowak", "typ": "wesele"})
+    db.add(models.Termin(rodzaj="stolik", data=d, nazwisko="Gość Stolik", status="potwierdzona",
+                         kanal="reczna", zadatek=0.0, liczba_osob=2, godz_od=dt.time(18, 0),
+                         utworzono_at=dt.datetime.utcnow()))
+    db.commit()
+
+    lst = admin_client.get(f"/api/terminy?start={d}&end={d}").json()["terminy"]
+    assert [t["nazwisko"] for t in lst] == ["Wesele Nowak"]     # rezerwacja stolika NIE trafia do kalendarza
+
+    sid = db.query(models.Termin).filter_by(rodzaj="stolik").first().id
+    assert admin_client.put(f"/api/terminy/{sid}", json={"data": str(d), "nazwisko": "X"}).status_code == 404
+    assert admin_client.delete(f"/api/terminy/{sid}").status_code == 404
 
 
 def test_terminy_crud(admin_client, db):
