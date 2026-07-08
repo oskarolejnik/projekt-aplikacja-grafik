@@ -28,7 +28,8 @@ def test_plan_platny_z_karta_stawia_trial(client, db, monkeypatch):
     _wlacz(monkeypatch, wyw)
     r = client.post("/api/online/rejestracja", json={
         "email": "Wlasciciel@Knajpa.PL", "haslo": "Haslo123!", "nazwa_lokalu": "Moja Knajpa",
-        "plan": "pro", "typ_lokalu": "pizzeria", "moduly": {"modul_rezerwacje": True}, "karta": KARTA})
+        "plan": "pro", "typ_lokalu": "pizzeria", "moduly": {"modul_rezerwacje": True}, "karta": KARTA,
+        "zgoda_regulamin": True})
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["tryb"] == "trial-karta" and body["status"] == "zrealizowana"
@@ -52,14 +53,15 @@ def test_plan_platny_z_karta_stawia_trial(client, db, monkeypatch):
 def test_plan_platny_bez_karty_400(client, monkeypatch):
     _wlacz(monkeypatch, [])
     r = client.post("/api/online/rejestracja", json={
-        "email": "a@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Bez Karty", "plan": "pro"})
+        "email": "a@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Bez Karty", "plan": "pro",
+        "zgoda_regulamin": True})
     assert r.status_code == 400
 
 
 def test_dedup_jedna_karta_jeden_trial(client, monkeypatch):
     wyw = []
     _wlacz(monkeypatch, wyw)
-    baza = {"haslo": "Haslo123!", "plan": "basic", "karta": KARTA}
+    baza = {"haslo": "Haslo123!", "plan": "basic", "karta": KARTA, "zgoda_regulamin": True}
     r1 = client.post("/api/online/rejestracja", json={**baza, "email": "a@b.pl", "nazwa_lokalu": "Pierwsza"})
     assert r1.status_code == 201, r1.text
     # Ta sama karta → drugi trial zablokowany (koniec wykorzystywania triala dwa razy).
@@ -72,7 +74,8 @@ def test_darmowy_stawia_od_razu_bez_karty(client, monkeypatch):
     wyw = []
     _wlacz(monkeypatch, wyw)
     r = client.post("/api/online/rejestracja", json={
-        "email": "free@lokal.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Darmowa Knajpa", "plan": "darmowy"})
+        "email": "free@lokal.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Darmowa Knajpa",
+        "plan": "darmowy", "zgoda_regulamin": True})
     assert r.status_code == 201, r.text
     assert r.json()["tryb"] == "darmowy" and r.json()["plan"] == "free"
     assert "/?login" in r.json()["url"]
@@ -102,14 +105,17 @@ def test_rejestracja_limit_ip(client, monkeypatch):
     _wlacz(monkeypatch, [])
     for i in range(3):
         assert client.post("/api/online/rejestracja", json={
-            "email": f"a{i}@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": f"Knajpa {i}", "plan": "darmowy"}).status_code == 201
+            "email": f"a{i}@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": f"Knajpa {i}",
+            "plan": "darmowy", "zgoda_regulamin": True}).status_code == 201
     assert client.post("/api/online/rejestracja", json={
-        "email": "x@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Za duzo", "plan": "darmowy"}).status_code == 429
+        "email": "x@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Za duzo", "plan": "darmowy",
+        "zgoda_regulamin": True}).status_code == 429
 
 
 def test_rejestracja_walidacja(client, monkeypatch):
     _wlacz(monkeypatch, [])
-    baza = {"email": "ok@lokal.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Dobra Knajpa", "plan": "darmowy"}
+    baza = {"email": "ok@lokal.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Dobra Knajpa",
+            "plan": "darmowy", "zgoda_regulamin": True}
     assert client.post("/api/online/rejestracja", json={**baza, "email": "zly-email"}).status_code == 400
     assert client.post("/api/online/rejestracja", json={**baza, "haslo": "slabe"}).status_code == 400
     assert client.post("/api/online/rejestracja", json={**baza, "nazwa_lokalu": "ab"}).status_code == 400
@@ -117,7 +123,23 @@ def test_rejestracja_walidacja(client, monkeypatch):
     # Karta z błędną datą/CVC → 400 (walidacja karty).
     zla_karta = {"numer": "4242424242424242", "exp_miesiac": 13, "exp_rok": 2030, "cvc": "12"}
     assert client.post("/api/online/rejestracja", json={
-        "email": "k@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Zla Karta", "plan": "pro", "karta": zla_karta}).status_code == 400
+        "email": "k@b.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Zla Karta", "plan": "pro",
+        "karta": zla_karta, "zgoda_regulamin": True}).status_code == 400
+
+
+def test_rejestracja_wymaga_zgody(client, db, monkeypatch):
+    _wlacz(monkeypatch, [])
+    # Bez akceptacji Regulaminu/Polityki/DPA — 400 (warunek toru samoobsługowego).
+    r = client.post("/api/online/rejestracja", json={
+        "email": "bez@zgody.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Bez Zgody", "plan": "darmowy"})
+    assert r.status_code == 400
+    # Z akceptacją — 201 + utrwalona WERSJA i moment zgody (dowodliwość RODO).
+    r2 = client.post("/api/online/rejestracja", json={
+        "email": "ze@zgoda.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Ze Zgoda", "plan": "darmowy",
+        "zgoda_regulamin": True})
+    assert r2.status_code == 201
+    rej = db.query(models.RejestracjaLokalu).filter_by(email="ze@zgoda.pl").first()
+    assert rej.zgoda_wersja == "1.0" and rej.zgoda_at is not None
 
 
 def test_oplac_legacy_idempotentny(client, db, monkeypatch):

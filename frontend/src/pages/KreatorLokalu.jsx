@@ -68,6 +68,7 @@ export default function KreatorLokalu({ planStart = null }) {
   const [karta, setKarta] = useState({ numer: '', exp: '' })
   const [busy, setBusy] = useState(false)
   const [blad, setBlad] = useState(null)
+  const [zgoda, setZgoda] = useState(false)
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
   const setK = (k, v) => setKarta((s) => ({ ...s, [k]: v }))
 
@@ -109,11 +110,14 @@ export default function KreatorLokalu({ planStart = null }) {
     email: form.email.trim(), haslo: form.haslo, nazwa_lokalu: form.nazwa.trim(),
     typ_lokalu: wybranyTyp === 'inny' ? null : wybranyTyp,
     moduly: { typ_lokalu: wybranyTyp === 'inny' ? null : wybranyTyp, ...moduly },
+    zgoda_regulamin: zgoda,
   })
+  const BLAD_ZGODA = 'Aby założyć lokal, zaakceptuj Regulamin i Politykę prywatności.'
 
   // Z kroku „moduły": Darmowy → stawiamy od razu; płatny → krok karty.
   const dalejZModulow = async () => {
     if (platny) { setBlad(null); setKrok('karta'); return }
+    if (!zgoda) { setBlad(BLAD_ZGODA); return }
     setBlad(null); setBusy(true); setKrok('stawianie')
     try {
       const r = await api('/online/rejestracja', 'POST', { ...wspolne(), plan: 'darmowy' })
@@ -128,6 +132,7 @@ export default function KreatorLokalu({ planStart = null }) {
     if (numer.replace(/\D/g, '').length < 12 || !m) {
       setBlad('Sprawdź dane karty: numer i ważność (MM/RR).'); return
     }
+    if (!zgoda) { setBlad(BLAD_ZGODA); return }
     setBlad(null); setBusy(true); setKrok('stawianie')
     try {
       // Bez CVC — kodu zabezpieczającego nie wysyłamy do serwera (wymóg PCI DSS).
@@ -140,6 +145,15 @@ export default function KreatorLokalu({ planStart = null }) {
   }
 
   const posortowane = [...TYPY].sort((a, b) => (b.popularny ? 1 : 0) - (a.popularny ? 1 : 0))
+
+  const zgodaBox = (
+    <label className="mb-4 flex cursor-pointer items-start gap-2.5 rounded-xl border border-line bg-surface-2 px-3.5 py-3 text-xs leading-relaxed text-muted">
+      <input type="checkbox" checked={zgoda} onChange={(e) => setZgoda(e.target.checked)} className="mt-0.5 accent-mint" />
+      <span>Akceptuję <a href="/regulamin" target="_blank" rel="noreferrer" className="text-mint underline">Regulamin</a>,{' '}
+        <a href="/polityka" target="_blank" rel="noreferrer" className="text-mint underline">Politykę prywatności</a> oraz
+        Umowę powierzenia przetwarzania danych osobowych.</span>
+    </label>
+  )
 
   return (
     <div className="relative min-h-dvh bg-bg px-4 py-10 text-ink">
@@ -272,7 +286,8 @@ export default function KreatorLokalu({ planStart = null }) {
                 <span key={r} className="text-[11px] text-muted">· {r}</span>
               ))}
             </div>
-            {blad && <p className="mt-3 text-xs font-medium text-danger">{blad}</p>}
+            {blad && <p className="mb-3 mt-3 text-xs font-medium text-danger">{blad}</p>}
+            {!platny && <div className="mt-4">{zgodaBox}</div>}
             <div className="mt-5 flex items-center justify-between gap-3">
               <button onClick={() => setKrok('plan')} className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-muted transition hover:text-ink">← Plan</button>
               <button onClick={dalejZModulow} disabled={busy}
@@ -302,7 +317,8 @@ export default function KreatorLokalu({ planStart = null }) {
               <p className="mt-3 flex items-center gap-1.5 text-[11px] text-muted">
                 <Icon name="key" className="h-3 w-3 text-mint" /> Tryb testowy — użyj 4242 4242 4242 4242. Kodu CVC nie prosimy (bezpieczeństwo). Prawdziwe płatności po wpięciu bramki.
               </p>
-              {blad && <p className="mt-3 text-xs font-medium text-danger">{blad}</p>}
+              {blad && <p className="mb-3 mt-3 text-xs font-medium text-danger">{blad}</p>}
+              <div className="mt-4">{zgodaBox}</div>
               <button onClick={rozpocznijTrial} disabled={busy}
                 className="mt-5 w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
                 {busy ? 'Chwila…' : 'Rozpocznij 14 dni za darmo →'}

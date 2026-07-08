@@ -732,6 +732,9 @@ class RejestracjaLokalu(Base):
     karta_token       = Column(String(64), nullable=True)
     karta_ostatnie4   = Column(String(4), nullable=True)
     karta_fingerprint = Column(String(64), nullable=True, index=True)
+    # Zgoda na Regulamin/Politykę/DPA przy zakładaniu konta (dowodliwość RODO: WERSJA + moment).
+    zgoda_wersja      = Column(String(32), nullable=True)
+    zgoda_at          = Column(DateTime, nullable=True)
     __table_args__ = (
         # Jedna karta = jeden AKTYWNY trial — dedup na poziomie bazy domyka wyścig TOCTOU
         # (dwa równoległe /rejestracja z tą samą kartą). Częściowy indeks: obejmuje tylko statusy

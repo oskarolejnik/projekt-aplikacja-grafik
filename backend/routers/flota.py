@@ -86,6 +86,11 @@ class KartaIn(BaseModel):
     exp_rok: Optional[int] = None
 
 
+# Wersja pakietu dokumentów (Regulamin/Polityka/DPA) akceptowanych przy rejestracji.
+# Podbij, gdy zmieni się treść dokumentów — zapisywana zgoda utrwala WERSJĘ (dowodliwość RODO).
+ZGODA_WERSJA = "1.0"
+
+
 class RejestracjaIn(BaseModel):
     """Kreator na matce: dane właściciela + wybór planu. DARMOWY → instancja od razu (bez karty).
     PŁATNY (basic/pro/premium) → wymaga `karta`: 14 dni za darmo, po nich AUTO-OBCIĄŻENIE planu;
@@ -98,6 +103,7 @@ class RejestracjaIn(BaseModel):
     karta: Optional[KartaIn] = None
     typ_lokalu: Optional[str] = None
     moduly: Optional[dict] = None
+    zgoda_regulamin: bool = False   # akceptacja Regulaminu/Polityki/DPA — warunek toru samoobsługowego
 
 
 def _przetworz_karte(karta: "KartaIn") -> tuple[str, str, str]:
@@ -136,6 +142,12 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
         tier = PLAN_NA_TIER.get(plan)
         if not tier:
             raise HTTPException(400, "Wybierz pakiet (darmowy, basic, pro lub premium).")
+        # Akceptacja dokumentów jest WARUNKIEM założenia konta w torze samoobsługowym (nie dot. operatora).
+        if not dane.zgoda_regulamin:
+            raise HTTPException(400, "Aby założyć konto, zaakceptuj Regulamin, Politykę prywatności "
+                                     "i Umowę powierzenia przetwarzania danych.")
+    zgoda_wersja = ZGODA_WERSJA if dane.zgoda_regulamin else None
+    zgoda_at = utcnow_naive() if dane.zgoda_regulamin else None
     ip = request.client.host if request.client else "?"
     if not zuzyj_kwote(f"rejestracja:{ip}", str(date.today()), NOWY_LOKAL_LIMIT_IP_DZIENNY):
         raise HTTPException(429, "Zbyt wiele prób z tego adresu dzisiaj — spróbuj jutro.")
@@ -168,7 +180,8 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
         rej = models.RejestracjaLokalu(
             email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
             moduly=dane.moduly, tier="premium", netto=0.0, status="przetwarzanie",
-            external_id=external_id, utworzono_at=utcnow_naive())
+            external_id=external_id, utworzono_at=utcnow_naive(),
+            zgoda_wersja=zgoda_wersja, zgoda_at=zgoda_at)
         wpis = _postaw(rej, tier="premium", trial=True)
         return {"tryb": "trial", "status": "zrealizowana", "url": wpis["url"], "slug": wpis["slug"]}
 
@@ -177,7 +190,8 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
         rej = models.RejestracjaLokalu(
             email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
             moduly=dane.moduly, tier="free", netto=0.0, status="przetwarzanie",
-            external_id=external_id, utworzono_at=utcnow_naive())
+            external_id=external_id, utworzono_at=utcnow_naive(),
+            zgoda_wersja=zgoda_wersja, zgoda_at=zgoda_at)
         wpis = _postaw(rej, tier="free")
         return {"tryb": "darmowy", "status": "zrealizowana", "url": wpis["url"], "slug": wpis["slug"], "plan": "free"}
 
@@ -196,7 +210,8 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
         email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
         moduly=dane.moduly, tier=tier, netto=cennik.cena_netto(tier), status="przetwarzanie",
         external_id=external_id, karta_token=token, karta_ostatnie4=ostatnie4,
-        karta_fingerprint=fingerprint, utworzono_at=utcnow_naive())
+        karta_fingerprint=fingerprint, utworzono_at=utcnow_naive(),
+        zgoda_wersja=zgoda_wersja, zgoda_at=zgoda_at)
     try:
         wpis = _postaw(rej, tier=tier, trial=True, karta_token=token, karta_ostatnie4=ostatnie4)
     except IntegrityError:

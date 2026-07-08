@@ -17,6 +17,12 @@ function wypelnijKonto() {
   fireEvent.click(screen.getByText('Dalej'))
 }
 
+// Zaznacza checkbox akceptacji Regulaminu/Polityki/DPA (warunek utworzenia lokalu).
+function zaznaczZgode() {
+  const label = screen.getByText(/Akceptuję/).closest('label')
+  fireEvent.click(label.querySelector('input[type=checkbox]'))
+}
+
 describe('KreatorLokalu (plany + karta na trialu)', () => {
   it('ścieżka płatna (Pro): konto → typ → plan → moduły → KARTA → trial', async () => {
     apiMock.mockResolvedValue({ tryb: 'trial-karta', status: 'zrealizowana',
@@ -30,6 +36,7 @@ describe('KreatorLokalu (plany + karta na trialu)', () => {
     fireEvent.change(screen.getByPlaceholderText('12/30'), { target: { value: '12/30' } })
     // Brak pola CVC — nie wysyłamy kodu zabezpieczającego (PCI DSS).
     expect(screen.queryByPlaceholderText('123')).not.toBeInTheDocument()
+    zaznaczZgode()
     fireEvent.click(screen.getByText(/Rozpocznij 14 dni za darmo/))
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
       '/online/rejestracja', 'POST',
@@ -46,10 +53,11 @@ describe('KreatorLokalu (plany + karta na trialu)', () => {
     fireEvent.click(await screen.findByText('Pizzeria'))
     fireEvent.click(await screen.findByText('Darmowy'))           // wybór planu darmowego
     fireEvent.click(screen.getByText('Dalej'))                    // plan → moduły
+    zaznaczZgode()
     fireEvent.click(await screen.findByText(/Utwórz lokal/))
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
       '/online/rejestracja', 'POST',
-      expect.objectContaining({ plan: 'darmowy', email: 'wlasciciel@lokal.pl' })))
+      expect.objectContaining({ plan: 'darmowy', email: 'wlasciciel@lokal.pl', zgoda_regulamin: true })))
     // Bez kroku karty — żadne pole karty nie zostało pokazane.
     expect(screen.queryByPlaceholderText(/4242/)).not.toBeInTheDocument()
   })
