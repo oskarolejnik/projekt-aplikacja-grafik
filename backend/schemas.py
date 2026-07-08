@@ -587,6 +587,11 @@ class ZrealizujIn(BaseModel):
     stolik_id: int
     godz_od: Optional[time] = None   # opcjonalne nadpisanie godziny z wpisu
 
+class HoldIn(BaseModel):
+    """Tymczasowy HOLD stołu dla wpisu z listy oczekujących (waitlist v2)."""
+    stolik_id: int
+    minuty: int = 15                 # jak długo trzymać stół
+
 class OnlineRezerwacjaIn(BaseModel):
     """Publiczna rezerwacja online (gość, bez logowania) — system sam dobiera wolny stolik."""
     data: date

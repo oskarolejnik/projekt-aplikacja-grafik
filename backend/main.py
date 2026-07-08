@@ -1903,7 +1903,10 @@ def wyslij_potwierdzenie_stolik(rid: int, db: Session = Depends(get_db)):
 def _lista_out(w: models.ListaOczekujacych) -> dict:
     return {"id": w.id, "data": str(w.data), "godz_od": _hm(w.godz_od), "liczba_osob": w.liczba_osob,
             "nazwisko": w.nazwisko, "telefon": w.telefon, "email": w.email, "notatka": w.notatka,
-            "status": w.status, "termin_id": w.termin_id}
+            "status": w.status, "termin_id": w.termin_id, "kanal": w.kanal,
+            "powiadomiono_at": w.powiadomiono_at.isoformat() if w.powiadomiono_at else None,
+            "hold_stolik_id": w.hold_stolik_id,
+            "hold_do": w.hold_do.isoformat() if w.hold_do else None}
 
 
 @app.get("/api/lista-oczekujacych", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -1953,6 +1956,7 @@ def zrealizuj_lista_oczekujacych(wid: int, dane: schemas.ZrealizujIn, db: Sessio
         raise HTTPException(404, "Brak wpisu.")
     if w.status != "oczekuje":
         raise HTTPException(409, "Wpis już zrealizowany lub odwołany.")
+    w.hold_stolik_id = None; w.hold_do = None      # realizacja kończy HOLD (autoflush: kolizja go nie zobaczy)
     godz = dane.godz_od or w.godz_od
     godz_do = _waliduj_rezerwacje(db, w.data, godz, None, dane.stolik_id, w.liczba_osob)
     t = models.Termin(
@@ -1965,6 +1969,69 @@ def zrealizuj_lista_oczekujacych(wid: int, dane: schemas.ZrealizujIn, db: Sessio
     db.commit(); db.refresh(t)
     _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
     return {"rezerwacja": _rezerwacja_out(t), "wpis": _lista_out(w)}
+
+
+def _powiadom_waitlist(db, w: models.ListaOczekujacych) -> bool:
+    """Best-effort „stolik gotowy" do gościa (e-mail + SMS gdy integracje aktywne). Nie wywraca żądania."""
+    cfg = get_lokal_config(db)
+    wyslano = False
+    if w.email:
+        wyslano = mailer.wyslij_email(w.email, f"Stolik gotowy — {cfg.nazwa_lokalu}",
+                                      f"Dzień dobry, Twój stolik w {cfg.nazwa_lokalu} jest gotowy. Zapraszamy!")
+    if w.telefon:
+        sms.wyslij_sms(w.telefon, f"{cfg.nazwa_lokalu}: Twój stolik jest gotowy. Zapraszamy!")
+    return wyslano
+
+
+@app.post("/api/lista-oczekujacych/{wid}/powiadom", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def powiadom_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
+    """Wysyła gościowi „stolik gotowy" i stempluje powiadomiono_at (dowód + wskaźnik w widoku hosta)."""
+    w = db.get(models.ListaOczekujacych, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    if w.status != "oczekuje":
+        raise HTTPException(409, "Wpis nie oczekuje już na stolik.")
+    if w.powiadomiono_at:                          # nie spamuj — gość już dostał „stolik gotowy"
+        return {"wyslano": False, "juz_powiadomiony": True, "wpis": _lista_out(w)}
+    wyslano = _powiadom_waitlist(db, w)
+    w.powiadomiono_at = utcnow_naive()
+    db.commit(); db.refresh(w)
+    return {"wyslano": wyslano, "wpis": _lista_out(w)}
+
+
+@app.post("/api/lista-oczekujacych/{wid}/hold", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def hold_lista_oczekujacych(wid: int, dane: schemas.HoldIn, db: Session = Depends(get_db)):
+    """Tymczasowo trzyma wskazany stół dla gościa z waitlisty (na `minuty`). Stół z aktywnym holdem
+    znika z puli wolnych (także online) — patrz _zajete_stoly."""
+    w = db.get(models.ListaOczekujacych, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    if w.status != "oczekuje":
+        raise HTTPException(409, "Wpis nie oczekuje już na stolik.")
+    stolik = db.get(models.Stolik, dane.stolik_id)
+    if not stolik or not stolik.aktywny:
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+    if w.godz_od:                                   # gdy znamy porę — sprawdź wolność stołu w oknie gościa
+        godz_do = _dodaj_minuty(w.godz_od, _dlugosc_dla(db, w.data, w.godz_od, w.liczba_osob))
+        if _stolik_zajety(db, w.data, dane.stolik_id, w.godz_od, godz_do):
+            raise HTTPException(409, "Stolik zajęty (lub już trzymany) w tym oknie.")
+    minuty = max(1, int(dane.minuty or 15))
+    teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    w.hold_stolik_id = dane.stolik_id
+    w.hold_do = teraz + timedelta(minutes=minuty)
+    db.commit(); db.refresh(w)
+    return _lista_out(w)
+
+
+@app.post("/api/lista-oczekujacych/{wid}/zwolnij-hold", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def zwolnij_hold_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
+    """Zwalnia wcześniejszy HOLD (stół wraca do puli)."""
+    w = db.get(models.ListaOczekujacych, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    w.hold_stolik_id = None; w.hold_do = None
+    db.commit(); db.refresh(w)
+    return _lista_out(w)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2042,6 +2109,14 @@ def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
         r_do_buf, r_od_buf = _dodaj_minuty(r_do, bufor), _dodaj_minuty(r.godz_od, -bufor)
         if godz_od < r_do_buf and r_od_buf < godz_do:
             zajete |= _stoly_terminu(r)
+    # Tymczasowe HOLD-y z listy oczekujących (waitlist v2) — trzymany stół jest zajęty dopóki hold aktywny.
+    teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    for w in db.query(models.ListaOczekujacych).filter(
+            models.ListaOczekujacych.data == data,
+            models.ListaOczekujacych.hold_stolik_id.isnot(None),
+            models.ListaOczekujacych.hold_do.isnot(None)).all():
+        if w.hold_do > teraz:
+            zajete.add(w.hold_stolik_id)
     return zajete
 
 
@@ -2186,6 +2261,38 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Se
                            f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
     _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
     return {"token": t.token_potwierdzenia, "rezerwacja": _online_rez_out(t, stolik)}
+
+
+@app.post("/api/online/lista-oczekujacych", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Request, db: Session = Depends(get_db)):
+    """Publicznie: gość zapisuje się na listę oczekujących (gdy brak wolnych stolików). Anty-spam
+    (limit IP + limit po telefonie/e-mailu) skopiowany z rezerwacji online."""
+    if not dane.nazwisko or not dane.nazwisko.strip():
+        raise HTTPException(400, "Podaj imię/nazwisko.")
+    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    dzis_lokalnie = teraz_lok.date()
+    if dane.data < dzis_lokalnie:
+        raise HTTPException(400, "Nie można zapisać się wstecz.")
+    ip = request.client.host if request.client else "?"
+    if not ratelimit.zuzyj_kwote(f"online-wait:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY):
+        raise HTTPException(429, "Przekroczono dzienny limit zapisów z tego adresu.")
+    if dane.telefon or dane.email:                 # limit po kontakcie (PII szyfrowane → filtr po odszyfr.)
+        dzisiaj = db.query(models.ListaOczekujacych).filter(
+            models.ListaOczekujacych.data == dane.data,
+            models.ListaOczekujacych.status == "oczekuje").all()
+        ile = sum(1 for w in dzisiaj if (dane.telefon and w.telefon == dane.telefon)
+                  or (dane.email and w.email == dane.email))
+        if ile >= ONLINE_LIMIT_DZIENNY:
+            raise HTTPException(429, "Jesteś już na liście oczekujących na ten dzień.")
+    w = models.ListaOczekujacych(
+        data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
+        nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email, notatka=dane.notatka,
+        status="oczekuje", kanal="online", token=secrets.token_urlsafe(24), utworzono_at=utcnow_naive())
+    db.add(w); db.commit(); db.refresh(w)
+    wyslij_push_do_adminow(db, "Nowy wpis na liście oczekujących",
+                           f"{w.nazwisko} — {w.data} {_hm(w.godz_od) or ''}".strip(), url="/")
+    return {"token": w.token, "wpis": {"data": str(w.data), "godz_od": _hm(w.godz_od),
+            "liczba_osob": w.liczba_osob, "nazwisko": w.nazwisko, "status": w.status}}
 
 
 @app.get("/api/online/rezerwacja/{token}", dependencies=[Depends(_wymagaj_rezerwacje_online)])

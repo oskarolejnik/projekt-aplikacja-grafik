@@ -673,6 +673,12 @@ class ListaOczekujacych(Base):
     utworzono_at    = Column(DateTime, nullable=False)
     zrealizowano_at = Column(DateTime, nullable=True)
     termin_id       = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True)   # przypisany termin
+    # Waitlist v2 (S5): powiadomienie „stolik gotowy", tymczasowy HOLD stołu, kanał zapisu.
+    powiadomiono_at = Column(DateTime, nullable=True)                                         # kiedy wysłano „stolik gotowy”
+    hold_stolik_id  = Column(Integer, ForeignKey("stoliki.id", ondelete="SET NULL"), nullable=True)  # trzymany stół
+    hold_do         = Column(DateTime, nullable=True)                                         # do kiedy trzymany
+    token           = Column(String(64), nullable=True, index=True)                          # magic-link gościa (potwierdzenie holdu)
+    kanal           = Column(String(16), nullable=False, default="reczna")                    # reczna|online
 
 
 class ProfilGoscia(Base):
