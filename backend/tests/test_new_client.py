@@ -95,6 +95,30 @@ def test_ustaw_nazwe_lokalu_tworzy_singleton(db):
     assert db.query(models.LokalConfig).count() == 1
 
 
+def test_nowa_instancja_zasiewa_neutralne_sale(db):
+    """De-Rajculizacja: świeża instancja (brak configu) dostaje NEUTRALNĄ salę „Sala", nie sale
+    legacy pierwotnego lokalu (Parter/Zielona/Kryształowa…), które sprzątanie podstawia dla NULL."""
+    import sprzatanie
+    for c in db.query(models.LokalConfig).all():
+        db.delete(c)
+    db.commit()
+    cfg = nc.ustaw_nazwe_lokalu(db, "Bistro Verde")
+    assert cfg.sale == ["Sala"]
+    assert cfg.sprzatanie_sale_codziennie == ["Sala"]
+    assert cfg.sprzatanie_sala_niedziela == ""
+    assert cfg.sale != list(sprzatanie.SALE)        # NIE dziedziczy sal legacy
+
+
+def test_nowa_instancja_nie_nadpisuje_istniejacych_sal(db):
+    """Idempotencja: gdy config już istnieje (kreator / ponowny provisioning), zasiew NIE rusza sal."""
+    for c in db.query(models.LokalConfig).all():
+        db.delete(c)
+    db.add(models.LokalConfig(id=1, sale=["Główna", "Ogród"]))
+    db.commit()
+    cfg = nc.ustaw_nazwe_lokalu(db, "X")
+    assert cfg.sale == ["Główna", "Ogród"]          # istniejąca struktura nietknięta
+
+
 def test_ustaw_tier_singleton_i_walidacja(db):
     s = nc.ustaw_tier(db, "pro")
     assert s.id == 1 and s.tier == "pro"

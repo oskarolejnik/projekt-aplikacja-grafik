@@ -228,15 +228,28 @@ def ustaw_trial(db, tier: str = "premium", dni: int = 14, *, karta_token=None, k
 
 
 def ustaw_nazwe_lokalu(db, nazwa: str):
-    """Ustawia nazwę lokalu w singletonie LokalConfig (id=1), tworząc go w razie potrzeby."""
+    """Ustawia nazwę lokalu w singletonie LokalConfig (id=1), tworząc go w razie potrzeby.
+
+    Przy PIERWSZYM utworzeniu (nowa instancja) zasiewa NEUTRALNĄ strukturę sal — świeży lokal
+    NIE może dziedziczyć sal legacy pierwotnego lokalu (Parter/Zielona/Kryształowa…), które moduł
+    sprzątania podstawia jako fallback dla NULL. Zasiew tylko dla pól jeszcze pustych (idempotentny,
+    nie nadpisuje kreatora ani istniejącej instancji)."""
     import models
 
     cfg = db.get(models.LokalConfig, 1)
-    if cfg is None:
+    nowa = cfg is None
+    if nowa:
         cfg = models.LokalConfig(id=1)
         db.add(cfg)
     if nazwa:
         cfg.nazwa_lokalu = nazwa
+    if nowa:
+        if cfg.sale is None:
+            cfg.sale = ["Sala"]                       # neutralny default — lokal edytuje w Ustawieniach
+        if cfg.sprzatanie_sale_codziennie is None:
+            cfg.sprzatanie_sale_codziennie = ["Sala"]
+        if cfg.sprzatanie_sala_niedziela is None:
+            cfg.sprzatanie_sala_niedziela = ""        # reguła „sala niedzielna" wyłączona (pusty = off)
     db.commit()
     db.refresh(cfg)
     return cfg
