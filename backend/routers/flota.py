@@ -14,7 +14,7 @@ import logging
 import re
 import secrets
 from datetime import date
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -103,6 +103,7 @@ class RejestracjaIn(BaseModel):
     karta: Optional[KartaIn] = None
     typ_lokalu: Optional[str] = None
     moduly: Optional[dict] = None
+    sale: Optional[List[str]] = None   # sale/strefy lokalu — wpinają się w sprzątanie i rezerwacje
     zgoda_regulamin: bool = False   # akceptacja Regulaminu/Polityki/DPA — warunek toru samoobsługowego
 
 
@@ -156,6 +157,9 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
     konfiguracja = {"typ_lokalu": dane.typ_lokalu}
     if dane.moduly:
         konfiguracja.update(dane.moduly)
+    sale = [s.strip() for s in (dane.sale or []) if s and s.strip()]   # sale/strefy z kreatora
+    if sale:
+        konfiguracja["sale"] = sale
 
     def _postaw(rej: models.RejestracjaLokalu, **prov) -> dict:
         """Zapis rejestracji + provisioning instancji; ustawia zrealizowana/blad. Wspólne dla
@@ -179,7 +183,7 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
     if dane.trial:
         rej = models.RejestracjaLokalu(
             email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
-            moduly=dane.moduly, tier="premium", netto=0.0, status="przetwarzanie",
+            moduly=dane.moduly, sale=(sale or None), tier="premium", netto=0.0, status="przetwarzanie",
             external_id=external_id, utworzono_at=utcnow_naive(),
             zgoda_wersja=zgoda_wersja, zgoda_at=zgoda_at)
         wpis = _postaw(rej, tier="premium", trial=True)
@@ -189,7 +193,7 @@ def rejestracja(dane: RejestracjaIn, request: Request, db: Session = Depends(get
     if tier == "free":
         rej = models.RejestracjaLokalu(
             email=email, haslo_hash=haslo_hash, nazwa=nazwa, typ_lokalu=dane.typ_lokalu,
-            moduly=dane.moduly, tier="free", netto=0.0, status="przetwarzanie",
+            moduly=dane.moduly, sale=(sale or None), tier="free", netto=0.0, status="przetwarzanie",
             external_id=external_id, utworzono_at=utcnow_naive(),
             zgoda_wersja=zgoda_wersja, zgoda_at=zgoda_at)
         wpis = _postaw(rej, tier="free")
@@ -248,6 +252,8 @@ def rejestracja_oplac(external_id: str, request: Request, db: Session = Depends(
     konfiguracja = {"typ_lokalu": rej.typ_lokalu}
     if rej.moduly:
         konfiguracja.update(rej.moduly)
+    if rej.sale:
+        konfiguracja["sale"] = rej.sale
     try:
         wpis = provisioning.utworz_instancje(
             rej.nazwa, host=request.url.hostname or "127.0.0.1", tier=rej.tier,

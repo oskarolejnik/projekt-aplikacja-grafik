@@ -274,6 +274,14 @@ def ustaw_konfiguracje(db, dane: dict):
     for k in _POLA_KONFIGURACJI:
         if k in dane and dane[k] is not None:
             setattr(cfg, k, dane[k])
+    # Sale/strefy z kreatora → wpinają się w sprzątanie (i w rezerwacje jako strefy stołów).
+    # Nadpisują neutralny default „Sala" zasiany w ustaw_nazwe_lokalu, gdy klient poda swoje.
+    sale = [s.strip() for s in (dane.get("sale") or []) if isinstance(s, str) and s.strip()]
+    if sale:
+        cfg.sale = sale
+        cfg.sprzatanie_sale_codziennie = sale        # domyślnie wszystkie codziennie — lokal edytuje później
+        if cfg.sprzatanie_sala_niedziela is None:
+            cfg.sprzatanie_sala_niedziela = ""
     db.commit()
     db.refresh(cfg)
     return cfg

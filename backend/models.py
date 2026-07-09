@@ -757,6 +757,7 @@ class RejestracjaLokalu(Base):
     nazwa        = Column(String(120), nullable=False)
     typ_lokalu   = Column(String(32), nullable=True)
     moduly       = Column(JSON, nullable=True)                  # {"modul_rezerwacje":true,...}
+    sale         = Column(JSON, nullable=True)                  # sale/strefy lokalu z kreatora (sprzątanie + rezerwacje)
     tier         = Column(String(16), nullable=False, default="free")
     netto        = Column(Float, nullable=False, default=0.0)
     status       = Column(String(16), nullable=False, default="oczekuje", index=True)  # oczekuje|przetwarzanie|zrealizowana|blad

@@ -50,6 +50,20 @@ def test_plan_platny_z_karta_stawia_trial(client, db, monkeypatch):
     assert "4242424242424242" not in ((rej.karta_token or "") + (rej.karta_fingerprint or ""))
 
 
+def test_sale_z_kreatora_ida_do_konfiguracji(client, db, monkeypatch):
+    """Sale/strefy z kreatora: oczyszczone, przekazane do provisioningu (konfiguracja) i utrwalone
+    na rejestracji (dla toru /oplac). Wpinają się potem w sprzątanie i rezerwacje na instancji."""
+    wyw = []
+    _wlacz(monkeypatch, wyw)
+    r = client.post("/api/online/rejestracja", json={
+        "email": "sale@lokal.pl", "haslo": "Haslo123!", "nazwa_lokalu": "Z Salami",
+        "plan": "darmowy", "zgoda_regulamin": True, "sale": ["Sala główna", " Ogród ", ""]})
+    assert r.status_code == 201, r.text
+    assert wyw[0]["konfiguracja"]["sale"] == ["Sala główna", "Ogród"]
+    rej = db.query(models.RejestracjaLokalu).filter_by(email="sale@lokal.pl").first()
+    assert rej.sale == ["Sala główna", "Ogród"]
+
+
 def test_plan_platny_bez_karty_400(client, monkeypatch):
     _wlacz(monkeypatch, [])
     r = client.post("/api/online/rejestracja", json={

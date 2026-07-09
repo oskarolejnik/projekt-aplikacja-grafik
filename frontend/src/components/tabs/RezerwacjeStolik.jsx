@@ -32,6 +32,7 @@ export default function RezerwacjeStolik() {
   const [modal, setModal] = useState(null)        // rezerwacja (edycja) lub { data } (nowa)
   const [stolikModal, setStolikModal] = useState(false)
   const [nowyStolik, setNowyStolik] = useState({ nazwa: '', strefa: '', pojemnosc: 2, rewir_nr: '' })
+  const [saleLokalu, setSaleLokalu] = useState([])   // sale/strefy z konfiguracji → podpowiedzi strefy stołu
   const [lista, setLista] = useState([])
   const [listaModal, setListaModal] = useState(false)
   const [nowyOcz, setNowyOcz] = useState({ godz_od: '', liczba_osob: '', nazwisko: '', telefon: '' })
@@ -52,6 +53,7 @@ export default function RezerwacjeStolik() {
   }, [data, toast])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { api('/lokal/config').then((c) => setSaleLokalu(c.sale || [])).catch(() => {}) }, [])
 
   const przesun = (delta) => {
     const d = new Date(data); d.setDate(d.getDate() + delta)
@@ -254,7 +256,8 @@ export default function RezerwacjeStolik() {
             </div>
             <div className="grid grid-cols-6 gap-2 border-t border-line pt-3">
               <input value={nowyStolik.nazwa} onChange={(e) => setNowyStolik((s) => ({ ...s, nazwa: e.target.value }))} placeholder="Nazwa" className={`${fld} col-span-3`} />
-              <input value={nowyStolik.strefa} onChange={(e) => setNowyStolik((s) => ({ ...s, strefa: e.target.value }))} placeholder="Strefa" className={`${fld} col-span-3`} />
+              <input value={nowyStolik.strefa} onChange={(e) => setNowyStolik((s) => ({ ...s, strefa: e.target.value }))} placeholder="Strefa / sala" list="strefy-lokalu" className={`${fld} col-span-3`} />
+              <datalist id="strefy-lokalu">{saleLokalu.map((s) => <option key={s} value={s} />)}</datalist>
               <input type="number" min="1" value={nowyStolik.pojemnosc} onChange={(e) => setNowyStolik((s) => ({ ...s, pojemnosc: e.target.value }))} placeholder="Os." className={`${fld} col-span-2`} />
               <input type="number" min="1" value={nowyStolik.rewir_nr} onChange={(e) => setNowyStolik((s) => ({ ...s, rewir_nr: e.target.value }))} placeholder="Rewir POS (opc.)" title="Numer rewiru z POS/Gastro — live obłożenie na planie sali" className={`${fld} col-span-3`} />
               <button onClick={dodajStolik} className="col-span-1 grid place-items-center rounded-lg bg-mint text-bg"><Icon name="plus" className="h-4 w-4" /></button>

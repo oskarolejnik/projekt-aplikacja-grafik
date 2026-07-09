@@ -157,3 +157,14 @@ def test_ustaw_trial_14_dni_pelny_dostep(db):
 def test_ustaw_konfiguracje_ustawia_typ_i_moduly(db):
     cfg = nc.ustaw_konfiguracje(db, {"typ_lokalu": "pizzeria", "modul_pos": True, "nieznane": "x"})
     assert cfg.typ_lokalu == "pizzeria" and cfg.modul_pos is True
+
+
+def test_ustaw_konfiguracje_zasiewa_sale_z_kreatora(db):
+    """Sale z kreatora NADPISUJĄ neutralny default „Sala" i wpinają się w sprzątanie."""
+    for c in db.query(models.LokalConfig).all():
+        db.delete(c)
+    db.commit()
+    nc.ustaw_nazwe_lokalu(db, "X")                          # najpierw neutralne ["Sala"]
+    cfg = nc.ustaw_konfiguracje(db, {"typ_lokalu": "bar", "sale": ["Bar", " Ogród ", ""]})
+    assert cfg.sale == ["Bar", "Ogród"]                     # nadpisane + oczyszczone
+    assert cfg.sprzatanie_sale_codziennie == ["Bar", "Ogród"]

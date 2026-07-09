@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
 import { Logo } from '../components/Logo'
+import { Hint } from '../components/ui/Hint'
 import { Icon } from '../lib/icons'
 import { TYPY, MODULY, RDZEN, TYP_PO_ID, PRESET_INNY, znormalizujModuly } from './onboarding/typy'
 
@@ -66,11 +67,20 @@ export default function KreatorLokalu({ planStart = null }) {
   const [moduly, setModuly] = useState(PRESET_INNY)
   const [wybor, setWybor] = useState(PLAN_PO_ID[planStart] ? planStart : 'pro')
   const [karta, setKarta] = useState({ numer: '', exp: '' })
+  const [sale, setSale] = useState([])            // sale/strefy lokalu (opcjonalne) → sprzątanie + rezerwacje
+  const [nowaSala, setNowaSala] = useState('')
   const [busy, setBusy] = useState(false)
   const [blad, setBlad] = useState(null)
   const [zgoda, setZgoda] = useState(false)
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
   const setK = (k, v) => setKarta((s) => ({ ...s, [k]: v }))
+
+  const dodajSale = () => {
+    const v = nowaSala.trim()
+    if (v && !sale.some((s) => s.toLowerCase() === v.toLowerCase())) setSale((l) => [...l, v])
+    setNowaSala('')
+  }
+  const usunSale = (v) => setSale((l) => l.filter((s) => s !== v))
 
   const plan = PLAN_PO_ID[wybor] || PLAN_PO_ID.pro
   const platny = plan.tier !== 'free'
@@ -110,6 +120,7 @@ export default function KreatorLokalu({ planStart = null }) {
     email: form.email.trim(), haslo: form.haslo, nazwa_lokalu: form.nazwa.trim(),
     typ_lokalu: wybranyTyp === 'inny' ? null : wybranyTyp,
     moduly: { typ_lokalu: wybranyTyp === 'inny' ? null : wybranyTyp, ...moduly },
+    sale,
     zgoda_regulamin: zgoda,
   })
   const BLAD_ZGODA = 'Aby założyć lokal, zaakceptuj Regulamin i Politykę prywatności.'
@@ -286,6 +297,36 @@ export default function KreatorLokalu({ planStart = null }) {
                 <span key={r} className="text-[11px] text-muted">· {r}</span>
               ))}
             </div>
+
+            {/* Sale / strefy — opcjonalne; wpinają się w sprzątanie i strefy stołów przy rezerwacjach */}
+            <div className="mt-4 rounded-xl border border-line bg-surface-2/30 px-4 py-3">
+              <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-ink">
+                Sale / strefy <span className="text-xs font-normal text-muted">(opcjonalnie)</span>
+                <Hint>Sale/strefy Twojego lokalu (np. „Sala główna", „Ogród"). Wpinają się w grafik sprzątania i w strefy stołów przy rezerwacjach. Puste = dodasz później w Ustawieniach.</Hint>
+              </div>
+              {sale.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {sale.map((s) => (
+                    <span key={s} className="inline-flex items-center gap-1 rounded-full bg-mint/15 px-2.5 py-1 text-xs font-medium text-mint">
+                      {s}
+                      <button type="button" onClick={() => usunSale(s)} aria-label={`Usuń ${s}`} className="text-mint/70 transition hover:text-mint">
+                        <Icon name="close" className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input value={nowaSala} onChange={(e) => setNowaSala(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); dodajSale() } }}
+                  className={fld} placeholder="np. Sala główna, Ogród…" />
+                <button type="button" onClick={dodajSale}
+                  className="shrink-0 rounded-xl border border-line px-3 text-sm font-semibold text-muted transition hover:text-ink">
+                  <Icon name="plus" className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
             {blad && <p className="mb-3 mt-3 text-xs font-medium text-danger">{blad}</p>}
             {!platny && <div className="mt-4">{zgodaBox}</div>}
             <div className="mt-5 flex items-center justify-between gap-3">
