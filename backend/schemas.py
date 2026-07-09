@@ -328,6 +328,10 @@ class LokalConfigOut(LokalBrandingOut):
     rez_bufor_min: int = 0
     rez_anulacja_do_h: int = 0
     rez_no_show_po_min: int = 0
+    zadatek_wymagany: bool = False
+    zadatek_kwota_os: float = 0.0
+    zadatek_prog_osob: int = 0
+    no_show_fee: float = 0.0
     rejestracja_otwarta: bool = False
     impreza_osoby_na_obsluge: int = 15
     impreza_wyprzedzenie_min: int = 120
@@ -375,6 +379,10 @@ class LokalConfigIn(BaseModel):
     rez_bufor_min: Optional[int] = None
     rez_anulacja_do_h: Optional[int] = None
     rez_no_show_po_min: Optional[int] = None
+    zadatek_wymagany: Optional[bool] = None
+    zadatek_kwota_os: Optional[float] = None
+    zadatek_prog_osob: Optional[int] = None
+    no_show_fee: Optional[float] = None
     rejestracja_otwarta: Optional[bool] = None
     impreza_osoby_na_obsluge: Optional[int] = None
     impreza_wyprzedzenie_min: Optional[int] = None

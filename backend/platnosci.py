@@ -57,5 +57,9 @@ def oznacz_oplacona(db, external_id) -> models.Platnosc | None:
     if p.status != "oplacona":
         p.status = "oplacona"
         p.oplacono_at = utcnow_naive()
+        if p.termin_id:                                   # jedno źródło prawdy dla UI: kwota na Termin.zadatek
+            t = db.get(models.Termin, p.termin_id)
+            if t is not None:
+                t.zadatek = p.kwota
         db.commit(); db.refresh(p)
     return p

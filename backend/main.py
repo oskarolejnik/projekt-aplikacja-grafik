@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating, platnosci
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -1904,7 +1904,8 @@ def host_auto_no_show(data: date = Query(...), db: Session = Depends(get_db)):
             oznaczone.append((t.id, t.data, t.godz_od, _koniec_okna(db, t)))
     if oznaczone:
         db.commit()
-        for _, d, od, do in oznaczone:
+        for rid, d, od, do in oznaczone:
+            _nalicz_no_show_fee(db, db.get(models.Termin, rid))   # opłata za no-show (za flagą)
             _po_zwolnieniu_stolu(db, d, od, do)
     return {"oznaczone": [rid for rid, *_ in oznaczone]}
 
@@ -1925,6 +1926,8 @@ def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, d
     elif nowy == "odwolana":
         t.odwolano_at = utcnow_naive()
     db.commit(); db.refresh(t)
+    if nowy == "no_show":
+        _nalicz_no_show_fee(db, t)                        # opłata za no-show (za flagą no_show_fee)
     if nowy in ("odwolana", "no_show") and t.godz_od:     # stół się zwolnił → re-optymalizacja
         _po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
     return _rezerwacja_out(t)
@@ -2361,7 +2364,22 @@ def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Se
     wyslij_push_do_adminow(db, "Rezerwacja online",
                            f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
     _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
-    return {"token": t.token_potwierdzenia, "rezerwacja": _online_rez_out(t, stolik)}
+    odp = {"token": t.token_potwierdzenia, "rezerwacja": _online_rez_out(t, stolik)}
+    # Zadatek (za flagą zadatek_wymagany) — sandbox link do zapłaty; realne pobieranie po wpięciu bramki.
+    if cfg.zadatek_wymagany and dane.liczba_osob >= (cfg.zadatek_prog_osob or 0):
+        kwota = round((cfg.zadatek_kwota_os or 0) * dane.liczba_osob, 2)
+        if kwota > 0:
+            p = platnosci.utworz_platnosc(db, t.id, kwota)
+            odp["platnosc"] = {"kwota": p.kwota, "link": p.link, "status": p.status}
+    return odp
+
+
+def _nalicz_no_show_fee(db, t):
+    """Opłata za no-show (za flagą no_show_fee) — rekord płatności (sandbox link). Realne obciążenie
+    zapisanej karty dopiero z realną bramką; tu powstaje należność do rozliczenia."""
+    fee = get_lokal_config(db).no_show_fee or 0
+    if fee > 0 and t is not None and t.rodzaj == "stolik":
+        platnosci.utworz_platnosc(db, t.id, fee)
 
 
 @app.post("/api/online/lista-oczekujacych", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])

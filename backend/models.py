@@ -525,6 +525,11 @@ class LokalConfig(Base):
     rez_bufor_min             = Column(Integer, nullable=False, default=0)   # bufor sprzątania między rezerwacjami
     rez_anulacja_do_h         = Column(Integer, nullable=False, default=0)   # anulacja online do X h przed (0 = zawsze)
     rez_no_show_po_min        = Column(Integer, nullable=False, default=0)   # auto-no-show po X min od godz_od (0 = off)
+    # --- Zadatki + no-show fee (za flagą; realne pobieranie czeka na bramkę operatora → do tego sandbox) ---
+    zadatek_wymagany   = Column(Boolean, nullable=False, default=False)  # wymagaj zadatku przy rezerwacji online
+    zadatek_kwota_os   = Column(Float, nullable=False, default=0.0)      # kwota zadatku na osobę (0 = brak)
+    zadatek_prog_osob  = Column(Integer, nullable=False, default=0)      # zadatek dopiero od tylu osób (0 = zawsze gdy wymagany)
+    no_show_fee        = Column(Float, nullable=False, default=0.0)      # opłata za no-show (0 = brak)
     # --- Konta zespołu ---
     # False (domyślnie) = publiczna samodzielna rejestracja pracownika WYŁĄCZONA:
     # konto zakłada się wyłącznie z linku-zaproszenia wygenerowanego przez managera.
