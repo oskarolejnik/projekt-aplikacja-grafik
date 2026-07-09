@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Card } from '../ui/Card'
+import { Card, SectionHeader } from '../ui/Card'
 import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
@@ -185,31 +185,24 @@ export default function RaportGodzin() {
 
   return (
     <Card className="p-6 md:p-8">
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="font-display text-2xl font-bold text-ink">Raport godzin</h2>
-          <p className="mt-1 text-sm text-muted">Przepracowane godziny (RCP) z podziałem na stanowiska z opublikowanego grafiku.</p>
-        </div>
-        {/* Nawigacja miesiącem */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => przesunMiesiac(-1)}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
-            aria-label="Poprzedni miesiąc"
-          >
-            <Icon name="chevronDown" className="h-4 w-4 rotate-90" />
-          </button>
-          <span className="min-w-[150px] text-center font-display text-base font-bold capitalize text-ink">{etykietaMiesiaca}</span>
-          <button
-            onClick={() => przesunMiesiac(1)}
-            disabled={naPrzyszlosc}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
-            aria-label="Następny miesiąc"
-          >
-            <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
-          </button>
-        </div>
-      </div>
+      <SectionHeader title="Raport godzin" subtitle="Przepracowane godziny (RCP) z podziałem na stanowiska z opublikowanego grafiku.">
+        <button
+          onClick={() => przesunMiesiac(-1)}
+          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
+          aria-label="Poprzedni miesiąc"
+        >
+          <Icon name="chevronDown" className="h-4 w-4 rotate-90" />
+        </button>
+        <span className="min-w-[150px] text-center font-display text-base font-bold capitalize text-ink">{etykietaMiesiaca}</span>
+        <button
+          onClick={() => przesunMiesiac(1)}
+          disabled={naPrzyszlosc}
+          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
+          aria-label="Następny miesiąc"
+        >
+          <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
+        </button>
+      </SectionHeader>
 
       {isAdmin && oczekujace.length > 0 && (
         <div className="mb-6 rounded-xl border border-lemon/30 bg-lemon/[0.06] p-4">

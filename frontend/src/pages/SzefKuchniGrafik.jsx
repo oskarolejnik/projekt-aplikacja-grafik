@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Card } from '../components/ui/Card'
+import { Card, SectionHeader } from '../components/ui/Card'
 import { WeekSelect } from '../components/ui/WeekSelect'
 import { Banner } from '../components/ui/Banner'
 import { Spinner } from '../components/ui/Spinner'
@@ -89,13 +89,9 @@ export default function SzefKuchniGrafik() {
 
   return (
     <Card className="p-6 md:p-8">
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="font-display text-2xl font-bold text-ink">Grafik kuchni</h2>
-          <p className="mt-1 text-sm text-muted">Korekty na żywo — każda zmiana od razu trafia do kucharza (z powiadomieniem).</p>
-        </div>
+      <SectionHeader title="Grafik kuchni" subtitle="Korekty na żywo — każda zmiana od razu trafia do kucharza (z powiadomieniem).">
         <WeekSelect />
-      </div>
+      </SectionHeader>
 
       {/* Kto z kuchni jest teraz na zmianie (live z RCP) — od razu na głównej zakładce */}
       {naZmianie.length > 0 && (

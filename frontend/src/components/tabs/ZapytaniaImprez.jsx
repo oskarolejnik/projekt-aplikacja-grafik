@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { useToast } from '../ui/Toast'
 import { Card, SectionHeader } from '../ui/Card'
+import { Hint } from '../ui/Hint'
 import { Button } from '../ui/Button'
 import { Icon } from '../../lib/icons'
 import { Spinner } from '../ui/Spinner'
@@ -150,8 +151,9 @@ export default function ZapytaniaImprez() {
 
           <Card className="p-6">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-display text-base font-semibold text-ink">
+              <h3 className="flex items-center gap-1.5 font-display text-base font-semibold text-ink">
                 Szkic odpowiedzi {analiza.ai ? '(AI)' : '(szablon)'}
+                <Hint>Możesz edytować przed skopiowaniem — szkic to punkt startu, nie gotowa oferta.</Hint>
               </h3>
               <Button variant="ghost" size="sm" onClick={kopiuj}>
                 <Icon name="clipboard" className="h-4 w-4" /> Kopiuj
@@ -163,7 +165,6 @@ export default function ZapytaniaImprez() {
               rows={12}
               className="mt-3 w-full min-w-0 resize-y rounded-xl border border-line bg-surface-2 px-4 py-3 text-sm leading-relaxed text-ink outline-none transition focus:border-mint/60 focus:ring-2 focus:ring-mint/20"
             />
-            <p className="mt-2 text-xs text-muted">Możesz edytować przed skopiowaniem — szkic to punkt startu, nie gotowa oferta.</p>
           </Card>
         </>
       )}

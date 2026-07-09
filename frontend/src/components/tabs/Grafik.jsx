@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Button } from '../ui/Button'
 import { WeekSelect } from '../ui/WeekSelect'
 import { Banner } from '../ui/Banner'
+import { Hint } from '../ui/Hint'
 import { Icon } from '../../lib/icons'
 import { Spinner } from '../ui/Spinner'
 import { api } from '../../lib/api'
@@ -293,7 +294,10 @@ export default function Grafik() {
         </Banner>
       ) : (
         <>
-          <p className="mb-2 text-xs text-muted">Cały tydzień na raz. Kliknij pole, aby dodać lub zmienić zmianę. Tło: <span className="font-semibold text-success">zielone</span> = dostępny (✓), <span className="font-semibold text-danger">czerwone</span> = nie (✗). 🔑 = zamyka lokal. <span className="font-semibold text-mint">Miętowo</span> = rewir (Sala/Bar).</p>
+          <div className="mb-2 flex items-center gap-1.5 text-xs text-muted">
+            Legenda
+            <Hint width={280}>Kliknij pole, aby dodać lub zmienić zmianę. Tło: zielone = dostępny (✓), czerwone = nie (✗). 🔑 = zamyka lokal. Miętowo = rewir (Sala/Bar).</Hint>
+          </div>
           <div className="card overflow-auto p-0" style={{ maxHeight: '74vh' }}>
             <table className="w-full table-fixed border-separate border-spacing-0">
               <thead>

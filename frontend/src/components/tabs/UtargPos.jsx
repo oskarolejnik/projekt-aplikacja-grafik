@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
+import { Hint } from '../ui/Hint'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
@@ -217,18 +218,16 @@ export default function UtargPos() {
         {/* Kreator podłączenia agenta: token + gotowy config.yaml do pobrania. */}
         <div className="mt-5 rounded-xl border border-line bg-white/[0.02] p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-bold text-ink">Podłącz agenta POS</span>
+            <span className="flex items-center gap-1.5 text-sm font-bold text-ink">
+              Podłącz agenta POS
+              <Hint>Agent instalowany na serwerze POS czyta dane (tylko odczyt!) i wypycha je tutaj. Wygeneruj token, pobierz gotowy config.yaml i przekaż paczkę serwisantowi POS — na miejscu zostaje tylko wpisanie dostępu do bazy.</Hint>
+            </span>
             {status?.token_aktywny && (
               <span className="rounded-full bg-mint/15 px-2.5 py-0.5 text-xs font-semibold text-mint">
                 token aktywny{status.token_od ? ` od ${status.token_od.slice(0, 10)}` : ''}
               </span>
             )}
           </div>
-          <p className="mt-1.5 text-sm leading-relaxed text-muted">
-            Agent instalowany na serwerze POS czyta dane (tylko odczyt!) i wypycha je tutaj.
-            Wygeneruj token, pobierz gotowy <code className="text-ink">config.yaml</code> i przekaż
-            paczkę serwisantowi POS — na miejscu zostaje tylko wpisanie dostępu do bazy.
-          </p>
 
           {nowyToken ? (
             <div className="mt-3 space-y-2">
@@ -284,7 +283,8 @@ export default function UtargPos() {
             <input value={form.gotowka} onChange={(e) => set('gotowka', e.target.value)} placeholder="opcjonalnie" className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Karta
             <input value={form.karta} onChange={(e) => set('karta', e.target.value)} placeholder="opcjonalnie" className={fld} /></label>
-          <label className="text-xs font-semibold text-muted">Rachunki (szt.)
+          <label className="text-xs font-semibold text-muted">
+            <span className="inline-flex items-center gap-1">Rachunki (szt.) <Hint width={220}>Liczba rachunków zasila prognozę ruchu i sugerowaną obsadę.</Hint></span>
             <input value={form.liczba_rachunkow} onChange={(e) => set('liczba_rachunkow', e.target.value)} placeholder="→ prognoza" className={fld} /></label>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -294,7 +294,6 @@ export default function UtargPos() {
           <Button variant="ghost" onClick={() => plikRef.current?.click()} disabled={busy}>
             <Icon name="upload" className="h-4 w-4" /> Import CSV
           </Button>
-          <span className="text-xs text-muted">Liczba rachunków zasila prognozę ruchu i sugerowaną obsadę.</span>
         </div>
       </Card>
 

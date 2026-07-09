@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Card } from '../ui/Card'
+import { Card, SectionHeader } from '../ui/Card'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
@@ -67,11 +67,7 @@ export default function Rezerwacje() {
 
   return (
     <Card className="p-6 md:p-8">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="font-display text-2xl font-bold text-ink">Rezerwacje</h2>
-          <p className="mt-1 text-sm text-muted">Na żywo z kalendarza · dni rozwijane.</p>
-        </div>
+      <SectionHeader title="Rezerwacje" subtitle="Na żywo z kalendarza · dni rozwijane.">
         <div className="text-right">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Jeszcze dziś</div>
           <div className="flex items-baseline justify-end gap-2">
@@ -80,7 +76,7 @@ export default function Rezerwacje() {
             <span className="text-sm text-muted">· {dzisOsob} os.</span>
           </div>
         </div>
-      </div>
+      </SectionHeader>
 
       {loading ? (
         <div className="grid place-items-center py-16">

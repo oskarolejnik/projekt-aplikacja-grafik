@@ -43,9 +43,10 @@ export default function AntyfraudPos() {
     <div className="space-y-6">
       <SectionHeader
         title="Antyfraud POS — storna i rabaty"
-        subtitle={dane?.zespol?.zdarzen
+        subtitleInline={dane?.zespol?.zdarzen
           ? `${dane.zespol.zdarzen} zdarzeń · ${dane.zespol.osob} os. · ${flagi ? `${flagi} do rozmowy` : 'zespół w normie'}`
           : 'Porównanie stornowań każdego kelnera do reszty zespołu.'}
+        hint="Flaga = wynik ≥ 2× średniej reszty zespołu (min. 5 zdarzeń). To sygnał do spokojnej rozmowy — odstające liczby często mają niewinne przyczyny (szkolenie nowej osoby, awaria drukarki, duże imprezy)."
       >
         <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className={fld} aria-label="Od" />
         <span className="text-muted">—</span>
@@ -113,11 +114,6 @@ export default function AntyfraudPos() {
           </div>
         )}
       </Card>
-
-      <p className="text-xs text-muted/70">
-        Flaga = wynik ≥ 2× średniej reszty zespołu (min. 5 zdarzeń). To sygnał do spokojnej rozmowy —
-        odstające liczby często mają niewinne przyczyny (szkolenie nowej osoby, awaria drukarki, duże imprezy).
-      </p>
     </div>
   )
 }

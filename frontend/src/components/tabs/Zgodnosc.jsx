@@ -3,6 +3,7 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 import { Card, SectionHeader } from '../ui/Card'
+import { Hint } from '../ui/Hint'
 import { Button } from '../ui/Button'
 import { Icon } from '../../lib/icons'
 import { Spinner } from '../ui/Spinner'
@@ -198,8 +199,10 @@ export default function Zgodnosc() {
       )}
 
       <Card className="p-6">
-        <h3 className="font-display text-base font-semibold text-ink">Badania i dokumenty załogi</h3>
-        <p className="mt-1 text-xs text-muted">Sanepid, medycyna pracy, BHP — z datą ważności per pracownik.</p>
+        <h3 className="flex items-center gap-1.5 font-display text-base font-semibold text-ink">
+          Badania i dokumenty załogi
+          <Hint>Sanepid, medycyna pracy, BHP — z datą ważności per pracownik.</Hint>
+        </h3>
         <div className="mt-3">
           {zaloga.length === 0
             ? <p className="py-6 text-center text-sm text-muted">Brak dokumentów — dodaj pierwsze badania, a Lokalo przypilnuje terminu.</p>
@@ -208,8 +211,10 @@ export default function Zgodnosc() {
       </Card>
 
       <Card className="p-6">
-        <h3 className="font-display text-base font-semibold text-ink">Terminy lokalu</h3>
-        <p className="mt-1 text-xs text-muted">Koncesja alkoholowa (raty 31.01 / 31.05 / 30.09), przeglądy gaśnic, wentylacji.</p>
+        <h3 className="flex items-center gap-1.5 font-display text-base font-semibold text-ink">
+          Terminy lokalu
+          <Hint>Koncesja alkoholowa (raty 31.01 / 31.05 / 30.09), przeglądy gaśnic, wentylacji.</Hint>
+        </h3>
         <div className="mt-3">
           {lokal.length === 0
             ? <p className="py-6 text-center text-sm text-muted">Brak terminów — dodaj np. najbliższą ratę koncesji.</p>

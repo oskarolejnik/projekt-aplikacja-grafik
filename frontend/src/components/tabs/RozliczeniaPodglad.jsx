@@ -65,7 +65,7 @@ export default function RozliczeniaPodglad() {
     <Card className="p-6 sm:p-8">
       <SectionHeader
         title="Rozliczenia kelnerów — podgląd"
-        subtitle="Wyłącznie kwoty zadeklarowane przez kelnerów (gotówka, karta) + faktury. To, co naliczył system, pomijamy. Pełne rozliczenie dnia (terminale, kasy, zadatek…) dojdzie w kolejnym etapie."
+        subtitle="Wyłącznie kwoty zadeklarowane przez kelnerów przy rozliczeniu w POS: Gotówka/Karta = zadeklarowane formy, FV = faktury (KARTA_FV + GOTÓWKA_FV). Reprezentację, przelewy i ONLINE pomijamy — podobnie jak to, co naliczył system. Pełne rozliczenie dnia (terminale, kasy, zadatek…) dojdzie w kolejnym etapie."
       />
 
       <div className="mb-5 flex flex-wrap items-end gap-3">
@@ -78,11 +78,6 @@ export default function RozliczeniaPodglad() {
           <input type="date" value={doDnia} onChange={(e) => setDoDnia(e.target.value)} className="field" />
         </label>
       </div>
-
-      <p className="mb-4 text-[11px] leading-snug text-muted/80">
-        <b>Gotówka / Karta</b> = kwoty <b>zadeklarowane</b> przez kelnera przy rozliczeniu w POS.
-        <span className="font-bold text-mint"> FV</span> = faktury (KARTA_FV + GOTÓWKA_FV). Reprezentacja, przelewy i ONLINE pomijamy.
-      </p>
 
       {loading ? (
         <div className="grid place-items-center py-12"><Spinner className="h-6 w-6 text-muted" /></div>

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
-import { Banner } from '../ui/Banner'
 import { Icon } from '../../lib/icons'
 import { API, pobierzPlik } from '../../lib/api'
 import { useToast } from '../ui/Toast'
@@ -37,7 +36,7 @@ export default function Eksport() {
       {/* Wypłaty miesięczne → Excel */}
       <Card className="p-8">
         <SectionHeader title="Wypłaty do Excela"
-          subtitle="Miesięczny raport płac (godziny × stawka per stanowisko, wiersze RAZEM) jako gotowy .xlsx dla księgowej." />
+          subtitle="Miesięczny raport płac (godziny × stawka per stanowisko, wiersze RAZEM) jako gotowy .xlsx dla księgowej. Plik ma formatowanie (nagłówki, sumy); dostęp do danych płacowych jest zapisywany w dzienniku audytu (RODO)." />
         <div className="mt-2 grid grid-cols-2 gap-4">
           <label className="flex flex-col gap-2">
             <span className="field-label">Miesiąc</span>
@@ -50,9 +49,6 @@ export default function Eksport() {
             <input type="number" min="2000" max="2100" value={rok} onChange={(e) => setRok(Number(e.target.value))} className="field" />
           </label>
         </div>
-        <Banner variant="info" className="mt-6">
-          Plik .xlsx z formatowaniem (nagłówki, sumy). Dostęp do danych płacowych jest zapisywany w dzienniku audytu (RODO).
-        </Banner>
         <Button variant="success" size="lg" className="mt-6 w-full" onClick={pobierzWyplaty} disabled={busy}>
           <Icon name="download" className="h-5 w-5" /> {busy ? 'Generuję…' : 'Pobierz wypłaty (.xlsx)'}
         </Button>
@@ -61,7 +57,7 @@ export default function Eksport() {
       {/* Grafik → CSV */}
       <Card className="p-8">
         <SectionHeader title="Grafik do CSV"
-          subtitle="Tabela przestawna (pracownik × dzień) w pliku CSV zgodnym z polskim Excelem." />
+          subtitle="Tabela przestawna (pracownik × dzień) w pliku CSV zgodnym z polskim Excelem. Separator średnik + kodowanie UTF-8 (BOM), aby polskie znaki poprawnie się otwierały." />
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-2">
             <span className="field-label">Początek zakresu</span>
@@ -72,9 +68,6 @@ export default function Eksport() {
             <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="field" />
           </label>
         </div>
-        <Banner variant="info" className="mt-6">
-          Separator średnik + kodowanie UTF-8 (BOM), aby polskie znaki poprawnie otwierały się w Excelu.
-        </Banner>
         <Button variant="success" size="lg" className="mt-6 w-full" onClick={pobierzCsv}>
           <Icon name="download" className="h-5 w-5" /> Pobierz grafik (.csv)
         </Button>

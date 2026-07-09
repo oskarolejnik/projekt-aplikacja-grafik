@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Card } from '../ui/Card'
+import { Card, SectionHeader } from '../ui/Card'
 import { Banner } from '../ui/Banner'
 import { WeekSelect } from '../ui/WeekSelect'
 import { Spinner } from '../ui/Spinner'
@@ -61,13 +61,9 @@ export default function SzefGrafik() {
 
   return (
     <Card className="p-6 md:p-8">
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="font-display text-2xl font-bold text-ink">Grafik</h2>
-          <p className="mt-1 text-sm text-muted">Opublikowany grafik na wybrany tydzień (podgląd).</p>
-        </div>
+      <SectionHeader title="Grafik" subtitle="Opublikowany grafik na wybrany tydzień (podgląd).">
         <WeekSelect />
-      </div>
+      </SectionHeader>
 
       {loading ? (
         <div className="grid place-items-center py-16">

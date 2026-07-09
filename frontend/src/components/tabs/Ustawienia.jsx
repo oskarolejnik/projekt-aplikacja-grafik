@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
+import { Hint } from '../ui/Hint'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
@@ -239,7 +240,7 @@ export default function Ustawienia() {
       </Card>
 
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Typ lokalu" subtitle="Profil Twojej knajpy — z niego dobieramy sensowny zestaw modułów. Możesz go zmienić i zastosować preset ponownie." />
+        <SectionHeader title="Typ lokalu" subtitle="Profil Twojej knajpy — z niego dobieramy sensowny zestaw modułów. „Zastosuj preset” ustawi przełączniki modułów wg wybranego typu (zapisz, by utrwalić) — możesz to zrobić ponownie w każdej chwili." />
         <div className="mt-4 flex flex-wrap items-end gap-3">
           <label className="flex-1 text-xs font-semibold text-muted">Typ
             <select value={cfg.typ_lokalu || ''} onChange={(e) => set('typ_lokalu', e.target.value || null)} className={fld}>
@@ -252,11 +253,10 @@ export default function Ustawienia() {
             <Icon name="refresh" className="h-4 w-4" /> Zastosuj preset modułów
           </Button>
         </div>
-        <p className="mt-2 text-xs text-muted">„Zastosuj preset" ustawi przełączniki modułów wg wybranego typu — zapisz, by utrwalić.</p>
       </Card>
 
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Parametry obsady imprez" subtitle="Reguły automatycznego przeliczania obsady imprez na wymagania grafiku (moduł imprez)." />
+        <SectionHeader title="Parametry obsady imprez" subtitle="Reguły automatycznego przeliczania obsady imprez na wymagania grafiku (moduł imprez). Komórki Excel dotyczą importu imprez z plików (moduł „Baza imprez”) — każdy lokal ma własny szablon." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted">Gości na 1 pracownika obsługi
             <input type="number" min="1" value={cfg.impreza_osoby_na_obsluge ?? 15} onChange={(e) => set('impreza_osoby_na_obsluge', e.target.value)} className={fld} /></label>
@@ -275,18 +275,15 @@ export default function Ustawienia() {
           <label className="text-xs font-semibold text-muted">Komórka Excel: sala
             <input value={excelMapa.sala} onChange={(e) => setExcelMapa((s) => ({ ...s, sala: e.target.value.toUpperCase() }))} className={fld} /></label>
         </div>
-        <p className="mt-2 text-xs text-muted">Komórki dotyczą importu imprez z plików Excel (moduł „Baza imprez") — każdy lokal ma własny szablon.</p>
       </Card>
 
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Rozliczenie dnia" subtitle="Dopasuj kasę do swojego lokalu — nie każda knajpa rozlicza się jak dom weselny." />
+        <SectionHeader title="Rozliczenie dnia" subtitle="Dopasuj kasę do swojego lokalu — nie każda knajpa rozlicza się jak dom weselny. Podane niżej etykiety kas/terminali pojawią się jako lista wyboru w Rozliczeniu dnia — liczba pozycji wynika z długości list." />
         <div className="mt-4 space-y-3">
           <div className="flex items-center justify-between gap-4 rounded-xl border border-line bg-surface-2 px-4 py-3">
-            <span className="text-sm text-ink">Imprezy rozliczane osobno
-              <span className="mt-0.5 block text-xs text-muted">
-                Włączone: rozliczenia imprez trafiają do zeszytu i pulpitu, a IMP pomniejsza kasy.
-                Wyłączone: sprzedaż imprezowa siedzi w zwykłym obrocie sali (bez osobnych rozliczeń).
-              </span>
+            <span className="flex items-center gap-1.5 text-sm text-ink">
+              Imprezy rozliczane osobno
+              <Hint>Włączone: rozliczenia imprez trafiają do zeszytu i pulpitu, a IMP pomniejsza kasy. Wyłączone: sprzedaż imprezowa siedzi w zwykłym obrocie sali (bez osobnych rozliczeń).</Hint>
             </span>
             <Toggle on={!!cfg.impreza_osobne_rozliczenie} onChange={(v) => set('impreza_osobne_rozliczenie', v)} />
           </div>
@@ -302,15 +299,11 @@ export default function Ustawienia() {
             <label className="text-xs font-semibold text-muted">Terminale — etykiety po przecinku (puste = wolny wpis)
               <input value={terminaleText} onChange={(e) => setTerminaleText(e.target.value)} placeholder="np. Terminal 1, Terminal ogródek" className={fld} /></label>
           </div>
-          <p className="text-xs text-muted">
-            Podane etykiety pojawią się jako lista wyboru w Rozliczeniu dnia — liczba kas i terminali
-            wynika z długości list.
-          </p>
         </div>
       </Card>
 
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Struktura lokalu" subtitle="Sale i reguły sprzątania Twojego lokalu (puste pole = wartości domyślne). Kolejność sal = kolejność wyświetlania." />
+        <SectionHeader title="Struktura lokalu" subtitle="Sale i reguły sprzątania Twojego lokalu (puste pole = wartości domyślne). Kolejność sal = kolejność wyświetlania. Sale napędzają też grafik sprzątania i widok stołów; zmiana nazwy sali nie zmienia wpisów historycznych (zostają pod starą nazwą)." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted sm:col-span-2">Sale (po przecinku)
             <input value={saleText} onChange={(e) => setSaleText(e.target.value)} placeholder="np. Sala główna, Ogródek, Antresola" className={fld} /></label>
@@ -323,10 +316,6 @@ export default function Ustawienia() {
           <label className="text-xs font-semibold text-muted sm:col-span-2">Kolumny rozchodu w zeszycie (po przecinku; puste = Towar, Koszty, Wypłaty, Inne)
             <input value={zeszytKolText} onChange={(e) => setZeszytKolText(e.target.value)} placeholder="np. towar, koszty, media, wypłaty" className={fld} /></label>
         </div>
-        <p className="mt-2 text-xs text-muted">
-          Sale napędzają grafik sprzątania i widok stołów; zmiana nazwy sali nie zmienia wpisów
-          historycznych (zostają pod starą nazwą).
-        </p>
       </Card>
 
       <Card className="p-6 sm:p-8">
@@ -499,7 +488,7 @@ export default function Ustawienia() {
       )}
 
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Dane do faktury" subtitle="Dane Twojej firmy jako nabywcy faktur za subskrypcję (KSeF). Uzupełnij NIP — bez niego faktura jest niekompletna." />
+        <SectionHeader title="Dane do faktury" subtitle="Dane Twojej firmy jako nabywcy faktur za subskrypcję (KSeF). Uzupełnij NIP — bez niego faktura jest niekompletna. Zapisujesz przyciskiem „Zapisz ustawienia” na dole." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted">NIP
             <input value={cfg.faktura_nip || ''} onChange={(e) => set('faktura_nip', e.target.value)} placeholder="1234567890" className={fld} /></label>
@@ -510,7 +499,6 @@ export default function Ustawienia() {
           <label className="text-xs font-semibold text-muted">Kod pocztowy i miasto
             <input value={cfg.faktura_adres_l2 || ''} onChange={(e) => set('faktura_adres_l2', e.target.value)} placeholder="00-123 Warszawa" className={fld} /></label>
         </div>
-        <p className="mt-2 text-xs text-muted">Zapisujesz przyciskiem „Zapisz ustawienia" na dole.</p>
       </Card>
 
       {faktury && (

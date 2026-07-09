@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Card } from '../ui/Card'
+import { Card, SectionHeader } from '../ui/Card'
 import { WeekSelect } from '../ui/WeekSelect'
-import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { PillSwitch } from '../ui/PillSwitch'
 import { Icon } from '../../lib/icons'
@@ -118,17 +117,10 @@ export default function Dyspozycje() {
 
   return (
     <Card className="p-6 md:p-8">
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="font-display text-2xl font-bold text-ink">Dyspozycyjność pracowników</h2>
-          <p className="mt-1 text-sm text-muted">Zgłoszenia z paneli pracowników — możesz je tu dowolnie zmieniać.</p>
-        </div>
+      <SectionHeader title="Dyspozycyjność pracowników"
+        subtitle="Zgłoszenia z paneli pracowników — możesz je tu dowolnie zmieniać. Kliknij dowolną komórkę, aby ustawić, zmienić lub wyczyścić dyspozycyjność na dany dzień.">
         <WeekSelect />
-      </div>
-
-      <Banner variant="info" className="mb-6">
-        Kliknij dowolną komórkę, aby ustawić, zmienić lub wyczyścić dyspozycyjność pracownika na dany dzień.
-      </Banner>
+      </SectionHeader>
 
       {loading ? (
         <div className="grid place-items-center py-16">

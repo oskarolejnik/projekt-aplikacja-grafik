@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
-import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { num } from '../../lib/num'
 import { useToast } from '../ui/Toast'
@@ -44,7 +43,7 @@ export default function Napiwki() {
   return (
     <Card className="p-6 sm:p-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <SectionHeader title="Napiwki" subtitle="Pula napiwków dnia dzielona między obsługę sali — wg przepracowanych godzin (z RCP) albo po równo." />
+        <SectionHeader title="Napiwki" subtitle="Pula napiwków dnia dzielona między obsługę sali — wg przepracowanych godzin (z RCP) albo po równo. „Wg godzin” dzieli proporcjonalnie do godzin z RCP; przy braku odbić — po równo. Suma zawsze zgadza się co do grosza." />
         <input type="date" value={data} onChange={(e) => setData(e.target.value)}
           className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-mint" />
       </div>
@@ -101,10 +100,6 @@ export default function Napiwki() {
           </table>
         </div>
       )}
-      <p className="mt-3 flex items-center gap-1.5 text-xs text-muted">
-        <Icon name="info" className="h-3.5 w-3.5" />
-        „Wg godzin" dzieli proporcjonalnie do godzin z RCP; przy braku odbić — po równo. Suma zawsze zgadza się co do grosza.
-      </p>
     </Card>
   )
 }

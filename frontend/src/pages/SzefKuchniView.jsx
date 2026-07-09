@@ -4,7 +4,7 @@ import { useBranding } from '../context/BrandingContext'
 import { Logo } from '../components/Logo'
 import { PushButton } from '../components/PushButton'
 import { Icon } from '../lib/icons'
-import { Card } from '../components/ui/Card'
+import { Card, SectionHeader } from '../components/ui/Card'
 import { Spinner } from '../components/ui/Spinner'
 import { useToast } from '../components/ui/Toast'
 import { api } from '../lib/api'
@@ -69,11 +69,7 @@ function KuchniaGodziny() {
 
   return (
     <Card className="p-6 md:p-8">
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="font-display text-2xl font-bold text-ink">Godziny kuchni</h2>
-          <p className="mt-1 text-sm text-muted">Przepracowane godziny pracowników kuchni (RCP). Bez kwot.</p>
-        </div>
+      <SectionHeader title="Godziny kuchni" subtitle="Przepracowane godziny pracowników kuchni (RCP). Bez kwot.">
         <div className="flex items-center gap-3">
           <button
             onClick={() => przesunMiesiac(-1)}
@@ -92,7 +88,7 @@ function KuchniaGodziny() {
             <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
           </button>
         </div>
-      </div>
+      </SectionHeader>
 
       {loading ? (
         <div className="grid place-items-center py-16">

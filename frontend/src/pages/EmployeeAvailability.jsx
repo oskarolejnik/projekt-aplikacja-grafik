@@ -3,6 +3,7 @@ import { useData } from '../context/DataContext'
 import { useToast } from '../components/ui/Toast'
 import { WeekSelect } from '../components/ui/WeekSelect'
 import { Card } from '../components/ui/Card'
+import { Hint } from '../components/ui/Hint'
 import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
 import { api } from '../lib/api'
@@ -111,12 +112,13 @@ export default function EmployeeAvailability() {
   return (
     <>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <WeekSelect />
-        <span className="text-sm text-muted">
-          {zablokowane
-            ? 'Grafik na ten tydzień jest opublikowany — dyspozycji nie można już zmieniać.'
-            : 'Zaznacz dni, w których możesz pracować. Domyślnie „Cały dzień" — wyłącz przełącznik, aby podać godziny od–do.'}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <WeekSelect />
+          <Hint>Zaznacz dni, w których możesz pracować. Domyślnie „Cały dzień” — wyłącz przełącznik, aby podać godziny od–do.</Hint>
+        </div>
+        {zablokowane && (
+          <span className="text-sm text-muted">Grafik na ten tydzień jest opublikowany — dyspozycji nie można już zmieniać.</span>
+        )}
       </div>
 
       {zablokowane && (

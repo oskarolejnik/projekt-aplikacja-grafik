@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { Card } from '../ui/Card'
+import { Hint } from '../ui/Hint'
 import { Button } from '../ui/Button'
 import { WeekSelect } from '../ui/WeekSelect'
 import { Icon } from '../../lib/icons'
@@ -274,10 +275,10 @@ export default function Wymagania() {
 
         {/* Kopiowanie tygodnia — przenosi cały tydzień na inny (dzień w dzień) */}
         <Card className="h-fit p-6">
-          <h3 className="mb-2 flex items-center gap-2 font-display text-lg font-bold text-ink">
+          <h3 className="mb-4 flex items-center gap-2 font-display text-lg font-bold text-ink">
             <Icon name="clipboard" className="h-5 w-5 text-info" /> Kopiuj tydzień
+            <Hint>Przenieś wszystkie wymagania z jednego tygodnia na drugi (dzień w dzień).</Hint>
           </h3>
-          <p className="mb-4 text-xs text-muted">Przenieś wszystkie wymagania z jednego tygodnia na drugi (dzień w dzień).</p>
           <div className="mx-auto max-w-md space-y-4">
             <label className="flex flex-col gap-1.5">
               <span className="field-label">Z tygodnia</span>

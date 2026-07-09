@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
-import { Banner } from '../ui/Banner'
 import { WeekSelect } from '../ui/WeekSelect'
 import { Icon } from '../../lib/icons'
 import { Spinner } from '../ui/Spinner'
@@ -123,19 +122,14 @@ export default function Imprezy() {
       <div className="mb-5">
         <WeekSelect />
       </div>
-      <SectionHeader title="Baza Imprez (Ustalone)" subtitle={`Skan plików .xlsx dla tygodnia ${ddmmyyyy(s)} — ${ddmmyyyy(e)}`}>
+      <SectionHeader title="Baza Imprez (Ustalone)" subtitleInline={`Skan plików .xlsx dla tygodnia ${ddmmyyyy(s)} — ${ddmmyyyy(e)}`}
+        hint="Podłącz dysk NAS w Finderze, kliknij „Synchronizuj” i wskaż folder z plikami imprez (np. „USTALONE”). Pliki z tego tygodnia są odczytywane na Twoim laptopie — na serwer leci tylko data, klient, godzina, sala i liczba osób (serwer nie czyta NAS-a i nie parsuje Excela).">
         <Button onClick={() => fileInputRef.current?.click()} disabled={syncing}>
           {syncing ? <Spinner className="h-4 w-4" /> : <Icon name="refresh" className="h-4 w-4" />}
           {syncing ? 'Synchronizacja…' : 'Synchronizuj'}
         </Button>
         <input ref={fileInputRef} type="file" multiple accept=".xlsx" className="hidden" onChange={naWyborFolderu} />
       </SectionHeader>
-
-      <Banner variant="info" className="mb-6">
-        Podłącz dysk NAS w Finderze, kliknij „Synchronizuj" i wskaż folder z plikami imprez (np. „USTALONE”).
-        Pliki z tego tygodnia są odczytywane <strong>na Twoim laptopie</strong> — na serwer leci tylko data,
-        klient, godzina, sala i liczba osób (serwer nie czyta NAS-a i nie parsuje Excela).
-      </Banner>
 
       {/* Karty zamiast tabeli — czytelne na mobile, nic się nie ucina. */}
       {loading ? (

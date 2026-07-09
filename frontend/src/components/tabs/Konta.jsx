@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
-import { Banner } from '../ui/Banner'
 import { Icon } from '../../lib/icons'
 import { Spinner } from '../ui/Spinner'
 import { api } from '../../lib/api'
@@ -241,7 +240,7 @@ export default function Konta() {
       <Zaproszenia pracownicy={pracownicy.filter((p) => !users.some((u) => u.pracownik_id === p.id))} />
 
       <Card className="p-6 sm:p-8">
-        <SectionHeader title="Nowe konto" subtitle="Ręczne konto (np. administrator) — pracowników wygodniej zapraszać linkiem.">
+        <SectionHeader title="Nowe konto" subtitle="Ręczne konto (np. administrator) — pracowników wygodniej zapraszać linkiem. Powiąż konto pracownika z osobą z listy, aby jego zgłoszenia trafiały do właściwej dyspozycyjności.">
           <Button variant="ghost" onClick={provision}>
             <Icon name="users" className="h-4 w-4" /> Konta dla wszystkich
           </Button>
@@ -264,9 +263,6 @@ export default function Konta() {
               ))}
             </select>
           </div>
-          <Banner variant="info" className="mt-4">
-            Powiąż konto pracownika z osobą z listy — dzięki temu jego zgłoszenia trafią do właściwej dyspozycyjności.
-          </Banner>
           <Button className="mt-5 w-full" onClick={utworz}>
             <Icon name="plus" className="h-4 w-4" /> Utwórz konto
           </Button>

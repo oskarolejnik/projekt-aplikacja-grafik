@@ -48,7 +48,7 @@ export default function PrognozaObsady() {
   return (
     <Card className="p-6 sm:p-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <SectionHeader title="Prognoza obsady" subtitle="Sugerowana liczba osób na zmianę wg prognozowanego ruchu (7 dni)." />
+        <SectionHeader title="Prognoza obsady" subtitle="Sugerowana liczba osób na zmianę wg prognozowanego ruchu (7 dni). Liczymy ją jako max(min, ⌈prognoza ÷ rachunki_na_osobę⌉) — parametry zmienisz w zakładce Ustawienia lokalu." />
         <div className="flex items-center gap-2 text-sm">
           <span className="text-muted">Okno historii:</span>
           <select value={dni} onChange={(e) => setDni(Number(e.target.value))}
@@ -136,11 +136,6 @@ export default function PrognozaObsady() {
                     className="rounded-xl bg-mint px-4 py-2 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
               {busy ? 'Stosuję…' : 'Zastosuj do wymagań'}
             </button>
-          </div>
-
-          <div className="rounded-xl border border-line bg-surface-2 px-4 py-3 text-xs text-muted">
-            Sugerowaną obsadę liczymy jako <b className="text-ink">max(min, ⌈prognoza ÷ rachunki_na_osobę⌉)</b>.
-            Parametry zmienisz w zakładce <b className="text-ink">Ustawienia lokalu</b>.
           </div>
         </div>
       )}
