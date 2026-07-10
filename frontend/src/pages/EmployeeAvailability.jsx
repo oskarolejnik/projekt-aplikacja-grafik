@@ -116,9 +116,6 @@ export default function EmployeeAvailability() {
           <WeekSelect />
           <Hint>Zaznacz dni, w których możesz pracować. Domyślnie „Cały dzień” — wyłącz przełącznik, aby podać godziny od–do.</Hint>
         </div>
-        {zablokowane && (
-          <span className="text-sm text-muted">Grafik na ten tydzień jest opublikowany — dyspozycji nie można już zmieniać.</span>
-        )}
       </div>
 
       {zablokowane && (
@@ -260,7 +257,16 @@ export default function EmployeeAvailability() {
         )}
       </Card>
 
-      <MojeUrlopy />
+      <details className="group mt-6">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 rounded-xl border border-line bg-white/[0.03] px-4 py-3 transition hover:bg-white/[0.05] [&::-webkit-details-marker]:hidden">
+          <span>
+            <span className="block font-semibold text-ink">Urlopy i nieobecności</span>
+            <span className="block text-xs text-muted">Złóż wniosek lub sprawdź jego status</span>
+          </span>
+          <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition-transform duration-200 group-open:rotate-180" />
+        </summary>
+        <MojeUrlopy />
+      </details>
     </>
   )
 }

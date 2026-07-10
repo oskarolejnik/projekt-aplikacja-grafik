@@ -138,6 +138,22 @@ export default function EmployeeHours() {
             </Card>
           )}
 
+          {/* Najpierw odpowiedź na dwa najczęstsze pytania pracownika. */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Card className="p-6 text-center">
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Łącznie w miesiącu</div>
+              <div className="mt-1 font-display text-4xl font-bold text-ink tabular-nums sm:text-5xl">
+                {godzinyHM(dane?.suma_godzin)}
+              </div>
+            </Card>
+            <Card className="border-mint/30 bg-mint/[0.05] p-6 text-center">
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Do wypłaty</div>
+              <div className="mt-1 font-display text-4xl font-bold tabular-nums text-mint sm:text-5xl">
+                {zl(dane?.do_wyplaty)}
+              </div>
+            </Card>
+          </div>
+
           {/* Portfel: zarobek na żywo + zaliczki (roadmapa v2) */}
           {portfel && (
             <Card className="p-6">
@@ -154,14 +170,14 @@ export default function EmployeeHours() {
                 )}
               </div>
               {biezacyMiesiac && portfel.dostepna_zaliczka > 0 && (
-                <div className="mt-4 flex gap-2">
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                   <input
                     type="number" min="1" value={kwotaZal} onChange={(e) => setKwotaZal(e.target.value)}
                     placeholder="kwota zaliczki (zł)"
                     className="w-full min-w-0 flex-1 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted/50 focus:border-mint/60 focus:ring-2 focus:ring-mint/20"
                   />
-                  <button onClick={zlozWniosek} disabled={busyZal}
-                          className="shrink-0 rounded-xl bg-mint px-4 py-2.5 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-50">
+                  <button type="button" onClick={zlozWniosek} disabled={busyZal}
+                          className="min-h-11 w-full shrink-0 rounded-xl bg-mint px-4 py-2.5 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-50 sm:w-auto">
                     Poproś o zaliczkę
                   </button>
                 </div>
@@ -189,22 +205,6 @@ export default function EmployeeHours() {
               )}
             </Card>
           )}
-
-          {/* Suma godzin + do wypłaty (u góry) */}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Card className="p-6 text-center">
-              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Łącznie w miesiącu</div>
-              <div className="mt-1 font-display text-4xl font-bold text-ink tabular-nums sm:text-5xl">
-                {godzinyHM(dane?.suma_godzin)}
-              </div>
-            </Card>
-            <Card className="border-mint/30 bg-mint/[0.05] p-6 text-center">
-              <div className="text-xs font-semibold uppercase tracking-wider text-muted">Do wypłaty</div>
-              <div className="mt-1 font-display text-4xl font-bold tabular-nums text-mint sm:text-5xl">
-                {zl(dane?.do_wyplaty)}
-              </div>
-            </Card>
-          </div>
 
           {/* Napiwki miesiąca — suma + rozbicie na dni (jeśli są). */}
           {napiwki && napiwki.suma > 0 && (

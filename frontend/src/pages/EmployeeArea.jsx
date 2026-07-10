@@ -104,6 +104,7 @@ export default function EmployeeArea() {
           <button
             type="button"
             onClick={logout}
+            aria-label="Wyloguj"
             className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
           >
             <Icon name="logout" className="h-4 w-4" />
