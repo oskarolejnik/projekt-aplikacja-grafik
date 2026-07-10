@@ -13,14 +13,17 @@ import { motion, AnimatePresence } from 'framer-motion'
 // Dyspozycyjność pracowników. Pracownicy zgłaszają się sami w swoim panelu, ale
 // administrator może tu DOWOLNIE ustawić/zmienić/wyczyścić dyspozycję — klik w komórkę
 // otwiera edytor (dostępny / niedostępny / od której godziny). Zapis: POST/DELETE /api/dyspozycje.
-export default function Dyspozycje() {
+export default function Dyspozycje({ active = true }) {
   const { pracownicy, week, przyszly, setWeek, reloadDicts } = useData()
   const { toast } = useToast()
+  const ustawionoPrzyszly = useRef(false)
 
   // Na wejściu w Dyspozycyjność pokaż tydzień przyszły (składane z wyprzedzeniem).
   useEffect(() => {
+    if (!active || ustawionoPrzyszly.current) return
+    ustawionoPrzyszly.current = true
     setWeek(przyszly)
-  }, [przyszly, setWeek])
+  }, [active, przyszly, setWeek])
   const [dys, setDys] = useState([])
   const [loading, setLoading] = useState(true)
   const [edit, setEdit] = useState(null) // { prac, dt, dostepnosc, od, id }
@@ -46,8 +49,8 @@ export default function Dyspozycje() {
   }, [s, e, reloadDicts, toast])
 
   useEffect(() => {
-    load()
-  }, [load])
+    if (active) load()
+  }, [active, load])
 
   const map = useMemo(() => {
     const m = {}

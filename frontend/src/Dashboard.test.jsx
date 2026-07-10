@@ -21,6 +21,9 @@ vi.mock('./components/Logo', () => ({ Logo: () => <span>Lokalo</span> }))
 vi.mock('./components/PushButton', () => ({ PushButton: () => <button type="button">Powiadomienia</button> }))
 vi.mock('./lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
 vi.mock('./components/tabs/Pulpit', () => ({ default: () => <div>Treść pulpitu</div> }))
+vi.mock('./components/tabs/Ustawienia', () => ({
+  default: ({ initialSection }) => <div>Ustawienia: {initialSection}</div>,
+}))
 
 const CONFIG = {
   modul_rezerwacje: true,
@@ -60,6 +63,20 @@ describe('Dashboard', () => {
     expect(screen.queryByRole('button', { name: 'Zadatki' })).not.toBeInTheDocument()
   })
 
+  it('grupuje plan, dyspozycje i edycję w jednym wejściu Grafik pracy', async () => {
+    render(<Dashboard />)
+
+    const grafik = await screen.findByRole('button', { name: 'Grafik' })
+    fireEvent.click(grafik)
+
+    expect(screen.getByRole('button', { name: 'Grafik pracy' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Interaktywny grafik' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Wymagania (plan)' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Dyspozycyjność' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Giełda zmian' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Raport godzin' })).toBeInTheDocument()
+  })
+
   it('wyłącza fokus w zamkniętym menu mobilnym', () => {
     const { container } = render(<Dashboard />)
     const drawer = container.querySelector('aside[aria-label="Menu administracyjne"]')
@@ -72,5 +89,19 @@ describe('Dashboard', () => {
     expect(drawer).toHaveAttribute('aria-hidden', 'false')
     expect(drawer).not.toHaveAttribute('inert')
     expect(screen.getByRole('button', { name: 'Zamknij menu' })).toBeInTheDocument()
+  })
+
+  it('prowadzi z alertu płatności bezpośrednio do planu', async () => {
+    apiMock.mockImplementation((path) => {
+      if (path === '/lokal/config') return Promise.resolve(CONFIG)
+      if (path === '/subskrypcja') return Promise.resolve({ stan: 'grace', data_grace: '2026-07-15' })
+      if (path === '/flota') return Promise.resolve({ enabled: false })
+      return Promise.resolve({})
+    })
+
+    render(<Dashboard />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Przejdź do subskrypcji' }))
+    expect(screen.getByText('Ustawienia: plan')).toBeInTheDocument()
   })
 })

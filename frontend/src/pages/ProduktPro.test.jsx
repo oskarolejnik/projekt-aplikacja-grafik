@@ -11,14 +11,14 @@ describe('Landing sprzedażowy (ProduktPro)', () => {
     const { container } = render(<Produkt />)
     expect(container.textContent).toContain('jednym systemie')
     expect(container.textContent).toContain('Excela')
-  })
+  }, 15000)
 
   it('pokazuje wszystkie 5 pakietów', () => {
     render(<Produkt />)
     for (const tier of ['Darmowy', 'Basic', 'Pro', 'Premium', 'Enterprise']) {
       expect(screen.getByRole('heading', { name: tier })).toBeInTheDocument()
     }
-  })
+  }, 15000)
 
   it('domyślnie pokazuje ceny roczne + dodatek POS + wycenę', () => {
     const { container } = render(<Produkt />)

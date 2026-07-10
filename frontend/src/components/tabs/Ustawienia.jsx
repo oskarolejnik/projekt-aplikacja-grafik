@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Hint } from '../ui/Hint'
 import { Button } from '../ui/Button'
+import { PillSwitch } from '../ui/PillSwitch'
+import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api, pobierzPlik } from '../../lib/api'
@@ -21,22 +23,39 @@ const MODULY = [
 const ETYKIETA_PLANU = { free: 'Darmowy', basic: 'Basic', pro: 'Pro', premium: 'Premium', enterprise: 'Enterprise' }
 const fld = 'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-mint'
 
-function Toggle({ on, onChange }) {
+function Toggle({ on, onChange, label, disabled = false }) {
   return (
-    <button type="button" onClick={() => onChange(!on)} role="switch" aria-checked={on}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition ${on ? 'bg-mint' : 'bg-white/10'}`}>
-      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-bg shadow transition-all ${on ? 'left-[1.375rem]' : 'left-0.5'}`} />
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl transition active:scale-[0.98] disabled:opacity-50"
+    >
+      <span aria-hidden className={`relative h-6 w-11 rounded-full transition ${on ? 'bg-mint' : 'bg-white/10'}`}>
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-bg shadow transition-all ${on ? 'left-[1.375rem]' : 'left-0.5'}`} />
+      </span>
     </button>
   )
 }
 
-export default function Ustawienia() {
-  const { toast } = useToast()
+export default function Ustawienia({ initialSection = 'lokal' }) {
+  const { toast, confirm } = useToast()
   const [cfg, setCfg] = useState(null)
   const [integ, setInteg] = useState([])
   const [sub, setSub] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [integError, setIntegError] = useState(false)
+  const [subError, setSubError] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [widok, setWidok] = useState(initialSection)
+
+  useEffect(() => {
+    setWidok(initialSection)
+  }, [initialSection])
 
   // Etykiety kas/terminali edytowane jako tekst „po przecinku" (puste = wolny wpis w Rozliczeniu dnia).
   const [kasyText, setKasyText] = useState('')
@@ -49,11 +68,23 @@ export default function Ustawienia() {
   const [zeszytKolText, setZeszytKolText] = useState('')
   const [excelMapa, setExcelMapa] = useState({ godzina: 'J1', osoby: 'H8', sala: 'J2' })
 
+  const loadSubskrypcja = useCallback(async () => {
+    try {
+      const s = await api('/subskrypcja')
+      setSub(s)
+      setSubError(false)
+    } catch {
+      setSub(null)
+      setSubError(true)
+    }
+  }, [])
+
   const load = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const [c, i, s] = await Promise.all([api('/lokal/config'), api('/integracje/status'), api('/subskrypcja')])
-      setCfg(c); setInteg(i.integracje || []); setSub(s)
+      const c = await api('/lokal/config')
+      setCfg(c)
       setKasyText((c.rozliczenia_nazwy_kas || []).join(', '))
       setTerminaleText((c.rozliczenia_nazwy_terminali || []).join(', '))
       setSaleText((c.sale || []).join(', '))
@@ -62,12 +93,34 @@ export default function Ustawienia() {
       setMapaSalText(Object.entries(c.imprezy_mapa_sal || {}).map(([k, v]) => `${k}=${v}`).join(', '))
       setZeszytKolText((c.zeszyt_kolumny || []).join(', '))
       setExcelMapa({ godzina: 'J1', osoby: 'H8', sala: 'J2', ...(c.imprezy_excel_mapa || {}) })
-    } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
-  }, [toast])
+      const [integracjeResult] = await Promise.allSettled([
+        api('/integracje/status'),
+        loadSubskrypcja(),
+      ])
+      if (integracjeResult.status === 'fulfilled') {
+        setInteg(integracjeResult.value.integracje || [])
+        setIntegError(false)
+      } else {
+        setInteg([])
+        setIntegError(true)
+      }
+    } catch (e) {
+      setCfg(null)
+      setLoadError(e.message || 'Nie udało się pobrać konfiguracji lokalu.')
+    } finally {
+      setLoading(false)
+    }
+  }, [loadSubskrypcja])
   useEffect(() => { load() }, [load])
 
   const set = (k, v) => setCfg((s) => ({ ...s, [k]: v }))
   const setS = (k, v) => setSub((s) => ({ ...s, [k]: v }))
+  const pokazSubskrypcje = () => {
+    setWidok('plan')
+    requestAnimationFrame(() => {
+      document.getElementById('sekcja-subskrypcja')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
 
   // Menu imprez (portal Pary Młodej): katalog ofert wybieralnych przez klienta w portalu.
   const [oferty, setOferty] = useState([])
@@ -90,6 +143,9 @@ export default function Ustawienia() {
     catch (e) { toast(e.message, 'error') }
   }
   const usunOferte = async (o) => {
+    if (!(await confirm(`Usunąć ofertę „${o.nazwa}”? Istniejące wybory klientów zostaną odpięte.`, {
+      confirmText: 'Usuń ofertę',
+    }))) return
     try { await api(`/oferty-menu/${o.id}`, 'DELETE'); await odswiezOferty(); toast('Usunięto ofertę.', 'success') }
     catch (e) { toast(e.message, 'error') }
   }
@@ -184,13 +240,39 @@ export default function Ustawienia() {
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
-  if (loading || !cfg) {
-    return <Card className="p-8"><div className="grid place-items-center py-16"><Spinner className="h-6 w-6 text-muted" /></div></Card>
+  if (loading) {
+    return <Card className="p-8"><div className="grid place-items-center py-16" role="status" aria-label="Wczytywanie ustawień"><Spinner className="h-6 w-6 text-muted" /></div></Card>
+  }
+
+  if (loadError || !cfg) {
+    return (
+      <Card className="p-6 sm:p-8">
+        <Banner variant="danger">
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+            <span>Nie udało się wczytać ustawień. {loadError}</span>
+            <Button size="sm" variant="ghost" onClick={load}>Spróbuj ponownie</Button>
+          </div>
+        </Banner>
+      </Card>
+    )
   }
 
   return (
     <div className="space-y-5">
-      <Card className="p-6 sm:p-8">
+      <PillSwitch
+        className="w-full"
+        label="Kategoria ustawień"
+        value={widok}
+        onChange={setWidok}
+        options={[
+          { value: 'lokal', label: 'Lokal' },
+          { value: 'operacje', label: 'Operacje' },
+          { value: 'goscie', label: 'Goście' },
+          { value: 'plan', label: 'Plan' },
+        ]}
+      />
+
+      <Card hidden={widok !== 'lokal'} className="p-6 sm:p-8">
         <SectionHeader title="Marka (white-label)" subtitle="Nazwa, logo i kolor widoczne w całej aplikacji." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted">Nazwa lokalu
@@ -212,11 +294,19 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'plan'} className="p-6 sm:p-8">
         <SectionHeader title="Moduły" subtitle="Włącz tylko funkcje, których używasz. Moduły spoza Twojego planu są zablokowane — odblokujesz je podnosząc pakiet." />
+        {subError && (
+          <Banner variant="warn" className="mb-4">
+            <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+              <span>Nie udało się sprawdzić planu. Zmiana modułów jest chwilowo zablokowana.</span>
+              <Button size="sm" variant="ghost" onClick={loadSubskrypcja}>Spróbuj ponownie</Button>
+            </div>
+          </Banner>
+        )}
         <div className="mt-4 space-y-2">
           {MODULY.map(([k, l]) => {
-            const ok = !sub?.dostepne_moduly || sub.dostepne_moduly.includes(k)
+            const ok = !!sub && (!sub.dostepne_moduly || sub.dostepne_moduly.includes(k))
             const plan = sub?.moduly_wg_planu?.[k]
             return (
               <div key={k} className={`flex items-center justify-between rounded-xl border px-4 py-3 ${ok ? 'border-line bg-surface-2' : 'border-line/60 bg-surface-2/40'}`}>
@@ -225,13 +315,15 @@ export default function Ustawienia() {
                   {l}
                   {!ok && plan && <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-semibold text-muted">{ETYKIETA_PLANU[plan]}+</span>}
                 </span>
-                {ok ? (
-                  <Toggle on={!!cfg[k]} onChange={(v) => (k === 'modul_rezerwacje' && !v)
+                {!sub ? (
+                  <span className="text-xs font-semibold text-muted">Plan niedostępny</span>
+                ) : ok ? (
+                  <Toggle label={`Przełącz: ${l}`} on={!!cfg[k]} onChange={(v) => (k === 'modul_rezerwacje' && !v)
                     ? setCfg((s) => ({ ...s, modul_rezerwacje: false, rezerwacje_online: false }))
                     : set(k, v)} />
                 ) : (
-                  <button onClick={() => document.getElementById('sekcja-subskrypcja')?.scrollIntoView({ behavior: 'smooth' })}
-                    className="text-xs font-semibold text-mint transition hover:brightness-110">Odblokuj →</button>
+                  <button type="button" onClick={pokazSubskrypcje}
+                    className="min-h-11 rounded-lg px-2 text-xs font-semibold text-mint transition hover:bg-white/[0.04]">Odblokuj →</button>
                 )}
               </div>
             )
@@ -239,7 +331,7 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'lokal'} className="p-6 sm:p-8">
         <SectionHeader title="Typ lokalu" subtitle="Profil Twojej knajpy — z niego dobieramy sensowny zestaw modułów. „Zastosuj preset” ustawi przełączniki modułów wg wybranego typu (zapisz, by utrwalić) — możesz to zrobić ponownie w każdej chwili." />
         <div className="mt-4 flex flex-wrap items-end gap-3">
           <label className="flex-1 text-xs font-semibold text-muted">Typ
@@ -255,7 +347,7 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'goscie'} className="p-6 sm:p-8">
         <SectionHeader title="Parametry obsady imprez" subtitle="Reguły automatycznego przeliczania obsady imprez na wymagania grafiku (moduł imprez). Komórki Excel dotyczą importu imprez z plików (moduł „Baza imprez”) — każdy lokal ma własny szablon." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted">Gości na 1 pracownika obsługi
@@ -267,7 +359,7 @@ export default function Ustawienia() {
           <label className="text-xs font-semibold text-muted">Sale z minimum 2 obsady (po przecinku)
             <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="R2Piw,R2G" className={fld} /></label>
         </div>
-        <div className="mt-4 grid grid-cols-3 gap-3">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="text-xs font-semibold text-muted">Komórka Excel: godzina
             <input value={excelMapa.godzina} onChange={(e) => setExcelMapa((s) => ({ ...s, godzina: e.target.value.toUpperCase() }))} className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Komórka Excel: liczba osób
@@ -277,7 +369,7 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'operacje'} className="p-6 sm:p-8">
         <SectionHeader title="Rozliczenie dnia" subtitle="Dopasuj kasę do swojego lokalu — nie każda knajpa rozlicza się jak dom weselny. Podane niżej etykiety kas/terminali pojawią się jako lista wyboru w Rozliczeniu dnia — liczba pozycji wynika z długości list." />
         <div className="mt-4 space-y-3">
           <div className="flex items-center justify-between gap-4 rounded-xl border border-line bg-surface-2 px-4 py-3">
@@ -285,7 +377,7 @@ export default function Ustawienia() {
               Imprezy rozliczane osobno
               <Hint>Włączone: rozliczenia imprez trafiają do zeszytu i pulpitu, a IMP pomniejsza kasy. Wyłączone: sprzedaż imprezowa siedzi w zwykłym obrocie sali (bez osobnych rozliczeń).</Hint>
             </span>
-            <Toggle on={!!cfg.impreza_osobne_rozliczenie} onChange={(v) => set('impreza_osobne_rozliczenie', v)} />
+            <Toggle label="Imprezy rozliczane osobno" on={!!cfg.impreza_osobne_rozliczenie} onChange={(v) => set('impreza_osobne_rozliczenie', v)} />
           </div>
           <label className="block text-xs font-semibold text-muted">Sposób rozliczania obsługi
             <select value={cfg.rozliczenia_tryb_kelnera || 'indywidualnie'} onChange={(e) => set('rozliczenia_tryb_kelnera', e.target.value)} className={fld}>
@@ -302,7 +394,7 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'lokal'} className="p-6 sm:p-8">
         <SectionHeader title="Struktura lokalu" subtitle="Sale i reguły sprzątania Twojego lokalu (puste pole = wartości domyślne). Kolejność sal = kolejność wyświetlania. Sale napędzają też grafik sprzątania i widok stołów; zmiana nazwy sali nie zmienia wpisów historycznych (zostają pod starą nazwą)." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted sm:col-span-2">Sale (po przecinku)
@@ -318,14 +410,14 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'goscie'} className="p-6 sm:p-8">
         <SectionHeader title="Menu imprez (portal klienta)" subtitle="Warianty menu, które para młoda / organizator wybiera w portalu imprezy. Nieaktywne znikają z portalu, wybory zostają." />
         <div className="space-y-2">
           {oferty.length === 0 && <p className="py-3 text-sm text-muted">Brak ofert — dodaj pierwszą, a pojawi się w portalu klienta.</p>}
           {oferty.map((o) => (
             <div key={o.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line bg-white/[0.02] px-4 py-2.5">
-              <button onClick={() => przelaczOferte(o)}
-                      className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold transition ${
+              <button type="button" onClick={() => przelaczOferte(o)}
+                      className={`min-h-11 shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition ${
                         o.aktywna ? 'bg-mint/15 text-mint' : 'bg-white/[0.06] text-muted hover:text-ink'}`}>
                 {o.aktywna ? 'aktywna' : 'wyłączona'}
               </button>
@@ -334,7 +426,7 @@ export default function Ustawienia() {
                 {o.opis && <span className="ml-2 text-xs text-muted">{o.opis}</span>}
               </div>
               <span className="text-sm tabular-nums text-ink">{(o.cena_od_osoby || 0).toLocaleString('pl-PL')} zł/os.</span>
-              <button onClick={() => usunOferte(o)} className="text-muted transition hover:text-danger" aria-label="Usuń ofertę">✕</button>
+              <button type="button" onClick={() => usunOferte(o)} className="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted transition hover:bg-danger/10 hover:text-danger" aria-label={`Usuń ofertę ${o.nazwa}`}>✕</button>
             </div>
           ))}
           <div className="grid gap-2 pt-1 sm:grid-cols-[1fr_7rem_1fr_auto]">
@@ -349,7 +441,7 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'operacje'} className="p-6 sm:p-8">
         <SectionHeader title="Prognoza obsady" subtitle="Przeliczanie prognozowanego ruchu na sugerowaną liczbę osób na zmianę (zakładka „Prognoza obsady”)." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted">Rachunków na 1 osobę obsługi
@@ -359,7 +451,7 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'operacje'} className="p-6 sm:p-8">
         <SectionHeader title="Strażnik prawa pracy" subtitle="Limity przy ręcznym przydziale zmian (Kodeks pracy). Wpisz 0, aby wyłączyć dany limit." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="text-xs font-semibold text-muted">Min. odpoczynek między zmianami (h)
@@ -371,22 +463,25 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'goscie'} className="p-6 sm:p-8">
         <SectionHeader title="Rezerwacje online" subtitle="Publiczny widget — goście rezerwują bez logowania (wymaga modułu rezerwacji + godzin otwarcia + stolików)." />
         <div className="mt-4 space-y-2">
           <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
             <span className="text-sm text-ink">Włącz rezerwacje online <span className="text-xs text-muted">(włączy też moduł rezerwacji)</span></span>
-            <Toggle on={!!cfg.rezerwacje_online} onChange={(v) => setCfg((s) => ({ ...s, ...znormalizujModuly({ ...s, rezerwacje_online: v }) }))} />
+            <Toggle label="Włącz rezerwacje online" on={!!cfg.rezerwacje_online} onChange={(v) => setCfg((s) => ({ ...s, ...znormalizujModuly({ ...s, rezerwacje_online: v }) }))} />
           </div>
           <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
             <span className="text-sm text-ink">Automatyczne potwierdzanie (bez akceptacji admina)</span>
-            <Toggle on={!!cfg.rezerwacje_auto_potwierdzenie} onChange={(v) => set('rezerwacje_auto_potwierdzenie', v)} />
+            <Toggle label="Automatyczne potwierdzanie rezerwacji" on={!!cfg.rezerwacje_auto_potwierdzenie} onChange={(v) => set('rezerwacje_auto_potwierdzenie', v)} />
           </div>
         </div>
       </Card>
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'plan'} className="p-6 sm:p-8">
         <SectionHeader title="Integracje" subtitle="Status połączeń — konfigurowane sekretami instancji (.env)." />
+        {integError && (
+          <Banner variant="warn" className="mb-4">Nie udało się pobrać statusu integracji. Ustawienia lokalu nadal możesz edytować.</Banner>
+        )}
         <div className="mt-4 space-y-2">
           {integ.map((i) => (
             <div key={i.klucz} className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
@@ -399,8 +494,8 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      <div id="sekcja-subskrypcja" />
-      {sub && (
+      <div id="sekcja-subskrypcja" hidden={widok !== 'plan'} />
+      {widok === 'plan' && sub && (
         <Card className="p-6 sm:p-8">
           <SectionHeader title="Subskrypcja / licencja" subtitle="Twój pakiet, moduły, płatności i zmiana planu. Po grace instancja przechodzi w tryb tylko do odczytu." />
           <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -468,26 +563,31 @@ export default function Ustawienia() {
             )}
           </div>
 
-          <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-muted/70">Ręczne (operator)</p>
-          <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <label className="text-xs font-semibold text-muted">Status
-              <select value={sub.status} onChange={(e) => setS('status', e.target.value)} className={fld}>
-                {['aktywna', 'trial', 'wygasla', 'zawieszona'].map((s) => <option key={s} value={s}>{s}</option>)}
-              </select></label>
-            <label className="text-xs font-semibold text-muted">Plan (tier)
-              <select value={sub.tier} onChange={(e) => setS('tier', e.target.value)} className={fld}>
-                {['free', 'basic', 'pro', 'premium', 'enterprise'].map((t) => <option key={t} value={t}>{t}</option>)}
-              </select></label>
-            <label className="text-xs font-semibold text-muted">Ważna do (puste = bezterminowo)
-              <input type="date" value={sub.data_do || ''} onChange={(e) => setS('data_do', e.target.value || null)} className={fld} /></label>
-          </div>
-          <div className="mt-4 flex justify-end">
-            <Button onClick={zapiszSub} disabled={busy}><Icon name="check" className="h-4 w-4" /> Zapisz subskrypcję</Button>
-          </div>
+          <details className="group mt-4 border-t border-line pt-2">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-muted [&::-webkit-details-marker]:hidden">
+              <span>Narzędzia operatora</span>
+              <Icon name="chevronDown" className="h-4 w-4 transition group-open:rotate-180" />
+            </summary>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="text-xs font-semibold text-muted">Status
+                <select value={sub.status} onChange={(e) => setS('status', e.target.value)} className={fld}>
+                  {['aktywna', 'trial', 'wygasla', 'zawieszona'].map((s) => <option key={s} value={s}>{s}</option>)}
+                </select></label>
+              <label className="text-xs font-semibold text-muted">Plan (tier)
+                <select value={sub.tier} onChange={(e) => setS('tier', e.target.value)} className={fld}>
+                  {['free', 'basic', 'pro', 'premium', 'enterprise'].map((t) => <option key={t} value={t}>{t}</option>)}
+                </select></label>
+              <label className="text-xs font-semibold text-muted">Ważna do (puste = bezterminowo)
+                <input type="date" value={sub.data_do || ''} onChange={(e) => setS('data_do', e.target.value || null)} className={fld} /></label>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <Button onClick={zapiszSub} disabled={busy}><Icon name="check" className="h-4 w-4" /> Zapisz subskrypcję</Button>
+            </div>
+          </details>
         </Card>
       )}
 
-      <Card className="p-6 sm:p-8">
+      <Card hidden={widok !== 'plan'} className="p-6 sm:p-8">
         <SectionHeader title="Dane do faktury" subtitle="Dane Twojej firmy jako nabywcy faktur za subskrypcję (KSeF). Uzupełnij NIP — bez niego faktura jest niekompletna. Zapisujesz przyciskiem „Zapisz ustawienia” na dole." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted">NIP
@@ -501,7 +601,7 @@ export default function Ustawienia() {
         </div>
       </Card>
 
-      {faktury && (
+      {widok === 'plan' && faktury && (
         <Card className="p-6 sm:p-8">
           <SectionHeader title="Faktury za subskrypcję"
             subtitle={`Wystawiane po opłaceniu (KSeF: ${faktury.tryb_ksef === 'stub' ? 'tryb testowy — numery mockowane' : faktury.tryb_ksef}). Pobierz XML FA(3) do archiwum.`} />

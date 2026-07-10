@@ -18,7 +18,7 @@ def _h(user):
 @pytest.mark.parametrize(
     ("permission", "path"),
     [
-        ("grafik.podglad", "/api/przydzialy?start=2026-06-01&end=2026-06-07"),
+        ("grafik.podglad", "/api/szef/grafik?start=2026-06-01&end=2026-06-07"),
         ("raporty.podglad", "/api/raporty/godziny?rok=2026&miesiac=6"),
         ("zeszyt.podglad", "/api/szef/zeszyt?start=2026-06-01&end=2026-06-07"),
         ("imprezy.podglad", "/api/imprezy?start=2026-06-01&end=2026-06-07"),

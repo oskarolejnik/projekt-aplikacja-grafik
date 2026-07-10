@@ -10,11 +10,9 @@ import Pulpit from './components/tabs/Pulpit'
 import PrognozaObsady from './components/tabs/PrognozaObsady'
 import Pracownicy from './components/tabs/Pracownicy'
 import Stanowiska from './components/tabs/Stanowiska'
-import Wymagania from './components/tabs/Wymagania'
 import Konta from './components/tabs/Konta'
 import Imprezy from './components/tabs/Imprezy'
-import Dyspozycje from './components/tabs/Dyspozycje'
-import Grafik from './components/tabs/Grafik'
+import GrafikWorkspace from './components/tabs/GrafikWorkspace'
 import Sprzatanie from './components/tabs/Sprzatanie'
 import Zamowienia from './components/tabs/Zamowienia'
 import Urlopy from './components/tabs/Urlopy'
@@ -64,9 +62,7 @@ const TABS = [
   { id: 'ogloszenia', label: 'Ogłoszenia', icon: 'bell', kat: 'zespol', title: 'Ogłoszenia dla zespołu', Comp: Ogloszenia },
   { id: 'zgodnosc', label: 'Zgodność', icon: 'clipboard', kat: 'zespol', title: 'Zgodność — badania i terminy', Comp: Zgodnosc },
   // Grafik — planowanie i rozliczanie czasu pracy.
-  { id: 'grafik', label: 'Interaktywny grafik', icon: 'calendar', kat: 'grafik', title: 'Interaktywny grafik pracy', Comp: Grafik },
-  { id: 'wymagania', label: 'Wymagania (plan)', icon: 'clipboard', kat: 'grafik', title: 'Planowanie zmian', Comp: Wymagania },
-  { id: 'dyspozycje', label: 'Dyspozycyjność', icon: 'calendar', kat: 'grafik', title: 'Dyspozycyjność pracowników', Comp: Dyspozycje },
+  { id: 'grafik', label: 'Grafik pracy', icon: 'calendar', kat: 'grafik', title: 'Planowanie grafiku', Comp: GrafikWorkspace },
   { id: 'gielda', label: 'Giełda zmian', icon: 'refresh', kat: 'grafik', title: 'Giełda wymiany zmian', Comp: GieldaZmian },
   { id: 'godziny', label: 'Raport godzin', icon: 'clock', kat: 'grafik', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
   { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', kat: 'grafik', title: 'Grafik sprzątania sal', Comp: Sprzatanie, modul: 'modul_sprzatanie' },
@@ -106,6 +102,7 @@ export default function Dashboard() {
   const [openCat, setOpenCat] = useState(null)     // dropdown kategorii (desktop)
   const [openAcc, setOpenAcc] = useState('pulpit') // rozwinięty akordeon (mobile)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [settingsSection, setSettingsSection] = useState('lokal')
   const [cfg, setCfg] = useState({})
   const [flotaEnabled, setFlotaEnabled] = useState(false)   // panel operatora tylko na matce
   const [sub, setSub] = useState(null)                      // stan subskrypcji (baner grace/blokada)
@@ -134,7 +131,8 @@ export default function Dashboard() {
   // Otwarta szuflada startuje z rozwiniętą kategorią bieżącej zakładki.
   useEffect(() => { if (mobileOpen) setOpenAcc(aktywnaKat) }, [mobileOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const select = (id) => {
+  const select = (id, section) => {
+    if (id === 'ustawienia' && section) setSettingsSection(section)
     setActive(id)
     setOpenCat(null)
     setMobileOpen(false)
@@ -329,7 +327,7 @@ export default function Dashboard() {
                 ? `Faktura po terminie — opłać subskrypcję do ${sub.data_grace}, inaczej instancja przejdzie w tryb tylko do odczytu.`
                 : 'Subskrypcja nieopłacona — instancja działa w trybie tylko do odczytu. Opłać, aby odblokować zapisy.'}
             </span>
-            <button type="button" onClick={() => select('ustawienia')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+            <button type="button" onClick={() => select('ustawienia', 'plan')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
               Przejdź do subskrypcji
             </button>
           </div>
@@ -343,7 +341,7 @@ export default function Dashboard() {
                 ? <> Po trialu plan włączy się automatycznie{sub.karta_ostatnie4 ? ` (karta •••• ${sub.karta_ostatnie4})` : ''} — anuluj wcześniej, jeśli nie chcesz kontynuować.</>
                 : ' Masz pełny dostęp do wszystkich modułów; wybierz plan, żeby ich nie stracić po trialu.'}
             </span>
-            <button type="button" onClick={() => select('ustawienia')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+            <button type="button" onClick={() => select('ustawienia', 'plan')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
               {sub.trial_auto_obciazenie ? 'Zarządzaj' : 'Wybierz plan'}
             </button>
           </div>
@@ -358,7 +356,7 @@ export default function Dashboard() {
             )}
             <h2 className="font-display text-lg font-bold text-ink md:text-xl">{current.title}</h2>
           </div>
-          <Active />
+          {active === 'ustawienia' ? <Active initialSection={settingsSection} /> : <Active />}
         </div>
       </main>
     </div>

@@ -97,7 +97,13 @@ export default function SzefView() {
 
             {Active && (
               <div key={aktywnyTab.value} className="animate-tab-in">
-                {aktywnyTab.value === 'zeszyt' ? <Active readOnly endpoint="/szef/zeszyt" /> : <Active />}
+                {aktywnyTab.value === 'zeszyt' ? (
+                  <Active readOnly endpoint="/szef/zeszyt" />
+                ) : aktywnyTab.value === 'grafik' ? (
+                  <Active onOpenLive={() => setWidok('stoly')} />
+                ) : (
+                  <Active />
+                )}
               </div>
             )}
           </>

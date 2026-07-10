@@ -125,8 +125,7 @@ OVERSIGHT_GET = {
 # `/api/imprezy/rozliczenia`. Pozostałe role zachowują historyczną, segmentową allowlistę.
 SZEF_GET_PERMISSION = {
     "/api/raporty/godziny": "raporty.podglad",
-    "/api/przydzialy": "grafik.podglad",
-    "/api/grafik/publikacja": "grafik.podglad",
+    "/api/szef/grafik": "grafik.podglad",
     "/api/pracownicy": "grafik.podglad",
     "/api/stanowiska": "grafik.podglad",
     "/api/gastro/stoly": "grafik.podglad",
@@ -137,7 +136,6 @@ SZEF_GET_PERMISSION = {
     "/api/szef/zeszyt": "zeszyt.podglad",
     "/api/pulpit": "pulpit.podglad",
     "/api/alerty-kasowe": "zeszyt.podglad",
-    "/api/alerty-obsady": "grafik.podglad",
 }
 
 SZEF_ME_GET_PERMISSION = {
@@ -1075,20 +1073,15 @@ def alerty_kasowe(start: date = Query(...), end: date = Query(...), prog: float 
     return _alerty_kasowe(db, start, end, max(0.0, float(prog)))
 
 
-@app.get("/api/alerty-obsady")
-def alerty_obsady(dni: int = 14, db: Session = Depends(get_db)):
-    """Nadchodzące dni z NIEDOBOREM obsady: wymagana liczba osób (WymaganiaDnia) > przydzielona
-    (PrzydzialZmiany) na danym stanowisku. Wsparcie decyzji „gdzie brakuje ludzi". Admin/szef."""
-    dni = max(1, min(int(dni), 60))
-    today = date.today()
-    end = today + timedelta(days=dni)
+def _alerty_obsady_okres(db: Session, start: date, end: date) -> dict:
+    """Niedobory obsady w jawnym okresie; wspólny rdzeń pulpitu i widoku szefa."""
     wymagane = defaultdict(int)
     for w in db.query(models.WymaganiaDnia).filter(
-            models.WymaganiaDnia.data >= today, models.WymaganiaDnia.data <= end).all():
+            models.WymaganiaDnia.data >= start, models.WymaganiaDnia.data <= end).all():
         wymagane[(w.data, w.stanowisko_id)] += (w.liczba_osob or 0)
     obsadzone = defaultdict(int)
     for p in db.query(models.PrzydzialZmiany).filter(
-            models.PrzydzialZmiany.data >= today, models.PrzydzialZmiany.data <= end).all():
+            models.PrzydzialZmiany.data >= start, models.PrzydzialZmiany.data <= end).all():
         obsadzone[(p.data, p.stanowisko_id)] += 1
     stan_nazwa = {s.id: s.nazwa for s in db.query(models.Stanowisko).all()}
     alerty = []
@@ -1098,7 +1091,57 @@ def alerty_obsady(dni: int = 14, db: Session = Depends(get_db)):
             alerty.append({"data": str(d), "stanowisko": stan_nazwa.get(sid, "?"),
                            "wymagane": wym, "obsadzone": obs, "brakuje": wym - obs})
     alerty.sort(key=lambda x: (x["data"], x["stanowisko"]))
-    return {"alerty": alerty, "razem_brakuje": sum(a["brakuje"] for a in alerty), "dni": dni}
+    return {"alerty": alerty, "razem_brakuje": sum(a["brakuje"] for a in alerty)}
+
+
+@app.get("/api/alerty-obsady")
+def alerty_obsady(dni: int = 14, db: Session = Depends(get_db)):
+    """Nadchodzące dni z NIEDOBOREM obsady: wymagana liczba osób (WymaganiaDnia) > przydzielona
+    (PrzydzialZmiany) na danym stanowisku. Wsparcie decyzji „gdzie brakuje ludzi". Admin."""
+    dni = max(1, min(int(dni), 60))
+    today = date.today()
+    wynik = _alerty_obsady_okres(db, today, today + timedelta(days=dni))
+    return {**wynik, "dni": dni}
+
+
+@app.get("/api/szef/grafik")
+def szef_grafik(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+    """Published-only grafik szefa z bezpiecznym alertem obsady na bieżący dzień."""
+    if end < start:
+        raise HTTPException(400, "Koniec okresu przed początkiem.")
+    if (end - start).days > 62:
+        raise HTTPException(400, "Zakres grafiku może obejmować maksymalnie 63 dni.")
+
+    publikacja = db.query(models.PublikacjaGrafiku).filter_by(start=start, koniec=end).first()
+    if not publikacja:
+        return {
+            "opublikowany": False,
+            "opublikowano_at": None,
+            "przydzialy": [],
+            "alerty_dzis": [],
+            "razem_brakuje_dzis": 0,
+        }
+
+    przydzialy = db.query(models.PrzydzialZmiany).filter(
+        models.PrzydzialZmiany.data >= start,
+        models.PrzydzialZmiany.data <= end,
+    ).all()
+    today = date.today()
+    alerty_dzis = (
+        _alerty_obsady_okres(db, today, today)
+        if start <= today <= end
+        else {"alerty": [], "razem_brakuje": 0}
+    )
+    return {
+        "opublikowany": True,
+        "opublikowano_at": publikacja.opublikowano_at.isoformat(),
+        "przydzialy": [
+            schemas.PrzydzialOut.model_validate(p).model_dump(mode="json")
+            for p in przydzialy
+        ],
+        "alerty_dzis": alerty_dzis["alerty"],
+        "razem_brakuje_dzis": alerty_dzis["razem_brakuje"],
+    }
 
 
 # ── NAPIWKI (admin; helpery podziału w deps.py, /api/me/napiwki w routers/moje.py) ──

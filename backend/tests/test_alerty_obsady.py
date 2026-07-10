@@ -37,13 +37,13 @@ def test_pomija_dni_z_przeszlosci(admin_client, db):
     assert admin_client.get("/api/alerty-obsady").json()["alerty"] == []
 
 
-def test_szef_widzi_alerty_obsady(db):
+def test_szef_nie_widzi_surowych_alertow_obsady(db):
     from fastapi.testclient import TestClient
     import main
     szef = factories.UserFactory(login="szef_ob", rola="szef")
     c = TestClient(main.app)
     c.headers.update({"Authorization": f"Bearer {create_access_token(szef)}"})
-    assert c.get("/api/alerty-obsady").status_code == 200
+    assert c.get("/api/alerty-obsady").status_code == 403
 
 
 def test_pracownik_nie_widzi_alertow_obsady(make_employee_client, db):
