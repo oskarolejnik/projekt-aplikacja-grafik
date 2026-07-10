@@ -1,25 +1,27 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { MotionConfig } from 'framer-motion'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { BrandingProvider } from './context/BrandingContext'
 import { DataProvider } from './context/DataContext'
 import { ToastProvider } from './components/ui/Toast'
 import { Spinner } from './components/ui/Spinner'
-import Landing from './pages/Landing'
-import Dashboard from './Dashboard'
-import EmployeeArea from './pages/EmployeeArea'
-import SzefView from './pages/SzefView'
-import SzefKuchniView from './pages/SzefKuchniView'
-import RezerwacjaWidget from './pages/RezerwacjaWidget'
-import PortalImprezy from './pages/PortalImprezy'
-import Onboarding from './pages/Onboarding'
-import Start from './pages/Start'
-import Produkt from './pages/ProduktPro'
-import Zaproszenie from './pages/Zaproszenie'
-import WyborInstancji from './pages/WyborInstancji'
-import Dokument from './pages/Dokument'
+import { LazyErrorBoundary, LazyFallback } from './components/ui/LazyFallback'
 import { api, getApiBase } from './lib/api'
 import { jestNatywna } from './lib/platforma'
+
+const Landing = lazy(() => import('./pages/Landing'))
+const Dashboard = lazy(() => import('./Dashboard'))
+const EmployeeArea = lazy(() => import('./pages/EmployeeArea'))
+const SzefView = lazy(() => import('./pages/SzefView'))
+const SzefKuchniView = lazy(() => import('./pages/SzefKuchniView'))
+const RezerwacjaWidget = lazy(() => import('./pages/RezerwacjaWidget'))
+const PortalImprezy = lazy(() => import('./pages/PortalImprezy'))
+const Onboarding = lazy(() => import('./pages/Onboarding'))
+const Start = lazy(() => import('./pages/Start'))
+const Produkt = lazy(() => import('./pages/ProduktPro'))
+const Zaproszenie = lazy(() => import('./pages/Zaproszenie'))
+const WyborInstancji = lazy(() => import('./pages/WyborInstancji'))
+const Dokument = lazy(() => import('./pages/Dokument'))
 
 // Publiczne „trasy" wykrywane po query param (bez logowania, poza AuthProvider):
 //   ?rezerwuj → widget rezerwacji gościa,  ?produkt → strona produktu/cennik (marketing),
@@ -75,7 +77,7 @@ function Routed() {
   return <EmployeeArea />   // employee (obsługa) i kuchnia — kuchnia ma ukrytą Dyspozycyjność
 }
 
-export default function App() {
+function AppContent() {
   // Aplikacja NATYWNA bez zapisanego adresu instancji → najpierw ekran „adres instancji".
   // (Na webie jestNatywna()=false i getApiBase()='' → ten warunek nigdy nie zachodzi.)
   const [maBaze, setMaBaze] = useState(!!getApiBase())
@@ -148,5 +150,15 @@ export default function App() {
         </AuthProvider>
       </BrandingProvider>
     </MotionConfig>
+  )
+}
+
+export default function App() {
+  return (
+    <LazyErrorBoundary fullPage>
+      <Suspense fallback={<LazyFallback label="Ładowanie aplikacji" />}>
+        <AppContent />
+      </Suspense>
+    </LazyErrorBoundary>
   )
 }

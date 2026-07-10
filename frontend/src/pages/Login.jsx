@@ -4,7 +4,7 @@ import { useBranding } from '../context/BrandingContext'
 import { useToast } from '../components/ui/Toast'
 import { Icon } from '../lib/icons'
 import { Logo } from '../components/Logo'
-import { Spinner } from '../components/ui/Spinner'
+import { Button } from '../components/ui/Button'
 import { motion } from 'framer-motion'
 
 // Walidacja po stronie klienta (natychmiastowy feedback). Serwer waliduje ponownie
@@ -63,7 +63,7 @@ export default function Login({ onClose }) {
         await register({ email: loginName.trim(), haslo, imie: imie.trim(), nazwisko: nazwisko.trim() })
       } else {
         if (!loginName.trim() || !haslo) {
-          toast('Podaj e-mail i hasło.', 'error')
+          toast('Podaj e-mail lub login i hasło.', 'error')
           return
         }
         await login(loginName.trim(), haslo, zapamietaj)
@@ -121,14 +121,15 @@ export default function Login({ onClose }) {
           )}
 
           <label className="flex flex-col gap-1.5">
-            <span className="field-label">E-mail</span>
+            <span className="field-label">{rejestracja ? 'E-mail' : 'E-mail lub login'}</span>
             <input
-              type="email"
+              type={rejestracja ? 'email' : 'text'}
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
-              autoComplete="email"
+              autoComplete={rejestracja ? 'email' : 'username'}
+              inputMode={rejestracja ? 'email' : undefined}
               className="field"
-              placeholder="np. jan@lokal.pl"
+              placeholder={rejestracja ? 'np. jan@lokal.pl' : 'np. jan@lokal.pl lub jan.kowalski'}
             />
             {rejestracja && <span className="text-[11px] text-muted/80">na ten adres zalogujesz się do panelu</span>}
           </label>
@@ -168,14 +169,15 @@ export default function Login({ onClose }) {
             </label>
           )}
 
-          <button
+          <Button
             type="submit"
-            disabled={busy}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98] disabled:opacity-60"
+            loading={busy}
+            loadingLabel={rejestracja ? 'Tworzę konto…' : 'Loguję…'}
+            className="w-full"
           >
-            {busy ? <Spinner className="h-4 w-4" /> : <Icon name="logout" className="h-4 w-4 rotate-180" />}
-            {busy ? 'Chwila…' : rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}
-          </button>
+            <Icon name="logout" className="h-4 w-4 rotate-180" />
+            {rejestracja ? 'Zarejestruj się' : 'Zaloguj się'}
+          </Button>
         </form>
 
         <div className="mt-5 text-center text-xs text-muted">

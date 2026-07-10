@@ -1,41 +1,43 @@
 /* global __BUILD_TIME__ */
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Icon } from './lib/icons'
 import { Logo } from './components/Logo'
 import { PushButton } from './components/PushButton'
 import { useAuth } from './context/AuthContext'
 import { useBranding } from './context/BrandingContext'
 import { api } from './lib/api'
-import Pulpit from './components/tabs/Pulpit'
-import PrognozaObsady from './components/tabs/PrognozaObsady'
-import Pracownicy from './components/tabs/Pracownicy'
-import Stanowiska from './components/tabs/Stanowiska'
-import Konta from './components/tabs/Konta'
-import Imprezy from './components/tabs/Imprezy'
-import GrafikWorkspace from './components/tabs/GrafikWorkspace'
-import Sprzatanie from './components/tabs/Sprzatanie'
-import Zamowienia from './components/tabs/Zamowienia'
-import Urlopy from './components/tabs/Urlopy'
-import RaportGodzin from './components/tabs/RaportGodzin'
-import RozliczeniaPodglad from './components/tabs/RozliczeniaPodglad'
-import ZeszytPanel from './components/tabs/ZeszytPanel'
-import KalendarzImprez from './components/tabs/KalendarzImprez'
-import StolyLive from './components/tabs/StolyLive'
-import RezerwacjeStolik from './components/tabs/RezerwacjeStolik'
-import WidokHosta from './components/tabs/WidokHosta'
-import AnalitykaRezerwacji from './components/tabs/AnalitykaRezerwacji'
-import CrmGoscie from './components/tabs/CrmGoscie'
-import GieldaZmian from './components/tabs/GieldaZmian'
-import PlanSali from './components/tabs/PlanSali'
-import Ustawienia from './components/tabs/Ustawienia'
-import Eksport from './components/tabs/Eksport'
-import Ogloszenia from './components/tabs/Ogloszenia'
-import Napiwki from './components/tabs/Napiwki'
-import Zgodnosc from './components/tabs/Zgodnosc'
-import ZapytaniaImprez from './components/tabs/ZapytaniaImprez'
-import AntyfraudPos from './components/tabs/AntyfraudPos'
-import UtargPos from './components/tabs/UtargPos'
-import Flota from './components/tabs/Flota'
+import { LazyErrorBoundary, LazyFallback } from './components/ui/LazyFallback'
+
+const loadPulpit = () => import('./components/tabs/Pulpit')
+const loadPrognozaObsady = () => import('./components/tabs/PrognozaObsady')
+const loadPracownicy = () => import('./components/tabs/Pracownicy')
+const loadStanowiska = () => import('./components/tabs/Stanowiska')
+const loadKonta = () => import('./components/tabs/Konta')
+const loadImprezy = () => import('./components/tabs/Imprezy')
+const loadGrafikWorkspace = () => import('./components/tabs/GrafikWorkspace')
+const loadSprzatanie = () => import('./components/tabs/Sprzatanie')
+const loadZamowienia = () => import('./components/tabs/Zamowienia')
+const loadUrlopy = () => import('./components/tabs/Urlopy')
+const loadRaportGodzin = () => import('./components/tabs/RaportGodzin')
+const loadRozliczeniaPodglad = () => import('./components/tabs/RozliczeniaPodglad')
+const loadZeszytPanel = () => import('./components/tabs/ZeszytPanel')
+const loadKalendarzImprez = () => import('./components/tabs/KalendarzImprez')
+const loadStolyLive = () => import('./components/tabs/StolyLive')
+const loadRezerwacjeStolik = () => import('./components/tabs/RezerwacjeStolik')
+const loadWidokHosta = () => import('./components/tabs/WidokHosta')
+const loadAnalitykaRezerwacji = () => import('./components/tabs/AnalitykaRezerwacji')
+const loadCrmGoscie = () => import('./components/tabs/CrmGoscie')
+const loadGieldaZmian = () => import('./components/tabs/GieldaZmian')
+const loadPlanSali = () => import('./components/tabs/PlanSali')
+const loadUstawienia = () => import('./components/tabs/Ustawienia')
+const loadEksport = () => import('./components/tabs/Eksport')
+const loadOgloszenia = () => import('./components/tabs/Ogloszenia')
+const loadNapiwki = () => import('./components/tabs/Napiwki')
+const loadZgodnosc = () => import('./components/tabs/Zgodnosc')
+const loadZapytaniaImprez = () => import('./components/tabs/ZapytaniaImprez')
+const loadAntyfraudPos = () => import('./components/tabs/AntyfraudPos')
+const loadUtargPos = () => import('./components/tabs/UtargPos')
+const loadFlota = () => import('./components/tabs/Flota')
 
 // Nawigacja dwupoziomowa (feedback: „zakładek jest na tyle, że można się pogubić —
 // najpierw główne kategorie, później ładne listy rozwijane"). Na desktopie górny
@@ -52,43 +54,43 @@ const KATEGORIE = [
 
 const TABS = [
   // Pulpit — przegląd dnia i prognozy.
-  { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', kat: 'pulpit', title: 'Pulpit właściciela', Comp: Pulpit },
-  { id: 'prognoza-obsady', label: 'Prognoza obsady', icon: 'clock', kat: 'pulpit', title: 'Prognoza obsady', Comp: PrognozaObsady },
+  { id: 'pulpit', label: 'Pulpit', icon: 'sparkles', kat: 'pulpit', title: 'Pulpit właściciela', load: loadPulpit },
+  { id: 'prognoza-obsady', label: 'Prognoza obsady', icon: 'clock', kat: 'pulpit', title: 'Prognoza obsady', load: loadPrognozaObsady },
   // Zespół — ludzie, konta, komunikacja, formalności.
-  { id: 'pracownicy', label: 'Pracownicy', icon: 'users', kat: 'zespol', title: 'Zarządzanie pracownikami', Comp: Pracownicy },
-  { id: 'stanowiska', label: 'Stanowiska', icon: 'office', kat: 'zespol', title: 'Struktura i stanowiska', Comp: Stanowiska },
-  { id: 'konta', label: 'Konta pracowników', icon: 'key', kat: 'zespol', title: 'Konta i dostęp', Comp: Konta },
-  { id: 'urlopy', label: 'Urlopy', icon: 'calendar', kat: 'zespol', title: 'Wnioski urlopowe', Comp: Urlopy },
-  { id: 'ogloszenia', label: 'Ogłoszenia', icon: 'bell', kat: 'zespol', title: 'Ogłoszenia dla zespołu', Comp: Ogloszenia },
-  { id: 'zgodnosc', label: 'Zgodność', icon: 'clipboard', kat: 'zespol', title: 'Zgodność — badania i terminy', Comp: Zgodnosc },
+  { id: 'pracownicy', label: 'Pracownicy', icon: 'users', kat: 'zespol', title: 'Zarządzanie pracownikami', load: loadPracownicy },
+  { id: 'stanowiska', label: 'Stanowiska', icon: 'office', kat: 'zespol', title: 'Struktura i stanowiska', load: loadStanowiska },
+  { id: 'konta', label: 'Konta pracowników', icon: 'key', kat: 'zespol', title: 'Konta i dostęp', load: loadKonta },
+  { id: 'urlopy', label: 'Urlopy', icon: 'calendar', kat: 'zespol', title: 'Wnioski urlopowe', load: loadUrlopy },
+  { id: 'ogloszenia', label: 'Ogłoszenia', icon: 'bell', kat: 'zespol', title: 'Ogłoszenia dla zespołu', load: loadOgloszenia },
+  { id: 'zgodnosc', label: 'Zgodność', icon: 'clipboard', kat: 'zespol', title: 'Zgodność — badania i terminy', load: loadZgodnosc },
   // Grafik — planowanie i rozliczanie czasu pracy.
-  { id: 'grafik', label: 'Grafik pracy', icon: 'calendar', kat: 'grafik', title: 'Planowanie grafiku', Comp: GrafikWorkspace },
-  { id: 'gielda', label: 'Giełda zmian', icon: 'refresh', kat: 'grafik', title: 'Giełda wymiany zmian', Comp: GieldaZmian },
-  { id: 'godziny', label: 'Raport godzin', icon: 'clock', kat: 'grafik', title: 'Raport przepracowanych godzin', Comp: RaportGodzin },
-  { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', kat: 'grafik', title: 'Grafik sprzątania sal', Comp: Sprzatanie, modul: 'modul_sprzatanie' },
-  { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', kat: 'grafik', title: 'Zamówienia sprzątaczki', Comp: Zamowienia },
+  { id: 'grafik', label: 'Grafik pracy', icon: 'calendar', kat: 'grafik', title: 'Planowanie grafiku', load: loadGrafikWorkspace },
+  { id: 'gielda', label: 'Giełda zmian', icon: 'refresh', kat: 'grafik', title: 'Giełda wymiany zmian', load: loadGieldaZmian },
+  { id: 'godziny', label: 'Raport godzin', icon: 'clock', kat: 'grafik', title: 'Raport przepracowanych godzin', load: loadRaportGodzin },
+  { id: 'sprzatanie', label: 'Sprzątanie sal', icon: 'check', kat: 'grafik', title: 'Grafik sprzątania sal', load: loadSprzatanie, modul: 'modul_sprzatanie' },
+  { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', kat: 'grafik', title: 'Zamówienia sprzątaczki', load: loadZamowienia },
   // Kasa i POS — pieniądze i sygnały z kasy.
-  { id: 'utarg-pos', label: 'Utarg (POS)', icon: 'upload', kat: 'kasa', title: 'Utarg dnia — źródła POS', Comp: UtargPos },
-  { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', kat: 'kasa', title: 'Zeszyt kasowy', Comp: ZeszytPanel, modul: 'modul_rozliczenia' },
-  { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', kat: 'kasa', title: 'Rozliczenia kelnerów — podgląd', Comp: RozliczeniaPodglad, modul: 'modul_rozliczenia' },
-  { id: 'napiwki', label: 'Napiwki', icon: 'sparkles', kat: 'kasa', title: 'Napiwki — podział między obsługę', Comp: Napiwki },
-  { id: 'stoly', label: 'Stoły (live)', icon: 'pin', kat: 'kasa', title: 'Zajętość stołów na żywo', Comp: StolyLive, modul: 'modul_pos' },
-  { id: 'antyfraud', label: 'Antyfraud POS', icon: 'warning', kat: 'kasa', title: 'Antyfraud POS — storna i rabaty', Comp: AntyfraudPos, modul: 'modul_pos' },
-  { id: 'eksport', label: 'Eksport do Excela', icon: 'download', kat: 'kasa', title: 'Eksport danych', Comp: Eksport },
+  { id: 'utarg-pos', label: 'Utarg (POS)', icon: 'upload', kat: 'kasa', title: 'Utarg dnia — źródła POS', load: loadUtargPos },
+  { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', kat: 'kasa', title: 'Zeszyt kasowy', load: loadZeszytPanel, modul: 'modul_rozliczenia' },
+  { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', kat: 'kasa', title: 'Rozliczenia kelnerów — podgląd', load: loadRozliczeniaPodglad, modul: 'modul_rozliczenia' },
+  { id: 'napiwki', label: 'Napiwki', icon: 'sparkles', kat: 'kasa', title: 'Napiwki — podział między obsługę', load: loadNapiwki },
+  { id: 'stoly', label: 'Stoły (live)', icon: 'pin', kat: 'kasa', title: 'Zajętość stołów na żywo', load: loadStolyLive, modul: 'modul_pos' },
+  { id: 'antyfraud', label: 'Antyfraud POS', icon: 'warning', kat: 'kasa', title: 'Antyfraud POS — storna i rabaty', load: loadAntyfraudPos, modul: 'modul_pos' },
+  { id: 'eksport', label: 'Eksport do Excela', icon: 'download', kat: 'kasa', title: 'Eksport danych', load: loadEksport },
   // Goście — rezerwacje i relacje.
-  { id: 'widok-hosta', label: 'Widok hosta', icon: 'users', kat: 'goscie', title: 'Widok hosta — kolejka dnia i sadzanie', Comp: WidokHosta, modul: 'modul_rezerwacje' },
-  { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', kat: 'goscie', title: 'Rezerwacje stolików', Comp: RezerwacjeStolik, modul: 'modul_rezerwacje' },
-  { id: 'plan-sali', label: 'Plan sali', icon: 'office', kat: 'goscie', title: 'Plan sali — rozmieszczenie stolików', Comp: PlanSali, modul: 'modul_rezerwacje' },
-  { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', Comp: CrmGoscie, modul: 'modul_rezerwacje' },
-  { id: 'analityka-rezerwacji', label: 'Analityka rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Analityka rezerwacji — covery, no-show, szczyty', Comp: AnalitykaRezerwacji, modul: 'modul_rezerwacje' },
+  { id: 'widok-hosta', label: 'Widok hosta', icon: 'users', kat: 'goscie', title: 'Widok hosta — kolejka dnia i sadzanie', load: loadWidokHosta, modul: 'modul_rezerwacje' },
+  { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', kat: 'goscie', title: 'Rezerwacje stolików', load: loadRezerwacjeStolik, modul: 'modul_rezerwacje' },
+  { id: 'plan-sali', label: 'Plan sali', icon: 'office', kat: 'goscie', title: 'Plan sali — rozmieszczenie stolików', load: loadPlanSali, modul: 'modul_rezerwacje' },
+  { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', load: loadCrmGoscie, modul: 'modul_rezerwacje' },
+  { id: 'analityka-rezerwacji', label: 'Analityka rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Analityka rezerwacji — covery, no-show, szczyty', load: loadAnalitykaRezerwacji, modul: 'modul_rezerwacje' },
   // Imprezy — eventy i zapytania. Rozliczenia wydarzeń pozostają w kalendarzu imprez.
-  { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', kat: 'imprezy', title: 'Kalendarz imprez', Comp: KalendarzImprez, modul: 'modul_imprezy' },
-  { id: 'zapytania-imprez', label: 'Zapytania o imprezy', icon: 'sparkles', kat: 'imprezy', title: 'Zapytania o imprezy', Comp: ZapytaniaImprez, modul: 'modul_imprezy' },
-  { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', kat: 'imprezy', title: 'Baza imprez — serwer NAS', Comp: Imprezy, modul: 'modul_imprezy' },
+  { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', kat: 'imprezy', title: 'Kalendarz imprez', load: loadKalendarzImprez, modul: 'modul_imprezy' },
+  { id: 'zapytania-imprez', label: 'Zapytania o imprezy', icon: 'sparkles', kat: 'imprezy', title: 'Zapytania o imprezy', load: loadZapytaniaImprez, modul: 'modul_imprezy' },
+  { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', kat: 'imprezy', title: 'Baza imprez — serwer NAS', load: loadImprezy, modul: 'modul_imprezy' },
   // Operator (instancja-matka) — panel floty; widoczny tylko gdy /api/flota → enabled.
-  { id: 'flota', label: 'Flota lokali', icon: 'server', kat: 'operator', title: 'Flota lokali — operator', Comp: Flota, operator: true },
+  { id: 'flota', label: 'Flota lokali', icon: 'server', kat: 'operator', title: 'Flota lokali — operator', load: loadFlota, operator: true },
   // Ustawienia — poza kategoriami (przycisk przy profilu / wpis pod akordeonami).
-  { id: 'ustawienia', label: 'Ustawienia lokalu', icon: 'office', kat: 'ustawienia', title: 'Ustawienia lokalu', Comp: Ustawienia },
+  { id: 'ustawienia', label: 'Ustawienia lokalu', icon: 'office', kat: 'ustawienia', title: 'Ustawienia lokalu', load: loadUstawienia },
 ]
 
 // Znacznik wersji = czas builda (wstrzykiwany przez Vite define). Fallback „dev" w trybie
@@ -106,6 +108,7 @@ export default function Dashboard() {
   const [cfg, setCfg] = useState({})
   const [flotaEnabled, setFlotaEnabled] = useState(false)   // panel operatora tylko na matce
   const [sub, setSub] = useState(null)                      // stan subskrypcji (baner grace/blokada)
+  const [lazyAttempt, setLazyAttempt] = useState(0)
   // Konfiguracja lokalu — chowamy zakładki wyłączonych modułów (np. modul_rezerwacje).
   useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
   useEffect(() => { api('/subskrypcja').then(setSub).catch(() => {}) }, [])
@@ -119,7 +122,7 @@ export default function Dashboard() {
   const visibleTabs = TABS.filter((t) => (!t.modul || modulOk(t.modul)) && (!t.operator || flotaEnabled))
   const kategorie = KATEGORIE.filter((k) => visibleTabs.some((t) => t.kat === k.id))
   const current = TABS.find((t) => t.id === active)
-  const Active = current.Comp
+  const Active = useMemo(() => lazy(current.load), [current.load, lazyAttempt])
   const aktywnaKat = current.kat
 
   // Escape zamyka dropdown i szufladę.
@@ -356,7 +359,14 @@ export default function Dashboard() {
             )}
             <h2 className="font-display text-lg font-bold text-ink md:text-xl">{current.title}</h2>
           </div>
-          {active === 'ustawienia' ? <Active initialSection={settingsSection} /> : <Active />}
+          <LazyErrorBoundary
+            resetKey={`${active}:${lazyAttempt}`}
+            onRetry={() => setLazyAttempt((attempt) => attempt + 1)}
+          >
+            <Suspense fallback={<LazyFallback compact label={`Ładowanie: ${current.title}`} />}>
+              {active === 'ustawienia' ? <Active initialSection={settingsSection} /> : <Active />}
+            </Suspense>
+          </LazyErrorBoundary>
         </div>
       </main>
     </div>

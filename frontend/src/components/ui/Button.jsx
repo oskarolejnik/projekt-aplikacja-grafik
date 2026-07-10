@@ -1,3 +1,5 @@
+import { Spinner } from './Spinner'
+
 // Przycisk systemu „Cicha scena" — spokojne, natywne warianty bez poświat i gradientów.
 const VARIANTS = {
   // Główne CTA: neutralna jasna pigułka na ciemnym tle (jedna nadrzędna akcja na widok)
@@ -17,16 +19,45 @@ const SIZES = {
   lg: 'px-7 py-3 text-base',
 }
 
-export function Button({ variant = 'primary', size = 'md', type = 'button', className = '', children, ...props }) {
+export function Button({
+  variant = 'primary',
+  size = 'md',
+  type = 'button',
+  className = '',
+  children,
+  disabled = false,
+  loading = false,
+  loadingLabel,
+  'aria-label': ariaLabel,
+  'aria-busy': ariaBusy,
+  ...props
+}) {
   return (
     <button
       type={type}
       {...props}
+      aria-label={loading && loadingLabel ? loadingLabel : ariaLabel}
+      aria-busy={loading ? true : ariaBusy}
+      disabled={disabled || loading}
       className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-xl font-semibold tracking-tight
         transition duration-150 ease-snap active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50
         ${VARIANTS[variant]} ${SIZES[size]} ${className}`}
     >
-      {children}
+      <span className="grid items-center justify-items-center">
+        <span
+          className={`col-start-1 row-start-1 inline-flex items-center gap-2 ${loading ? 'opacity-0' : ''}`}
+          aria-hidden={loading && loadingLabel ? true : undefined}
+        >
+          {children}
+        </span>
+        <span
+          className={`col-start-1 row-start-1 inline-flex items-center gap-2 ${loading ? '' : 'invisible'}`}
+          aria-hidden={!loading || !loadingLabel ? true : undefined}
+        >
+          <Spinner className="h-4 w-4 shrink-0 motion-reduce:animate-none" />
+          {loadingLabel ? <span>{loadingLabel}</span> : null}
+        </span>
+      </span>
     </button>
   )
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import { useBranding } from '../context/BrandingContext'
@@ -32,8 +32,36 @@ export default function EmployeeArea() {
   const [widok, setWidok] = useState(jestTechniczny ? 'sprzatanie' : 'grafik')
   const [nowyGrafik, setNowyGrafik] = useState(false)
   const [nieprzeczytaneOgl, setNieprzeczytaneOgl] = useState(0)
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+  const mobileMoreButtonRef = useRef(null)
+  const mobileMoreDialogRef = useRef(null)
+  const mobileMoreTitleId = useId()
 
   const imie = user?.imie || user?.login
+  const widoki = jestTechniczny
+    ? [
+        { value: 'sprzatanie', label: 'Sprzątanie', icon: 'check' },
+        ...(jestSprzataczka ? [{ value: 'zamowienia', label: 'Zamówienia', icon: 'clipboard' }] : []),
+        { value: 'godziny', label: 'Godziny', icon: 'clock' },
+      ]
+    : jestKuchnia
+    ? [
+        { value: 'grafik', label: 'Grafik', icon: 'calendar', badge: nowyGrafik },
+        { value: 'godziny', label: 'Godziny', icon: 'clock' },
+        { value: 'gielda', label: 'Giełda', icon: 'users' },
+        { value: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar' },
+        { value: 'imprezy', label: 'Imprezy', icon: 'bell' },
+      ]
+    : [
+        { value: 'grafik', label: 'Grafik', icon: 'calendar', badge: nowyGrafik },
+        { value: 'godziny', label: 'Godziny', icon: 'clock' },
+        { value: 'dyspozycyjnosc', label: 'Dyspo', icon: 'check' },
+        { value: 'gielda', label: 'Giełda', icon: 'users' },
+        { value: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar' },
+        { value: 'imprezy', label: 'Imprezy', icon: 'bell' },
+      ]
+  const glowneWidoki = widoki.slice(0, 3)
+  const pozostaleWidoki = widoki.slice(3)
 
   // Licznik nieprzeczytanych ogłoszeń → odznaka przy skrócie w nagłówku.
   useEffect(() => {
@@ -65,8 +93,64 @@ export default function EmployeeArea() {
     setNowyGrafik(false)
   }, [])
 
+  // Po obrocie urządzenia lub poszerzeniu okna arkusz mobilny przestaje być
+  // dostępny wizualnie, więc zamykamy go także logicznie i zwalniamy body scroll.
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const desktop = window.matchMedia('(min-width: 768px)')
+    const onBreakpoint = (event) => {
+      if (event.matches) setMobileMoreOpen(false)
+    }
+    if (desktop.addEventListener) desktop.addEventListener('change', onBreakpoint)
+    else desktop.addListener?.(onBreakpoint)
+    return () => {
+      if (desktop.removeEventListener) desktop.removeEventListener('change', onBreakpoint)
+      else desktop.removeListener?.(onBreakpoint)
+    }
+  }, [])
+
+  // Mobilny arkusz zachowuje fokus w środku, zamyka się klawiszem Escape
+  // i po zamknięciu oddaje fokus do przycisku „Więcej”.
+  useEffect(() => {
+    if (!mobileMoreOpen) return
+    const dialog = mobileMoreDialogRef.current
+    const poprzedniOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const focusable = () => Array.from(dialog?.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])
+    focusable()[0]?.focus()
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMobileMoreOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const elementy = focusable()
+      if (elementy.length === 0) return
+      const first = elementy[0]
+      const last = elementy[elementy.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = poprzedniOverflow
+      mobileMoreButtonRef.current?.focus()
+    }
+  }, [mobileMoreOpen])
+
   const zmienWidok = (v) => {
     setWidok(v)
+    setMobileMoreOpen(false)
     if (v === 'grafik') setNowyGrafik(false)
   }
 
@@ -113,33 +197,11 @@ export default function EmployeeArea() {
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 pb-safe md:py-10">
+      <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 pb-[calc(6.5rem+env(safe-area-inset-bottom))] md:py-10 md:pb-10">
         {/* Nawigacja: najczęstsze pytania najpierw; ogłoszenia są pod skrótem w nagłówku.
             Rezerwacje i imprezy zostają dostępne pracownikowi, lecz nie konkurują z grafikiem. */}
-        <nav aria-label="Widoki pracownika" className="mb-6 flex gap-2 overflow-x-auto pb-1">
-          {(jestTechniczny
-            ? [
-                { value: 'sprzatanie', label: 'Sprzątanie' },
-                ...(jestSprzataczka ? [{ value: 'zamowienia', label: 'Zamówienia' }] : []),
-                { value: 'godziny', label: 'Godziny' },
-              ]
-            : jestKuchnia
-            ? [
-                { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
-                { value: 'godziny', label: 'Godziny' },
-                { value: 'gielda', label: 'Giełda' },
-                { value: 'rezerwacje', label: 'Rezerwacje' },
-                { value: 'imprezy', label: 'Imprezy' },
-              ]
-            : [
-                { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
-                { value: 'godziny', label: 'Godziny' },
-                { value: 'dyspozycyjnosc', label: 'Dyspo' },
-                { value: 'gielda', label: 'Giełda' },
-                { value: 'rezerwacje', label: 'Rezerwacje' },
-                { value: 'imprezy', label: 'Imprezy' },
-              ]
-          ).map((t) => (
+        <nav aria-label="Widoki pracownika" className="mb-6 hidden gap-2 overflow-x-auto pb-1 md:flex">
+          {widoki.map((t) => (
             <button
               type="button"
               key={t.value}
@@ -169,6 +231,93 @@ export default function EmployeeArea() {
           {widok === 'zamowienia' && <TechZamowienia />}
         </div>
       </main>
+
+      <nav
+        aria-label="Główna nawigacja mobilna"
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.08] bg-bg/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
+      >
+        <div className="mx-auto flex w-full max-w-3xl px-2 pt-1.5">
+          {glowneWidoki.map((t) => (
+            <button
+              type="button"
+              key={t.value}
+              onClick={() => zmienWidok(t.value)}
+              aria-current={widok === t.value ? 'page' : undefined}
+              className={`relative flex min-h-[3.75rem] min-w-11 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-xs font-semibold transition active:scale-[0.98] ${
+                widok === t.value ? 'text-mint' : 'text-muted'
+              }`}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <span className={`relative grid h-7 min-w-10 place-items-center rounded-full px-2 ${widok === t.value ? 'bg-mint/15' : ''}`}>
+                <Icon name={t.icon} className="h-5 w-5" />
+                {t.badge && <span aria-hidden className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
+              </span>
+              <span>{t.label}</span>
+            </button>
+          ))}
+          {pozostaleWidoki.length > 0 && (
+            <button
+              ref={mobileMoreButtonRef}
+              type="button"
+              onClick={() => setMobileMoreOpen(true)}
+              aria-expanded={mobileMoreOpen}
+              aria-controls="employee-mobile-more"
+              aria-current={pozostaleWidoki.some((t) => t.value === widok) ? 'page' : undefined}
+              className={`flex min-h-[3.75rem] min-w-11 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-xs font-semibold transition active:scale-[0.98] ${
+                pozostaleWidoki.some((t) => t.value === widok) ? 'text-mint' : 'text-muted'
+              }`}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <span className={`grid h-7 min-w-10 place-items-center rounded-full px-2 ${pozostaleWidoki.some((t) => t.value === widok) ? 'bg-mint/15' : ''}`}>
+                <Icon name="menu" className="h-5 w-5" />
+              </span>
+              <span>Więcej</span>
+            </button>
+          )}
+        </div>
+      </nav>
+
+      {mobileMoreOpen && pozostaleWidoki.length > 0 && (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <div aria-hidden className="absolute inset-0 bg-black/65" onClick={() => setMobileMoreOpen(false)} />
+          <section
+            ref={mobileMoreDialogRef}
+            id="employee-mobile-more"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={mobileMoreTitleId}
+            className="material absolute inset-x-0 bottom-0 max-h-[75dvh] overflow-y-auto rounded-b-none rounded-t-2xl border-b-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 id={mobileMoreTitleId} className="font-display text-lg font-semibold text-ink">Więcej widoków</h2>
+              <button
+                type="button"
+                onClick={() => setMobileMoreOpen(false)}
+                className="grid min-h-11 min-w-11 place-items-center rounded-xl text-muted transition hover:bg-white/[0.06] hover:text-ink"
+                aria-label="Zamknij więcej widoków"
+              >
+                <Icon name="close" className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-1">
+              {pozostaleWidoki.map((t) => (
+                <button
+                  type="button"
+                  key={t.value}
+                  onClick={() => zmienWidok(t.value)}
+                  aria-current={widok === t.value ? 'page' : undefined}
+                  className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition active:scale-[0.99] ${
+                    widok === t.value ? 'bg-mint/15 text-mint' : 'text-ink hover:bg-white/[0.06]'
+                  }`}
+                >
+                  <Icon name={t.icon} className="h-5 w-5 shrink-0" />
+                  <span>{t.label}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }

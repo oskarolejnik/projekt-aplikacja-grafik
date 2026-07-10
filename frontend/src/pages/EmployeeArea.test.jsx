@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 
 const { apiMock, logoutMock, userState } = vi.hoisted(() => ({
@@ -31,10 +31,13 @@ vi.mock('../components/tabs/TechZamowienia', () => ({ default: () => <div>Zamów
 
 import EmployeeArea from './EmployeeArea'
 
+const originalMatchMedia = window.matchMedia
+
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   userState.current = { rola: 'employee', imie: 'Ania', login: 'ania' }
+  Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: originalMatchMedia })
 })
 
 describe('EmployeeArea', () => {
@@ -50,6 +53,77 @@ describe('EmployeeArea', () => {
     expect(within(nav).getByRole('button', { name: 'Grafik' })).toHaveAttribute('aria-current', 'page')
     expect(within(nav).getByRole('button', { name: 'Rezerwacje' })).toBeInTheDocument()
     expect(within(nav).getByRole('button', { name: 'Imprezy' })).toBeInTheDocument()
+
+    const mobileNav = screen.getByRole('navigation', { name: 'Główna nawigacja mobilna' })
+    expect(within(mobileNav).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Grafik', 'Godziny', 'Dyspo', 'Więcej',
+    ])
+    expect(within(mobileNav).getByRole('button', { name: 'Grafik' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('udostępnia pozostałe widoki w mobilnym arkuszu i oznacza aktywne Więcej', () => {
+    apiMock.mockResolvedValue({ nieprzeczytane: 0, opublikowany: false })
+    render(<EmployeeArea />)
+
+    const mobileNav = screen.getByRole('navigation', { name: 'Główna nawigacja mobilna' })
+    const wiecej = within(mobileNav).getByRole('button', { name: 'Więcej' })
+    fireEvent.click(wiecej)
+
+    const dialog = screen.getByRole('dialog', { name: 'Więcej widoków' })
+    expect(within(dialog).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      '', 'Giełda', 'Rezerwacje', 'Imprezy',
+    ])
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rezerwacje' }))
+
+    expect(screen.getByText('Rezerwacje pracownika')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Więcej widoków' })).not.toBeInTheDocument()
+    expect(wiecej).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('zamyka mobilny arkusz przez Escape i oddaje fokus do Więcej', () => {
+    apiMock.mockResolvedValue({ nieprzeczytane: 0, opublikowany: false })
+    render(<EmployeeArea />)
+
+    const wiecej = within(screen.getByRole('navigation', { name: 'Główna nawigacja mobilna' }))
+      .getByRole('button', { name: 'Więcej' })
+    fireEvent.click(wiecej)
+    expect(screen.getByRole('dialog', { name: 'Więcej widoków' })).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: 'Więcej widoków' })).not.toBeInTheDocument()
+    expect(wiecej).toHaveFocus()
+  })
+
+  it('zamyka mobilny arkusz i zwalnia przewijanie po wejściu w breakpoint desktopowy', () => {
+    let onBreakpoint
+    const removeEventListener = vi.fn()
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => ({
+        matches: false,
+        media: '(min-width: 768px)',
+        addEventListener: vi.fn((event, handler) => {
+          if (event === 'change') onBreakpoint = handler
+        }),
+        removeEventListener,
+      })),
+    })
+    apiMock.mockResolvedValue({ nieprzeczytane: 0, opublikowany: false })
+    render(<EmployeeArea />)
+
+    const wiecej = within(screen.getByRole('navigation', { name: 'Główna nawigacja mobilna' }))
+      .getByRole('button', { name: 'Więcej' })
+    fireEvent.click(wiecej)
+    expect(screen.getByRole('dialog', { name: 'Więcej widoków' })).toBeInTheDocument()
+    expect(document.body.style.overflow).toBe('hidden')
+
+    act(() => onBreakpoint({ matches: true }))
+
+    expect(screen.queryByRole('dialog', { name: 'Więcej widoków' })).not.toBeInTheDocument()
+    expect(document.body.style.overflow).toBe('')
+    expect(wiecej).toHaveFocus()
   })
 
   it('otwiera ogłoszenia z dzwonka zamiast zajmować slot głównej nawigacji', async () => {
@@ -74,6 +148,10 @@ describe('EmployeeArea', () => {
       'Grafik', 'Godziny', 'Giełda', 'Rezerwacje', 'Imprezy',
     ])
     expect(within(nav).queryByRole('button', { name: 'Dyspo' })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: 'Główna nawigacja mobilna' }))
+      .getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Grafik', 'Godziny', 'Giełda', 'Więcej',
+    ])
   })
 
   it('stawia Sprzątanie na początku widoku technicznego i nie pobiera grafiku', async () => {
@@ -87,6 +165,10 @@ describe('EmployeeArea', () => {
       'Sprzątanie', 'Zamówienia', 'Godziny',
     ])
     expect(within(nav).getByRole('button', { name: 'Sprzątanie' })).toHaveAttribute('aria-current', 'page')
+    expect(within(screen.getByRole('navigation', { name: 'Główna nawigacja mobilna' }))
+      .getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Sprzątanie', 'Zamówienia', 'Godziny',
+    ])
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/me/ogloszenia'))
     expect(apiMock).not.toHaveBeenCalledWith(expect.stringContaining('/me/grafik'))
   })

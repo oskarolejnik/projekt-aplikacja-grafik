@@ -44,4 +44,34 @@ describe('Button', () => {
     render(<Button type="submit">Wyślij</Button>)
     expect(screen.getByRole('button', { name: 'Wyślij' })).toHaveAttribute('type', 'submit')
   })
+
+  it('pokazuje stabilny stan ładowania i blokuje kolejne kliknięcia', () => {
+    const onClick = vi.fn()
+    const { container, rerender } = render(
+      <Button loading loadingLabel="Zapisuję…" onClick={onClick}>Zapisz</Button>,
+    )
+
+    const loadingButton = screen.getByRole('button', { name: 'Zapisuję…' })
+    expect(loadingButton).toBeDisabled()
+    expect(loadingButton).toHaveAttribute('aria-busy', 'true')
+    expect(container.querySelector('svg')).toBeInTheDocument()
+    expect(screen.getByText('Zapisz')).toHaveClass('opacity-0')
+    expect(screen.getByText('Zapisuję…').parentElement).toHaveClass('col-start-1', 'row-start-1')
+
+    fireEvent.click(loadingButton)
+    expect(onClick).not.toHaveBeenCalled()
+
+    rerender(<Button loadingLabel="Zapisuję…" onClick={onClick}>Zapisz</Button>)
+    const readyButton = screen.getByRole('button', { name: 'Zapisz' })
+    expect(readyButton).not.toBeDisabled()
+    expect(readyButton).not.toHaveAttribute('aria-busy')
+    expect(screen.getByText('Zapisuję…').parentElement).toHaveClass('invisible')
+    fireEvent.click(readyButton)
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('bez loadingLabel zachowuje dotychczasową dostępną nazwę', () => {
+    render(<Button loading>Zapisz</Button>)
+    expect(screen.getByRole('button', { name: 'Zapisz' })).toHaveAttribute('aria-busy', 'true')
+  })
 })

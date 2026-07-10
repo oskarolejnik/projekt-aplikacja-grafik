@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Spinner } from '../ui/Spinner'
+import { Banner } from '../ui/Banner'
+import { Button } from '../ui/Button'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
-import { useToast } from '../ui/Toast'
 
 // Pulpit właściciela — KPI lokalu w okresie. Czysta agregacja z /api/pulpit (zero zapisu).
 const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'
@@ -24,30 +25,83 @@ function Kpi({ label, value, sub, icon, accent }) {
   )
 }
 
+function PulpitSkeleton() {
+  return (
+    <div className="space-y-6" role="status" aria-label="Wczytywanie pulpitu">
+      <span className="sr-only">Wczytywanie pulpitu…</span>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 7 }, (_, i) => (
+          <div key={i} className="h-[7.25rem] animate-pulse rounded-2xl border border-line bg-white/[0.03]" />
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="h-[4.5rem] animate-pulse rounded-xl border border-line bg-white/[0.025]" />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function Pulpit() {
-  const { toast } = useToast()
   const [start, setStart] = useState(isoMinus(29))
   const [end, setEnd] = useState(dzisISO())
   const [p, setP] = useState(null)
   const [alerty, setAlerty] = useState(null)
   const [obsada, setObsada] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState(null)
+  const [partialError, setPartialError] = useState([])
+  const [updatedAt, setUpdatedAt] = useState(null)
+  const loadedRef = useRef(false)
+  const requestIdRef = useRef(0)
   // Kafelek „Impreza" tylko w lokalach z osobnym rozliczaniem imprez.
   const [cfg, setCfg] = useState(null)
   useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
 
   const load = useCallback(async () => {
-    setLoading(true)
+    const requestId = ++requestIdRef.current
+    const initial = !loadedRef.current
+    if (initial) setLoading(true)
+    else setRefreshing(true)
+    setError(null)
     try {
-      const [pul, al, ob] = await Promise.all([
+      const [pul, al, ob] = await Promise.allSettled([
         api(`/pulpit?start=${start}&end=${end}`),
         api(`/alerty-kasowe?start=${start}&end=${end}`),
         api('/alerty-obsady?dni=14'),
       ])
-      setP(pul); setAlerty(al); setObsada(ob)
-    } catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
-  }, [start, end, toast])
+      if (requestId !== requestIdRef.current) return
+
+      const braki = []
+      if (pul.status === 'fulfilled') {
+        setP(pul.value)
+        loadedRef.current = true
+        setUpdatedAt(new Date())
+      } else {
+        setError(pul.reason?.message || 'Nie udało się pobrać danych pulpitu.')
+      }
+      if (al.status === 'fulfilled') setAlerty(al.value)
+      else {
+        setAlerty(null)
+        braki.push('alertów kasowych')
+      }
+      if (ob.status === 'fulfilled') setObsada(ob.value)
+      else {
+        setObsada(null)
+        braki.push('alertów obsady')
+      }
+      setPartialError(braki)
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
+    }
+  }, [start, end])
   useEffect(() => { load() }, [load])
+  useEffect(() => () => { requestIdRef.current += 1 }, [])
 
   const maxPrzychod = p ? Math.max(1, ...p.przychod.dzienny.map((d) => d.przychod)) : 1
 
@@ -55,17 +109,54 @@ export default function Pulpit() {
     <Card className="p-6 sm:p-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <SectionHeader title="Pulpit właściciela" subtitle="Kluczowe wskaźniki lokalu w wybranym okresie." />
-        <div className="flex items-center gap-2 text-sm">
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="rounded-lg border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
+        <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-sm sm:w-auto">
+          <input aria-label="Początek okresu" type="date" value={start} onChange={(e) => setStart(e.target.value)} className="min-h-11 min-w-0 rounded-lg border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
           <span className="text-muted">—</span>
-          <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="rounded-lg border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
+          <input aria-label="Koniec okresu" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="min-h-11 min-w-0 rounded-lg border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
         </div>
       </div>
 
-      {loading || !p ? (
-        <div className="grid place-items-center py-20"><Spinner className="h-6 w-6 text-muted" /></div>
+      {loading && !p ? (
+        <PulpitSkeleton />
+      ) : !p ? (
+        <div role="alert">
+          <Banner variant="danger">
+            <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+              <span>Nie udało się wczytać pulpitu. {error}</span>
+              <Button size="sm" variant="ghost" onClick={load}>Spróbuj ponownie</Button>
+            </div>
+          </Banner>
+        </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-6" aria-busy={refreshing}>
+          <div className="flex min-h-6 flex-wrap items-center justify-between gap-2 text-xs text-muted" aria-live="polite">
+            <span>
+              {refreshing ? (
+                <span className="inline-flex items-center gap-2"><Spinner className="h-3.5 w-3.5" /> Aktualizuję dane…</span>
+              ) : updatedAt ? `Zaktualizowano ${updatedAt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}` : null}
+            </span>
+            {refreshing && <span>Poprzednie wyniki pozostają widoczne.</span>}
+          </div>
+
+          {error && (
+            <div role="alert">
+              <Banner variant="warn">
+                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+                  <span>Nie udało się odświeżyć KPI. Pokazujemy ostatnie dostępne dane. {error}</span>
+                  <Button size="sm" variant="ghost" onClick={load}>Ponów</Button>
+                </div>
+              </Banner>
+            </div>
+          )}
+
+          {partialError.length > 0 && (
+            <div role="status" aria-live="polite">
+              <Banner variant="info">
+                Główne KPI są aktualne, ale nie udało się pobrać {partialError.join(' ani ')}. Niedostępne sekcje zostały ukryte i odświeżą się przy kolejnej próbie.
+              </Banner>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Kpi label="Przychód" value={zl(p.przychod.razem)} sub={`śr. ${zl(p.przychod.srednia_dzienna)}/dzień`} icon="download" accent="text-mint" />
             <Kpi label="Rozchód" value={zl(p.rozchod.razem)} icon="upload" />

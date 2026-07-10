@@ -7,6 +7,14 @@ import { SPRING } from '../../lib/motion'
 // spójnym, dostępnym UI w ciemnym motywie.
 const ToastContext = createContext(null)
 let idSeq = 0
+const DEFAULT_TOAST_DURATION = 4200
+
+function getToastAction(options) {
+  const nestedAction = options?.action
+  const label = nestedAction?.label ?? options?.actionLabel
+  const onClick = nestedAction?.onClick ?? options?.onAction
+  return label && typeof onClick === 'function' ? { label, onClick } : null
+}
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([])
@@ -16,19 +24,46 @@ export function ToastProvider({ children }) {
   const cancelBtnRef = useRef(null)
   const confirmTitleId = useId()
   const confirmMessageId = useId()
+  const toastTimers = useRef(new Map())
 
-  const dismiss = useCallback((id) => {
-    setToasts((t) => t.filter((x) => x.id !== id))
+  const clearToastTimer = useCallback((id) => {
+    const timer = toastTimers.current.get(id)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      toastTimers.current.delete(id)
+    }
   }, [])
 
+  const dismiss = useCallback((id) => {
+    clearToastTimer(id)
+    setToasts((t) => t.filter((x) => x.id !== id))
+  }, [clearToastTimer])
+
   const toast = useCallback(
-    (message, type = 'info') => {
+    (message, type = 'info', options = {}) => {
       const id = ++idSeq
-      setToasts((t) => [...t, { id, message, type }])
-      setTimeout(() => dismiss(id), 4200)
+      const action = getToastAction(options)
+      const duration = Number.isFinite(options?.duration)
+        ? Math.max(0, options.duration)
+        : action ? 0 : DEFAULT_TOAST_DURATION
+      setToasts((t) => [...t, { id, message, type, action }])
+      if (duration > 0) {
+        const timer = setTimeout(() => dismiss(id), duration)
+        toastTimers.current.set(id, timer)
+      }
     },
     [dismiss],
   )
+
+  useEffect(() => () => {
+    toastTimers.current.forEach((timer) => clearTimeout(timer))
+    toastTimers.current.clear()
+  }, [])
+
+  const runToastAction = useCallback((item) => {
+    dismiss(item.id)
+    item.action?.onClick()
+  }, [dismiss])
 
   const confirm = useCallback((message, opts = {}) => {
     return new Promise((resolve) => {
@@ -106,7 +141,18 @@ export function ToastProvider({ children }) {
               <span className="mt-0.5 shrink-0">
                 <Icon name={t.type === 'error' ? 'warning' : t.type === 'success' ? 'check' : 'info'} className="h-4 w-4" />
               </span>
-              <span className="flex-1 leading-snug">{t.message}</span>
+              <span className="min-w-0 flex-1 leading-snug">
+                <span className="block">{t.message}</span>
+                {t.action ? (
+                  <button
+                    type="button"
+                    onClick={() => runToastAction(t)}
+                    className="mt-2 min-h-11 rounded-xl border border-current/20 bg-white/[0.06] px-3 text-sm font-semibold transition hover:bg-white/[0.11] active:scale-[0.98]"
+                  >
+                    {t.action.label}
+                  </button>
+                ) : null}
+              </span>
               <button type="button" onClick={() => dismiss(t.id)} className="-m-2 grid min-h-11 min-w-11 shrink-0 place-items-center opacity-70 transition hover:opacity-100" aria-label="Zamknij">
                 <Icon name="close" className="h-3.5 w-3.5" />
               </button>

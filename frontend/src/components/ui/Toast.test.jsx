@@ -4,16 +4,27 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 import '@testing-library/jest-dom/vitest'
 import { ToastProvider, useToast } from './Toast'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
 // Konsument wystawiający toast()/confirm() na przyciskach — testujemy przez realny UI.
 let wynikConfirm
+const cofnijMock = vi.fn()
 function Konsument() {
   const { toast, confirm } = useToast()
   return (
     <div>
       <button onClick={() => toast('Zapisano zmiany!', 'success')}>pokaz-toast</button>
       <button onClick={() => toast('Nie udało się zapisać.', 'error')}>pokaz-error</button>
+      <button onClick={() => toast('Wpis usunięty.', 'success', {
+        duration: 8000,
+        action: { label: 'Cofnij', onClick: cofnijMock },
+      })}>pokaz-toast-z-akcja</button>
+      <button onClick={() => toast('Nie zapisano zmian.', 'error', {
+        action: { label: 'Ponów', onClick: cofnijMock },
+      })}>pokaz-trwaly-toast-z-akcja</button>
       <button onClick={async () => { wynikConfirm = await confirm('Na pewno usunąć?') }}>pokaz-confirm</button>
     </div>
   )
@@ -37,6 +48,56 @@ describe('ToastProvider / useToast', () => {
     render_()
     fireEvent.click(screen.getByRole('button', { name: 'pokaz-error' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Nie udało się zapisać.')
+  })
+
+  it('toast może wykonać jedną akcję i po niej znika', async () => {
+    cofnijMock.mockReset()
+    render_()
+    fireEvent.click(screen.getByRole('button', { name: 'pokaz-toast-z-akcja' }))
+
+    const action = screen.getByRole('button', { name: 'Cofnij' })
+    expect(action).toHaveClass('min-h-11')
+    fireEvent.click(action)
+
+    expect(cofnijMock).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByText('Wpis usunięty.')).not.toBeInTheDocument())
+  })
+
+  it('respektuje własny czas i czyści timer przy zamknięciu', () => {
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    render_()
+    fireEvent.click(screen.getByRole('button', { name: 'pokaz-toast-z-akcja' }))
+
+    const timerIndex = timeoutSpy.mock.calls.findIndex(([, duration]) => duration === 8000)
+    expect(timerIndex).toBeGreaterThanOrEqual(0)
+    const timer = timeoutSpy.mock.results[timerIndex].value
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij' }))
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timer)
+  })
+
+  it('domyślnie nie wygasza toasta z akcją, ale zachowuje 4,2 s dla zwykłego komunikatu', () => {
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    render_()
+
+    fireEvent.click(screen.getByRole('button', { name: 'pokaz-trwaly-toast-z-akcja' }))
+    expect(screen.getByRole('button', { name: 'Ponów' })).toBeInTheDocument()
+    expect(timeoutSpy.mock.calls.some(([, duration]) => duration === 4200)).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'pokaz-toast' }))
+    expect(timeoutSpy.mock.calls.some(([, duration]) => duration === 4200)).toBe(true)
+  })
+
+  it('czyści aktywne timery przy odmontowaniu providera', () => {
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    const view = render_()
+    fireEvent.click(screen.getByRole('button', { name: 'pokaz-toast-z-akcja' }))
+
+    const timerIndex = timeoutSpy.mock.calls.findIndex(([, duration]) => duration === 8000)
+    const timer = timeoutSpy.mock.results[timerIndex].value
+    view.unmount()
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timer)
   })
 
   it('confirm() → „Potwierdź" rozwiązuje Promise wartością true', async () => {

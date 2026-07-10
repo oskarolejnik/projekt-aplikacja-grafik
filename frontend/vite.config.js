@@ -20,6 +20,13 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectManifest: {
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // czcionki bywają duże
+        // Tylko powłoka potrzebna do startu. Ekrany ról, zakładki, fonty i ciężkie
+        // biblioteki są cache'owane przez SW dopiero przy pierwszym użyciu.
+        globPatterns: [
+          'index.html',
+          'assets/index-*.js',
+          'assets/index-*.css',
+        ],
       },
       devOptions: { enabled: true, type: 'module' }, // SW działa też w dev (localhost)
       includeAssets: ['icon.svg'],

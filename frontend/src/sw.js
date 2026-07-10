@@ -1,15 +1,51 @@
-/* Service Worker (PWA): precache powłoki + powiadomienia Web Push.
-   Wersja „vanilla" (bez workbox). self.__WB_MANIFEST jest wstrzykiwane przez
-   vite-plugin-pwa (injectManifest) i tu używane jako lista plików do precache. */
+/* Service Worker (PWA): mały precache powłoki, runtime-cache użytych assetów
+   i powiadomienia Web Push. self.__WB_MANIFEST jest wstrzykiwane przez
+   vite-plugin-pwa (injectManifest). */
 
-const PRECACHE = (self.__WB_MANIFEST || []).map((e) => (typeof e === 'string' ? e : e.url))
-const CACHE = 'grafik-cache-v1'
+const PRECACHE = (self.__WB_MANIFEST || []).map((entry) => (typeof entry === 'string' ? entry : entry.url))
+const SHELL_CACHE = 'lokalo-shell-v2'
+const ASSET_CACHE = 'lokalo-assets-v2'
+const CURRENT_CACHES = new Set([SHELL_CACHE, ASSET_CACHE])
+const ASSET_DESTINATIONS = new Set(['script', 'style', 'font', 'image', 'manifest', 'audio', 'video'])
+
+function responseMatchesAsset(request, response) {
+  if (!response || !response.ok || response.type === 'opaque') return false
+
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('text/html')) return false
+  if (request.destination === 'script') return /javascript|ecmascript/.test(contentType)
+  if (request.destination === 'style') return contentType.includes('text/css')
+  if (request.destination === 'font') return /font|application\/octet-stream/.test(contentType)
+  if (request.destination === 'image') return contentType.startsWith('image/')
+  if (request.destination === 'manifest') return /json|manifest/.test(contentType)
+  if (request.destination === 'audio') return contentType.startsWith('audio/')
+  if (request.destination === 'video') return contentType.startsWith('video/')
+  return false
+}
+
+async function cachedAsset(request) {
+  const cached = await caches.match(request)
+  if (cached) return cached
+
+  try {
+    const response = await fetch(request)
+    if (responseMatchesAsset(request, response)) {
+      const cache = await caches.open(ASSET_CACHE)
+      await cache.put(request, response.clone())
+    }
+    return response
+  } catch (_) {
+    // Błąd assetu pozostaje błędem sieci. HTML jako fallback skryptu/CSS powodował
+    // mylący błąd MIME i potrafił utrwalić uszkodzony chunk w cache.
+    return Response.error()
+  }
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
-      .open(CACHE)
-      .then((c) => c.addAll([...new Set([...PRECACHE, '/'])]))
+      .open(SHELL_CACHE)
+      .then((c) => c.addAll([...new Set(PRECACHE)]))
       .catch(() => {}),
   )
   self.skipWaiting()
@@ -17,7 +53,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
+    caches.keys().then((keys) => Promise.all(keys.filter((key) => !CURRENT_CACHES.has(key)).map((key) => caches.delete(key)))),
   )
   self.clients.claim()
 })
@@ -27,6 +63,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return
   const url = new URL(req.url)
   if (url.pathname.startsWith('/api/')) return
+  if (url.origin !== self.location.origin) return
 
   // Shell HTML (nawigacja): NETWORK-FIRST — po deployu od razu świeża wersja frontu
   // (koniec ze starym, zacache'owanym UI, np. „[object]" we współpracownikach). Offline → cache.
@@ -34,30 +71,23 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone()
-          caches.open(CACHE).then((c) => c.put('/', copy)).catch(() => {})
+          const contentType = res.headers.get('content-type') || ''
+          if (res.ok && contentType.includes('text/html')) {
+            const copy = res.clone()
+            caches.open(SHELL_CACHE).then((c) => c.put('/', copy)).catch(() => {})
+          }
           return res
         })
-        .catch(() => caches.match(req).then((c) => c || caches.match('/'))),
+        .catch(() => caches.open(SHELL_CACHE).then(async (cache) =>
+          (await cache.match('/')) || (await cache.match('index.html')) || Response.error(),
+        )),
     )
     return
   }
 
-  // Reszta (hashowane JS/CSS/fonty): cache-first — szybko i bez ryzyka nieaktualności
-  // (zmiana zawartości = nowa nazwa pliku). API zawsze z sieci (nie cache'ujemy danych).
-  event.respondWith(
-    caches.match(req).then(
-      (cached) =>
-        cached ||
-        fetch(req)
-          .then((res) => {
-            const copy = res.clone()
-            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {})
-            return res
-          })
-          .catch(() => caches.match('/')),
-    ),
-  )
+  // Hashowane JS/CSS/fonty trafiają do cache dopiero, gdy użytkownik faktycznie ich użyje.
+  // Dzięki temu instalacja SW nie konkuruje z pierwszym renderem o wszystkie lazy chunki.
+  if (ASSET_DESTINATIONS.has(req.destination)) event.respondWith(cachedAsset(req))
 })
 
 // Powiadomienie push: wyświetl notyfikację.

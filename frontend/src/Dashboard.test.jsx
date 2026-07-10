@@ -5,9 +5,10 @@ import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Dashboard from './Dashboard'
 
-const { apiMock, logoutMock } = vi.hoisted(() => ({
+const { apiMock, logoutMock, dashboardState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   logoutMock: vi.fn(),
+  dashboardState: { pulpitError: false },
 }))
 
 vi.mock('./lib/api', () => ({ api: apiMock }))
@@ -20,7 +21,12 @@ vi.mock('./context/BrandingContext', () => ({
 vi.mock('./components/Logo', () => ({ Logo: () => <span>Lokalo</span> }))
 vi.mock('./components/PushButton', () => ({ PushButton: () => <button type="button">Powiadomienia</button> }))
 vi.mock('./lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
-vi.mock('./components/tabs/Pulpit', () => ({ default: () => <div>Treść pulpitu</div> }))
+vi.mock('./components/tabs/Pulpit', () => ({
+  default: () => {
+    if (dashboardState.pulpitError) throw new Error('pulpit chunk unavailable')
+    return <div>Treść pulpitu</div>
+  },
+}))
 vi.mock('./components/tabs/Ustawienia', () => ({
   default: ({ initialSection }) => <div>Ustawienia: {initialSection}</div>,
 }))
@@ -39,6 +45,7 @@ describe('Dashboard', () => {
   beforeEach(() => {
     apiMock.mockReset()
     logoutMock.mockReset()
+    dashboardState.pulpitError = false
     apiMock.mockImplementation((path) => {
       if (path === '/lokal/config') return Promise.resolve(CONFIG)
       if (path === '/subskrypcja') return Promise.resolve({ stan: 'aktywna' })
@@ -102,6 +109,25 @@ describe('Dashboard', () => {
     render(<Dashboard />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Przejdź do subskrypcji' }))
-    expect(screen.getByText('Ustawienia: plan')).toBeInTheDocument()
+    expect(await screen.findByText('Ustawienia: plan')).toBeInTheDocument()
+  })
+
+  it('ponawia ładowanie uszkodzonej zakładki bez przeładowania panelu', async () => {
+    const consoleMock = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const preventError = (event) => event.preventDefault()
+    window.addEventListener('error', preventError)
+    dashboardState.pulpitError = true
+
+    try {
+      render(<Dashboard />)
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Nie udało się wczytać widoku')
+      dashboardState.pulpitError = false
+      fireEvent.click(screen.getByRole('button', { name: 'Spróbuj ponownie' }))
+      expect(await screen.findByText('Treść pulpitu')).toBeInTheDocument()
+    } finally {
+      window.removeEventListener('error', preventError)
+      consoleMock.mockRestore()
+    }
   })
 })
