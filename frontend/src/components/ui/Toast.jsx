@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useRef, useEffect, useId } from 'react'
 import { Icon } from '../../lib/icons'
 import { motion, AnimatePresence } from 'framer-motion'
 import { SPRING } from '../../lib/motion'
@@ -13,6 +13,9 @@ export function ToastProvider({ children }) {
   const [confirmState, setConfirmState] = useState(null)
   const resolver = useRef(null)
   const confirmBtnRef = useRef(null)
+  const cancelBtnRef = useRef(null)
+  const confirmTitleId = useId()
+  const confirmMessageId = useId()
 
   const dismiss = useCallback((id) => {
     setToasts((t) => t.filter((x) => x.id !== id))
@@ -48,12 +51,23 @@ export function ToastProvider({ children }) {
     }
   }, [])
 
-  // Esc zamyka modal, a po otwarciu fokus trafia na przycisk potwierdzenia.
+  // Esc zamyka modal; destrukcyjne potwierdzenie zaczyna od bezpiecznej akcji.
   useEffect(() => {
     if (!confirmState) return
-    confirmBtnRef.current?.focus()
+    const cancel = cancelBtnRef.current
+    const confirm = confirmBtnRef.current
+    ;(confirmState.danger ? cancel : confirm)?.focus()
     const onKey = (e) => {
       if (e.key === 'Escape') closeConfirm(false)
+      if (e.key === 'Tab' && cancel && confirm) {
+        if (e.shiftKey && document.activeElement === cancel) {
+          e.preventDefault()
+          confirm.focus()
+        } else if (!e.shiftKey && document.activeElement === confirm) {
+          e.preventDefault()
+          cancel.focus()
+        }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -73,6 +87,7 @@ export function ToastProvider({ children }) {
       <div
         className="pointer-events-none fixed left-1/2 top-[max(1rem,calc(env(safe-area-inset-top)+0.5rem))] z-[2000] flex w-80 max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2"
         aria-live="polite"
+        aria-atomic="true"
       >
         {/* Sonner-like: wjazd z góry, a `layout` sprawia, że stos płynnie się
             przesuwa, gdy któryś toast znika. Wyjście szybsze niż wejście (Emil). */}
@@ -81,7 +96,7 @@ export function ToastProvider({ children }) {
             <motion.div
               key={t.id}
               layout
-              role="status"
+              role={t.type === 'error' ? 'alert' : 'status'}
               initial={{ opacity: 0, y: -20, scale: 0.92 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2, ease: 'easeIn' } }}
@@ -92,7 +107,7 @@ export function ToastProvider({ children }) {
                 <Icon name={t.type === 'error' ? 'warning' : t.type === 'success' ? 'check' : 'info'} className="h-4 w-4" />
               </span>
               <span className="flex-1 leading-snug">{t.message}</span>
-              <button onClick={() => dismiss(t.id)} className="shrink-0 opacity-70 transition hover:opacity-100" aria-label="Zamknij">
+              <button type="button" onClick={() => dismiss(t.id)} className="-m-2 grid min-h-11 min-w-11 shrink-0 place-items-center opacity-70 transition hover:opacity-100" aria-label="Zamknij">
                 <Icon name="close" className="h-3.5 w-3.5" />
               </button>
             </motion.div>
@@ -115,25 +130,30 @@ export function ToastProvider({ children }) {
             <motion.div
               role="alertdialog"
               aria-modal="true"
+              aria-labelledby={confirmTitleId}
+              aria-describedby={confirmMessageId}
               className="card relative z-10 w-full max-w-sm p-6"
               initial={{ opacity: 0, scale: 0.98, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 10 }}
               transition={{ duration: 0.3, ease: 'circOut' }}
             >
-              <h3 className="font-display text-lg font-bold text-ink">{confirmState.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted">{confirmState.message}</p>
+              <h3 id={confirmTitleId} className="font-display text-lg font-bold text-ink">{confirmState.title}</h3>
+              <p id={confirmMessageId} className="mt-2 text-sm leading-relaxed text-muted">{confirmState.message}</p>
               <div className="mt-6 flex justify-end gap-3">
                 <button
+                  ref={cancelBtnRef}
+                  type="button"
                   onClick={() => closeConfirm(false)}
-                  className="rounded-xl border border-line bg-white/[0.04] px-4 py-2 text-sm font-semibold text-ink transition active:scale-[0.97] hover:bg-white/[0.09]"
+                  className="min-h-11 rounded-xl border border-line bg-white/[0.04] px-4 py-2 text-sm font-semibold text-ink transition active:scale-[0.97] hover:bg-white/[0.09]"
                 >
                   {confirmState.cancelText}
                 </button>
                 <button
                   ref={confirmBtnRef}
+                  type="button"
                   onClick={() => closeConfirm(true)}
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.97] ${
+                  className={`min-h-11 rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.97] ${
                     confirmState.danger ? 'bg-danger text-white hover:brightness-110' : 'bg-cream text-bg hover:brightness-[1.03]'
                   }`}
                 >

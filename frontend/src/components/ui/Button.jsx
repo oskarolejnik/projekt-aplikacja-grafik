@@ -17,11 +17,12 @@ const SIZES = {
   lg: 'px-7 py-3 text-base',
 }
 
-export function Button({ variant = 'primary', size = 'md', className = '', children, ...props }) {
+export function Button({ variant = 'primary', size = 'md', type = 'button', className = '', children, ...props }) {
   return (
     <button
+      type={type}
       {...props}
-      className={`inline-flex items-center justify-center gap-2 rounded-xl font-semibold tracking-tight
+      className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-xl font-semibold tracking-tight
         transition duration-150 ease-snap active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50
         ${VARIANTS[variant]} ${SIZES[size]} ${className}`}
     >

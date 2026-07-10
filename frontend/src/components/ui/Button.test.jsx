@@ -9,7 +9,11 @@ afterEach(cleanup)
 describe('Button', () => {
   it('renderuje treść dziecka', () => {
     render(<Button>Zapisz</Button>)
-    expect(screen.getByRole('button', { name: 'Zapisz' })).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: 'Zapisz' })
+    expect(button).toBeInTheDocument()
+    expect(button).toHaveAttribute('type', 'button')
+    expect(button.className).toContain('min-h-11')
+    expect(button.className).toContain('min-w-11')
   })
 
   it('woła onClick po kliknięciu', () => {
@@ -34,5 +38,10 @@ describe('Button', () => {
   it('przekazuje dodatkową klasę', () => {
     render(<Button className="moja-klasa">Y</Button>)
     expect(screen.getByRole('button', { name: 'Y' }).className).toContain('moja-klasa')
+  })
+
+  it('pozwala jawnie ustawić typ submit', () => {
+    render(<Button type="submit">Wyślij</Button>)
+    expect(screen.getByRole('button', { name: 'Wyślij' })).toHaveAttribute('type', 'submit')
   })
 })

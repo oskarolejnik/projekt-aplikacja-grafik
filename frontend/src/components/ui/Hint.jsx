@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useId } from 'react'
 
 // Mały „?" chowający tekst objaśniający — klik odsłania dymek, ponowny klik / Esc / klik obok go chowa.
 // Dymek renderowany position:fixed (pozycja z getBoundingClientRect), żeby nie był przycinany przez
@@ -8,6 +8,7 @@ export function Hint({ children, label = 'Więcej informacji', width = 260, clas
   const [pos, setPos] = useState(null)
   const btnRef = useRef(null)
   const popRef = useRef(null)
+  const tooltipId = useId()
 
   const umiejsc = useCallback(() => {
     const r = btnRef.current?.getBoundingClientRect()
@@ -51,14 +52,19 @@ export function Hint({ children, label = 'Więcej informacji', width = 260, clas
         onClick={toggle}
         aria-label={label}
         aria-expanded={open}
-        className={`inline-grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border text-[11px] font-bold leading-none transition
-          focus:outline-none focus-visible:ring-2 focus-visible:ring-mint/50
-          ${open ? 'border-mint/60 bg-mint/15 text-mint' : 'border-line bg-surface-2 text-muted hover:border-mint/40 hover:text-ink'}`}
+        aria-controls={open ? tooltipId : undefined}
+        aria-describedby={open ? tooltipId : undefined}
+        className="-m-[13px] inline-grid h-11 w-11 shrink-0 place-items-center rounded-full text-[11px] font-bold leading-none focus:outline-none focus-visible:ring-2 focus-visible:ring-mint/50"
       >
-        ?
+        <span className={`inline-grid h-[18px] w-[18px] place-items-center rounded-full border transition ${
+          open ? 'border-mint/60 bg-mint/15 text-mint' : 'border-line bg-surface-2 text-muted hover:border-mint/40 hover:text-ink'
+        }`}>
+          ?
+        </span>
       </button>
       {open && pos && (
         <div
+          id={tooltipId}
           ref={popRef}
           role="tooltip"
           style={{ position: 'fixed', top: pos.top, left: pos.left, width, zIndex: 60 }}

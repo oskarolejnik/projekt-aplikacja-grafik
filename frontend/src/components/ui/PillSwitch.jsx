@@ -8,11 +8,11 @@ import { BOUNCE } from '../../lib/motion'
 //   activeBg   – tło aktywnego segmentu (domyślnie uniesiona powierzchnia). Solid kolory
 //                (np. bg-success/bg-danger) ładnie się przenikają przy zmianie stanu.
 //   activeText – kolor tekstu na aktywnym segmencie (domyślnie text-ink)
-export function PillSwitch({ options, value, onChange, className = '' }) {
+export function PillSwitch({ options, value, onChange, label = 'Wybór opcji', className = '' }) {
   const activeIndex = Math.max(0, options.findIndex((o) => o.value === value))
   const active = options[activeIndex] || options[0]
   return (
-    <div className={`relative flex rounded-2xl border border-line bg-white/[0.03] p-1.5 ${className}`}>
+    <div role="group" aria-label={label} className={`relative flex rounded-2xl border border-line bg-white/[0.03] p-1.5 ${className}`}>
       {/* Wskaźnik — sam transform/opacity (GPU), bez JS. Spokojny glide, zero overshootu. */}
       <span
         aria-hidden
@@ -30,13 +30,14 @@ export function PillSwitch({ options, value, onChange, className = '' }) {
             key={String(opt.value)}
             type="button"
             onClick={() => onChange(opt.value)}
-            className={`relative z-10 flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition-[color,transform] duration-150 ease-snap active:scale-[0.97] ${
+            aria-pressed={isActive}
+            className={`relative z-10 min-h-11 flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition-[color,transform] duration-150 ease-snap active:scale-[0.97] ${
               isActive ? opt.activeText || 'text-ink' : 'text-muted hover:text-ink'
             }`}
             style={{ WebkitTapHighlightColor: 'transparent' }}
           >
             {opt.label}
-            {opt.badge && <span className="absolute right-2 top-1.5 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
+            {opt.badge && <span aria-hidden className="absolute right-2 top-1.5 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
           </button>
         )
       })}
