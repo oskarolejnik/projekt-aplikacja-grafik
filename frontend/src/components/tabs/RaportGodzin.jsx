@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
@@ -13,12 +13,15 @@ import { useAuth } from '../../context/AuthContext'
 // Dane: GET /api/raporty/godziny?rok=&miesiac= (raporty.raport_godzin_miesiac).
 export default function RaportGodzin() {
   const { toast } = useToast()
-  const { isAdmin } = useAuth()
+  const { isAdmin, can = () => false } = useAuth()
+  const showPay = isAdmin || can('wyplaty.podglad')
   const dzis = new Date()
   const [rok, setRok] = useState(dzis.getFullYear())
   const [miesiac, setMiesiac] = useState(dzis.getMonth() + 1) // 1-12
   const [dane, setDane] = useState(null)
   const [loading, setLoading] = useState(true)
+  const requestIdRef = useRef(0)
+  const showPayRef = useRef(showPay)
 
   const etykietaMiesiaca = useMemo(
     () => new Intl.DateTimeFormat('pl-PL', { month: 'long', year: 'numeric' }).format(new Date(rok, miesiac - 1, 1)),
@@ -26,22 +29,35 @@ export default function RaportGodzin() {
   )
 
   const load = useCallback(async (silent = false) => {
+    const requestId = ++requestIdRef.current
     if (!silent) setLoading(true)
     try {
-      setDane(await api(`/raporty/godziny?rok=${rok}&miesiac=${miesiac}`))
+      const response = await api(`/raporty/godziny?rok=${rok}&miesiac=${miesiac}`)
+      if (requestId === requestIdRef.current) setDane(response)
     } catch (e) {
-      if (!silent) {
+      if (!silent && requestId === requestIdRef.current) {
         toast(e.message, 'error')
         setDane(null)
       }
     } finally {
-      if (!silent) setLoading(false)
+      // Cichy refresh może przejąć pierwszeństwo nad wolniejszym ładowaniem
+      // jawnym; najnowsze żądanie zawsze domyka wtedy stan spinnera.
+      if (requestId === requestIdRef.current) setLoading(false)
     }
   }, [rok, miesiac, toast])
 
   useEffect(() => {
     load()
   }, [load])
+
+  // Po nadaniu lub cofnięciu dostępu usuń poprzednią odpowiedź z pamięci
+  // i pobierz nowy, autoryzowany po stronie serwera kształt raportu.
+  useEffect(() => {
+    if (showPayRef.current === showPay) return
+    showPayRef.current = showPay
+    setDane(null)
+    load()
+  }, [showPay, load])
 
   // Live: ciche odświeżanie co 20 s (bez spinnera), tylko gdy karta jest widoczna.
   useEffect(() => {
@@ -106,7 +122,7 @@ export default function RaportGodzin() {
           <span className="min-w-0 truncate font-semibold text-ink">{p.pracownik}</span>
           <div className="flex shrink-0 items-baseline gap-3">
             <span className="font-display font-bold tabular-nums text-ink">{godzinyHM(p.suma_godzin)}</span>
-            <span className="text-right">
+            {showPay && <span className="text-right">
               <span className="font-display font-bold tabular-nums text-mint">
                 {zl((p.zaliczki_kwota || 0) > 0 ? p.do_wyplaty_po_zaliczkach : p.do_wyplaty)}
               </span>
@@ -115,7 +131,7 @@ export default function RaportGodzin() {
                   po zaliczce −{zl(p.zaliczki_kwota)}
                 </span>
               )}
-            </span>
+            </span>}
           </div>
         </div>
         <div className="space-y-2">
@@ -125,13 +141,13 @@ export default function RaportGodzin() {
               <div key={s.stanowisko} className="flex items-center gap-3">
                 <span className="flex w-28 shrink-0 items-center gap-1.5 text-xs text-muted" title={s.stanowisko}>
                   <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: kolor }} />
-                  <span className="truncate">{s.stanowisko}{s.stawka > 0 ? ` · ${zl(s.stawka)}/h` : ''}</span>
+                  <span className="truncate">{s.stanowisko}{showPay && s.stawka > 0 ? ` · ${zl(s.stawka)}/h` : ''}</span>
                 </span>
                 <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
                   <div className="h-full rounded-full" style={{ width: `${(s.godziny / maxG) * 100}%`, background: kolor }} />
                 </div>
                 <span className="w-12 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
-                <span className="w-16 shrink-0 text-right text-xs font-semibold tabular-nums text-mint">{s.kwota > 0 ? zl(s.kwota) : ''}</span>
+                {showPay && <span className="w-16 shrink-0 text-right text-xs font-semibold tabular-nums text-mint">{s.kwota > 0 ? zl(s.kwota) : ''}</span>}
               </div>
             )
           })}
@@ -148,7 +164,7 @@ export default function RaportGodzin() {
         <details className="group rounded-xl border border-line bg-white/[0.02]">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 outline-none [&::-webkit-details-marker]:hidden">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-              {tytul} · {lista.length} os. · {godzinyHM(s.godziny)} · {zl(s.kwota)}
+              {tytul} · {lista.length} os. · {godzinyHM(s.godziny)}{showPay ? ` · ${zl(s.kwota)}` : ''}
             </span>
             <Icon name="chevronDown" className="h-4 w-4 shrink-0 text-muted transition group-open:rotate-180" />
           </summary>
@@ -187,17 +203,19 @@ export default function RaportGodzin() {
     <Card className="p-6 md:p-8">
       <SectionHeader title="Raport godzin" subtitle="Przepracowane godziny (RCP) z podziałem na stanowiska z opublikowanego grafiku.">
         <button
+          type="button"
           onClick={() => przesunMiesiac(-1)}
-          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
+          className="min-h-11 min-w-11 rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
           aria-label="Poprzedni miesiąc"
         >
           <Icon name="chevronDown" className="h-4 w-4 rotate-90" />
         </button>
         <span className="min-w-[150px] text-center font-display text-base font-bold capitalize text-ink">{etykietaMiesiaca}</span>
         <button
+          type="button"
           onClick={() => przesunMiesiac(1)}
           disabled={naPrzyszlosc}
-          className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
+          className="min-h-11 min-w-11 rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
           aria-label="Następny miesiąc"
         >
           <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
@@ -212,12 +230,12 @@ export default function RaportGodzin() {
               <div key={z.id} className="flex flex-wrap items-center gap-3 text-sm">
                 <span className="min-w-0 flex-1 font-semibold text-ink">{z.pracownik}</span>
                 <span className="tabular-nums text-ink">{zl(z.kwota)}</span>
-                <button onClick={() => decyzjaZaliczki(z, 'zaakceptowana')}
-                        className="rounded-lg bg-mint px-3 py-1.5 text-xs font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">
+                <button type="button" onClick={() => decyzjaZaliczki(z, 'zaakceptowana')}
+                        className="min-h-11 rounded-lg bg-mint px-3 py-1.5 text-xs font-semibold text-bg transition hover:brightness-105 active:scale-[0.98]">
                   Akceptuj
                 </button>
-                <button onClick={() => decyzjaZaliczki(z, 'odrzucona')}
-                        className="rounded-lg border border-line bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-muted transition hover:text-danger">
+                <button type="button" onClick={() => decyzjaZaliczki(z, 'odrzucona')}
+                        className="min-h-11 rounded-lg border border-line bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-muted transition hover:text-danger">
                   Odrzuć
                 </button>
               </div>
@@ -267,14 +285,14 @@ export default function RaportGodzin() {
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Pracownicy z godzinami</div>
               <div className="font-display text-2xl font-bold text-ink tabular-nums">{pracownicy.length}</div>
             </div>
-            <div>
+            {showPay && <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Do wypłaty (wszyscy)</div>
               <div className="font-display text-2xl font-bold tabular-nums text-mint">{zl(sumaWyplat)}</div>
-            </div>
+            </div>}
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Zaoszczędzone (wg grafiku)</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Różnica względem grafiku</div>
               <div className="font-display text-2xl font-bold tabular-nums text-coral">
-                {godzinyHM(zaoszczedzone.godziny)} · {zl(zaoszczedzone.kwota)}
+                {godzinyHM(zaoszczedzone.godziny)}{showPay ? ` · ${zl(zaoszczedzone.kwota)}` : ''}
               </div>
             </div>
           </div>
@@ -348,7 +366,9 @@ export default function RaportGodzin() {
               {/* Koszt i godziny wg stanowisk (sumarycznie, wszyscy) — każde stanowisko w swoim kolorze */}
               {stanowiskaPodsum.length > 0 && (
                 <div className="rounded-xl border border-line bg-white/[0.02] p-4">
-                  <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted">Koszt wg stanowisk</div>
+                  <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                    {showPay ? 'Koszt i godziny wg stanowisk' : 'Godziny wg stanowisk'}
+                  </div>
                   <div className="space-y-2.5">
                     {stanowiskaPodsum.map((s) => {
                       const kolor = kolorStanowiska(s.stanowisko)
@@ -360,7 +380,7 @@ export default function RaportGodzin() {
                             <div className="h-full rounded-full" style={{ width: `${(s.godziny / maxStan) * 100}%`, background: kolor }} />
                           </div>
                           <span className="w-12 shrink-0 text-right font-mono text-xs font-bold text-ink tabular-nums">{godzinyHM(s.godziny)}</span>
-                          <span className="w-16 shrink-0 text-right text-xs font-semibold tabular-nums text-mint">{s.kwota > 0 ? zl(s.kwota) : ''}</span>
+                          {showPay && <span className="w-16 shrink-0 text-right text-xs font-semibold tabular-nums text-mint">{s.kwota > 0 ? zl(s.kwota) : ''}</span>}
                         </div>
                       )
                     })}

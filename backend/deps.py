@@ -208,6 +208,8 @@ def _jest_sprzataczka(prac: models.Pracownik) -> bool:
 
 def _user_out(u: models.User) -> schemas.UserOut:
     """Konto użytkownika do odpowiedzi API (współdzielone: auth w main + /api/users w kadrach)."""
+    import uprawnienia
+
     return schemas.UserOut(
         id=u.id, login=u.login, email=u.email, rola=u.rola, aktywny=bool(u.aktywny),
         pracownik_id=u.pracownik_id,
@@ -215,6 +217,8 @@ def _user_out(u: models.User) -> schemas.UserOut:
         sprzataczka=_jest_sprzataczka(u.pracownik) if u.pracownik else False,
         imie=u.pracownik.imie if u.pracownik else None,
         nazwisko=u.pracownik.nazwisko if u.pracownik else None,
+        uprawnienia_override=dict(u.uprawnienia_override or {}),
+        uprawnienia=uprawnienia.efektywne(u),
     )
 
 

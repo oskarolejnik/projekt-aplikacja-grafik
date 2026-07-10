@@ -7,22 +7,73 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [uprawnienia, setUprawnienia] = useState([])
+  const [uprawnieniaReady, setUprawnieniaReady] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const logout = useCallback(() => {
     setToken(null)
     setUser(null)
     setUprawnienia([])
+    setUprawnieniaReady(false)
   }, [])
 
   // Granularne uprawnienia (RBAC) — pobierane po zalogowaniu, do sterowania UI.
   useEffect(() => {
-    if (!user) { setUprawnienia([]); return }
+    if (!user) {
+      setUprawnienia([])
+      setUprawnieniaReady(false)
+      return
+    }
+    if (Array.isArray(user.uprawnienia)) {
+      setUprawnienia(user.uprawnienia)
+      setUprawnieniaReady(true)
+      return
+    }
+
+    setUprawnieniaReady(false)
     let off = false
     api('/me/uprawnienia')
       .then((r) => { if (!off) setUprawnienia(r.uprawnienia || []) })
       .catch(() => { if (!off) setUprawnienia([]) })
+      .finally(() => { if (!off) setUprawnieniaReady(true) })
     return () => { off = true }
+  }, [user])
+
+  // Uprawnienia konta mogą zostać zmienione przez administratora w trakcie
+  // otwartej sesji. Odświeżamy je po powrocie do aplikacji oraz okresowo,
+  // bez migania ekranu stanem ładowania.
+  useEffect(() => {
+    if (!user) return undefined
+
+    let off = false
+    let inFlight = false
+    const refreshUprawnienia = async () => {
+      if (off || inFlight || document.visibilityState === 'hidden') return
+      inFlight = true
+      try {
+        const response = await api('/me/uprawnienia')
+        if (!off) setUprawnienia(response.uprawnienia || [])
+      } catch {
+        // Chwilowy błąd sieci nie powinien odbierać dostępu ani powodować
+        // migania UI. Odpowiedź 401 nadal obsługuje globalny handler sesji.
+      } finally {
+        inFlight = false
+      }
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshUprawnienia()
+    }
+
+    window.addEventListener('focus', refreshUprawnienia)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    const intervalId = window.setInterval(refreshUprawnienia, 60000)
+
+    return () => {
+      off = true
+      window.removeEventListener('focus', refreshUprawnienia)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.clearInterval(intervalId)
+    }
   }, [user])
 
   // Reakcja na 401 z dowolnego zapytania + walidacja zapisanego tokenu na starcie.
@@ -59,7 +110,17 @@ export function AuthProvider({ children }) {
   }, [])
 
   const can = useCallback((perm) => uprawnienia.includes(perm), [uprawnienia])
-  const value = { user, loading, login, register, logout, isAdmin: user?.rola === 'admin', uprawnienia, can }
+  const value = {
+    user,
+    loading,
+    login,
+    register,
+    logout,
+    isAdmin: user?.rola === 'admin',
+    uprawnienia,
+    uprawnieniaReady,
+    can,
+  }
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 

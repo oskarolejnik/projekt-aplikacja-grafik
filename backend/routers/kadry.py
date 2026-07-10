@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
-from auth import hash_password
+import uprawnienia
+from auth import get_current_user, hash_password, require_admin
 from database import get_db
 from deps import (
     SPRZATACZKA_NAZWA, _przypisz_odbicia_do_pracownika, _urlop_out, _user_out, utcnow_naive,
@@ -62,11 +63,35 @@ def update_user(uid: int, dane: schemas.UserUpdate, db: Session = Depends(get_db
     if dane.rola is not None:
         if dane.rola not in ROLE_VALID:
             raise HTTPException(400, "Nieprawidłowa rola.")
+        if dane.rola != u.rola:
+            u.uprawnienia_override = None
         u.rola = dane.rola
     if dane.aktywny is not None:
         u.aktywny = dane.aktywny
     if dane.pracownik_id is not None:
         u.pracownik_id = dane.pracownik_id
+    db.commit(); db.refresh(u)
+    return _user_out(u)
+
+
+@router.put("/api/users/{uid}/uprawnienia", response_model=schemas.UserOut)
+def update_user_uprawnienia(
+    uid: int,
+    dane: schemas.UserUprawnieniaUpdate,
+    db: Session = Depends(get_db),
+    _admin: models.User = Depends(require_admin),
+):
+    """Admin: zastępuje wyjątki uprawnień; w bazie zostają tylko różnice od roli."""
+    u = db.get(models.User, uid)
+    if not u:
+        raise HTTPException(404, "Nie znaleziono konta.")
+    if u.rola != "szef":
+        raise HTTPException(400, "Uprawnienia per konto można zmieniać tylko dla roli szef.")
+    nieznane = sorted(set(dane.uprawnienia_override) - set(uprawnienia.EDYTOWALNE_ODCZYTY))
+    if nieznane:
+        raise HTTPException(400, f"Nieznane uprawnienia: {', '.join(nieznane)}.")
+    override = uprawnienia.znormalizuj_override(u.rola, dane.uprawnienia_override)
+    u.uprawnienia_override = override or None
     db.commit(); db.refresh(u)
     return _user_out(u)
 
@@ -209,8 +234,19 @@ def create_podkategoria(sid: int, data: schemas.PodkategoriaCreate, db: Session 
 
 
 @router.get("/api/pracownicy", response_model=List[schemas.PracownikOut])
-def get_pracownicy(db: Session = Depends(get_db)):
-    return db.query(models.Pracownik).order_by(models.Pracownik.kolejnosc, models.Pracownik.id).all()
+def get_pracownicy(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    pracownicy = db.query(models.Pracownik).order_by(models.Pracownik.kolejnosc, models.Pracownik.id).all()
+    if user.rola == "szef" and not uprawnienia.ma_user(user, "wyplaty.podglad"):
+        wynik = []
+        for pracownik in pracownicy:
+            out = schemas.PracownikOut.model_validate(pracownik)
+            out.stawki = []
+            wynik.append(out)
+        return wynik
+    return pracownicy
 
 
 def _ustaw_stawki(db, p, stawki):

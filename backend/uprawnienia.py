@@ -1,27 +1,30 @@
-"""Granularne uprawnienia (RBAC) — warstwa NAD rolami (User.rola).
+"""Granularne uprawnienia: domyślna rola + wyjątki per konto.
 
-Mapuje rolę na zbiór uprawnień (stringi 'obszar.akcja'). To warstwa GRANULARNA do
-sterowania UI i fundament pod przyszłe role własne / nadawanie uprawnień per konto.
-Krytyczny enforcement po stronie API dalej robi middleware `role_guard` — ten moduł
-go NIE zastępuje (zmiana enforcement = ryzyko regresji ról).
-
-Konwencja: '<obszar>.<akcja>', akcja 'zarzadzaj' (pełny dostęp) / 'podglad' (tylko odczyt).
+Krytyczny enforcement tras nadal robi middleware ``role_guard``. Ten moduł jest
+kanonicznym źródłem skutecznych uprawnień dla UI i redakcji danych w endpointach.
+Konwencja klucza: ``<obszar>.<akcja>``.
 """
 
-# Pełny katalog uprawnień (admin dostaje wszystkie).
+# Pełny katalog znanych uprawnień. Administrator zawsze dostaje wszystkie.
 WSZYSTKIE = [
     "pulpit.podglad",
     "pracownicy.zarzadzaj",
     "stanowiska.zarzadzaj",
     "konta.zarzadzaj",
     "grafik.zarzadzaj",
+    "grafik.podglad",
     "dyspozycje.zarzadzaj",
     "urlopy.zarzadzaj",
     "raporty.podglad",
+    "wyplaty.podglad",
     "rozliczenia.zarzadzaj",
+    "rozliczenia.podglad",
     "zeszyt.zarzadzaj",
+    "zeszyt.podglad",
     "imprezy.zarzadzaj",
+    "imprezy.podglad",
     "rezerwacje.zarzadzaj",
+    "rezerwacje.podglad",
     "sprzatanie.zarzadzaj",
     "lokal.ustawienia",
     "integracje.podglad",
@@ -31,25 +34,90 @@ WSZYSTKIE = [
     "me.godziny",
 ]
 
+# Celowo mały katalog odczytów, które administrator może zmieniać per konto.
+# Uprawnienia do zapisu i dostęp administratora nie podlegają override'om.
+EDYTOWALNE_ODCZYTY = (
+    "grafik.podglad",
+    "raporty.podglad",
+    "wyplaty.podglad",
+    "zeszyt.podglad",
+    "imprezy.podglad",
+    "rezerwacje.podglad",
+)
+
 UPRAWNIENIA_ROLI = {
-    # Administrator — pełnia uprawnień.
     "admin": list(WSZYSTKIE),
-    # Szef — oversight (tylko podgląd) finansów, grafiku, imprez, rezerwacji.
-    "szef": ["pulpit.podglad", "raporty.podglad", "rozliczenia.podglad", "zeszyt.podglad",
-             "grafik.podglad", "imprezy.podglad", "rezerwacje.podglad"],
-    # Szef kuchni — godziny kuchni (bez wypłat), grafik kuchni, rezerwacje (planowanie).
-    "szef_kuchni": ["godziny_kuchni.podglad", "grafik.podglad", "rezerwacje.podglad"],
-    # Pracownik kuchni / obsługi — samoobsługa.
+    # Szef domyślnie zachowuje dotychczasowe odczyty; admin może je zawęzić per konto.
+    "szef": [
+        "pulpit.podglad",
+        "raporty.podglad",
+        "wyplaty.podglad",
+        "rozliczenia.podglad",
+        "zeszyt.podglad",
+        "grafik.podglad",
+        "imprezy.podglad",
+        "rezerwacje.podglad",
+    ],
+    "szef_kuchni": [
+        "godziny_kuchni.podglad",
+        "grafik.podglad",
+        "rezerwacje.podglad",
+    ],
     "kuchnia": ["me.grafik", "me.godziny"],
     "employee": ["me.dyspozycje", "me.grafik", "me.godziny"],
 }
 
 
 def uprawnienia(rola: str) -> list:
-    """Lista uprawnień dla roli (pusta dla nieznanej)."""
+    """Lista domyślnych uprawnień roli (pusta dla nieznanej)."""
     return list(UPRAWNIENIA_ROLI.get(rola, []))
 
 
 def ma(rola: str, perm: str) -> bool:
-    """Czy rola ma dane uprawnienie."""
+    """Czy rola ma dane uprawnienie domyślnie (stary, kompatybilny interfejs)."""
     return perm in UPRAWNIENIA_ROLI.get(rola, [])
+
+
+def efektywne(user) -> list[str]:
+    """Lista uprawnień po nałożeniu bezpiecznych wyjątków konkretnego konta.
+
+    Nieznane klucze i wartości inne niż bool są ignorowane. Administrator zawsze
+    zachowuje pełny katalog, nawet jeśli w bazie pozostały stare override'y.
+    """
+    rola = getattr(user, "rola", None)
+    if rola == "admin":
+        return list(WSZYSTKIE)
+    if rola not in UPRAWNIENIA_ROLI:
+        return []
+
+    wynik = set(UPRAWNIENIA_ROLI[rola])
+    override = getattr(user, "uprawnienia_override", None)
+    if isinstance(override, dict):
+        for perm in EDYTOWALNE_ODCZYTY:
+            wartosc = override.get(perm)
+            if type(wartosc) is not bool:
+                continue
+            if wartosc:
+                wynik.add(perm)
+            else:
+                wynik.discard(perm)
+    return [perm for perm in WSZYSTKIE if perm in wynik]
+
+
+def ma_user(user, perm: str) -> bool:
+    """Czy konkretne konto ma dane skuteczne uprawnienie."""
+    return perm in efektywne(user)
+
+
+def znormalizuj_override(rola: str, mapa: dict) -> dict[str, bool]:
+    """Zostawia tylko boolowskie odchylenia od domyślnych wartości roli."""
+    if rola == "admin" or rola not in UPRAWNIENIA_ROLI:
+        return {}
+    domyslne = set(UPRAWNIENIA_ROLI[rola])
+    return {
+        perm: mapa[perm]
+        for perm in EDYTOWALNE_ODCZYTY
+        if perm in mapa
+        and type(mapa[perm]) is bool
+        and mapa[perm] != (perm in domyslne)
+    }

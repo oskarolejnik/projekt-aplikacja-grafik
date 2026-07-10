@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from datetime import date, time
 from typing import Optional, List
 
@@ -154,6 +154,8 @@ class UserOut(BaseModel):
     sprzataczka: bool = False         # techniczny z kwalifikacją „Sprzątaczka" (dostęp do zamówień)
     imie: Optional[str] = None        # uzupełniane z powiązanego Pracownika
     nazwisko: Optional[str] = None
+    uprawnienia_override: dict[str, bool] = Field(default_factory=dict)
+    uprawnienia: List[str] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
 class TokenOut(BaseModel):
@@ -171,6 +173,11 @@ class UserUpdate(BaseModel):
     rola: Optional[str] = None
     aktywny: Optional[bool] = None
     pracownik_id: Optional[int] = None
+
+class UserUprawnieniaUpdate(BaseModel):
+    """Pełna mapa wyjątków przesyłana przez panel kont (PUT zastępuje poprzednią)."""
+    uprawnienia_override: dict[str, StrictBool] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
 
 class ResetHasloIn(BaseModel):
     haslo: str

@@ -173,6 +173,9 @@ class User(Base):
     haslo_hash   = Column(String(255), nullable=False)          # bcrypt
     rola         = Column(String(16), nullable=False, default="employee")  # 'admin' | 'employee'
     aktywny      = Column(Boolean, default=True)
+    # Tylko odchylenia od domyślnej macierzy roli, np. {"wyplaty.podglad": false}.
+    # NULL oznacza brak wyjątków; resolver ignoruje nieznane/stare klucze.
+    uprawnienia_override = Column(JSON, nullable=True)
     pracownik_id = Column(
         Integer,
         ForeignKey("pracownicy.id", ondelete="SET NULL"),

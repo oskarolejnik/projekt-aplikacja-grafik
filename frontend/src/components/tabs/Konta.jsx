@@ -7,6 +7,78 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 
+const PRAWA_PODGLADU = [
+  { key: 'grafik.podglad', label: 'Grafik i stoły', opis: 'Opublikowany grafik oraz bieżący widok sali.' },
+  { key: 'raporty.podglad', label: 'Raport godzin', opis: 'Czas pracy bez automatycznego dostępu do kwot.' },
+  { key: 'wyplaty.podglad', label: 'Wypłaty', opis: 'Stawki, kwoty i podsumowania finansowe w raporcie.' },
+  { key: 'zeszyt.podglad', label: 'Zeszyt kasowy', opis: 'Podgląd zapisów kasowych bez edycji.' },
+  { key: 'imprezy.podglad', label: 'Imprezy', opis: 'Kalendarz i operacyjne informacje o imprezach.' },
+  { key: 'rezerwacje.podglad', label: 'Rezerwacje', opis: 'Podgląd rezerwacji bez możliwości zarządzania.' },
+]
+
+function DostepKonta({ user, pending, onToggle, onReset }) {
+  const overrides = user.uprawnienia_override || {}
+  const liczbaZmian = PRAWA_PODGLADU.filter(({ key }) => key in overrides).length
+
+  return (
+    <details className="group rounded-xl border border-line bg-white/[0.02]">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-mint/70 [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+          <Icon name="key" className="h-4 w-4 text-muted" />
+          Dostęp
+        </span>
+        <span className="flex items-center gap-2 text-xs text-muted">
+          {liczbaZmian > 0 ? `${liczbaZmian} ${liczbaZmian === 1 ? 'zmiana' : 'zmian'}` : 'Ustawienia roli'}
+          <Icon name="chevronDown" className="h-4 w-4 transition group-open:rotate-180" />
+        </span>
+      </summary>
+
+      <div className="space-y-2 border-t border-line p-3">
+        <p className="mb-3 text-xs leading-relaxed text-muted">
+          Włącz tylko widoki potrzebne tej osobie. Zmiany nie dają prawa do edycji.
+        </p>
+        {PRAWA_PODGLADU.map((prawo) => {
+          const wlaczone = (user.uprawnienia || []).includes(prawo.key)
+          const zapisuje = pending === `${user.id}:${prawo.key}`
+          return (
+            <button
+              key={prawo.key}
+              type="button"
+              role="switch"
+              aria-checked={wlaczone}
+              disabled={!!pending}
+              onClick={() => onToggle(user, prawo.key, !wlaczone)}
+              className="flex min-h-11 w-full items-center justify-between gap-4 rounded-lg px-2 py-2 text-left transition hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mint/70 disabled:opacity-60"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-ink">{prawo.label}</span>
+                <span className="block text-xs leading-relaxed text-muted">{prawo.opis}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <span className="hidden text-xs text-muted sm:inline">{zapisuje ? 'Zapisuję…' : wlaczone ? 'Włączone' : 'Wyłączone'}</span>
+                <span className={`relative h-6 w-11 rounded-full transition-colors ${wlaczone ? 'bg-mint' : 'bg-white/15'}`} aria-hidden>
+                  <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ${wlaczone ? 'translate-x-6' : 'translate-x-1'}`} />
+                </span>
+              </span>
+            </button>
+          )
+        })}
+
+        <div className="flex justify-end border-t border-line pt-3">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!!pending || liczbaZmian === 0}
+            onClick={() => onReset(user)}
+          >
+            Przywróć ustawienia roli
+          </Button>
+        </div>
+      </div>
+    </details>
+  )
+}
+
 // Zaproszenia do kont: manager wpisuje imię, nazwisko i rolę → dostaje link,
 // który wysyła pracownikowi dowolnym kanałem. Pracownik z linku sam ustala
 // login i hasło, a konto od razu jest przypięte do właściwej osoby.
@@ -144,6 +216,7 @@ export default function Konta() {
   const { toast, confirm } = useToast()
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
+  const [permissionPending, setPermissionPending] = useState(null)
 
   const [login, setLogin] = useState('')
   const [haslo, setHaslo] = useState('')
@@ -216,6 +289,24 @@ export default function Konta() {
       toast(e.message, 'error')
     }
   }
+  const zapiszDostep = async (u, uprawnieniaOverride, pendingKey) => {
+    setPermissionPending(pendingKey)
+    try {
+      const updated = await api(`/users/${u.id}/uprawnienia`, 'PUT', {
+        uprawnienia_override: uprawnieniaOverride,
+      })
+      setUsers((current) => current.map((item) => item.id === updated.id ? updated : item))
+    } catch (e) {
+      toast(e.message, 'error')
+    } finally {
+      setPermissionPending(null)
+    }
+  }
+  const toggleDostep = (u, permission, enabled) => {
+    const next = { ...(u.uprawnienia_override || {}), [permission]: enabled }
+    return zapiszDostep(u, next, `${u.id}:${permission}`)
+  }
+  const resetDostep = (u) => zapiszDostep(u, {}, `${u.id}:reset`)
   const resetHaslo = async (u) => {
     const nowe = Math.random().toString(36).slice(2, 10)
     try {
@@ -289,7 +380,7 @@ export default function Konta() {
                       value={u.rola}
                       onChange={(e) => zmienRole(u, e.target.value)}
                       title="Zmień rolę konta"
-                      className="cursor-pointer rounded-md border border-line bg-surface-2 px-2 py-1 text-xs font-semibold text-ink outline-none transition hover:border-mint/50"
+                      className="min-h-11 cursor-pointer rounded-lg border border-line bg-surface-2 px-3 py-2 text-xs font-semibold text-ink outline-none transition hover:border-mint/50 focus-visible:ring-2 focus-visible:ring-mint/70"
                     >
                       <option value="employee" className="bg-surface">Pracownik obsługa</option>
                       <option value="kuchnia" className="bg-surface">Pracownik kuchnia</option>
@@ -298,21 +389,35 @@ export default function Konta() {
                       <option value="admin" className="bg-surface">Administrator</option>
                     </select>
                   </div>
-                  <label className="flex items-center gap-2 text-xs text-muted">
-                    Aktywne
+                  <div className="flex items-center gap-1 text-xs text-muted">
+                    <span>Aktywne</span>
                     <button
+                      type="button"
                       onClick={() => toggleAktywny(u)}
-                      className={`relative h-5 w-9 rounded-full transition-colors ${u.aktywny ? 'bg-success' : 'bg-white/15'}`}
+                      role="switch"
+                      aria-checked={u.aktywny}
+                      className="flex h-11 w-11 items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mint/70"
                       aria-label="Przełącz aktywność konta"
                     >
-                      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${u.aktywny ? 'left-[18px]' : 'left-0.5'}`} />
+                      <span className={`relative h-5 w-9 rounded-full transition-colors ${u.aktywny ? 'bg-success' : 'bg-white/15'}`} aria-hidden>
+                        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${u.aktywny ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+                      </span>
                     </button>
-                  </label>
+                  </div>
                 </div>
 
                 <div className="text-xs text-muted">
                   Pracownik: <span className="text-ink">{u.imie ? `${u.imie} ${u.nazwisko}` : '— niepowiązane —'}</span>
                 </div>
+
+                {u.rola === 'szef' && (
+                  <DostepKonta
+                    user={u}
+                    pending={permissionPending}
+                    onToggle={toggleDostep}
+                    onReset={resetDostep}
+                  />
+                )}
 
                 <div className="flex justify-end gap-2 border-t border-line pt-3">
                   <Button size="sm" variant="ghost" onClick={() => resetHaslo(u)}>Reset hasła</Button>

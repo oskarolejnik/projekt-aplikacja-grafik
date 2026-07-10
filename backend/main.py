@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating, platnosci
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating, platnosci, uprawnienia
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -102,12 +102,6 @@ app.add_middleware(
 # Role nadzorcze i ich dozwolone ścieżki GET (poza /api/me/* dostępnym dla każdego zalogowanego).
 # Wszystko spoza tych prefiksów = 403. Zapisy (POST/PUT/DELETE) zarezerwowane dla admina.
 OVERSIGHT_GET = {
-    "szef": (
-        "/api/raporty/godziny", "/api/przydzialy", "/api/grafik/publikacja",
-        "/api/imprezy", "/api/pracownicy", "/api/stanowiska", "/api/gastro/stoly",
-        "/api/rezerwacje", "/api/szef/rozliczenie", "/api/szef/zeszyt", "/api/pulpit",
-        "/api/alerty-kasowe", "/api/alerty-obsady",
-    ),
     # Szef kuchni: godziny kuchni (bez wypłat), podgląd stołów na żywo, rezerwacje.
     "szef_kuchni": (
         "/api/szefkuchni/", "/api/gastro/stoly", "/api/rezerwacje",
@@ -124,6 +118,31 @@ OVERSIGHT_GET = {
     "employee": (
         "/api/rezerwacje",
     ),
+}
+
+# Szef korzysta z dokładnej mapy endpoint → efektywne uprawnienie konta. Celowo nie
+# używamy tu prefiksów: `imprezy.podglad` ma otwierać listę wydarzeń, ale nie finansowe
+# `/api/imprezy/rozliczenia`. Pozostałe role zachowują historyczną, segmentową allowlistę.
+SZEF_GET_PERMISSION = {
+    "/api/raporty/godziny": "raporty.podglad",
+    "/api/przydzialy": "grafik.podglad",
+    "/api/grafik/publikacja": "grafik.podglad",
+    "/api/pracownicy": "grafik.podglad",
+    "/api/stanowiska": "grafik.podglad",
+    "/api/gastro/stoly": "grafik.podglad",
+    "/api/gastro/stoly-historia": "grafik.podglad",
+    "/api/rezerwacje": "rezerwacje.podglad",
+    "/api/imprezy": "imprezy.podglad",
+    "/api/szef/rozliczenie": "zeszyt.podglad",
+    "/api/szef/zeszyt": "zeszyt.podglad",
+    "/api/pulpit": "pulpit.podglad",
+    "/api/alerty-kasowe": "zeszyt.podglad",
+    "/api/alerty-obsady": "grafik.podglad",
+}
+
+SZEF_ME_GET_PERMISSION = {
+    "/api/me/imprezy": "imprezy.podglad",
+    "/api/me/rezerwacje": "rezerwacje.podglad",
 }
 
 
@@ -229,10 +248,20 @@ async def role_guard(request: Request, call_next):
     if _user is None or not _user.aktywny:
         return JSONResponse({"detail": "Konto nieaktywne lub nie istnieje."}, status_code=401)
     rola = _user.rola
+    if rola == "szef" and path in SZEF_ME_GET_PERMISSION:
+        wymagane = SZEF_ME_GET_PERMISSION[path]
+        if metoda == "GET" and uprawnienia.ma_user(_user, wymagane):
+            return await call_next(request)
+        return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
     if path.startswith("/api/me/") or rola == "admin":
         return await call_next(request)
     if _sciezka_na_whitelist(path, ROLA_PELNA_PRZESTRZEN.get(rola, ())):
         return await call_next(request)
+    if rola == "szef" and metoda == "GET":
+        wymagane = SZEF_GET_PERMISSION.get(path)
+        if wymagane and uprawnienia.ma_user(_user, wymagane):
+            return await call_next(request)
+        return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
     if metoda == "GET" and _sciezka_na_whitelist(path, OVERSIGHT_GET.get(rola, ())):
         return await call_next(request)
     return JSONResponse({"detail": "Brak uprawnień."}, status_code=403)
@@ -839,9 +868,39 @@ def get_zeszyt(start: date = Query(...), end: date = Query(...), db: Session = D
     return _zeszyt_dane(db, start, end)
 
 
+def _zeszyt_bez_pozycji_wyplat(dane: dict) -> dict:
+    """Ukrywa wypłaty oraz agregaty, z których można by odtworzyć ich kwotę.
+
+    Rzeczywiste saldo uwzględnia wypłaty, więc nie może być zwrócone osobie
+    bez ``wyplaty.podglad``. Suma rozchodu obejmuje wyłącznie widoczne pozycje.
+    """
+    dni = []
+    for dzien in dane.get("dni", []):
+        widoczny_rozchod = [
+            p for p in dzien.get("rozchod", []) if p.get("kolumna") != "wyplaty"
+        ]
+        dni.append({
+            **dzien,
+            "rozchod": widoczny_rozchod,
+            "rozchod_suma": round(sum(float(p.get("kwota") or 0) for p in widoczny_rozchod), 2),
+            "stan": None,
+        })
+    return {
+        **dane,
+        "stan_poczatkowy": None,
+        "stan_poczatkowy_data": None,
+        "dane_czesciowo_ukryte": True,
+        "dni": dni,
+    }
+
+
 @app.get("/api/szef/zeszyt")
-def szef_zeszyt(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
-    return _zeszyt_dane(db, start, end)
+def szef_zeszyt(start: date = Query(...), end: date = Query(...),
+                 user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    dane = _zeszyt_dane(db, start, end)
+    if not uprawnienia.ma_user(user, "wyplaty.podglad"):
+        return _zeszyt_bez_pozycji_wyplat(dane)
+    return dane
 
 
 @app.post("/api/zeszyt/pozycja", status_code=201)
@@ -900,7 +959,8 @@ def set_zeszyt_config(dane: schemas.ZeszytConfigIn, db: Session = Depends(get_db
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/pulpit")
-def pulpit(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+def pulpit(start: date = Query(...), end: date = Query(...),
+           user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Zbiorcze KPI lokalu za okres [start, end]: przychód (z zeszytu kasowego), saldo kasy,
     rozchód, ruch (rachunki z POS), rezerwacje (moduł stolików) oraz koszt pracy miesiąca
     końca okresu. Czysta agregacja — nie zapisuje nic do bazy."""
@@ -947,7 +1007,7 @@ def pulpit(start: date = Query(...), end: date = Query(...), db: Session = Depen
     alerty = _alerty_kasowe(db, start, end)
 
     n = max(1, len(przychod_dzienny))
-    return {
+    wynik = {
         "okres": {"start": str(start), "end": str(end), "dni": len(dni)},
         "przychod": {
             "razem": round(przychod_total, 2), "gotowka": round(got, 2), "karta": round(term, 2),
@@ -964,6 +1024,18 @@ def pulpit(start: date = Query(...), end: date = Query(...), db: Session = Depen
         "alerty_kasowe": {"dni_z_anomalia": alerty["dni_z_anomalia"],
                           "suma_braki": alerty["suma_braki"], "suma_nadwyzki": alerty["suma_nadwyzki"]},
     }
+    if user.rola == "szef":
+        if not uprawnienia.ma_user(user, "wyplaty.podglad"):
+            for pole in ("koszt_pracy_miesiac", "rozchod", "saldo_kasy", "wynik"):
+                wynik.pop(pole, None)
+            for dzien in wynik.get("przychod", {}).get("dzienny", []):
+                dzien.pop("rozchod", None)
+        if not uprawnienia.ma_user(user, "zeszyt.podglad"):
+            for pole in ("przychod", "rozchod", "saldo_kasy", "alerty_kasowe", "wynik"):
+                wynik.pop(pole, None)
+        if not uprawnienia.ma_user(user, "rezerwacje.podglad"):
+            wynik.pop("rezerwacje", None)
+    return wynik
 
 
 # ── ALERTY KASOWE (różnice w rozliczeniu: brak/nadwyżka na kartach lub w kasie) ──
@@ -3623,6 +3695,37 @@ def _trwajace_zmiany(db):
     return out
 
 
+def _raport_godzin_bez_wyplat(raport: dict) -> dict:
+    """Allowlista pól raportu czasu bez stawek, kwot, zaliczek i kosztowych agregatów."""
+    bezpieczne_pola = (
+        "rok", "miesiac", "poza_grafikiem", "duze_ciecia", "male_ciecia",
+        "niedopasowani_rcp", "na_zmianie",
+    )
+    bez_finansow = {k: raport[k] for k in bezpieczne_pola if k in raport}
+    bez_finansow["pracownicy"] = [
+        {
+            "pracownik_id": p.get("pracownik_id"),
+            "pracownik": p.get("pracownik"),
+            "dzial": p.get("dzial"),
+            "suma_godzin": p.get("suma_godzin", 0),
+            "stanowiska": [
+                {"stanowisko": s.get("stanowisko"), "godziny": s.get("godziny", 0)}
+                for s in p.get("stanowiska", [])
+            ],
+            "zaoszczedzone_godziny": p.get("zaoszczedzone_godziny", 0),
+        }
+        for p in raport.get("pracownicy", [])
+    ]
+    bez_finansow["zaoszczedzone"] = {
+        "godziny": (raport.get("zaoszczedzone") or {}).get("godziny", 0),
+    }
+    bez_finansow["stanowiska_podsumowanie"] = [
+        {"stanowisko": s.get("stanowisko"), "godziny": s.get("godziny", 0)}
+        for s in raport.get("stanowiska_podsumowanie", [])
+    ]
+    return bez_finansow
+
+
 @app.get("/api/raporty/godziny", status_code=200)
 def raport_godzin(request: Request, rok: int = Query(..., ge=2000, le=2100), miesiac: int = Query(..., ge=1, le=12),
                   user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -3632,8 +3735,10 @@ def raport_godzin(request: Request, rok: int = Query(..., ge=2000, le=2100), mie
     Dostęp do danych płacowych jest zapisywany w dzienniku audytu (RODO)."""
     raport = raporty.raport_godzin_miesiac(db, rok, miesiac)
     raport["na_zmianie"] = _trwajace_zmiany(db)
-    zapisz_audyt(db, user, "raport_godzin", zasob=f"{rok}-{miesiac:02d}", request=request)
-    return raport
+    if uprawnienia.ma_user(user, "wyplaty.podglad"):
+        zapisz_audyt(db, user, "raport_godzin", zasob=f"{rok}-{miesiac:02d}", request=request)
+        return raport
+    return _raport_godzin_bez_wyplat(raport)
 
 
 def _kuchnia_pids(db):

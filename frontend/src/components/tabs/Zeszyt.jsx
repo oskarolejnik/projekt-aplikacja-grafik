@@ -9,6 +9,7 @@ import { useToast } from '../ui/Toast'
 // Zeszyt kasowy — PRZYCHÓD (SALA z rozliczenia + imprezy auto + ręczne wiersze) − ROZCHÓD
 // (Towar/Koszty/Wypłaty/Inne) → STAN (saldo gotówki narastająco). Admin edytuje; szef czyta.
 const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'
+const saldo = (n) => n == null ? 'Ukryte' : zl(n)
 // Kategorie rozchodu: domyślne (legacy) — lokal może je podmienić w Ustawieniach
 // (zeszyt_kolumny). Wpisy historyczne spoza bieżącej listy wyświetlają surową nazwę.
 const KOL_DOMYSLNE = [{ v: 'towar', l: 'Towar' }, { v: 'koszty', l: 'Koszty' }, { v: 'wyplaty', l: 'Wypłaty' }, { v: 'inne', l: 'Inne' }]
@@ -30,10 +31,12 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
   // Kolumny rozchodu z konfiguracji lokalu (szef bez dostępu do configu → defaulty).
   const [kolumny, setKolumny] = useState(KOL_DOMYSLNE)
   useEffect(() => {
+    if (readOnly) return undefined
     api('/lokal/config')
       .then((c) => { if (c.zeszyt_kolumny?.length) setKolumny(c.zeszyt_kolumny.map((n) => ({ v: n, l: n }))) })
       .catch(() => {})
-  }, [])
+    return undefined
+  }, [readOnly])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -83,7 +86,7 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
   const setFP = (data, patch) => setFormP((s) => ({ ...s, [data]: { ...(s[data] || {}), ...patch } }))
 
   const wszystkie = dane?.dni || []
-  const stanKoniec = wszystkie.length ? wszystkie[wszystkie.length - 1].stan : (dane?.stan_poczatkowy ?? 0)
+  const stanKoniec = wszystkie.length ? wszystkie[wszystkie.length - 1].stan : dane?.stan_poczatkowy
   const aktywny = (d) => d.wiersze.length || d.rozchod.length
   // admin widzi wszystkie dni (puste zwinięte); szef tylko dni z ruchem
   const dniWidoczne = readOnly ? wszystkie.filter(aktywny) : wszystkie
@@ -100,7 +103,7 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="font-semibold text-ink">Stan początkowy</span>
           {readOnly ? (
-            <span className="font-mono text-ink">{zl(cfg.stan_poczatkowy)}{cfg.stan_poczatkowy_data ? ` (od ${cfg.stan_poczatkowy_data})` : ''}</span>
+            <span className="font-mono text-ink">{saldo(dane?.stan_poczatkowy)}{cfg.stan_poczatkowy_data ? ` (od ${cfg.stan_poczatkowy_data})` : ''}</span>
           ) : (
             <>
               <input value={cfg.stan_poczatkowy} onChange={(e) => setCfg((c) => ({ ...c, stan_poczatkowy: e.target.value }))} className="w-28 rounded-md border border-line bg-surface px-2 py-1 text-right text-sm text-ink outline-none focus:border-mint" />
@@ -110,8 +113,14 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
             </>
           )}
         </div>
-        <div className="text-sm"><span className="text-muted">Stan na koniec okresu: </span><span className="font-mono text-lg font-bold text-mint">{zl(stanKoniec)}</span></div>
+        <div className="text-sm"><span className="text-muted">Stan na koniec okresu: </span><span className="font-mono text-lg font-bold text-mint">{saldo(stanKoniec)}</span></div>
       </div>
+
+      {dane?.dane_czesciowo_ukryte && (
+        <p className="mb-5 rounded-xl border border-line bg-white/[0.02] px-4 py-3 text-xs leading-relaxed text-muted" role="note">
+          Pozycje wypłat i zależne od nich saldo są ukryte zgodnie z dostępem tego konta.
+        </p>
+      )}
 
       {loading || !dane ? (
         <div className="grid place-items-center py-12"><Spinner className="h-6 w-6 text-muted" /></div>
@@ -131,7 +140,7 @@ export default function Zeszyt({ readOnly = false, endpoint = '/zeszyt' }) {
                       <button onClick={() => setRozwiniete((s) => new Set([...s, d.data]))} className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[11px] font-semibold text-mint"><Icon name="plus" className="h-3 w-3" /> dodaj</button>
                     )}
                   </div>
-                  <span className="text-sm"><span className="text-muted">STAN </span><span className="font-mono font-bold text-mint">{zl(d.stan)}</span></span>
+                  <span className="text-sm"><span className="text-muted">STAN </span><span className="font-mono font-bold text-mint">{saldo(d.stan)}</span></span>
                 </div>
 
                 {open && (

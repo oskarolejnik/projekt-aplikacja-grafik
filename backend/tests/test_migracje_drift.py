@@ -16,6 +16,7 @@ BACKEND = Path(__file__).resolve().parent.parent
 _TABELE = [
     "lokal_config", "wyjatki_kalendarza", "godziny_otwarcia", "stoliki", "kombinacje_stolow",
     "terminy", "profile_gosci", "rejestracje_lokalu", "lista_oczekujacych",
+    "users",
 ]
 
 

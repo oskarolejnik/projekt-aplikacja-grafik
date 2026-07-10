@@ -42,7 +42,7 @@ router = APIRouter()
 def me_uprawnienia(user: models.User = Depends(get_current_user)):
     """Granularne uprawnienia zalogowanego użytkownika (RBAC) — do sterowania UI.
     Krytyczny enforcement po stronie API dalej robi middleware role_guard."""
-    return {"rola": user.rola, "uprawnienia": uprawnienia.uprawnienia(user.rola)}
+    return {"rola": user.rola, "uprawnienia": uprawnienia.efektywne(user)}
 
 
 # --- Samoobsługa: dyspozycyjność zalogowanego pracownika ---
