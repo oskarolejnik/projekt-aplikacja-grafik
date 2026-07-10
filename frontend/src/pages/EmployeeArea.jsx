@@ -19,8 +19,8 @@ import TechZamowienia from '../components/tabs/TechZamowienia'
 
 const LAST_SEEN_KEY = 'grafik_ostatni_grafik'
 
-// Powłoka obszaru pracownika: wspólny nagłówek + przełącznik dwóch widoków
-// („Moja dyspozycyjność" / „Mój grafik"), powiadomienia i przycisk push. Mobile-first.
+// Powłoka obszaru pracownika: najpierw odpowiedź na „kiedy pracuję?”, potem
+// bieżące informacje i dopiero zadania okazjonalne. Mobile-first.
 export default function EmployeeArea() {
   const { user, logout } = useAuth()
   const { biezacy } = useData()
@@ -29,13 +29,13 @@ export default function EmployeeArea() {
   const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: bez Dyspozycyjności
   const jestTechniczny = user?.dzial === 'techniczny'  // techniczni: Sprzątanie + Godziny (bez grafiku/dyspo)
   const jestSprzataczka = !!user?.sprzataczka          // sprzątaczka: dodatkowo zakładka Zamówienia
-  const [widok, setWidok] = useState(jestTechniczny ? 'sprzatanie' : jestKuchnia ? 'grafik' : 'dyspozycyjnosc')
+  const [widok, setWidok] = useState(jestTechniczny ? 'sprzatanie' : 'grafik')
   const [nowyGrafik, setNowyGrafik] = useState(false)
   const [nieprzeczytaneOgl, setNieprzeczytaneOgl] = useState(0)
 
   const imie = user?.imie || user?.login
 
-  // Licznik nieprzeczytanych ogłoszeń → odznaka na zakładce „Ogłoszenia".
+  // Licznik nieprzeczytanych ogłoszeń → odznaka przy skrócie w nagłówku.
   useEffect(() => {
     api('/me/ogloszenia').then((r) => setNieprzeczytaneOgl(r.nieprzeczytane || 0)).catch(() => {})
   }, [])
@@ -84,6 +84,25 @@ export default function EmployeeArea() {
         <div className="flex items-center gap-2">
           <PushButton />
           <button
+            type="button"
+            onClick={() => zmienWidok('ogloszenia')}
+            aria-label={nieprzeczytaneOgl > 0
+              ? `Ogłoszenia, ${nieprzeczytaneOgl} nieprzeczytane`
+              : 'Ogłoszenia'}
+            aria-current={widok === 'ogloszenia' ? 'page' : undefined}
+            className={`relative grid min-h-11 min-w-11 place-items-center rounded-xl border transition active:scale-[0.98] ${
+              widok === 'ogloszenia'
+                ? 'border-mint/50 bg-mint/15 text-mint'
+                : 'border-line bg-white/[0.04] text-muted hover:text-ink'
+            }`}
+          >
+            <Icon name="megaphone" className="h-5 w-5" />
+            {nieprzeczytaneOgl > 0 && (
+              <span aria-hidden className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />
+            )}
+          </button>
+          <button
+            type="button"
             onClick={logout}
             className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
           >
@@ -94,40 +113,38 @@ export default function EmployeeArea() {
       </header>
 
       <main className="relative z-10 mx-auto w-full max-w-3xl px-4 py-6 pb-safe md:py-10">
-        {/* Nawigacja zakładek — przewijany pasek. Kuchnia: 4 (Grafik, Godziny, Rezerwacje,
-            Imprezy). Obsługa: 5 (Dyspo + te same co kuchnia). Techniczni: Sprzątanie + Godziny.
-            Rezerwacje i Imprezy są wspólne (bez danych klienta). */}
-        <div className="mb-6 flex gap-2 overflow-x-auto pb-1">
+        {/* Nawigacja: najczęstsze pytania najpierw; ogłoszenia są pod skrótem w nagłówku.
+            Rezerwacje i imprezy zostają dostępne pracownikowi, lecz nie konkurują z grafikiem. */}
+        <nav aria-label="Widoki pracownika" className="mb-6 flex gap-2 overflow-x-auto pb-1">
           {(jestTechniczny
             ? [
                 { value: 'sprzatanie', label: 'Sprzątanie' },
                 ...(jestSprzataczka ? [{ value: 'zamowienia', label: 'Zamówienia' }] : []),
                 { value: 'godziny', label: 'Godziny' },
-                { value: 'ogloszenia', label: 'Ogłoszenia', badge: nieprzeczytaneOgl > 0 },
               ]
             : jestKuchnia
             ? [
                 { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
-                { value: 'gielda', label: 'Giełda' },
                 { value: 'godziny', label: 'Godziny' },
+                { value: 'gielda', label: 'Giełda' },
                 { value: 'rezerwacje', label: 'Rezerwacje' },
                 { value: 'imprezy', label: 'Imprezy' },
-                { value: 'ogloszenia', label: 'Ogłoszenia', badge: nieprzeczytaneOgl > 0 },
               ]
             : [
-                { value: 'dyspozycyjnosc', label: 'Dyspo' },
                 { value: 'grafik', label: 'Grafik', badge: nowyGrafik },
-                { value: 'gielda', label: 'Giełda' },
                 { value: 'godziny', label: 'Godziny' },
+                { value: 'dyspozycyjnosc', label: 'Dyspo' },
+                { value: 'gielda', label: 'Giełda' },
                 { value: 'rezerwacje', label: 'Rezerwacje' },
                 { value: 'imprezy', label: 'Imprezy' },
-                { value: 'ogloszenia', label: 'Ogłoszenia', badge: nieprzeczytaneOgl > 0 },
               ]
           ).map((t) => (
             <button
+              type="button"
               key={t.value}
               onClick={() => zmienWidok(t.value)}
-              className={`relative shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
+              aria-current={widok === t.value ? 'page' : undefined}
+              className={`relative min-h-11 shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
                 widok === t.value ? 'bg-mint text-bg' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
               }`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -136,7 +153,7 @@ export default function EmployeeArea() {
               {t.badge && <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
             </button>
           ))}
-        </div>
+        </nav>
 
         {/* Treść zakładki: reveal na czystym CSS (kompozytor; brak rAF-stuttera). */}
         <div key={widok} className="animate-tab-in">
