@@ -6,6 +6,7 @@ import { ToastProvider, useToast } from './Toast'
 
 afterEach(() => {
   cleanup()
+  document.body.style.overflow = ''
   vi.restoreAllMocks()
 })
 
@@ -122,6 +123,22 @@ describe('ToastProvider / useToast', () => {
     expect(potwierdz).toHaveFocus()
     fireEvent.keyDown(window, { key: 'Tab' })
     expect(anuluj).toHaveFocus()
+  })
+
+  it('blokuje tło i oddaje fokus do kontrolki wywołującej po Escape', async () => {
+    render_()
+    const trigger = screen.getByRole('button', { name: 'pokaz-confirm' })
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    await screen.findByRole('alertdialog')
+    expect(document.body.style.overflow).toBe('hidden')
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(document.body.style.overflow).toBe('')
+    expect(trigger).toHaveFocus()
   })
 
   it('confirm() → „Anuluj" rozwiązuje Promise wartością false', async () => {

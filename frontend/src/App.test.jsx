@@ -52,6 +52,13 @@ describe('App — powierzchnie ładowane na żądanie', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Ładowanie aplikacji')
   })
 
+  it('podczas sprawdzania sesji pokazuje stabilny szkielet zamiast pustego ekranu', () => {
+    authState.loading = true
+    render(<App />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Sprawdzanie sesji')
+  })
+
   it.each([
     ['admin', 'Panel administratora'],
     ['szef', 'Panel managera'],

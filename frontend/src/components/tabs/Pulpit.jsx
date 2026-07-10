@@ -1,15 +1,26 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Card, SectionHeader } from '../ui/Card'
+import { Card } from '../ui/Card'
 import { Spinner } from '../ui/Spinner'
 import { Banner } from '../ui/Banner'
 import { Button } from '../ui/Button'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
+import { warsawDateISO } from '../../lib/date'
 
 // Pulpit właściciela — KPI lokalu w okresie. Czysta agregacja z /api/pulpit (zero zapisu).
 const zl = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'
-const dzisISO = () => new Date().toISOString().slice(0, 10)
-const isoMinus = (days) => { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10) }
+const przesunISO = (iso, days) => {
+  const [year, month, day] = iso.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+const dzisISO = () => warsawDateISO()
+const isoMinus = (days) => przesunISO(dzisISO(), -days)
+const dataKrotko = (iso) => new Intl.DateTimeFormat('pl-PL', {
+  day: '2-digit',
+  month: '2-digit',
+}).format(new Date(`${iso}T12:00:00`))
 
 const STATUS_L = { rezerwacja: 'Rezerwacje', potwierdzona: 'Potwierdzone', odbyla: 'Odbyłe', no_show: 'No-show', odwolana: 'Odwołane' }
 
@@ -79,20 +90,21 @@ export default function Pulpit() {
         setP(pul.value)
         loadedRef.current = true
         setUpdatedAt(new Date())
+
+        if (al.status === 'fulfilled') setAlerty(al.value)
+        else {
+          setAlerty(null)
+          braki.push('alertów kasowych')
+        }
+        if (ob.status === 'fulfilled') setObsada(ob.value)
+        else {
+          setObsada(null)
+          braki.push('alertów obsady')
+        }
+        setPartialError(braki)
       } else {
         setError(pul.reason?.message || 'Nie udało się pobrać danych pulpitu.')
       }
-      if (al.status === 'fulfilled') setAlerty(al.value)
-      else {
-        setAlerty(null)
-        braki.push('alertów kasowych')
-      }
-      if (ob.status === 'fulfilled') setObsada(ob.value)
-      else {
-        setObsada(null)
-        braki.push('alertów obsady')
-      }
-      setPartialError(braki)
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false)
@@ -104,16 +116,26 @@ export default function Pulpit() {
   useEffect(() => () => { requestIdRef.current += 1 }, [])
 
   const maxPrzychod = p ? Math.max(1, ...p.przychod.dzienny.map((d) => d.przychod)) : 1
+  const alertyObsady = obsada?.alerty || []
+  const alertyKasy = alerty?.alerty || []
+  const liczbaAlertowKasy = p
+    ? Math.max(alertyKasy.length, Number(p.alerty_kasowe?.dni_z_anomalia) || 0)
+    : 0
+  const liczbaDecyzji = alertyObsady.length + liczbaAlertowKasy
+  const decyzjeNiepelne = partialError.length > 0
 
   return (
-    <Card className="p-6 sm:p-8">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <SectionHeader title="Pulpit właściciela" subtitle="Kluczowe wskaźniki lokalu w wybranym okresie." />
-        <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-sm sm:w-auto">
-          <input aria-label="Początek okresu" type="date" value={start} onChange={(e) => setStart(e.target.value)} className="min-h-11 min-w-0 rounded-lg border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
-          <span className="text-muted">—</span>
-          <input aria-label="Koniec okresu" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="min-h-11 min-w-0 rounded-lg border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
-        </div>
+    <section aria-label="Pulpit właściciela" className="space-y-5">
+      <div className="flex flex-col gap-4 rounded-2xl border border-line bg-white/[0.025] p-4 sm:flex-row sm:items-center sm:justify-between">
+        <p className="max-w-xl text-sm leading-relaxed text-muted">
+          Najpierw sprawy wymagające reakcji, potem wynik okresu.
+        </p>
+        <fieldset className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-sm sm:w-auto">
+          <legend className="sr-only">Zakres danych pulpitu</legend>
+          <input aria-label="Początek okresu" type="date" value={start} onChange={(e) => setStart(e.target.value)} className="min-h-11 min-w-0 rounded-xl border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
+          <span aria-hidden="true" className="text-muted">do</span>
+          <input aria-label="Koniec okresu" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="min-h-11 min-w-0 rounded-xl border border-line bg-surface px-3 py-1.5 text-ink outline-none focus:border-mint" />
+        </fieldset>
       </div>
 
       {loading && !p ? (
@@ -157,17 +179,89 @@ export default function Pulpit() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <Kpi label="Przychód" value={zl(p.przychod.razem)} sub={`śr. ${zl(p.przychod.srednia_dzienna)}/dzień`} icon="download" accent="text-mint" />
-            <Kpi label="Rozchód" value={zl(p.rozchod.razem)} icon="upload" />
-            <Kpi label="Saldo kasy" value={zl(p.saldo_kasy)} sub="stan gotówki narastająco" icon="clipboard" />
-            <Kpi label="Ruch (rachunki)" value={p.ruch.rachunki} sub={`śr. ${p.ruch.srednia_dzienna}/dzień`} icon="pin" />
-            <Kpi label="Rezerwacje" value={p.rezerwacje.razem} sub={`${p.rezerwacje.goscie} gości`} icon="calendar" />
-            <Kpi label={`Koszt pracy (${String(p.koszt_pracy_miesiac.miesiac).padStart(2, '0')}.${p.koszt_pracy_miesiac.rok})`} value={zl(p.koszt_pracy_miesiac.kwota)} icon="users" />
-            <Kpi label="Alerty kasowe" value={p.alerty_kasowe.dni_z_anomalia}
-                 sub={p.alerty_kasowe.suma_braki < 0 ? `braki ${zl(p.alerty_kasowe.suma_braki)}` : 'wszystko się zgadza'}
-                 icon="warning" accent={p.alerty_kasowe.dni_z_anomalia > 0 ? 'text-danger' : 'text-ink'} />
-          </div>
+          <section aria-labelledby="pulpit-decyzje-title" className={`rounded-2xl border p-5 sm:p-6 ${
+            liczbaDecyzji > 0
+              ? 'border-lemon/25 bg-lemon/[0.035]'
+              : decyzjeNiepelne
+                ? 'border-line bg-white/[0.025]'
+                : 'border-success/20 bg-success/[0.035]'
+          }`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 id="pulpit-decyzje-title" className="font-display text-lg font-semibold text-ink">Wymaga decyzji</h3>
+                <p className="mt-1 text-sm text-muted">
+                  {liczbaDecyzji > 0
+                    ? `${liczbaDecyzji} ${liczbaDecyzji === 1 ? 'sprawa' : liczbaDecyzji < 5 ? 'sprawy' : 'spraw'} do sprawdzenia.${decyzjeNiepelne ? ' Lista może być niepełna.' : ''}`
+                    : decyzjeNiepelne
+                      ? 'Nie udało się potwierdzić pełnego stanu alertów.'
+                      : 'Na teraz wszystko jest pod kontrolą.'}
+                </p>
+              </div>
+              <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                liczbaDecyzji > 0
+                  ? 'bg-lemon/15 text-lemon'
+                  : decyzjeNiepelne
+                    ? 'bg-white/[0.06] text-muted'
+                    : 'bg-success/15 text-success'
+              }`}>
+                {liczbaDecyzji > 0 ? 'Do działania' : decyzjeNiepelne ? 'Niepełne dane' : 'Bez pilnych spraw'}
+              </span>
+            </div>
+
+            {liczbaDecyzji > 0 && (
+              <div className="mt-5 space-y-2">
+                {alertyObsady.length > 0 && (
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Obsada · najbliższe {obsada?.dni || 14} dni
+                  </p>
+                )}
+                {alertyObsady.map((a, i) => (
+                  <div key={`obsada-${a.data}-${a.stanowisko}-${i}`} className="flex flex-col gap-1 rounded-xl bg-black/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                    <span className="text-ink"><time dateTime={a.data} className="font-semibold">{a.data}</time> · {a.stanowisko}</span>
+                    <span className="text-muted">Obsadzone {a.obsadzone}/{a.wymagane}. <b className="text-lemon">Brakuje {a.brakuje}</b></span>
+                  </div>
+                ))}
+                {liczbaAlertowKasy > 0 && (
+                  <p className={`${alertyObsady.length > 0 ? 'pt-3' : ''} text-xs font-semibold uppercase tracking-wide text-muted`}>
+                    Kasa · wybrany okres
+                  </p>
+                )}
+                {alertyKasy.map((a) => (
+                  <div key={`kasa-${a.data}`} className="rounded-xl bg-black/10 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-ink">Kasa · <time dateTime={a.data}>{a.data}</time></span>
+                      <span className="text-xs text-muted">{a.status}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                      {a.problemy.map((problem, i) => (
+                        <span key={i} className={`rounded-lg px-2 py-1 ${problem.roznica < 0 ? 'bg-danger/15 text-danger' : 'bg-lemon/15 text-lemon'}`}>
+                          {problem.typ === 'karty' ? 'Karty' : 'Kasa'}: {zl(problem.roznica)}{problem.etykieta ? ` · ${problem.etykieta}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {alertyKasy.length === 0 && liczbaAlertowKasy > 0 && (
+                  <div className="rounded-xl bg-black/10 px-4 py-3 text-sm text-muted">
+                    <b className="text-ink">Kasa:</b> {liczbaAlertowKasy} {liczbaAlertowKasy === 1 ? 'dzień wymaga' : 'dni wymagają'} sprawdzenia
+                    {p.alerty_kasowe.suma_braki < 0 ? `, braki ${zl(p.alerty_kasowe.suma_braki)}` : '.'}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section aria-labelledby="pulpit-wynik-title">
+            <h3 id="pulpit-wynik-title" className="mb-3 font-display text-lg font-semibold text-ink">Wynik okresu</h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Kpi label="Przychód" value={zl(p.przychod.razem)} sub={`śr. ${zl(p.przychod.srednia_dzienna)}/dzień`} icon="download" accent="text-mint" />
+              <Kpi label="Rozchód" value={zl(p.rozchod.razem)} icon="upload" />
+              <Kpi label="Saldo kasy" value={zl(p.saldo_kasy)} sub="stan gotówki narastająco" icon="clipboard" />
+              <Kpi label="Ruch (rachunki)" value={p.ruch.rachunki} sub={`śr. ${p.ruch.srednia_dzienna}/dzień`} icon="pin" />
+              <Kpi label="Rezerwacje" value={p.rezerwacje.razem} sub={`${p.rezerwacje.goscie} gości`} icon="calendar" />
+              <Kpi label={`Koszt pracy (${String(p.koszt_pracy_miesiac.miesiac).padStart(2, '0')}.${p.koszt_pracy_miesiac.rok})`} value={zl(p.koszt_pracy_miesiac.kwota)} icon="users" />
+            </div>
+          </section>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[['Gotówka', 'gotowka'], ['Karta', 'karta'], ['Przelew', 'przelew'],
@@ -180,16 +274,35 @@ export default function Pulpit() {
           </div>
 
           {p.przychod.dzienny.length > 0 && (
-            <div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Przychód dzienny</div>
-              <div className="flex h-40 items-end gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-3">
+            <figure aria-labelledby="pulpit-przychod-dzienny-title">
+              <figcaption id="pulpit-przychod-dzienny-title" className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Przychód dzienny
+              </figcaption>
+              <div
+                aria-hidden="true"
+                className="flex h-40 items-end gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-3"
+              >
                 {p.przychod.dzienny.map((d) => (
-                  <div key={d.data} className="flex min-w-[8px] flex-1 flex-col items-center" title={`${d.data}: ${zl(d.przychod)}`}>
+                  <div key={d.data} className="flex min-w-[8px] flex-1 flex-col items-center">
                     <div className="w-full rounded-t bg-mint" style={{ height: `${Math.round((d.przychod / maxPrzychod) * 100)}%`, minHeight: d.przychod > 0 ? '4px' : '0' }} />
                   </div>
                 ))}
               </div>
-            </div>
+              <details className="group mt-2">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-muted transition hover:bg-white/[0.04] hover:text-ink [&::-webkit-details-marker]:hidden">
+                  <Icon name="chevronDown" className="h-4 w-4 transition-transform duration-150 ease-snap group-open:rotate-180" />
+                  Pokaż wartości dzienne
+                </summary>
+                <ul className="mt-1 grid gap-x-6 rounded-xl bg-white/[0.02] px-4 py-2 sm:grid-cols-2" aria-label="Wartości przychodu według dni">
+                  {p.przychod.dzienny.map((d) => (
+                    <li key={d.data} className="flex items-center justify-between gap-4 border-b border-line/60 py-2 text-sm last:border-0">
+                      <time dateTime={d.data} className="text-muted">{dataKrotko(d.data)}</time>
+                      <span className="font-semibold tabular-nums text-ink">{zl(d.przychod)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </figure>
           )}
 
           {p.rezerwacje.razem > 0 && (
@@ -203,51 +316,12 @@ export default function Pulpit() {
             </div>
           )}
 
-          {obsada?.alerty?.length > 0 && (
-            <div>
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                <Icon name="warning" className="h-4 w-4 text-lemon" /> Niedobór obsady (najbliższe {obsada.dni} dni) — brakuje {obsada.razem_brakuje} os.
-              </div>
-              <div className="space-y-2">
-                {obsada.alerty.map((a, i) => (
-                  <div key={i} className="flex items-center justify-between gap-3 rounded-xl border border-lemon/30 bg-lemon/[0.05] px-4 py-2.5 text-sm">
-                    <span className="text-ink"><b>{a.data}</b> · {a.stanowisko}</span>
-                    <span className="text-muted">obsadzone {a.obsadzone}/{a.wymagane} · <b className="text-lemon">brakuje {a.brakuje}</b></span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {alerty && alerty.alerty.length > 0 && (
-            <div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Anomalie kasowe (różnice w rozliczeniu)</div>
-              <div className="space-y-2">
-                {alerty.alerty.map((a) => (
-                  <div key={a.data} className="rounded-xl border border-danger/30 bg-danger/5 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-ink">{a.data}</span>
-                      <span className="text-xs text-muted">{a.status}</span>
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-2 text-xs">
-                      {a.problemy.map((pr, i) => (
-                        <span key={i} className={`rounded-full px-2 py-0.5 ${pr.roznica < 0 ? 'bg-danger/15 text-danger' : 'bg-lemon/15 text-lemon'}`}>
-                          {pr.typ === 'karty' ? 'Karty' : 'Kasa'}: {zl(pr.roznica)}{pr.etykieta ? ` · ${pr.etykieta}` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="rounded-2xl border border-line bg-surface-2 p-5">
             <div className="text-xs font-semibold uppercase tracking-wide text-muted">Wynik poglądowy (przychód − rozchód − koszt pracy)</div>
             <div className={`font-display text-2xl font-bold ${p.wynik >= 0 ? 'text-mint' : 'text-danger'}`}>{zl(p.wynik)}</div>
           </div>
         </div>
       )}
-    </Card>
+    </section>
   )
 }

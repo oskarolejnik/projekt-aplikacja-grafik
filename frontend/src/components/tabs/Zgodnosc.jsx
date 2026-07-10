@@ -109,7 +109,7 @@ export default function Zgodnosc() {
   const lokal = dokumenty.filter((d) => d.pracownik_id == null)
   const uwaga = dokumenty.filter((d) => d.status !== 'ok').length
   const dlaPracownika = form && form.pracownik_id !== ''
-  const fld = 'w-full min-w-0 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted/50 focus:border-mint/60 focus:ring-2 focus:ring-mint/20'
+  const fld = 'w-full min-w-0 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted focus:border-mint/60 focus:ring-2 focus:ring-mint/20'
 
   const Wiersz = ({ d }) => (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line py-3 last:border-b-0">

@@ -106,15 +106,27 @@ describe('Dashboard', () => {
   it('wyłącza fokus w zamkniętym menu mobilnym', () => {
     const { container } = render(<Dashboard />)
     const drawer = container.querySelector('aside[aria-label="Menu administracyjne"]')
+    const trigger = screen.getByRole('button', { name: 'Otwórz menu' })
 
     expect(drawer).toHaveAttribute('aria-hidden', 'true')
     expect(drawer).toHaveAttribute('inert')
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Otwórz menu' }))
+    trigger.focus()
+    fireEvent.click(trigger)
 
     expect(drawer).toHaveAttribute('aria-hidden', 'false')
     expect(drawer).not.toHaveAttribute('inert')
-    expect(screen.getByRole('button', { name: 'Zamknij menu' })).toBeInTheDocument()
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    expect(drawer).toHaveAttribute('role', 'dialog')
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(screen.getByRole('button', { name: 'Zamknij menu' })).toHaveFocus()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(drawer).toHaveAttribute('aria-hidden', 'true')
+    expect(document.body.style.overflow).toBe('')
+    expect(trigger).toHaveFocus()
   })
 
   it('prowadzi z alertu płatności bezpośrednio do planu', async () => {

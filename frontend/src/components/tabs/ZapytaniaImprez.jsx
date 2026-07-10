@@ -87,7 +87,7 @@ export default function ZapytaniaImprez() {
             onChange={(e) => setTresc(e.target.value)}
             rows={6}
             placeholder={PRZYKLAD}
-            className="w-full min-w-0 resize-y rounded-xl border border-line bg-surface-2 px-4 py-3 text-sm leading-relaxed text-ink outline-none transition placeholder:text-muted/50 focus:border-mint/60 focus:ring-2 focus:ring-mint/20"
+            className="w-full min-w-0 resize-y rounded-xl border border-line bg-surface-2 px-4 py-3 text-sm leading-relaxed text-ink outline-none transition placeholder:text-muted focus:border-mint/60 focus:ring-2 focus:ring-mint/20"
           />
         </label>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">

@@ -4,7 +4,6 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { BrandingProvider } from './context/BrandingContext'
 import { DataProvider } from './context/DataContext'
 import { ToastProvider } from './components/ui/Toast'
-import { Spinner } from './components/ui/Spinner'
 import { LazyErrorBoundary, LazyFallback } from './components/ui/LazyFallback'
 import { api, getApiBase } from './lib/api'
 import { jestNatywna } from './lib/platforma'
@@ -50,12 +49,8 @@ function Routed() {
     api('/onboarding/status').then((s) => setOnboarding(!!s.potrzebny)).catch(() => setOnboarding(false))
   }, [loading, user])
 
-  const spinner = (
-    <div className="grid min-h-dvh place-items-center bg-bg">
-      <Spinner className="h-7 w-7 text-muted" />
-    </div>
-  )
-  if (loading) return spinner
+  const loadingShell = <LazyFallback label="Sprawdzanie sesji" />
+  if (loading) return loadingShell
   if (!user) {
     // Nie blokujemy publicznej strony sprzedażowej spinnerem na czas /onboarding/status —
     // domyślnie (status jeszcze null) renderujemy landing OD RAZU. Kreator pokazujemy dopiero,
@@ -64,7 +59,7 @@ function Routed() {
     if (isOnboardingParam) {
       // Jawne wejście do kreatora (?onboarding, np. ze strony ?start). Na zajętej
       // instancji kreator działa w trybie PODGLĄDU (demo) — kroki bez zapisu.
-      if (onboarding === null) return spinner
+      if (onboarding === null) return <LazyFallback label="Sprawdzanie konfiguracji lokalu" />
       return <Onboarding demo />
     }
     if (isStart) return <Start />                 // ?start → kreator (świeża instancja) albo jasny rozjazd

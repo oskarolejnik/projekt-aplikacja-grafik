@@ -72,17 +72,19 @@ function KuchniaGodziny() {
       <SectionHeader title="Godziny kuchni" subtitle="Przepracowane godziny pracowników kuchni (RCP). Bez kwot.">
         <div className="flex items-center gap-3">
           <button
+            type="button"
             onClick={() => przesunMiesiac(-1)}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
+            className="grid min-h-11 min-w-11 place-items-center rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98]"
             aria-label="Poprzedni miesiąc"
           >
             <Icon name="chevronDown" className="h-4 w-4 rotate-90" />
           </button>
           <span className="min-w-[150px] text-center font-display text-base font-bold capitalize text-ink">{etykietaMiesiaca}</span>
           <button
+            type="button"
             onClick={() => przesunMiesiac(1)}
             disabled={naPrzyszlosc}
-            className="rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
+            className="grid min-h-11 min-w-11 place-items-center rounded-xl border border-line bg-white/[0.04] p-2.5 text-muted transition hover:text-ink active:scale-[0.98] disabled:opacity-30"
             aria-label="Następny miesiąc"
           >
             <Icon name="chevronDown" className="h-4 w-4 -rotate-90" />
@@ -100,10 +102,7 @@ function KuchniaGodziny() {
           {dane?.na_zmianie?.length > 0 && (
             <div className="mb-6 rounded-xl border border-mint/30 bg-mint/[0.05] p-4">
               <div className="mb-3 flex items-center gap-2">
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-75" />
-                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-mint" />
-                </span>
+                  <span aria-hidden className="h-2.5 w-2.5 rounded-full bg-mint" />
                 <span className="text-sm font-bold text-ink">Na zmianie teraz ({dane.na_zmianie.length})</span>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -187,8 +186,10 @@ export default function SzefKuchniView() {
         <div className="flex items-center gap-2">
           <PushButton />
           <button
+            type="button"
             onClick={logout}
-            className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
+            aria-label="Wyloguj"
+            className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink active:scale-[0.98]"
           >
             <Icon name="logout" className="h-4 w-4" />
             <span className="hidden sm:inline">Wyloguj</span>
@@ -198,12 +199,14 @@ export default function SzefKuchniView() {
 
       <main className="relative z-10 mx-auto w-full max-w-5xl px-4 py-6 pb-safe md:py-10">
         {/* Przewijany pasek zakładek */}
-        <div className="mb-6 flex gap-2 overflow-x-auto pb-1">
+        <nav aria-label="Widoki szefa kuchni" className="mb-6 flex gap-2 overflow-x-auto pb-1">
           {TABY.map((t) => (
             <button
               key={t.value}
+              type="button"
               onClick={() => setWidok(t.value)}
-              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
+              aria-current={widok === t.value ? 'page' : undefined}
+              className={`min-h-11 shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
                 widok === t.value ? 'bg-mint text-bg' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
               }`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -211,7 +214,7 @@ export default function SzefKuchniView() {
               {t.label}
             </button>
           ))}
-        </div>
+        </nav>
 
         <div key={widok} className="animate-tab-in">
           {widok === 'grafik' && <SzefKuchniGrafik />}

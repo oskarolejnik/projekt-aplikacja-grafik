@@ -174,7 +174,7 @@ export default function EmployeeHours() {
                   <input
                     type="number" min="1" value={kwotaZal} onChange={(e) => setKwotaZal(e.target.value)}
                     placeholder="kwota zaliczki (zł)"
-                    className="w-full min-w-0 flex-1 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted/50 focus:border-mint/60 focus:ring-2 focus:ring-mint/20"
+                    className="w-full min-w-0 flex-1 rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted focus:border-mint/60 focus:ring-2 focus:ring-mint/20"
                   />
                   <button type="button" onClick={zlozWniosek} disabled={busyZal}
                           className="min-h-11 w-full shrink-0 rounded-xl bg-mint px-4 py-2.5 text-sm font-semibold text-bg transition hover:brightness-105 active:scale-[0.98] disabled:opacity-50 sm:w-auto">

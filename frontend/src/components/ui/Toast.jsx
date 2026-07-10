@@ -20,6 +20,7 @@ export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([])
   const [confirmState, setConfirmState] = useState(null)
   const resolver = useRef(null)
+  const returnFocusRef = useRef(null)
   const confirmBtnRef = useRef(null)
   const cancelBtnRef = useRef(null)
   const confirmTitleId = useId()
@@ -67,6 +68,9 @@ export function ToastProvider({ children }) {
 
   const confirm = useCallback((message, opts = {}) => {
     return new Promise((resolve) => {
+      returnFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
       resolver.current = resolve
       setConfirmState({
         message,
@@ -91,6 +95,8 @@ export function ToastProvider({ children }) {
     if (!confirmState) return
     const cancel = cancelBtnRef.current
     const confirm = confirmBtnRef.current
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     ;(confirmState.danger ? cancel : confirm)?.focus()
     const onKey = (e) => {
       if (e.key === 'Escape') closeConfirm(false)
@@ -105,7 +111,13 @@ export function ToastProvider({ children }) {
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+      const returnTarget = returnFocusRef.current
+      returnFocusRef.current = null
+      if (returnTarget?.isConnected) returnTarget.focus()
+    }
   }, [confirmState, closeConfirm])
 
   const toastStyle = {
@@ -166,23 +178,24 @@ export function ToastProvider({ children }) {
         {confirmState && (
           <div className="fixed inset-0 z-[1100] grid place-items-center p-4">
             <motion.div
+              aria-hidden="true"
               className="absolute inset-0 bg-black/60 backdrop-blur-md"
               onClick={() => closeConfirm(false)}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.25, ease: 'circOut' }}
+              transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
             />
             <motion.div
               role="alertdialog"
               aria-modal="true"
               aria-labelledby={confirmTitleId}
               aria-describedby={confirmMessageId}
-              className="card relative z-10 w-full max-w-sm p-6"
+              className="material relative z-10 w-full max-w-sm p-6"
               initial={{ opacity: 0, scale: 0.98, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 10 }}
-              transition={{ duration: 0.3, ease: 'circOut' }}
+              transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
             >
               <h3 id={confirmTitleId} className="font-display text-lg font-bold text-ink">{confirmState.title}</h3>
               <p id={confirmMessageId} className="mt-2 text-sm leading-relaxed text-muted">{confirmState.message}</p>

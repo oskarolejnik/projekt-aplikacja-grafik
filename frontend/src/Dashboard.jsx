@@ -1,5 +1,5 @@
 /* global __BUILD_TIME__ */
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from './lib/icons'
 import { Logo } from './components/Logo'
 import { PushButton } from './components/PushButton'
@@ -118,6 +118,8 @@ export default function Dashboard() {
   const [flotaEnabled, setFlotaEnabled] = useState(false)   // panel operatora tylko na matce
   const [sub, setSub] = useState(null)                      // stan subskrypcji (baner grace/blokada)
   const [lazyAttempt, setLazyAttempt] = useState(0)
+  const mobileMenuButtonRef = useRef(null)
+  const mobileDrawerRef = useRef(null)
   // Konfiguracja lokalu — chowamy zakładki wyłączonych modułów (np. modul_rezerwacje).
   useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
   useEffect(() => { api('/subskrypcja').then(setSub).catch(() => {}) }, [])
@@ -134,14 +136,70 @@ export default function Dashboard() {
   const Active = useMemo(() => lazy(current.load), [current.load, lazyAttempt])
   const aktywnaKat = current.kat
 
-  // Escape zamyka dropdown i szufladę.
+  // Escape zamyka dropdown. Mobilna szuflada ma własny kontrakt fokusu poniżej.
   useEffect(() => {
-    const esc = (e) => { if (e.key === 'Escape') { setOpenCat(null); setMobileOpen(false) } }
+    const esc = (e) => { if (e.key === 'Escape') setOpenCat(null) }
     document.addEventListener('keydown', esc)
     return () => document.removeEventListener('keydown', esc)
   }, [])
   // Otwarta szuflada startuje z rozwiniętą kategorią bieżącej zakładki.
   useEffect(() => { if (mobileOpen) setOpenAcc(aktywnaKat) }, [mobileOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Szuflada działa jak modal: blokuje tło, utrzymuje fokus, zamyka się przez Escape
+  // i oddaje fokus do przycisku menu. Ten sam przewidywalny kontrakt ma arkusz pracownika.
+  useEffect(() => {
+    if (!mobileOpen) return
+    const drawer = mobileDrawerRef.current
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const focusable = () => Array.from(drawer?.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) || [])
+    focusable()[0]?.focus()
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMobileOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const elements = focusable()
+      if (elements.length === 0) return
+      const first = elements[0]
+      const last = elements[elements.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+      if (mobileMenuButtonRef.current?.isConnected) mobileMenuButtonRef.current.focus()
+    }
+  }, [mobileOpen])
+
+  // Po przejściu do układu desktopowego ukryta szuflada nie może nadal blokować strony.
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const desktop = window.matchMedia('(min-width: 1024px)')
+    const onBreakpoint = (event) => {
+      if (event.matches) setMobileOpen(false)
+    }
+    if (desktop.addEventListener) desktop.addEventListener('change', onBreakpoint)
+    else desktop.addListener?.(onBreakpoint)
+    return () => {
+      if (desktop.removeEventListener) desktop.removeEventListener('change', onBreakpoint)
+      else desktop.removeListener?.(onBreakpoint)
+    }
+  }, [])
 
   const select = (id, section) => {
     if (id === 'ustawienia' && section) setSettingsSection(section)
@@ -158,10 +216,13 @@ export default function Dashboard() {
       {/* ── Górny pasek: logo · kategorie (desktop) · profil ── */}
       <header className="relative z-40 flex shrink-0 items-center gap-3 border-b border-white/[0.06] bg-bg/55 px-4 pt-[calc(env(safe-area-inset-top)+0.7rem)] pb-[0.7rem] backdrop-blur-xl md:px-6">
         <button
+          ref={mobileMenuButtonRef}
           type="button"
           onClick={() => setMobileOpen(true)}
           className="min-h-11 min-w-11 rounded-lg border border-line p-2 text-muted transition hover:text-ink lg:hidden"
           aria-label="Otwórz menu"
+          aria-expanded={mobileOpen}
+          aria-controls="dashboard-mobile-menu"
         >
           <Icon name="menu" className="h-5 w-5" />
         </button>
@@ -250,8 +311,12 @@ export default function Dashboard() {
       </header>
 
       {/* ── Szuflada mobile: kategorie jako akordeony ── */}
-      {mobileOpen && <div className="fixed inset-0 z-30 animate-overlay-in bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
+      {mobileOpen && <div aria-hidden="true" className="fixed inset-0 z-30 animate-overlay-in bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
       <aside
+        ref={mobileDrawerRef}
+        id="dashboard-mobile-menu"
+        role="dialog"
+        aria-modal={mobileOpen ? 'true' : undefined}
         aria-label="Menu administracyjne"
         aria-hidden={!mobileOpen}
         inert={mobileOpen ? undefined : ''}

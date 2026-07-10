@@ -82,7 +82,7 @@ export default function PortalImprezy() {
 
   const t = dane.termin
   const wplacone = (t.zadatek || 0) + (t.zadatek_kp || 0)
-  const fld = 'rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted/50 focus:border-mint/60 focus:ring-2 focus:ring-mint/20'
+  const fld = 'rounded-xl border border-line bg-surface-2 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted focus:border-mint/60 focus:ring-2 focus:ring-mint/20'
 
   return (
     <div className="relative min-h-dvh bg-bg px-4 py-8">
