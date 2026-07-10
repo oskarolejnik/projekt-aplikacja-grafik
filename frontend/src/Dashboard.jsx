@@ -93,6 +93,15 @@ const TABS = [
   { id: 'ustawienia', label: 'Ustawienia lokalu', icon: 'office', kat: 'ustawienia', title: 'Ustawienia lokalu', load: loadUstawienia },
 ]
 
+const TAB_BY_ID = new Map(TABS.map((tab) => [tab.id, tab]))
+
+// Prefetch dopiero po realnym sygnale intencji. Dynamic import i runtime cache
+// pobierają wyłącznie widok wskazany kursorem albo fokusem klawiatury.
+function prefetchTab(id) {
+  const request = TAB_BY_ID.get(id)?.load?.()
+  request?.catch(() => {}) // klik nadal pokaże odzyskiwalny LazyErrorBoundary
+}
+
 // Znacznik wersji = czas builda (wstrzykiwany przez Vite define). Fallback „dev" w trybie
 // deweloperskim — żeby brak define nie wywalał komponentu.
 const BUILD = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'dev'
@@ -192,6 +201,8 @@ export default function Dashboard() {
                           type="button"
                           key={t.id}
                           onClick={() => select(t.id)}
+                          onPointerEnter={() => prefetchTab(t.id)}
+                          onFocus={() => prefetchTab(t.id)}
                           aria-current={on ? 'page' : undefined}
                           className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition ${
                             on ? 'bg-mint/[0.12] font-semibold text-mint' : 'text-muted hover:bg-white/[0.05] hover:text-ink'
@@ -216,6 +227,8 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => select('ustawienia')}
+            onPointerEnter={() => prefetchTab('ustawienia')}
+            onFocus={() => prefetchTab('ustawienia')}
             aria-label="Ustawienia lokalu"
             title="Ustawienia lokalu"
             className={`hidden min-h-11 min-w-11 rounded-xl border border-line p-2 transition lg:block ${
@@ -281,6 +294,8 @@ export default function Dashboard() {
                           type="button"
                           key={t.id}
                           onClick={() => select(t.id)}
+                          onPointerEnter={() => prefetchTab(t.id)}
+                          onFocus={() => prefetchTab(t.id)}
                           aria-current={on ? 'page' : undefined}
                           className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
                             on ? 'bg-mint/[0.12] font-semibold text-mint' : 'text-muted hover:bg-white/[0.05] hover:text-ink'
@@ -301,6 +316,8 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => select('ustawienia')}
+            onPointerEnter={() => prefetchTab('ustawienia')}
+            onFocus={() => prefetchTab('ustawienia')}
             aria-current={active === 'ustawienia' ? 'page' : undefined}
             className={`flex min-h-11 w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
               active === 'ustawienia' ? 'bg-mint/[0.12] text-mint' : 'text-ink hover:bg-white/[0.03]'
@@ -330,7 +347,13 @@ export default function Dashboard() {
                 ? `Faktura po terminie — opłać subskrypcję do ${sub.data_grace}, inaczej instancja przejdzie w tryb tylko do odczytu.`
                 : 'Subskrypcja nieopłacona — instancja działa w trybie tylko do odczytu. Opłać, aby odblokować zapisy.'}
             </span>
-            <button type="button" onClick={() => select('ustawienia', 'plan')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => select('ustawienia', 'plan')}
+              onPointerEnter={() => prefetchTab('ustawienia')}
+              onFocus={() => prefetchTab('ustawienia')}
+              className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold"
+            >
               Przejdź do subskrypcji
             </button>
           </div>
@@ -344,7 +367,13 @@ export default function Dashboard() {
                 ? <> Po trialu plan włączy się automatycznie{sub.karta_ostatnie4 ? ` (karta •••• ${sub.karta_ostatnie4})` : ''} — anuluj wcześniej, jeśli nie chcesz kontynuować.</>
                 : ' Masz pełny dostęp do wszystkich modułów; wybierz plan, żeby ich nie stracić po trialu.'}
             </span>
-            <button type="button" onClick={() => select('ustawienia', 'plan')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => select('ustawienia', 'plan')}
+              onPointerEnter={() => prefetchTab('ustawienia')}
+              onFocus={() => prefetchTab('ustawienia')}
+              className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold"
+            >
               {sub.trial_auto_obciazenie ? 'Zarządzaj' : 'Wybierz plan'}
             </button>
           </div>

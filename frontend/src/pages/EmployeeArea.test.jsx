@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock, logoutMock, userState } = vi.hoisted(() => ({
+const { apiMock, confirmMock, logoutMock, userState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
+  confirmMock: vi.fn(),
   logoutMock: vi.fn(),
   userState: { current: { rola: 'employee', imie: 'Ania', login: 'ania' } },
 }))
@@ -15,11 +16,18 @@ vi.mock('../context/AuthContext', () => ({
 }))
 vi.mock('../context/DataContext', () => ({ useData: () => ({ biezacy: '2026-07-06|2026-07-12' }) }))
 vi.mock('../context/BrandingContext', () => ({ useBranding: () => ({ nazwa_lokalu: 'Testowy lokal' }) }))
-vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }))
+vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: vi.fn(), confirm: confirmMock }) }))
 vi.mock('../components/Logo', () => ({ Logo: () => <span>Logo</span> }))
 vi.mock('../components/PushButton', () => ({ PushButton: () => <button type="button">Push</button> }))
 vi.mock('../lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
-vi.mock('./EmployeeAvailability', () => ({ default: () => <div>Dyspozycyjność pracownika</div> }))
+vi.mock('./EmployeeAvailability', () => ({
+  default: ({ onDirtyChange }) => (
+    <div>
+      Dyspozycyjność pracownika
+      <button type="button" onClick={() => onDirtyChange(true)}>Wprowadź niezapisane zmiany</button>
+    </div>
+  ),
+}))
 vi.mock('./EmployeeSchedule', () => ({ default: () => <div>Grafik pracownika</div> }))
 vi.mock('./EmployeeHours', () => ({ default: () => <div>Godziny pracownika</div> }))
 vi.mock('./EmployeeGielda', () => ({ default: () => <div>Giełda pracownika</div> }))
@@ -36,6 +44,7 @@ const originalMatchMedia = window.matchMedia
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  confirmMock.mockResolvedValue(true)
   userState.current = { rola: 'employee', imie: 'Ania', login: 'ania' }
   Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: originalMatchMedia })
 })
@@ -48,7 +57,7 @@ describe('EmployeeArea', () => {
     expect(screen.getByText('Grafik pracownika')).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: 'Widoki pracownika' })
     expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Grafik', 'Godziny', 'Dyspo', 'Giełda', 'Rezerwacje', 'Imprezy',
+      'Grafik', 'Godziny', 'Dyspozycyjność', 'Giełda', 'Rezerwacje', 'Imprezy',
     ])
     expect(within(nav).getByRole('button', { name: 'Grafik' })).toHaveAttribute('aria-current', 'page')
     expect(within(nav).getByRole('button', { name: 'Rezerwacje' })).toBeInTheDocument()
@@ -78,6 +87,28 @@ describe('EmployeeArea', () => {
     expect(screen.getByText('Rezerwacje pracownika')).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: 'Więcej widoków' })).not.toBeInTheDocument()
     expect(wiecej).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('nie gubi dyspozycyjności przy przypadkowej zmianie widoku', async () => {
+    apiMock.mockResolvedValue({ nieprzeczytane: 0, opublikowany: false })
+    confirmMock.mockResolvedValue(false)
+    render(<EmployeeArea />)
+    const nav = screen.getByRole('navigation', { name: 'Widoki pracownika' })
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'Dyspozycyjność' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Wprowadź niezapisane zmiany' }))
+    fireEvent.click(within(nav).getByRole('button', { name: 'Grafik' }))
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining('Masz niezapisane zmiany'),
+      expect.objectContaining({ confirmText: 'Opuść bez zapisu' }),
+    ))
+    expect(screen.getByText('Dyspozycyjność pracownika')).toBeInTheDocument()
+    expect(within(nav).getByRole('button', { name: 'Dyspozycyjność' })).toHaveAttribute('aria-current', 'page')
+
+    confirmMock.mockResolvedValue(true)
+    fireEvent.click(within(nav).getByRole('button', { name: 'Grafik' }))
+    expect(await screen.findByText('Grafik pracownika')).toBeInTheDocument()
   })
 
   it('zamyka mobilny arkusz przez Escape i oddaje fokus do Więcej', () => {
@@ -147,7 +178,7 @@ describe('EmployeeArea', () => {
     expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
       'Grafik', 'Godziny', 'Giełda', 'Rezerwacje', 'Imprezy',
     ])
-    expect(within(nav).queryByRole('button', { name: 'Dyspo' })).not.toBeInTheDocument()
+    expect(within(nav).queryByRole('button', { name: 'Dyspozycyjność' })).not.toBeInTheDocument()
     expect(within(screen.getByRole('navigation', { name: 'Główna nawigacja mobilna' }))
       .getAllByRole('button').map((button) => button.textContent)).toEqual([
       'Grafik', 'Godziny', 'Giełda', 'Więcej',

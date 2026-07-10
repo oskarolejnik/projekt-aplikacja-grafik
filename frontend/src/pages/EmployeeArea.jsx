@@ -25,13 +25,14 @@ export default function EmployeeArea() {
   const { user, logout } = useAuth()
   const { biezacy } = useData()
   const { nazwa_lokalu } = useBranding()
-  const { toast } = useToast()
+  const { toast, confirm } = useToast()
   const jestKuchnia = user?.rola === 'kuchnia'   // kuchnia: bez Dyspozycyjności
   const jestTechniczny = user?.dzial === 'techniczny'  // techniczni: Sprzątanie + Godziny (bez grafiku/dyspo)
   const jestSprzataczka = !!user?.sprzataczka          // sprzątaczka: dodatkowo zakładka Zamówienia
   const [widok, setWidok] = useState(jestTechniczny ? 'sprzatanie' : 'grafik')
   const [nowyGrafik, setNowyGrafik] = useState(false)
   const [nieprzeczytaneOgl, setNieprzeczytaneOgl] = useState(0)
+  const [availabilityDirty, setAvailabilityDirty] = useState(false)
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   const mobileMoreButtonRef = useRef(null)
   const mobileMoreDialogRef = useRef(null)
@@ -55,7 +56,7 @@ export default function EmployeeArea() {
     : [
         { value: 'grafik', label: 'Grafik', icon: 'calendar', badge: nowyGrafik },
         { value: 'godziny', label: 'Godziny', icon: 'clock' },
-        { value: 'dyspozycyjnosc', label: 'Dyspo', icon: 'check' },
+        { value: 'dyspozycyjnosc', label: 'Dyspozycyjność', mobileLabel: 'Dyspo', icon: 'check' },
         { value: 'gielda', label: 'Giełda', icon: 'users' },
         { value: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar' },
         { value: 'imprezy', label: 'Imprezy', icon: 'bell' },
@@ -148,10 +149,24 @@ export default function EmployeeArea() {
     }
   }, [mobileMoreOpen])
 
-  const zmienWidok = (v) => {
+  const confirmDiscardAvailability = async () => {
+    if (widok !== 'dyspozycyjnosc' || !availabilityDirty) return true
+    return confirm('Masz niezapisane zmiany dyspozycyjności. Opuścić ten widok i je odrzucić?', {
+      title: 'Niezapisane zmiany',
+      confirmText: 'Opuść bez zapisu',
+    })
+  }
+
+  const zmienWidok = async (v) => {
+    if (v !== widok && widok === 'dyspozycyjnosc' && availabilityDirty && !(await confirmDiscardAvailability())) return
     setWidok(v)
     setMobileMoreOpen(false)
     if (v === 'grafik') setNowyGrafik(false)
+  }
+
+  const wyloguj = async () => {
+    if (widok === 'dyspozycyjnosc' && availabilityDirty && !(await confirmDiscardAvailability())) return
+    logout()
   }
 
   return (
@@ -187,9 +202,9 @@ export default function EmployeeArea() {
           </button>
           <button
             type="button"
-            onClick={logout}
+            onClick={wyloguj}
             aria-label="Wyloguj"
-            className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
+            className="flex min-h-11 min-w-11 items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
           >
             <Icon name="logout" className="h-4 w-4" />
             <span className="hidden sm:inline">Wyloguj</span>
@@ -220,7 +235,7 @@ export default function EmployeeArea() {
 
         {/* Treść zakładki: reveal na czystym CSS (kompozytor; brak rAF-stuttera). */}
         <div key={widok} className="animate-tab-in">
-          {widok === 'dyspozycyjnosc' && <EmployeeAvailability />}
+          {widok === 'dyspozycyjnosc' && <EmployeeAvailability onDirtyChange={setAvailabilityDirty} />}
           {widok === 'grafik' && <EmployeeSchedule onSeen={oznaczWidziany} />}
           {widok === 'gielda' && <EmployeeGielda />}
           {widok === 'ogloszenia' && <EmployeeOgloszenia onZmiana={setNieprzeczytaneOgl} />}
@@ -252,7 +267,7 @@ export default function EmployeeArea() {
                 <Icon name={t.icon} className="h-5 w-5" />
                 {t.badge && <span aria-hidden className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
               </span>
-              <span>{t.label}</span>
+              <span>{t.mobileLabel || t.label}</span>
             </button>
           ))}
           {pozostaleWidoki.length > 0 && (

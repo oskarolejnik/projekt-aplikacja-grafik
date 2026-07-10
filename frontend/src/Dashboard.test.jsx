@@ -8,7 +8,7 @@ import Dashboard from './Dashboard'
 const { apiMock, logoutMock, dashboardState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   logoutMock: vi.fn(),
-  dashboardState: { pulpitError: false },
+  dashboardState: { pulpitError: false, pracownicyLoads: 0 },
 }))
 
 vi.mock('./lib/api', () => ({ api: apiMock }))
@@ -30,6 +30,10 @@ vi.mock('./components/tabs/Pulpit', () => ({
 vi.mock('./components/tabs/Ustawienia', () => ({
   default: ({ initialSection }) => <div>Ustawienia: {initialSection}</div>,
 }))
+vi.mock('./components/tabs/Pracownicy', () => {
+  dashboardState.pracownicyLoads += 1
+  return { default: () => <div>Treść pracowników</div> }
+})
 
 const CONFIG = {
   modul_rezerwacje: true,
@@ -46,12 +50,27 @@ describe('Dashboard', () => {
     apiMock.mockReset()
     logoutMock.mockReset()
     dashboardState.pulpitError = false
+    dashboardState.pracownicyLoads = 0
     apiMock.mockImplementation((path) => {
       if (path === '/lokal/config') return Promise.resolve(CONFIG)
       if (path === '/subskrypcja') return Promise.resolve({ stan: 'aktywna' })
       if (path === '/flota') return Promise.resolve({ enabled: false })
       return Promise.resolve({})
     })
+  })
+
+  it('prefetchuje tylko zakładkę wskazaną fokusem, bez przełączania widoku', async () => {
+    render(<Dashboard />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Zespół' }))
+    const pracownicy = screen.getByRole('button', { name: 'Pracownicy' })
+    expect(dashboardState.pracownicyLoads).toBe(0)
+
+    fireEvent.focus(pracownicy)
+
+    await waitFor(() => expect(dashboardState.pracownicyLoads).toBe(1))
+    expect(screen.queryByText('Treść pracowników')).not.toBeInTheDocument()
+    expect(screen.getByText('Treść pulpitu')).toBeInTheDocument()
   })
 
   it('pokazuje tylko bieżące ścieżki rezerwacji i imprez', async () => {

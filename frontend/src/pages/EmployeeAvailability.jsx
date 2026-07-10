@@ -3,6 +3,8 @@ import { useData } from '../context/DataContext'
 import { useToast } from '../components/ui/Toast'
 import { WeekSelect } from '../components/ui/WeekSelect'
 import { Card } from '../components/ui/Card'
+import { Banner } from '../components/ui/Banner'
+import { Button } from '../components/ui/Button'
 import { Hint } from '../components/ui/Hint'
 import { Spinner } from '../components/ui/Spinner'
 import { Icon } from '../lib/icons'
@@ -19,19 +21,30 @@ const fmtGodzina = (g) => {
   return m ? `${m[1].padStart(2, '0')}:${m[2]}` : String(g)
 }
 
+const snapshotDni = (items) => JSON.stringify(items.map(({ data, dostepnosc, od, do: godzDo }) => ({
+  data,
+  dostepnosc,
+  od,
+  do: godzDo,
+})))
+
 // Treść widoku „Moja dyspozycyjność" (nagłówek/powłokę dostarcza EmployeeArea).
 // Domyślnie pokazujemy tydzień PRZYSZŁY (dyspozycje składa się z wyprzedzeniem).
 // Zapisaną dyspozycyjność wczytujemy z serwera, więc pracownik widzi, co zaznaczył,
 // i może to zmieniać aż do publikacji grafiku (potem widok jest zablokowany).
-export default function EmployeeAvailability() {
+export default function EmployeeAvailability({ onDirtyChange }) {
   const { week, przyszly, setWeek } = useData()
-  const { toast } = useToast()
+  const { confirm } = useToast()
   const [dni, setDni] = useState([])
   const [imprezyMap, setImprezyMap] = useState({})
   const [rezerwacjeMap, setRezerwacjeMap] = useState({})
   const [zablokowane, setZablokowane] = useState(false) // grafik opublikowany -> read-only
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState(null)
+  const [savedSnapshot, setSavedSnapshot] = useState(null)
+  const [savedAt, setSavedAt] = useState(null)
+  const [saveError, setSaveError] = useState(null)
   const reqId = useRef(0) // chroni przed wyścigiem: stare ładowanie nie nadpisze nowego (zmiana tygodnia)
 
   // Na wejściu w widok ustaw tydzień przyszły (raz, przy montażu).
@@ -45,6 +58,9 @@ export default function EmployeeAvailability() {
   const load = useCallback(async () => {
     const id = ++reqId.current
     setLoading(true)
+    setLoadError(null)
+    setSaveError(null)
+    setSavedAt(null)
     try {
       const [existing, imprezy, rez, grafik] = await Promise.all([
         api(`/me/dyspozycje?start=${s}&end=${e}`),
@@ -56,37 +72,73 @@ export default function EmployeeAvailability() {
       setZablokowane(!!grafik?.opublikowany)
       setRezerwacjeMap(Object.fromEntries((rez?.dni || []).map((d) => [d.data, d])))
       const map = Object.fromEntries(existing.map((d) => [d.data, d]))
-      setDni(
-        daty.map((d) => {
-          const rec = map[d]
-          return {
-            data: d,
-            dostepnosc: rec ? rec.dostepnosc : true, // domyślnie dostępny
-            od: rec && rec.godz_od ? hhmm(rec.godz_od) : '',
-            do: rec && rec.godz_do ? hhmm(rec.godz_do) : '',
-          }
-        }),
-      )
+      const nextDni = daty.map((d) => {
+        const rec = map[d]
+        return {
+          data: d,
+          dostepnosc: rec ? rec.dostepnosc : true, // domyślnie dostępny
+          od: rec && rec.godz_od ? hhmm(rec.godz_od) : '',
+          do: rec && rec.godz_do ? hhmm(rec.godz_do) : '',
+        }
+      })
+      setDni(nextDni)
+      // Brak choć jednego rekordu oznacza, że widoczne domyślne wartości
+      // nie zostały jeszcze jawnie zapisane dla całego tygodnia.
+      setSavedSnapshot(daty.every((d) => map[d]) ? snapshotDni(nextDni) : null)
       const im = {}
       imprezy.forEach((x) => {
         ;(im[x.data] = im[x.data] || []).push(x)
       })
       setImprezyMap(im)
     } catch (err) {
-      if (id === reqId.current) toast(err.message, 'error')
+      if (id === reqId.current) setLoadError(err.message || 'Nie udało się wczytać dyspozycyjności.')
     } finally {
       if (id === reqId.current) setLoading(false)
     }
-  }, [s, e, daty, toast])
+  }, [s, e, daty])
 
   useEffect(() => {
     load()
   }, [load])
 
-  const setDay = (idx, patch) => setDni((cur) => cur.map((d, i) => (i === idx ? { ...d, ...patch } : d)))
+  const currentSnapshot = useMemo(() => snapshotDni(dni), [dni])
+  const dirty = !loading && !loadError && !zablokowane && currentSnapshot !== savedSnapshot
+
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+    return () => {
+      if (dirty) onDirtyChange?.(false)
+    }
+  }, [dirty, onDirtyChange])
+
+  useEffect(() => {
+    if (!dirty) return undefined
+    const warnBeforeUnload = (event) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [dirty])
+
+  const confirmWeekChange = useCallback(async () => {
+    if (!dirty) return true
+    return confirm('Masz niezapisane zmiany dyspozycyjności. Zmienić okres i je odrzucić?', {
+      title: 'Niezapisane zmiany',
+      confirmText: 'Zmień okres',
+    })
+  }, [dirty, confirm])
+
+  const setDay = (idx, patch) => {
+    setSaveError(null)
+    setDni((cur) => cur.map((d, i) => (i === idx ? { ...d, ...patch } : d)))
+  }
 
   const zapisz = async () => {
+    if (saving || loading || loadError || !dirty) return
+    const submittedSnapshot = currentSnapshot
     setSaving(true)
+    setSaveError(null)
     try {
       await api('/me/dyspozycje', 'PUT', {
         dyspozycje: dni.map((d) => ({
@@ -96,14 +148,16 @@ export default function EmployeeAvailability() {
           godz_do: d.dostepnosc && d.do ? `${d.do}:00` : null,
         })),
       })
-      toast('Zapisano Twoją dyspozycyjność.', 'success')
+      setSavedSnapshot(submittedSnapshot)
+      setSavedAt(new Date())
     } catch (err) {
       // 409 = grafik opublikowany w międzyczasie -> zablokuj i przeładuj zapisany stan.
       if (/opublikowan/i.test(err.message)) {
         setZablokowane(true)
         load()
+      } else {
+        setSaveError(err.message || 'Nie udało się zapisać dyspozycyjności.')
       }
-      toast(err.message, 'error')
     } finally {
       setSaving(false)
     }
@@ -113,7 +167,7 @@ export default function EmployeeAvailability() {
     <>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-1.5">
-          <WeekSelect />
+          <WeekSelect beforeChange={confirmWeekChange} />
           <Hint>Zaznacz dni, w których możesz pracować. Domyślnie „Cały dzień” — wyłącz przełącznik, aby podać godziny od–do.</Hint>
         </div>
       </div>
@@ -126,7 +180,16 @@ export default function EmployeeAvailability() {
       )}
 
       <Card className="p-6">
-        {loading ? (
+        {loadError ? (
+          <div role="alert">
+            <Banner variant="danger">
+              <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+                <span>Nie udało się wczytać dyspozycyjności. {loadError}</span>
+                <Button size="sm" variant="ghost" onClick={load}>Spróbuj wczytać ponownie</Button>
+              </div>
+            </Banner>
+          </div>
+        ) : loading ? (
           <div className="grid place-items-center py-16">
             <Spinner className="h-6 w-6 text-muted" />
           </div>
@@ -245,15 +308,39 @@ export default function EmployeeAvailability() {
           </div>
         )}
 
-        {!zablokowane && (
-          <button
-            onClick={zapisz}
-            disabled={saving || loading}
-            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-cream px-6 py-3.5 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98] disabled:opacity-60"
-          >
-            {saving ? <Spinner className="h-4 w-4" /> : <Icon name="check" className="h-4 w-4" />}
-            {saving ? 'Zapisywanie…' : 'Zapisz dyspozycyjność'}
-          </button>
+        {!zablokowane && !loadError && (
+          <>
+            {saveError && (
+              <div className="mt-6" role="alert">
+                <Banner variant="danger">Nie udało się zapisać zmian. {saveError}</Banner>
+              </div>
+            )}
+            <div className={`${saveError ? 'mt-3' : 'mt-6'} flex flex-col gap-3 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between`}>
+              <span className={`text-sm ${saveError ? 'text-danger' : dirty ? 'text-lemon' : 'text-muted'}`} aria-live="polite">
+                {loading
+                  ? 'Wczytuję zapisaną dyspozycyjność…'
+                  : saving
+                    ? 'Zapisuję zmiany dla wybranego tygodnia…'
+                    : saveError
+                      ? 'Zmiany nadal są na ekranie — możesz spróbować ponownie.'
+                      : dirty
+                        ? 'Masz niezapisane zmiany.'
+                        : savedAt
+                          ? `Zapisano o ${savedAt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
+                          : 'Dyspozycyjność jest zapisana.'}
+              </span>
+              <Button
+                onClick={zapisz}
+                disabled={loading || !dirty}
+                loading={saving}
+                loadingLabel="Zapisywanie…"
+                className="w-full sm:w-auto"
+              >
+                <Icon name={saveError ? 'refresh' : 'check'} className="h-4 w-4" />
+                {saveError ? 'Spróbuj ponownie' : 'Zapisz dyspozycyjność'}
+              </Button>
+            </div>
+          </>
         )}
       </Card>
 

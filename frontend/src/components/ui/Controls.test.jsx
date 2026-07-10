@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 
 const { setWeekMock } = vi.hoisted(() => ({ setWeekMock: vi.fn() }))
@@ -54,6 +54,27 @@ describe('wspólne kontrolki', () => {
     expect(select.className).toContain('sm:min-w-[280px]')
     fireEvent.change(select, { target: { value: '2026-07-15|2026-07-21' } })
     expect(setWeekMock).toHaveBeenCalledWith('2026-07-15|2026-07-21')
+  })
+
+  it('WeekSelect pozwala widokowi zatrzymać zmianę okresu z niezapisanym formularzem', async () => {
+    const beforeChange = vi.fn().mockResolvedValue(false)
+    render(<WeekSelect beforeChange={beforeChange} />)
+    const select = screen.getByRole('combobox', { name: 'Wybierz okres grafiku' })
+
+    fireEvent.change(select, { target: { value: '2026-07-15|2026-07-21' } })
+
+    await waitFor(() => expect(beforeChange).toHaveBeenCalledWith(
+      '2026-07-15|2026-07-21',
+      '2026-07-08|2026-07-14',
+    ))
+    expect(setWeekMock).not.toHaveBeenCalled()
+    expect(select).not.toBeDisabled()
+  })
+
+  it('WeekSelect może zablokować zmianę okresu podczas trwającej operacji', () => {
+    render(<WeekSelect disabled />)
+
+    expect(screen.getByRole('combobox', { name: 'Wybierz okres grafiku' })).toBeDisabled()
   })
 
   it('Hint ma 44-pikselowy cel i łączy przycisk z podpowiedzią', () => {

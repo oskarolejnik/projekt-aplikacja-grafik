@@ -25,19 +25,26 @@ export default function Grafik() {
   const [dyspozycje, setDyspozycje] = useState([])
   const [wymagania, setWymagania] = useState([])
   const [loading, setLoading] = useState(true)
-  const [processing, setProcessing] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [processing, setProcessing] = useState(null) // 'auto' | 'clear'
   const [publikacja, setPublikacja] = useState({ opublikowany: false, opublikowano_at: null })
-  const [publikowanie, setPublikowanie] = useState(false)
+  const [publikowanie, setPublikowanie] = useState(null) // 'normal' | 'silent' | 'unpublish'
   const [dzial, setDzial] = useState('obsluga')    // który grafik: 'obsluga' | 'kuchnia'
   const [kuchniaId, setKuchniaId] = useState(null) // id ukrytego stanowiska kuchni
   const [modal, setModal] = useState(null)         // edytor komórki gęstej tabeli: { dt, p }
   const [mForm, setMForm] = useState({ stanowisko_id: '', godz_od: '', rewir: '', zamyka: false, zamyka_rewir: false, rozlicza_imprize: false })
+  const [modalAction, setModalAction] = useState(null) // 'save' | 'delete'
+  const [modalError, setModalError] = useState(null)
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ silent = false, failureMessage = '' } = {}) => {
     const id = ++reqId.current
     const [s, e] = week.split('|')
-    setLoading(true)
+    if (silent) setRefreshing(true)
+    else {
+      setLoading(true)
+      setRefreshing(false)
+    }
     try {
       await reloadDicts()
       const [pr, dy, wy, pub] = await Promise.all([
@@ -51,10 +58,15 @@ export default function Grafik() {
       setDyspozycje(dy)
       setWymagania(wy)
       setPublikacja(pub)
+      return true
     } catch (err) {
-      if (id === reqId.current) toast(err.message, 'error')
+      if (id === reqId.current) toast(failureMessage || err.message, 'error')
+      return false
     } finally {
-      if (id === reqId.current) setLoading(false)
+      if (id === reqId.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [week, reloadDicts, toast])
 
@@ -116,32 +128,39 @@ export default function Grafik() {
   )
 
   const autoAssign = async () => {
-    setProcessing(true)
+    if (processing || publikowanie) return
+    setProcessing('auto')
     try {
       await api(`/auto-assign?start=${s}&end=${e}`, 'POST')
-      await load()
+      const refreshed = await load({ silent: true, failureMessage: 'Auto-przydział zapisano, ale nie udało się odświeżyć tabeli.' })
       // Auto-przydział TYLKO szkicuje: backend cofa publikację, więc obsługa nie widzi zmian,
       // dopóki nie klikniesz „Udostępnij pracownikom".
-      toast('Auto-przydział gotowy — grafik jest szkicem. Sprawdź i opublikuj.', 'success')
+      if (refreshed) toast('Auto-przydział gotowy — grafik jest szkicem. Sprawdź i opublikuj.', 'success')
     } catch (err) {
       toast(err.message, 'error')
     } finally {
-      setProcessing(false)
+      setProcessing(null)
     }
   }
   const wyczysc = async () => {
     const ktory = jestKuchnia ? 'kuchni' : 'obsługi'
     if (!(await confirm(`Wyczyścić grafik ${ktory} na ten tydzień? Drugi grafik (${jestKuchnia ? 'obsługi' : 'kuchni'}) zostaje nietknięty.`, { title: 'Wyczyść tabelę', confirmText: 'Wyczyść' }))) return
+    if (processing || publikowanie) return
+    setProcessing('clear')
     try {
       await api(`/przydzialy?start=${s}&end=${e}&dzial=${jestKuchnia ? 'kuchnia' : 'obsluga'}`, 'DELETE')
-      load()
+      const refreshed = await load({ silent: true, failureMessage: 'Grafik wyczyszczono, ale nie udało się odświeżyć tabeli.' })
+      if (refreshed) toast(`Wyczyszczono grafik ${ktory}.`, 'success')
     } catch (err) {
       toast(err.message, 'error')
+    } finally {
+      setProcessing(null)
     }
   }
 
   const udostepnij = async (cisza = false) => {
-    setPublikowanie(true)
+    if (publikowanie || processing) return
+    setPublikowanie(cisza ? 'silent' : 'normal')
     try {
       const r = await api(`/grafik/publikuj?start=${s}&end=${e}${cisza ? '&cisza=true' : ''}`, 'POST')
       setPublikacja({ opublikowany: true, opublikowano_at: r.opublikowano_at })
@@ -154,13 +173,14 @@ export default function Grafik() {
     } catch (err) {
       toast(err.message, 'error')
     } finally {
-      setPublikowanie(false)
+      setPublikowanie(null)
     }
   }
 
   const cofnijPublikacje = async () => {
     if (!(await confirm('Cofnąć publikację grafiku na ten tydzień? Pracownicy przestaną go widzieć.', { title: 'Cofnij publikację', confirmText: 'Cofnij publikację' }))) return
-    setPublikowanie(true)
+    if (publikowanie || processing) return
+    setPublikowanie('unpublish')
     try {
       await api(`/grafik/publikuj?start=${s}&end=${e}`, 'DELETE')
       setPublikacja({ opublikowany: false, opublikowano_at: null })
@@ -168,7 +188,7 @@ export default function Grafik() {
     } catch (err) {
       toast(err.message, 'error')
     } finally {
-      setPublikowanie(false)
+      setPublikowanie(null)
     }
   }
 
@@ -200,15 +220,20 @@ export default function Grafik() {
         zamyka: false, zamyka_rewir: false, rozlicza_imprize: false,
       })
     }
+    setModalError(null)
+    setModalAction(null)
     setModal({ dt, p })
   }
 
   const zapiszModal = async () => {
+    if (modalAction) return
     const { dt, p } = modal
     const a = (przyMap[`${dt}_${p.id}`] || [])[0]
     const sid = +mForm.stanowisko_id || (jestKuchnia ? kuchniaId : 0)
     if (!sid) { toast('Wybierz stanowisko.', 'error'); return }
     const body = { data: dt, stanowisko_id: sid, pracownik_id: p.id, godz_od: mForm.godz_od ? `${mForm.godz_od}:00` : null, rewir: (mForm.rewir || '').trim() || null, zamyka_rewir: !!mForm.zamyka_rewir, rozlicza_imprize: !!mForm.rozlicza_imprize }
+    setModalAction('save')
+    setModalError(null)
     try {
       let aid = a?.id
       if (a) await api(`/przydzialy/${a.id}`, 'PUT', body)
@@ -217,16 +242,40 @@ export default function Grafik() {
       if (!jestKuchnia && aid != null && !!mForm.zamyka !== !!(a && a.zamyka)) {
         await api(`/przydzialy/${aid}/zamyka`, 'PUT', { reczny: !!mForm.zamyka })
       }
-      setModal(null); load()
-    } catch (err) { toast(err.message, 'error') }
+      setModal(null)
+      await load({ silent: true, failureMessage: 'Zmianę zapisano, ale nie udało się odświeżyć tabeli.' })
+    } catch (err) {
+      setModalError(err.message || 'Nie udało się zapisać zmiany.')
+    } finally {
+      setModalAction(null)
+    }
   }
 
   const usunModal = async () => {
+    if (modalAction) return
     const { dt, p } = modal
     const a = (przyMap[`${dt}_${p.id}`] || [])[0]
     if (!a) { setModal(null); return }
-    try { await api(`/przydzialy/${a.id}`, 'DELETE'); setModal(null); load() } catch (err) { toast(err.message, 'error') }
+    setModalAction('delete')
+    setModalError(null)
+    try {
+      await api(`/przydzialy/${a.id}`, 'DELETE')
+      setModal(null)
+      await load({ silent: true, failureMessage: 'Zmianę usunięto, ale nie udało się odświeżyć tabeli.' })
+    } catch (err) {
+      setModalError(err.message || 'Nie udało się usunąć zmiany.')
+    } finally {
+      setModalAction(null)
+    }
   }
+
+  const zamknijModal = () => {
+    if (modalAction) return
+    setModal(null)
+    setModalError(null)
+  }
+
+  const actionBusy = loading || !!processing || !!publikowanie || !!modalAction || refreshing
 
   return (
     <div className="space-y-6">
@@ -236,9 +285,10 @@ export default function Grafik() {
           <button
             key={v}
             onClick={() => { setDzial(v); setModal(null) }}
+            disabled={actionBusy}
             className={`rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
               dzial === v ? 'bg-mint text-bg' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
-            }`}
+            } disabled:cursor-wait disabled:opacity-50`}
           >
             {label}
           </button>
@@ -246,43 +296,72 @@ export default function Grafik() {
       </div>
 
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <WeekSelect />
+        <WeekSelect disabled={actionBusy} />
         <div className="flex flex-wrap items-center gap-3">
           {!jestKuchnia && (
-            <Button variant="ghost" onClick={autoAssign} disabled={processing}>
-              {processing ? <Spinner className="h-4 w-4" /> : <Icon name="robot" className="h-5 w-5" />}
+            <Button
+              variant="ghost"
+              onClick={autoAssign}
+              disabled={actionBusy}
+              loading={processing === 'auto'}
+              loadingLabel="Układam grafik…"
+            >
+              <Icon name="robot" className="h-5 w-5" />
               Auto-przydział AI
             </Button>
           )}
-          <Button variant="ghost" onClick={wyczysc} className="text-danger hover:bg-danger/10">
+          <Button
+            variant="ghost"
+            onClick={wyczysc}
+            disabled={actionBusy}
+            loading={processing === 'clear'}
+            loadingLabel="Czyszczę tabelę…"
+            className="text-danger hover:bg-danger/10"
+          >
             Wyczyść tabelę
           </Button>
-          <Button onClick={() => udostepnij(false)} disabled={publikowanie}>
-            {publikowanie ? <Spinner className="h-4 w-4" /> : <Icon name="bell" className="h-4 w-4" />}
+          <Button
+            onClick={() => udostepnij(false)}
+            disabled={actionBusy}
+            loading={publikowanie === 'normal'}
+            loadingLabel={publikacja.opublikowany ? 'Udostępniam ponownie…' : 'Udostępniam…'}
+          >
+            <Icon name="bell" className="h-4 w-4" />
             {publikacja.opublikowany ? 'Udostępnij ponownie' : 'Udostępnij pracownikom'}
           </Button>
           <Button
             variant="ghost"
             onClick={() => udostepnij(true)}
-            disabled={publikowanie}
+            disabled={actionBusy}
+            loading={publikowanie === 'silent'}
+            loadingLabel="Publikuję po cichu…"
             title="Publikuje bez wysyłania powiadomień push (np. dla starych tygodni)"
           >
             Po cichu
           </Button>
           {publikacja.opublikowany && (
-            <Button variant="ghost" onClick={cofnijPublikacje} disabled={publikowanie} className="text-danger hover:bg-danger/10">
+            <Button
+              variant="ghost"
+              onClick={cofnijPublikacje}
+              disabled={actionBusy}
+              loading={publikowanie === 'unpublish'}
+              loadingLabel="Cofam publikację…"
+              className="text-danger hover:bg-danger/10"
+            >
               Cofnij publikację
             </Button>
           )}
-          <span className={`text-xs font-semibold ${publikacja.opublikowany ? 'text-success' : 'text-muted'}`}>
-            {publikacja.opublikowany
+          <span className={`inline-flex min-h-5 items-center gap-2 text-xs font-semibold ${publikacja.opublikowany ? 'text-success' : 'text-muted'}`} aria-live="polite">
+            {refreshing
+              ? <><Spinner className="h-3.5 w-3.5" /> Aktualizuję tabelę…</>
+              : publikacja.opublikowany
               ? `Opublikowano: ${new Date(publikacja.opublikowano_at).toLocaleString('pl-PL')}`
               : 'Nieopublikowane'}
           </span>
         </div>
       </div>
 
-      {processing && <Banner variant="info">Trwa procesowanie algorytmu auto-przydziału…</Banner>}
+      {processing === 'auto' && <Banner variant="info">Układam propozycję grafiku. Obecna tabela pozostaje widoczna do zakończenia.</Banner>}
 
       {loading ? (
         <div className="grid place-items-center py-16">
@@ -298,7 +377,7 @@ export default function Grafik() {
             Legenda
             <Hint width={280}>Kliknij pole, aby dodać lub zmienić zmianę. Tło: zielone = dostępny (✓), czerwone = nie (✗). 🔑 = zamyka lokal. Miętowo = rewir (Sala/Bar).</Hint>
           </div>
-          <div className="card overflow-auto p-0" style={{ maxHeight: '74vh' }}>
+          <div className="card overflow-auto p-0" style={{ maxHeight: '74vh' }} aria-busy={refreshing}>
             <table className="w-full table-fixed border-separate border-spacing-0">
               <thead>
                 <tr>
@@ -332,41 +411,50 @@ export default function Grafik() {
                       const dys = dysMap[`${dt}_${p.id}`]
                       const sn = a ? (stanMap[a.stanowisko_id]?.nazwa || '?') : ''
                       const pokazRewir = a && a.rewir && /^(sala|bar)/i.test(sn)   // rewir tylko ze stanowisk Sala*/Bar*
+                      const { wd, dm } = dayLabel(dt)
+                      const osoba = `${p.imie} ${p.nazwisko || ''}`.trim()
                       return (
                         <td
                           key={dt}
-                          onClick={() => otworzKomorke(dt, p)}
-                          title="Kliknij, aby dodać / zmienić"
-                          className={`relative cursor-pointer overflow-hidden border-b border-r border-line p-0.5 text-center align-middle transition hover:brightness-150 ${cellBgFor(dt, p)}`}
+                          className="overflow-hidden border-b border-r border-line p-0 text-center align-middle"
                         >
-                          {dys && (
-                            <span
-                              className={`absolute left-0.5 top-0.5 ${dys.dostepnosc ? 'text-success' : 'text-danger'}`}
-                              title={dys.dostepnosc ? (dys.godz_od ? `Dostępny od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny'}
-                            >
-                              <Icon name={dys.dostepnosc ? 'check' : 'close'} className="h-2.5 w-2.5" strokeWidth={3} />
-                            </span>
-                          )}
-                          {a ? (
-                            <div className="px-0.5 py-1 leading-tight">
-                              <div className="flex flex-wrap items-baseline justify-center gap-x-1">
-                                <span className="text-[10px] font-bold text-ink">{sn}</span>
-                                {a.godz_od && <span className="font-mono text-[10px] text-muted">{hhmm(a.godz_od)}</span>}
-                                {!jestKuchnia && a.zamyka && (
-                                  <span title={`zamyka lokal${a.zamyka_reczny ? ' (ręcznie)' : ''}`} className="inline-flex text-lemon"><Icon name="key" className="h-2.5 w-2.5" /></span>
-                                )}
-                                {!jestKuchnia && a.zamyka_rewir && (
-                                  <span title="zamyka rewir" className="inline-flex text-mint"><Icon name="key" className="h-2.5 w-2.5" /></span>
-                                )}
-                                {a.rozlicza_imprize && (
-                                  <span title="rozlicza imprezę" className="text-[10px] font-bold leading-none text-coral">$</span>
-                                )}
+                          <button
+                            type="button"
+                            onClick={() => otworzKomorke(dt, p)}
+                            disabled={actionBusy}
+                            title="Kliknij, aby dodać lub zmienić zmianę"
+                            aria-label={`${a ? 'Edytuj' : 'Dodaj'} zmianę: ${osoba}, ${wd} ${dm}`}
+                            className={`relative min-h-11 w-full overflow-hidden p-0.5 text-center transition hover:brightness-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-mint disabled:cursor-wait ${cellBgFor(dt, p)}`}
+                          >
+                            {dys && (
+                              <span
+                                className={`absolute left-0.5 top-0.5 ${dys.dostepnosc ? 'text-success' : 'text-danger'}`}
+                                title={dys.dostepnosc ? (dys.godz_od ? `Dostępny od ${hhmm(dys.godz_od)}` : 'Dostępny') : 'Niedostępny'}
+                              >
+                                <Icon name={dys.dostepnosc ? 'check' : 'close'} className="h-2.5 w-2.5" strokeWidth={3} />
+                              </span>
+                            )}
+                            {a ? (
+                              <div className="px-0.5 py-1 leading-tight">
+                                <div className="flex flex-wrap items-baseline justify-center gap-x-1">
+                                  <span className="text-[10px] font-bold text-ink">{sn}</span>
+                                  {a.godz_od && <span className="font-mono text-[10px] text-muted">{hhmm(a.godz_od)}</span>}
+                                  {!jestKuchnia && a.zamyka && (
+                                    <span title={`zamyka lokal${a.zamyka_reczny ? ' (ręcznie)' : ''}`} className="inline-flex text-lemon"><Icon name="key" className="h-2.5 w-2.5" /></span>
+                                  )}
+                                  {!jestKuchnia && a.zamyka_rewir && (
+                                    <span title="zamyka rewir" className="inline-flex text-mint"><Icon name="key" className="h-2.5 w-2.5" /></span>
+                                  )}
+                                  {a.rozlicza_imprize && (
+                                    <span title="rozlicza imprezę" className="text-[10px] font-bold leading-none text-coral">$</span>
+                                  )}
+                                </div>
+                                {pokazRewir && <div className="truncate text-[9px] font-semibold text-mint" title={a.rewir}>{a.rewir}</div>}
                               </div>
-                              {pokazRewir && <div className="truncate text-[9px] font-semibold text-mint" title={a.rewir}>{a.rewir}</div>}
-                            </div>
-                          ) : (
-                            <span className="text-base font-bold text-muted/25">+</span>
-                          )}
+                            ) : (
+                              <span className="text-base font-bold text-muted/25">+</span>
+                            )}
+                          </button>
                         </td>
                       )
                     })}
@@ -383,14 +471,28 @@ export default function Grafik() {
         const dys = dysMap[`${modal.dt}_${modal.p.id}`]
         const { wd, dm } = dayLabel(modal.dt)
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setModal(null)}>
-            <div className="material w-full max-w-sm p-5 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={zamknijModal}>
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="grafik-shift-dialog-title"
+              className="material w-full max-w-sm p-5 shadow-2xl"
+              onClick={(ev) => ev.stopPropagation()}
+            >
               <div className="mb-3 flex items-start justify-between">
                 <div>
-                  <div className="font-display text-lg font-bold text-ink">{modal.p.imie} {modal.p.nazwisko}</div>
+                  <div id="grafik-shift-dialog-title" className="font-display text-lg font-bold text-ink">{modal.p.imie} {modal.p.nazwisko}</div>
                   <div className="text-xs capitalize text-muted">{wd} {dm}</div>
                 </div>
-                <button onClick={() => setModal(null)} className="text-muted transition hover:text-ink" aria-label="Zamknij"><Icon name="close" className="h-5 w-5" /></button>
+                <button
+                  type="button"
+                  onClick={zamknijModal}
+                  disabled={!!modalAction}
+                  className="grid min-h-11 min-w-11 place-items-center rounded-xl text-muted transition hover:bg-white/[0.06] hover:text-ink disabled:cursor-wait disabled:opacity-50"
+                  aria-label="Zamknij edycję zmiany"
+                >
+                  <Icon name="close" className="h-5 w-5" />
+                </button>
               </div>
               {!jestKuchnia && (
                 <div className={`mb-3 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold ${!dys ? 'bg-white/[0.06] text-muted' : dys.dostepnosc ? 'bg-success text-bg' : 'bg-danger text-white'}`}>
@@ -398,12 +500,12 @@ export default function Grafik() {
                 </div>
               )}
               <div className="flex flex-col gap-2">
-                <select value={mForm.stanowisko_id} onChange={(ev) => setMForm((f) => ({ ...f, stanowisko_id: ev.target.value }))} className="w-full cursor-pointer rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none">
+                <select aria-label="Stanowisko" value={mForm.stanowisko_id} onChange={(ev) => setMForm((f) => ({ ...f, stanowisko_id: ev.target.value }))} className="min-h-11 w-full cursor-pointer rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none focus:border-mint">
                   {!jestKuchnia && <option value="">— stanowisko —</option>}
                   {(jestKuchnia ? stanowiska : stanowiska.filter((st) => st.id !== kuchniaId)).map((st) => <option key={st.id} value={st.id}>{st.nazwa}</option>)}
                 </select>
-                <input type="time" value={mForm.godz_od} onChange={(ev) => setMForm((f) => ({ ...f, godz_od: ev.target.value }))} className="w-full rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none" />
-                {!jestKuchnia && <input value={mForm.rewir} onChange={(ev) => setMForm((f) => ({ ...f, rewir: ev.target.value }))} placeholder="rewir (opcjonalnie)" className="w-full rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none" />}
+                <input aria-label="Godzina rozpoczęcia" type="time" value={mForm.godz_od} onChange={(ev) => setMForm((f) => ({ ...f, godz_od: ev.target.value }))} className="min-h-11 w-full rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none focus:border-mint" />
+                {!jestKuchnia && <input aria-label="Rewir" value={mForm.rewir} onChange={(ev) => setMForm((f) => ({ ...f, rewir: ev.target.value }))} placeholder="rewir (opcjonalnie)" className="min-h-11 w-full rounded-md border border-line bg-surface p-2 text-sm text-ink outline-none focus:border-mint" />}
                 {!jestKuchnia && (
                   <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
                     <input type="checkbox" checked={mForm.zamyka} onChange={(ev) => setMForm((f) => ({ ...f, zamyka: ev.target.checked }))} className="h-4 w-4 accent-lemon" />
@@ -423,9 +525,33 @@ export default function Grafik() {
                   </label>
                 )}
               </div>
+              {modalError && (
+                <div className="mt-3" role="alert">
+                  <Banner variant="danger">{modalError} Dane w edytorze pozostały bez zmian.</Banner>
+                </div>
+              )}
               <div className="mt-4 flex items-center gap-2">
-                <button onClick={zapiszModal} className="flex-1 rounded-xl bg-cream py-2.5 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98]">Zapisz</button>
-                {a && <button onClick={usunModal} className="rounded-xl border border-danger/40 px-4 py-2.5 text-sm font-semibold text-danger transition hover:bg-danger/10">Usuń</button>}
+                <Button
+                  onClick={zapiszModal}
+                  disabled={!!modalAction}
+                  loading={modalAction === 'save'}
+                  loadingLabel="Zapisuję zmianę…"
+                  className="flex-1"
+                >
+                  Zapisz zmianę
+                </Button>
+                {a && (
+                  <Button
+                    variant="ghost"
+                    onClick={usunModal}
+                    disabled={!!modalAction}
+                    loading={modalAction === 'delete'}
+                    loadingLabel="Usuwam…"
+                    className="border-danger/40 text-danger hover:bg-danger/10"
+                  >
+                    Usuń
+                  </Button>
+                )}
               </div>
             </div>
           </div>
