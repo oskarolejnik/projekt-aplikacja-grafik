@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
+import { Banner } from '../ui/Banner'
+import { Button } from '../ui/Button'
 import { WeekSelect } from '../ui/WeekSelect'
 import { Spinner } from '../ui/Spinner'
 import { PillSwitch } from '../ui/PillSwitch'
@@ -10,12 +12,18 @@ import { useToast } from '../ui/Toast'
 import { hhmm, ddmmyyyy, NAZWY_DNI, zakresDni, tloKoloru } from '../../lib/format'
 import { motion, AnimatePresence } from 'framer-motion'
 
+const editSnapshot = (edit) => JSON.stringify({
+  dostepnosc: !!edit?.dostepnosc,
+  od: edit?.od || '',
+  do: edit?.do || '',
+})
+
 // Dyspozycyjność pracowników. Pracownicy zgłaszają się sami w swoim panelu, ale
 // administrator może tu DOWOLNIE ustawić/zmienić/wyczyścić dyspozycję — klik w komórkę
 // otwiera edytor (dostępny / niedostępny / od której godziny). Zapis: POST/DELETE /api/dyspozycje.
 export default function Dyspozycje({ active = true }) {
   const { pracownicy, week, przyszly, setWeek, reloadDicts } = useData()
-  const { toast } = useToast()
+  const { toast, confirm } = useToast()
   const ustawionoPrzyszly = useRef(false)
 
   // Na wejściu w Dyspozycyjność pokaż tydzień przyszły (składane z wyprzedzeniem).
@@ -26,27 +34,35 @@ export default function Dyspozycje({ active = true }) {
   }, [active, przyszly, setWeek])
   const [dys, setDys] = useState([])
   const [loading, setLoading] = useState(true)
-  const [edit, setEdit] = useState(null) // { prac, dt, dostepnosc, od, id }
-  const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState(null)
+  const [edit, setEdit] = useState(null) // { prac, dt, dostepnosc, od, do, id, originalSnapshot }
+  const [modalAction, setModalAction] = useState(null) // 'save' | 'clear'
+  const [modalError, setModalError] = useState(null)
+  const [lastUpdate, setLastUpdate] = useState(null)
   const reqId = useRef(0) // chroni przed wyścigiem ładowań przy zmianie tygodnia
+  const triggerRef = useRef(null)
 
   const [s, e] = week.split('|')
+  const rangeRef = useRef({ s, e })
+  rangeRef.current = { s, e }
   const daty = useMemo(() => zakresDni(s, e), [s, e])
 
   const load = useCallback(async () => {
     const id = ++reqId.current
     setLoading(true)
+    setLoadError(null)
+    setLastUpdate(null)
     try {
       await reloadDicts()
       const d = await api(`/dyspozycje?start=${s}&end=${e}`)
       if (id !== reqId.current) return // starsze zapytanie (zmienił się tydzień) — pomiń
       setDys(d)
     } catch (err) {
-      if (id === reqId.current) toast(err.message, 'error')
+      if (id === reqId.current) setLoadError(err.message || 'Nie udało się wczytać dyspozycyjności.')
     } finally {
       if (id === reqId.current) setLoading(false)
     }
-  }, [s, e, reloadDicts, toast])
+  }, [s, e, reloadDicts])
 
   useEffect(() => {
     if (active) load()
@@ -62,75 +78,147 @@ export default function Dyspozycje({ active = true }) {
 
   const aktywni = pracownicy.filter((p) => p.aktywny)
 
-  const otworz = (p, dt) => {
+  const otworz = (p, dt, trigger) => {
     const d = map[`${dt}_${p.id}`]
-    setEdit({
+    const nextEdit = {
       prac: p,
       dt,
       dostepnosc: d ? d.dostepnosc : true,
       od: d && d.godz_od ? hhmm(d.godz_od) : '',
       do: d && d.godz_do ? hhmm(d.godz_do) : '',
       id: d ? d.id : null,
+    }
+    triggerRef.current = trigger
+    setModalError(null)
+    setEdit({
+      ...nextEdit,
+      original: { dostepnosc: nextEdit.dostepnosc, od: nextEdit.od, do: nextEdit.do },
+      originalSnapshot: editSnapshot(nextEdit),
     })
   }
 
-  const zamknij = () => {
-    if (!saving) setEdit(null)
+  const restoreFocus = () => {
+    const trigger = triggerRef.current
+    setTimeout(() => trigger?.focus(), 0)
   }
 
+  const zamknij = async () => {
+    if (modalAction || !edit) return
+    if (editSnapshot(edit) !== edit.originalSnapshot) {
+      const discard = await confirm('Odrzucić niezapisane zmiany w tej dyspozycyjności?', {
+        title: 'Niezapisane zmiany',
+        confirmText: 'Odrzuć zmiany',
+      })
+      if (!discard) return
+    }
+    setEdit(null)
+    setModalError(null)
+    restoreFocus()
+  }
+
+  const upsertAvailability = useCallback((saved) => {
+    setDys((current) => {
+      const withoutSaved = current.filter((item) => item.id !== saved.id && !(item.pracownik_id === saved.pracownik_id && item.data === saved.data))
+      const { s: currentStart, e: currentEnd } = rangeRef.current
+      return saved.data >= currentStart && saved.data <= currentEnd ? [...withoutSaved, saved] : withoutSaved
+    })
+  }, [])
+
   const zapisz = async () => {
-    setSaving(true)
+    if (modalAction || !edit) return
+    setModalAction('save')
+    setModalError(null)
     try {
-      await api('/dyspozycje', 'POST', {
+      const saved = await api('/dyspozycje', 'POST', {
         pracownik_id: edit.prac.id,
         data: edit.dt,
         dostepnosc: edit.dostepnosc,
         godz_od: edit.dostepnosc && edit.od ? `${edit.od}:00` : null,
         godz_do: edit.dostepnosc && edit.do ? `${edit.do}:00` : null,
       })
-      toast('Zapisano dyspozycyjność.', 'success')
+      upsertAvailability(saved)
+      setLastUpdate(`Zapisano: ${edit.prac.imie} ${edit.prac.nazwisko}, ${ddmmyyyy(edit.dt)}.`)
       setEdit(null)
-      await load()
+      restoreFocus()
     } catch (err) {
-      toast(err.message, 'error')
+      setModalError(err.message || 'Nie udało się zapisać dyspozycyjności.')
     } finally {
-      setSaving(false)
+      setModalAction(null)
     }
   }
 
   const wyczysc = async () => {
+    if (modalAction || !edit) return
     if (!edit.id) {
       setEdit(null)
+      restoreFocus()
       return
     }
-    setSaving(true)
+    const removed = {
+      pracownik_id: edit.prac.id,
+      data: edit.dt,
+      dostepnosc: edit.original?.dostepnosc ?? edit.dostepnosc,
+      godz_od: edit.original?.od ? `${edit.original.od}:00` : null,
+      godz_do: edit.original?.do ? `${edit.original.do}:00` : null,
+    }
+    setModalAction('clear')
+    setModalError(null)
     try {
       await api(`/dyspozycje/${edit.id}`, 'DELETE')
-      toast('Wyczyszczono dyspozycyjność.', 'success')
+      setDys((current) => current.filter((item) => item.id !== edit.id))
+      const label = `${edit.prac.imie} ${edit.prac.nazwisko}, ${ddmmyyyy(edit.dt)}`
+      setLastUpdate(`Wyczyszczono: ${label}.`)
       setEdit(null)
-      await load()
+      restoreFocus()
+      toast(`Wyczyszczono dyspozycyjność: ${label}.`, 'info', {
+        action: {
+          label: 'Cofnij',
+          onClick: async () => {
+            try {
+              const restored = await api('/dyspozycje', 'POST', removed)
+              upsertAvailability(restored)
+              setLastUpdate(`Przywrócono: ${label}.`)
+              toast('Przywrócono dyspozycyjność.', 'success')
+            } catch (error) {
+              toast(error.message || 'Nie udało się przywrócić dyspozycyjności.', 'error')
+            }
+          },
+        },
+      })
     } catch (err) {
-      toast(err.message, 'error')
+      setModalError(err.message || 'Nie udało się wyczyścić dyspozycyjności.')
     } finally {
-      setSaving(false)
+      setModalAction(null)
     }
   }
 
   const calyDzien = edit ? !edit.od && !edit.do : true
+  const editDirty = !!edit && editSnapshot(edit) !== edit.originalSnapshot
+  const canSave = !!edit && (!edit.id || editDirty)
 
   return (
     <Card className="p-6 md:p-8">
       <SectionHeader title="Dyspozycyjność pracowników"
         subtitle="Zgłoszenia z paneli pracowników — możesz je tu dowolnie zmieniać. Kliknij dowolną komórkę, aby ustawić, zmienić lub wyczyścić dyspozycyjność na dany dzień.">
-        <WeekSelect />
+        {lastUpdate && <span className="text-xs font-medium text-success" role="status" aria-live="polite">{lastUpdate}</span>}
+        <WeekSelect disabled={loading || !!modalAction} />
       </SectionHeader>
 
-      {loading ? (
+      {loadError ? (
+        <div role="alert">
+          <Banner variant="danger">
+            <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+              <span>Nie udało się wczytać dyspozycyjności. {loadError}</span>
+              <Button size="sm" variant="ghost" onClick={load}>Spróbuj ponownie</Button>
+            </div>
+          </Banner>
+        </div>
+      ) : loading ? (
         <div className="grid place-items-center py-16">
           <Spinner className="h-6 w-6 text-muted" />
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-line">
+        <div className="overflow-x-auto rounded-xl border border-line" aria-busy={!!modalAction}>
           <table className="w-full border-separate border-spacing-0 text-sm">
             <thead>
               <tr>
@@ -139,9 +227,11 @@ export default function Dyspozycje({ active = true }) {
                 </th>
                 {daty.map((dt) => {
                   const [, mm, dd] = dt.split('-')
-                  const isW = [0, 6].includes(new Date(dt).getDay())
+                  const dayIndex = new Date(dt).getDay()
+                  const isW = [0, 6].includes(dayIndex)
                   return (
-                    <th key={dt} className={`min-w-[92px] border-b border-r border-line p-3 text-center text-xs font-bold ${isW ? 'text-blush' : 'text-ink'}`}>
+                    <th key={dt} className={`min-w-[92px] border-b border-r border-line p-3 text-center text-xs font-semibold ${isW ? 'text-blush' : 'text-ink'}`}>
+                      <span className="block text-[10px] capitalize text-muted">{NAZWY_DNI[dayIndex]}</span>
                       {dd}.{mm}
                     </th>
                   )
@@ -177,8 +267,10 @@ export default function Dyspozycje({ active = true }) {
                       return (
                         <td key={dt} className="border-b border-r border-line p-0">
                           <button
-                            onClick={() => otworz(p, dt)}
-                            className={`flex h-full w-full items-center justify-center px-3 py-3 text-center text-xs font-semibold transition hover:bg-white/[0.05] ${cls}`}
+                            type="button"
+                            onClick={(event) => otworz(p, dt, event.currentTarget)}
+                            aria-label={`${p.imie} ${p.nazwisko}, ${NAZWY_DNI[new Date(dt).getDay()]} ${ddmmyyyy(dt)}: ${d ? (d.dostepnosc ? `dostępny ${txt}` : 'niedostępny') : 'brak zgłoszenia'}`}
+                            className={`flex min-h-11 w-full items-center justify-center px-3 py-3 text-center text-xs font-semibold transition hover:bg-white/[0.05] ${cls}`}
                             style={{ WebkitTapHighlightColor: 'transparent' }}
                           >
                             {txt}
@@ -209,7 +301,8 @@ export default function Dyspozycje({ active = true }) {
             <motion.div
               role="dialog"
               aria-modal="true"
-              className="card relative z-10 w-full max-w-sm p-6"
+              aria-labelledby="availability-editor-title"
+              className="material relative z-10 w-full max-w-md p-6"
               initial={{ opacity: 0, scale: 0.98, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 10 }}
@@ -217,14 +310,20 @@ export default function Dyspozycje({ active = true }) {
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-display text-lg font-bold text-ink">
+                  <h3 id="availability-editor-title" className="font-display text-lg font-semibold text-ink">
                     {edit.prac.imie} {edit.prac.nazwisko}
                   </h3>
                   <p className="mt-0.5 text-sm capitalize text-muted">
                     {NAZWY_DNI[new Date(edit.dt).getDay()]}, {ddmmyyyy(edit.dt)}
                   </p>
                 </div>
-                <button onClick={zamknij} className="shrink-0 text-muted transition hover:text-ink" aria-label="Zamknij">
+                <button
+                  type="button"
+                  onClick={zamknij}
+                  disabled={!!modalAction}
+                  className="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-xl text-muted transition hover:bg-white/[0.06] hover:text-ink disabled:cursor-wait disabled:opacity-50"
+                  aria-label="Zamknij edycję dyspozycyjności"
+                >
                   <Icon name="close" className="h-5 w-5" />
                 </button>
               </div>
@@ -232,6 +331,7 @@ export default function Dyspozycje({ active = true }) {
               <PillSwitch
                 className="mt-5"
                 value={edit.dostepnosc}
+                disabled={!!modalAction}
                 onChange={(v) => setEdit((st) => ({ ...st, dostepnosc: v }))}
                 options={[
                   { value: true, label: 'Dostępny', activeBg: 'bg-success', activeText: 'text-bg' },
@@ -245,6 +345,7 @@ export default function Dyspozycje({ active = true }) {
                     type="button"
                     role="switch"
                     aria-checked={calyDzien}
+                    disabled={!!modalAction}
                     onClick={() => setEdit((st) => (calyDzien ? { ...st, od: '08:00', do: '' } : { ...st, od: '', do: '' }))}
                     className="flex items-center gap-2 self-start text-sm font-semibold text-muted transition active:scale-[0.98]"
                     style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -262,7 +363,9 @@ export default function Dyspozycje({ active = true }) {
                       <span>od</span>
                       <input
                         type="time"
+                        aria-label="Dostępny od"
                         value={edit.od}
+                        disabled={!!modalAction}
                         onChange={(ev) => setEdit((st) => ({ ...st, od: ev.target.value }))}
                         className="field px-2 py-2"
                         style={{ width: '6.5rem' }}
@@ -270,7 +373,9 @@ export default function Dyspozycje({ active = true }) {
                       <span>do</span>
                       <input
                         type="time"
+                        aria-label="Dostępny do"
                         value={edit.do}
+                        disabled={!!modalAction}
                         onChange={(ev) => setEdit((st) => ({ ...st, do: ev.target.value }))}
                         className="field px-2 py-2"
                         style={{ width: '6.5rem' }}
@@ -280,30 +385,50 @@ export default function Dyspozycje({ active = true }) {
                 </div>
               )}
 
-              <div className="mt-6 flex items-center justify-between gap-3">
-                <button
+              {modalError && (
+                <div className="mt-4" role="alert">
+                  <Banner variant="danger">{modalError} Dane pozostały w edytorze.</Banner>
+                </div>
+              )}
+
+              <div className="mt-4 min-h-5 text-xs" role="status" aria-live="polite">
+                {modalAction
+                  ? <span className="text-muted">{modalAction === 'save' ? 'Zapisuję zmianę…' : 'Czyszczę zgłoszenie…'}</span>
+                  : editDirty
+                    ? <span className="text-lemon">Masz niezapisane zmiany.</span>
+                    : <span className="text-muted">{edit.id ? 'Brak niezapisanych zmian.' : 'Nowe zgłoszenie — wybierz stan i zapisz.'}</span>}
+              </div>
+
+              <div className="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <Button
+                  variant="subtle"
+                  size="sm"
                   onClick={wyczysc}
-                  disabled={saving || !edit.id}
-                  className="rounded-xl px-3 py-2 text-sm font-semibold text-danger transition hover:bg-danger/10 disabled:opacity-30"
+                  disabled={!!modalAction || !edit.id}
+                  loading={modalAction === 'clear'}
+                  loadingLabel="Czyszczę…"
+                  className="text-danger hover:bg-danger/10"
+                  aria-label="Wyczyść zgłoszenie dyspozycyjności"
                 >
                   Wyczyść
-                </button>
+                </Button>
                 <div className="flex gap-3">
-                  <button
+                  <Button
+                    variant="ghost"
                     onClick={zamknij}
-                    disabled={saving}
-                    className="rounded-xl border border-line bg-white/[0.04] px-4 py-2 text-sm font-semibold text-ink transition hover:bg-white/[0.09] active:scale-[0.98]"
+                    disabled={!!modalAction}
                   >
                     Anuluj
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     onClick={zapisz}
-                    disabled={saving}
-                    className="flex items-center gap-2 rounded-xl bg-cream px-4 py-2 text-sm font-semibold text-bg transition hover:bg-white active:scale-[0.98] disabled:opacity-60"
+                    disabled={!!modalAction || !canSave}
+                    loading={modalAction === 'save'}
+                    loadingLabel="Zapisuję…"
                   >
-                    {saving ? <Spinner className="h-4 w-4" /> : <Icon name="check" className="h-4 w-4" />}
-                    Zapisz
-                  </button>
+                    <Icon name="check" className="h-4 w-4" />
+                    {modalError ? 'Ponów zapis' : 'Zapisz'}
+                  </Button>
                 </div>
               </div>
             </motion.div>

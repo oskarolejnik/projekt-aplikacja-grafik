@@ -47,6 +47,24 @@ describe('wspólne kontrolki', () => {
     expect(onChange).toHaveBeenCalledWith('nie')
   })
 
+  it('PillSwitch blokuje zmianę stanu podczas zapisu', () => {
+    const onChange = vi.fn()
+    render(
+      <PillSwitch
+        disabled
+        label="Dostępność"
+        value="tak"
+        onChange={onChange}
+        options={[{ value: 'tak', label: 'Tak' }, { value: 'nie', label: 'Nie' }]}
+      />,
+    )
+
+    const option = screen.getByRole('button', { name: 'Nie' })
+    expect(option).toBeDisabled()
+    fireEvent.click(option)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('WeekSelect dopasowuje się do szerokości i zmienia okres', () => {
     render(<WeekSelect />)
     const select = screen.getByRole('combobox', { name: 'Wybierz okres grafiku' })

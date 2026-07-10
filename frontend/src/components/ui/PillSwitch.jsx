@@ -8,7 +8,7 @@ import { BOUNCE } from '../../lib/motion'
 //   activeBg   – tło aktywnego segmentu (domyślnie uniesiona powierzchnia). Solid kolory
 //                (np. bg-success/bg-danger) ładnie się przenikają przy zmianie stanu.
 //   activeText – kolor tekstu na aktywnym segmencie (domyślnie text-ink)
-export function PillSwitch({ options, value, onChange, label = 'Wybór opcji', className = '' }) {
+export function PillSwitch({ options, value, onChange, label = 'Wybór opcji', className = '', disabled = false }) {
   const activeIndex = Math.max(0, options.findIndex((o) => o.value === value))
   const active = options[activeIndex] || options[0]
   return (
@@ -30,8 +30,9 @@ export function PillSwitch({ options, value, onChange, label = 'Wybór opcji', c
             key={String(opt.value)}
             type="button"
             onClick={() => onChange(opt.value)}
+            disabled={disabled}
             aria-pressed={isActive}
-            className={`relative z-10 min-h-11 flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition-[color,transform] duration-150 ease-snap active:scale-[0.97] ${
+            className={`relative z-10 min-h-11 flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition-[color,transform] duration-150 ease-snap active:scale-[0.97] disabled:cursor-wait disabled:opacity-50 ${
               isActive ? opt.activeText || 'text-ink' : 'text-muted hover:text-ink'
             }`}
             style={{ WebkitTapHighlightColor: 'transparent' }}
