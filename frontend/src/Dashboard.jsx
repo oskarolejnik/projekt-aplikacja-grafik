@@ -22,9 +22,7 @@ import RaportGodzin from './components/tabs/RaportGodzin'
 import RozliczeniaPodglad from './components/tabs/RozliczeniaPodglad'
 import ZeszytPanel from './components/tabs/ZeszytPanel'
 import KalendarzImprez from './components/tabs/KalendarzImprez'
-import Zadatki from './components/tabs/Zadatki'
 import StolyLive from './components/tabs/StolyLive'
-import Rezerwacje from './components/tabs/Rezerwacje'
 import RezerwacjeStolik from './components/tabs/RezerwacjeStolik'
 import WidokHosta from './components/tabs/WidokHosta'
 import AnalitykaRezerwacji from './components/tabs/AnalitykaRezerwacji'
@@ -87,11 +85,9 @@ const TABS = [
   { id: 'plan-sali', label: 'Plan sali', icon: 'office', kat: 'goscie', title: 'Plan sali — rozmieszczenie stolików', Comp: PlanSali, modul: 'modul_rezerwacje' },
   { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', Comp: CrmGoscie, modul: 'modul_rezerwacje' },
   { id: 'analityka-rezerwacji', label: 'Analityka rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Analityka rezerwacji — covery, no-show, szczyty', Comp: AnalitykaRezerwacji, modul: 'modul_rezerwacje' },
-  { id: 'rezerwacje', label: 'Rezerwacje (ruch)', icon: 'calendar', kat: 'goscie', title: 'Rezerwacje — ruch (30 dni)', Comp: Rezerwacje },
-  // Imprezy — eventy, zapytania, zadatki.
+  // Imprezy — eventy i zapytania. Rozliczenia wydarzeń pozostają w kalendarzu imprez.
   { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', kat: 'imprezy', title: 'Kalendarz imprez', Comp: KalendarzImprez, modul: 'modul_imprezy' },
   { id: 'zapytania-imprez', label: 'Zapytania o imprezy', icon: 'sparkles', kat: 'imprezy', title: 'Zapytania o imprezy', Comp: ZapytaniaImprez, modul: 'modul_imprezy' },
-  { id: 'zadatki', label: 'Zadatki', icon: 'clipboard', kat: 'imprezy', title: 'Zadatki (KP) — przypisania', Comp: Zadatki, modul: 'modul_imprezy' },
   { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', kat: 'imprezy', title: 'Baza imprez — serwer NAS', Comp: Imprezy, modul: 'modul_imprezy' },
   // Operator (instancja-matka) — panel floty; widoczny tylko gdy /api/flota → enabled.
   { id: 'flota', label: 'Flota lokali', icon: 'server', kat: 'operator', title: 'Flota lokali — operator', Comp: Flota, operator: true },
@@ -152,8 +148,9 @@ export default function Dashboard() {
       {/* ── Górny pasek: logo · kategorie (desktop) · profil ── */}
       <header className="relative z-40 flex shrink-0 items-center gap-3 border-b border-white/[0.06] bg-bg/55 px-4 pt-[calc(env(safe-area-inset-top)+0.7rem)] pb-[0.7rem] backdrop-blur-xl md:px-6">
         <button
+          type="button"
           onClick={() => setMobileOpen(true)}
-          className="rounded-lg border border-line p-2 text-muted transition hover:text-ink lg:hidden"
+          className="min-h-11 min-w-11 rounded-lg border border-line p-2 text-muted transition hover:text-ink lg:hidden"
           aria-label="Otwórz menu"
         >
           <Icon name="menu" className="h-5 w-5" />
@@ -175,9 +172,10 @@ export default function Dashboard() {
             return (
               <div key={k.id} className="relative z-50">
                 <button
+                  type="button"
                   onClick={() => setOpenCat(otwarta ? null : k.id)}
                   aria-expanded={otwarta}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                  className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
                     zawieraAktywna ? 'font-semibold text-mint' : otwarta ? 'bg-white/[0.06] text-ink' : 'text-muted hover:text-ink'
                   }`}
                 >
@@ -190,10 +188,11 @@ export default function Dashboard() {
                       const on = t.id === active
                       return (
                         <button
+                          type="button"
                           key={t.id}
                           onClick={() => select(t.id)}
                           aria-current={on ? 'page' : undefined}
-                          className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition ${
+                          className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition ${
                             on ? 'bg-mint/[0.12] font-semibold text-mint' : 'text-muted hover:bg-white/[0.05] hover:text-ink'
                           }`}
                         >
@@ -214,18 +213,20 @@ export default function Dashboard() {
           <span className="hidden text-sm font-medium text-muted sm:inline">{user?.login} · administrator</span>
           <PushButton />
           <button
+            type="button"
             onClick={() => select('ustawienia')}
             aria-label="Ustawienia lokalu"
             title="Ustawienia lokalu"
-            className={`hidden rounded-xl border border-line p-2 transition lg:block ${
+            className={`hidden min-h-11 min-w-11 rounded-xl border border-line p-2 transition lg:block ${
               active === 'ustawienia' ? 'bg-mint/[0.12] text-mint' : 'bg-white/[0.04] text-muted hover:text-ink'
             }`}
           >
             <Icon name="office" className="h-4 w-4" />
           </button>
           <button
+            type="button"
             onClick={logout}
-            className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
+            className="flex min-h-11 min-w-11 items-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
             aria-label="Wyloguj"
           >
             <Icon name="logout" className="h-4 w-4" />
@@ -237,6 +238,9 @@ export default function Dashboard() {
       {/* ── Szuflada mobile: kategorie jako akordeony ── */}
       {mobileOpen && <div className="fixed inset-0 z-30 animate-overlay-in bg-black/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
       <aside
+        aria-label="Menu administracyjne"
+        aria-hidden={!mobileOpen}
+        inert={mobileOpen ? undefined : ''}
         className={`fixed inset-y-0 left-0 z-40 flex w-80 max-w-[85vw] transform flex-col border-r border-white/[0.06] bg-bg/85 backdrop-blur-2xl transition-transform duration-300 ease-drawer lg:hidden ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
@@ -244,7 +248,7 @@ export default function Dashboard() {
         <div className="flex min-h-[4.5rem] items-center gap-3 border-b border-line px-6 pt-safe">
           <Logo className="h-8" variant="gradient" />
           <h1 className="min-w-0 truncate font-display text-lg font-bold tracking-tight text-ink">{nazwa_lokalu}</h1>
-          <button onClick={() => setMobileOpen(false)} className="ml-auto rounded-lg p-2 text-muted transition hover:text-ink" aria-label="Zamknij menu">
+          <button type="button" onClick={() => setMobileOpen(false)} className="ml-auto min-h-11 min-w-11 rounded-lg p-2 text-muted transition hover:text-ink" aria-label="Zamknij menu">
             <Icon name="close" className="h-5 w-5" />
           </button>
         </div>
@@ -256,9 +260,10 @@ export default function Dashboard() {
             return (
               <div key={k.id} className={`rounded-2xl transition ${otwarta ? 'bg-white/[0.03]' : ''}`}>
                 <button
+                  type="button"
                   onClick={() => setOpenAcc(otwarta ? null : k.id)}
                   aria-expanded={otwarta}
-                  className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+                  className={`flex min-h-11 w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
                     zawieraAktywna && !otwarta ? 'text-mint' : 'text-ink'
                   }`}
                 >
@@ -272,10 +277,11 @@ export default function Dashboard() {
                       const on = t.id === active
                       return (
                         <button
+                          type="button"
                           key={t.id}
                           onClick={() => select(t.id)}
                           aria-current={on ? 'page' : undefined}
-                          className={`flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
+                          className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
                             on ? 'bg-mint/[0.12] font-semibold text-mint' : 'text-muted hover:bg-white/[0.05] hover:text-ink'
                           }`}
                         >
@@ -292,9 +298,10 @@ export default function Dashboard() {
 
           {/* Ustawienia — pojedynczy wpis pod kategoriami. */}
           <button
+            type="button"
             onClick={() => select('ustawienia')}
             aria-current={active === 'ustawienia' ? 'page' : undefined}
-            className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+            className={`flex min-h-11 w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
               active === 'ustawienia' ? 'bg-mint/[0.12] text-mint' : 'text-ink hover:bg-white/[0.03]'
             }`}
           >
@@ -322,7 +329,7 @@ export default function Dashboard() {
                 ? `Faktura po terminie — opłać subskrypcję do ${sub.data_grace}, inaczej instancja przejdzie w tryb tylko do odczytu.`
                 : 'Subskrypcja nieopłacona — instancja działa w trybie tylko do odczytu. Opłać, aby odblokować zapisy.'}
             </span>
-            <button onClick={() => select('ustawienia')} className="ml-auto rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+            <button type="button" onClick={() => select('ustawienia')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
               Przejdź do subskrypcji
             </button>
           </div>
@@ -336,7 +343,7 @@ export default function Dashboard() {
                 ? <> Po trialu plan włączy się automatycznie{sub.karta_ostatnie4 ? ` (karta •••• ${sub.karta_ostatnie4})` : ''} — anuluj wcześniej, jeśli nie chcesz kontynuować.</>
                 : ' Masz pełny dostęp do wszystkich modułów; wybierz plan, żeby ich nie stracić po trialu.'}
             </span>
-            <button onClick={() => select('ustawienia')} className="ml-auto rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
+            <button type="button" onClick={() => select('ustawienia')} className="ml-auto min-h-11 rounded-lg border border-current px-2.5 py-1 text-xs font-semibold">
               {sub.trial_auto_obciazenie ? 'Zarządzaj' : 'Wybierz plan'}
             </button>
           </div>
