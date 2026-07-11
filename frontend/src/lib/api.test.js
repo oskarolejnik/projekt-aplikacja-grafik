@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { api, setToken, setUnauthorizedHandler } from './api'
+import { api, nowyKluczIdempotencji, setToken, setUnauthorizedHandler } from './api'
 
 // Pomocnik: odpowiedź w stylu fetch Response (tylko pola używane przez api()).
 const odp = (status, data, ok) => ({
@@ -40,14 +40,30 @@ describe('api()', () => {
     expect(opts.body).toBe(JSON.stringify({ a: 1 }))
   })
 
+  it('przekazuje nagłówki operacji, w tym klucz idempotencji', async () => {
+    mockFetch(odp(201, { id: 5 }))
+    await api('/x', 'POST', { a: 1 }, {
+      headers: { 'Idempotency-Key': 'create-001' },
+    })
+    expect(fetch.mock.calls[0][1].headers['Idempotency-Key']).toBe('create-001')
+  })
+
   it('204 No Content → zwraca null', async () => {
     mockFetch(odp(204, null))
     expect(await api('/x', 'DELETE')).toBeNull()
   })
 
   it('odpowiedź !ok → rzuca Error z detail', async () => {
-    mockFetch(odp(400, { detail: 'zły input' }))
-    await expect(api('/x')).rejects.toThrow('zły input')
+    mockFetch(odp(409, {
+      detail: 'stolik zajęty',
+      code: 'TABLE_CONFLICT',
+      availability: { available: false, rule: 'table' },
+    }))
+    const error = await api('/x').catch((caught) => caught)
+    expect(error.message).toBe('stolik zajęty')
+    expect(error.status).toBe(409)
+    expect(error.code).toBe('TABLE_CONFLICT')
+    expect(error.availability).toEqual({ available: false, rule: 'table' })
   })
 
   it('401 → czyści token i woła handler onUnauthorized', async () => {
@@ -58,5 +74,13 @@ describe('api()', () => {
     await expect(api('/x')).rejects.toBeTruthy()   // 401 ma !ok → też rzuca
     expect(localStorage.getItem('grafik_token')).toBeNull()
     expect(onUnauth).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('nowyKluczIdempotencji()', () => {
+  it('tworzy drukowalny, krótki klucz ze scope operacji', () => {
+    const key = nowyKluczIdempotencji('online-reservation')
+    expect(key).toMatch(/^online-reservation-/)
+    expect(key.length).toBeLessThanOrEqual(128)
   })
 })

@@ -8,7 +8,10 @@ const { apiMock, confirmMock } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
 }))
 
-vi.mock('../../lib/api', () => ({ api: apiMock }))
+vi.mock('../../lib/api', () => ({
+  api: apiMock,
+  nowyKluczIdempotencji: () => 'manual-reservation-test-key',
+}))
 vi.mock('../ui/Toast', () => ({
   useToast: () => ({ confirm: confirmMock, toast: vi.fn() }),
 }))
@@ -127,7 +130,8 @@ describe('Rezerwacje stolików', () => {
   it('zachowuje formularz po błędzie i po retry dodaje rezerwację bez pełnego przeładowania', async () => {
     let attempts = 0
     let listLoads = 0
-    apiMock.mockImplementation((path, method, body) => {
+    const idempotencyKeys = []
+    apiMock.mockImplementation((path, method, body, options) => {
       if (path.startsWith('/rezerwacje-stolik?')) {
         listLoads += 1
         return Promise.resolve({ rezerwacje: [] })
@@ -136,6 +140,7 @@ describe('Rezerwacje stolików', () => {
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
       if (path === '/lokal/config') return Promise.resolve({ sale: [] })
       if (path === '/rezerwacje-stolik' && method === 'POST') {
+        idempotencyKeys.push(options?.headers?.['Idempotency-Key'])
         attempts += 1
         return attempts === 1
           ? Promise.reject(new Error('Brak połączenia.'))
@@ -160,6 +165,10 @@ describe('Rezerwacje stolików', () => {
     expect(await screen.findByText('Wiśniewska')).toBeInTheDocument()
     expect(screen.getByText(/Dodano: Wiśniewska/)).toBeInTheDocument()
     expect(attempts).toBe(2)
+    expect(idempotencyKeys).toEqual([
+      'manual-reservation-test-key',
+      'manual-reservation-test-key',
+    ])
     expect(listLoads).toBe(1)
   })
 

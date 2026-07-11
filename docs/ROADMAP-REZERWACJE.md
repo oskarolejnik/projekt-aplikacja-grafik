@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: zatwierdzony kierunek produktu · 11 lipca 2026
+> Status: kierunek zatwierdzony · R0a i R0b wdrożone · następny checkpoint R1a · 11 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -396,6 +396,16 @@ Testy:
 
 **Done R0b:** równoległe żądania nie tworzą podwójnej rezerwacji, a R1 może bezpiecznie otworzyć
 zapisy managerowi i recepcji.
+
+**Stan wdrożenia R0b — 11 lipca 2026:** checkpoint ukończony. Migracja `0051` tworzy trwały
+ledger dni, minutowych zajęć stołów, pacingu i zaszyfrowanych wyników idempotencji. Ręczne i
+publiczne tworzenie, edycja, statusy, host, waitlista, import cutover oraz zwalnianie zasobów
+korzystają z jednej transakcji i deterministycznych blokad dni. Publiczny odczyt oraz zapis używają
+tego samego silnika pojedynczych stołów i zatwierdzonych kombinacji, również dla grup 18-osobowych.
+Klient webowy zachowuje klucz idempotencji przy ponowieniu po błędzie sieci. Anonimizacja RODO usuwa
+także zaszyfrowany replay zawierający PII. Pełna regresja backendu, 173 testy frontendu i build
+produkcyjny przechodzą. Test PostgreSQL jest gotowy i pozostaje warunkowy od `TEST_POSTGRES_URL`;
+lokalnie wykonano wariant SQLite, a przed wdrożeniem produkcyjnym CI musi uruchomić oba silniki.
 
 ### R1 — Uprawnienia operacyjne i wspólny workspace
 

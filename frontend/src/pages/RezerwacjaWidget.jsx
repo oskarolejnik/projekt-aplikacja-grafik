@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react'
-import { api } from '../lib/api'
+import { useState, useCallback, useRef } from 'react'
+import { api, nowyKluczIdempotencji } from '../lib/api'
 import { useBranding } from '../context/BrandingContext'
 import { useToast } from '../components/ui/Toast'
 import { Spinner } from '../components/ui/Spinner'
@@ -23,6 +23,7 @@ export default function RezerwacjaWidget() {
   const [form, setForm] = useState({ nazwisko: '', telefon: '', email: '', notatka: '' })
   const [busy, setBusy] = useState(false)
   const [wynik, setWynik] = useState(null)           // { token, rezerwacja }
+  const probaZapisuRef = useRef(null)
 
   const szukaj = useCallback(async () => {
     setLoading(true); setSloty(null); setNiedostepne(false)
@@ -37,15 +38,30 @@ export default function RezerwacjaWidget() {
   }, [data, osoby, toast])
 
   const rezerwuj = async () => {
+    if (busy || !slot) return
     if (!form.nazwisko.trim()) { toast('Podaj imię i nazwisko.', 'error'); return }
+    const body = {
+      data, godz_od: slot, liczba_osob: Number(osoby), nazwisko: form.nazwisko.trim(),
+      telefon: form.telefon || null, email: form.email || null, notatka: form.notatka || null,
+    }
+    const fingerprint = JSON.stringify(body)
+    if (probaZapisuRef.current?.fingerprint !== fingerprint) {
+      probaZapisuRef.current = {
+        fingerprint,
+        key: nowyKluczIdempotencji('online-reservation'),
+      }
+    }
     setBusy(true)
     try {
-      const r = await api('/online/rezerwacja', 'POST', {
-        data, godz_od: slot, liczba_osob: Number(osoby), nazwisko: form.nazwisko.trim(),
-        telefon: form.telefon || null, email: form.email || null, notatka: form.notatka || null,
+      const r = await api('/online/rezerwacja', 'POST', body, {
+        headers: { 'Idempotency-Key': probaZapisuRef.current.key },
       })
+      probaZapisuRef.current = null
       setWynik(r); setKrok('sukces')
-    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+    } catch (e) {
+      if (e.code === 'IDEMPOTENCY_KEY_REUSED') probaZapisuRef.current = null
+      toast(e.message, 'error')
+    } finally { setBusy(false) }
   }
 
   const odwolaj = async () => {
@@ -78,7 +94,7 @@ export default function RezerwacjaWidget() {
                 <label className="text-xs font-semibold text-muted">Data
                   <input type="date" min={dzisISO()} value={data} onChange={(e) => { setData(e.target.value); setSloty(null) }} className={fld} /></label>
                 <label className="text-xs font-semibold text-muted">Liczba osób
-                  <input type="number" min="1" max="20" value={osoby} onChange={(e) => { setOsoby(e.target.value); setSloty(null) }} className={fld} /></label>
+                  <input type="number" min="1" value={osoby} onChange={(e) => { setOsoby(e.target.value); setSloty(null) }} className={fld} /></label>
               </div>
               <button onClick={szukaj} disabled={loading}
                 className="mt-4 w-full rounded-xl bg-mint px-4 py-3 text-sm font-semibold text-bg transition hover:brightness-105 disabled:opacity-60">

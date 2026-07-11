@@ -10,14 +10,16 @@ from datetime import date, time, timedelta, datetime, timezone
 from typing import Optional, List
 from collections import defaultdict
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from fastapi import FastAPI, Depends, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import or_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating, platnosci, uprawnienia
+import reservation_service
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -68,6 +70,19 @@ app = FastAPI(
     redoc_url="/redoc" if app_settings.IS_DEV else None,
     openapi_url="/openapi.json" if app_settings.IS_DEV else None,
 )
+
+
+@app.exception_handler(reservation_service.ReservationError)
+async def reservation_error_handler(_request: Request, exc: reservation_service.ReservationError):
+    """Stabilny kontrakt konfliktu bez łamania istniejącego klienta czytającego ``detail``."""
+    return JSONResponse(
+        {
+            "detail": exc.message,
+            "code": exc.code,
+            "availability": exc.availability.to_dict(),
+        },
+        status_code=exc.status_code,
+    )
 app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status integracji (Rec#5: dekompozycja main)
 app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
 app.include_router(platnosci_router)   # płatności zadatków online (Rec#7)
@@ -1513,19 +1528,22 @@ def _waliduj_przydzial_rezerwacji(
         return godz_do
     if godz_do is None:
         godz_do = _dodaj_minuty(godz_od, _dlugosc_dla(db, data, godz_od, liczba_osob))
-    bufor = get_lokal_config(db).rez_bufor_min or 0     # bufor sprzątania między rezerwacjami
-    q = db.query(models.Termin).filter(
-        models.Termin.rodzaj == "stolik", models.Termin.data == data,
-        models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
-    if pomin_id is not None:
-        q = q.filter(models.Termin.id != pomin_id)
-    for r in q.all():
-        if not (ids & _stoly_terminu(r)):
-            continue
-        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
-        r_do_buf, r_od_buf = _dodaj_minuty(r_do, bufor), _dodaj_minuty(r.godz_od, -bufor)
-        if godz_od < r_do_buf and r_od_buf < godz_do:   # nachodzą (z buforem sprzątania)
-            raise HTTPException(409, f"Stolik zajęty w tym czasie (kolizja od {r.godz_od.strftime('%H:%M')}).")
+    zajete = reservation_service.occupied_table_ids(
+        db,
+        data=data,
+        start=godz_od,
+        end=godz_do,
+        buffer_min=get_lokal_config(db).rez_bufor_min or 0,
+        exclude_termin_id=pomin_id,
+        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    if ids & zajete:
+        raise reservation_service.ReservationError(
+            409,
+            "TABLE_CONFLICT",
+            "Stolik zajęty w tym czasie.",
+            rule="table",
+        )
     return godz_do
 
 
@@ -1534,6 +1552,111 @@ def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomi
     stoliki = [stolik_id] if stolik_id is not None else []
     return _waliduj_przydzial_rezerwacji(
         db, data, godz_od, godz_do, stoliki, liczba_osob, pomin_id=pomin_id)
+
+
+def _parametry_pacingu(db, data, godz_od):
+    serwis = _serwis_dla_godziny(db, data, godz_od) if godz_od else None
+    return {
+        "max_reservations": getattr(serwis, "pacing_max_rez", None) if serwis else None,
+        "max_covers": getattr(serwis, "pacing_max_osob", None) if serwis else None,
+        "pacing_window_min": (
+            getattr(serwis, "pacing_okno_min", None)
+            or getattr(serwis, "dlugosc_slotu_min", None)
+            or DOMYSLNY_SLOT_MIN
+        ),
+    }
+
+
+def _zastap_ledger_terminu(
+    db,
+    t,
+    *,
+    stoliki=None,
+    enforce_pacing=False,
+    candidates=(),
+    alternatives=(),
+):
+    """Aktualizuje ledger w tej samej transakcji co projekcję ``Termin``."""
+    if t.status not in REZ_AKTYWNE:
+        reservation_service.release_termin_allocation(db, t.id)
+        return reservation_service.AvailabilityResult(available=True)
+    ids = _ids_stolikow(stoliki if stoliki is not None else _stoly_terminu(t))
+    pacing = _parametry_pacingu(db, t.data, t.godz_od)
+    return reservation_service.replace_termin_allocation(
+        db,
+        termin_id=t.id,
+        data=t.data,
+        start=t.godz_od,
+        end=t.godz_do,
+        table_ids=ids,
+        party_size=t.liczba_osob or 1,
+        buffer_min=get_lokal_config(db).rez_bufor_min or 0,
+        enforce_pacing=enforce_pacing,
+        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+        candidates=candidates,
+        alternatives=alternatives,
+        **pacing,
+    )
+
+
+def _commit_zapis_rezerwacji(db, guards):
+    reservation_service.touch_days(guards)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+
+
+def _zablokuj_termin(db, rid, dodatkowe_dni=()):
+    """Blokuje aktualny dzień rekordu, odpornie na równoległe przeniesienie rezerwacji."""
+    t = db.get(models.Termin, rid)
+    if t is None:
+        return None, ()
+    dni = {t.data, *(d for d in dodatkowe_dni if d is not None)}
+    while True:
+        guards = reservation_service.begin_locked_write(db, dni)
+        t = db.get(models.Termin, rid)
+        if t is None:
+            db.rollback()
+            return None, ()
+        if t.data in dni:
+            return t, guards
+        dni.add(t.data)
+
+
+def _zablokuj_rezerwacje_online(db, token, dodatkowe_dni=()):
+    """Wariant blokady dla publicznego tokenu magic-link."""
+    t = _rez_po_tokenie(db, token)
+    if t is None:
+        return None, ()
+    dni = {t.data, *(d for d in dodatkowe_dni if d is not None)}
+    while True:
+        guards = reservation_service.begin_locked_write(db, dni)
+        t = _rez_po_tokenie(db, token)
+        if t is None:
+            db.rollback()
+            return None, ()
+        if t.data in dni:
+            return t, guards
+        dni.add(t.data)
+
+
+def _zablokuj_waitliste(db, wid):
+    """Blokuje dzień wpisu waitlisty przed zmianą jego holda lub realizacją."""
+    w = db.get(models.ListaOczekujacych, wid)
+    if w is None:
+        return None, ()
+    dni = {w.data}
+    while True:
+        guards = reservation_service.begin_locked_write(db, dni)
+        w = db.get(models.ListaOczekujacych, wid)
+        if w is None:
+            db.rollback()
+            return None, ()
+        if w.data in dni:
+            return w, guards
+        dni.add(w.data)
 
 
 def _jawne_kombinacje_dla_zestawu(db, stoliki):
@@ -1680,6 +1803,15 @@ def usun_stolik(sid: int, db: Session = Depends(get_db)):
         kombinacje = db.query(models.KombinacjaStolow.stoliki).all()
         if any(sid in _ids_stolikow(wartosc) for (wartosc,) in kombinacje):
             raise HTTPException(409, "Stolik należy do kombinacji. Najpierw usuń lub zmień tę kombinację.")
+        reservation_service.cleanup_expired_holds(
+            db,
+            _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        if db.query(models.RezerwacjaStolikClaim.id).filter_by(stolik_id=sid).first():
+            raise HTTPException(
+                409,
+                "Stolik ma aktywne zajęcie lub hold. Najpierw zwolnij go w rezerwacjach.",
+            )
         db.delete(s); db.commit()
 
 
@@ -1836,8 +1968,9 @@ def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), o
 @app.post("/api/rezerwacje-stolik/{rid}/auto-przydziel", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def auto_przydziel_stolik(rid: int, db: Session = Depends(get_db)):
     """Silnik sam dobiera najlepszy stół/kombinację dla rezerwacji (tryb AUTO). 409 gdy brak miejsca."""
-    t = db.get(models.Termin, rid)
+    t, guards = _zablokuj_termin(db, rid)
     if not t or t.rodzaj != "stolik":
+        db.rollback()
         raise HTTPException(404, "Brak rezerwacji.")
     if not t.godz_od:
         raise HTTPException(400, "Rezerwacja bez godziny — nie można dobrać stołu.")
@@ -1849,13 +1982,27 @@ def auto_przydziel_stolik(rid: int, db: Session = Depends(get_db)):
                             zajete=zajete, limit=1, sasiedztwo=_sasiedztwo_do_seating(db),
                             obciazenie_sekcji=_obciazenie_sekcji(db, t.data, t.godz_od, godz_do))
     if not wynik:
-        raise HTTPException(409, "Brak wolnego stołu dla tej grupy w tym czasie.")
+        raise reservation_service.ReservationError(
+            409,
+            "NO_TABLE_CANDIDATE",
+            "Brak wolnego stołu dla tej grupy w tym czasie.",
+            rule="table",
+        )
     wybrany = wynik[0]
     t.stolik_id = wybrany["stoliki"][0]
     t.stoliki_dodatkowe = (wybrany["stoliki"][1:] or None)
     t.godz_do = godz_do
     t.auto_przydzielony = True
-    db.commit(); db.refresh(t)
+    try:
+        db.flush()
+        _zastap_ledger_terminu(
+            db, t, candidates=[{"stoliki": wybrany["stoliki"]}], enforce_pacing=False,
+        )
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(t)
     return {"rezerwacja": _rezerwacja_out(t), "przydzial": wybrany}
 
 
@@ -1952,8 +2099,9 @@ def host_os_czasu(data: date = Query(None), db: Session = Depends(get_db)):
 def host_zmien_faze(rid: int, dane: schemas.HostFazaIn, db: Session = Depends(get_db)):
     """Zmiana fazy operacyjnej (przybył/posadzony/rachunek/opłacony/wyszedł) z walidacją przejść.
     'posadzony' potwierdza rezerwację; 'wyszedł' domyka ją jako odbytą (status księgowy)."""
-    t = db.get(models.Termin, rid)
+    t, guards = _zablokuj_termin(db, rid)
     if not t or t.rodzaj != "stolik":
+        db.rollback()
         raise HTTPException(404, "Brak rezerwacji.")
     faza = (dane.faza or "").strip()
     if faza not in HOST_FAZY:
@@ -1972,17 +2120,20 @@ def host_zmien_faze(rid: int, dane: schemas.HostFazaIn, db: Session = Depends(ge
         t.host_left_at = teraz
         if t.status in REZ_AKTYWNE:
             t.status = "odbyla"
-    db.commit(); db.refresh(t)
+        reservation_service.release_termin_allocation(db, t.id)
+    _commit_zapis_rezerwacji(db, guards)
+    db.refresh(t)
     if faza == "wyszedl" and t.godz_od:                    # obrót zakończony → stół wolny
-        _po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
+        _bezpiecznie_po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
     return _host_out(t, teraz)
 
 
 @app.post("/api/host/rezerwacja/{rid}/przydziel-stolik", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def host_przydziel_stolik(rid: int, dane: schemas.HostStolikIn, db: Session = Depends(get_db)):
     """Ręczny przydział/przeniesienie rezerwacji na konkretny stół (walidacja pojemności + kolizji)."""
-    t = db.get(models.Termin, rid)
+    t, guards = _zablokuj_termin(db, rid)
     if not t or t.rodzaj != "stolik":
+        db.rollback()
         raise HTTPException(404, "Brak rezerwacji.")
     if not t.godz_od:
         raise HTTPException(400, "Rezerwacja bez godziny — nie można przydzielić stołu.")
@@ -1992,7 +2143,14 @@ def host_przydziel_stolik(rid: int, dane: schemas.HostStolikIn, db: Session = De
     t.stoliki_dodatkowe = None          # ręczny pojedynczy stół kasuje wcześniejszą kombinację
     t.auto_przydzielony = False         # od tej chwili źródłem przydziału jest decyzja operatora
     t.godz_do = godz_do
-    db.commit(); db.refresh(t)
+    try:
+        db.flush()
+        _zastap_ledger_terminu(db, t, enforce_pacing=False)
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(t)
     return _host_out(t, utcnow_naive())
 
 
@@ -2035,26 +2193,57 @@ def get_rezerwacje_stolik(start: date = Query(...), end: date = Query(...),
 
 
 @app.post("/api/rezerwacje-stolik", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
-def dodaj_rezerwacje_stolik(dane: schemas.RezerwacjaIn, db: Session = Depends(get_db)):
-    godz_do = _waliduj_rezerwacje(db, dane.data, dane.godz_od, dane.godz_do,
-                                  dane.stolik_id, dane.liczba_osob)
-    t = models.Termin(
-        data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
-        liczba_osob=dane.liczba_osob, notatka=dane.notatka, status="potwierdzona",
-        zadatek=float(dane.zadatek or 0), utworzono_at=utcnow_naive(),
-        godz_od=dane.godz_od, godz_do=godz_do, stolik_id=dane.stolik_id,
-        rodzaj="stolik", kanal="reczna")
-    db.add(t); db.commit(); db.refresh(t)
+def dodaj_rezerwacje_stolik(
+    dane: schemas.RezerwacjaIn,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    guards = reservation_service.begin_locked_write(db, [dane.data])
+    teraz = utcnow_naive()
+    try:
+        idem = reservation_service.begin_idempotency(
+            db,
+            operation="reservation.create.manual:v1",
+            raw_key=idempotency_key,
+            payload=dane.model_dump(mode="json"),
+            secret=SECRET_KEY,
+            now=teraz,
+        )
+        if idem.replayed:
+            db.rollback()
+            return idem.response
+        godz_do = _waliduj_rezerwacje(
+            db, dane.data, dane.godz_od, dane.godz_do,
+            dane.stolik_id, dane.liczba_osob,
+        )
+        t = models.Termin(
+            data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
+            liczba_osob=dane.liczba_osob, notatka=dane.notatka, status="potwierdzona",
+            zadatek=float(dane.zadatek or 0), utworzono_at=teraz,
+            godz_od=dane.godz_od, godz_do=godz_do, stolik_id=dane.stolik_id,
+            rodzaj="stolik", kanal="reczna")
+        db.add(t); db.flush()
+        _zastap_ledger_terminu(db, t, enforce_pacing=False)
+        odpowiedz = _rezerwacja_out(t)
+        reservation_service.complete_idempotency(
+            idem.record, response=odpowiedz, http_status=201, termin_id=t.id, now=teraz,
+        )
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(t)
     wyslij_push_do_adminow(db, "Nowa rezerwacja",
                            f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
     _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort (no-op gdy brak SMTP/adresu)
-    return _rezerwacja_out(t)
+    return odpowiedz
 
 
 @app.put("/api/rezerwacje-stolik/{rid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def edytuj_rezerwacje_stolik(rid: int, dane: schemas.RezerwacjaIn, db: Session = Depends(get_db)):
-    t = db.get(models.Termin, rid)
+    t, guards = _zablokuj_termin(db, rid, [dane.data])
     if not t or t.rodzaj != "stolik":
+        db.rollback()
         raise HTTPException(404, "Brak rezerwacji.")
     zachowaj_przydzial = bool(
         dane.stolik_id is not None
@@ -2079,7 +2268,14 @@ def edytuj_rezerwacje_stolik(rid: int, dane: schemas.RezerwacjaIn, db: Session =
         # zachować niewidocznych składników wcześniejszej kombinacji ani flagi AUTO.
         t.stoliki_dodatkowe = None
         t.auto_przydzielony = False
-    db.commit(); db.refresh(t)
+    try:
+        db.flush()
+        _zastap_ledger_terminu(db, t, enforce_pacing=False)
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(t)
     return _rezerwacja_out(t)
 
 
@@ -2095,6 +2291,7 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
     okno, mogą przeskoczyć na tańszy stół (np. z kombinacji na pojedynczy stół, który się zwolnił).
     Posadzonych gości nie ruszamy. Zwraca też wpisy listy oczekujących pasujące do okna — jako
     propozycję dla hosta (realizacja pozostaje ręczna)."""
+    guards = reservation_service.begin_locked_write(db, [data])
     przesadzone = []
     auto = (db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == data,
@@ -2119,14 +2316,32 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
         if set(najlepszy["stoliki"]) != obecne and (obecny_koszt is None or najlepszy["koszt"] < obecny_koszt):
             t.stolik_id = najlepszy["stoliki"][0]
             t.stoliki_dodatkowe = (najlepszy["stoliki"][1:] or None)
+            _zastap_ledger_terminu(
+                db,
+                t,
+                candidates=[{"stoliki": najlepszy["stoliki"]}],
+                enforce_pacing=False,
+            )
             przesadzone.append(t.id)
     if przesadzone:
-        db.commit()
+        _commit_zapis_rezerwacji(db, guards)
+    else:
+        db.rollback()
     propozycje = [w for w in db.query(models.ListaOczekujacych).filter(
         models.ListaOczekujacych.data == data,
         models.ListaOczekujacych.status == "oczekuje").all()
         if w.godz_od is None or (godz_od <= w.godz_od <= godz_do)]
     return {"przesadzone": przesadzone, "propozycje_waitlisty": [_lista_out(w) for w in propozycje]}
+
+
+def _bezpiecznie_po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
+    """Reoptymalizacja jest skutkiem ubocznym i nie może odwrócić wyniku zatwierdzonej operacji."""
+    try:
+        return _po_zwolnieniu_stolu(db, data, godz_od, godz_do)
+    except Exception:  # noqa: BLE001 — zapis główny został już zatwierdzony
+        db.rollback()
+        logger.exception("Nie udała się reoptymalizacja po zwolnieniu stołu")
+        return {"przesadzone": [], "propozycje_waitlisty": []}
 
 
 @app.post("/api/host/auto-no-show", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -2137,6 +2352,7 @@ def host_auto_no_show(data: date = Query(...), db: Session = Depends(get_db)):
     prog = get_lokal_config(db).rez_no_show_po_min or 0
     if prog <= 0:
         return {"oznaczone": []}
+    guards = reservation_service.begin_locked_write(db, [data])
     teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
     oznaczone = []
     for t in (db.query(models.Termin).filter(
@@ -2145,18 +2361,21 @@ def host_auto_no_show(data: date = Query(...), db: Session = Depends(get_db)):
             models.Termin.faza_hosta.is_(None)).all()):
         if datetime.combine(t.data, _dodaj_minuty(t.godz_od, prog)) < teraz:
             t.status = "no_show"
+            reservation_service.release_termin_allocation(db, t.id)
+            _nalicz_no_show_fee(db, t, commit=False)
             oznaczone.append((t.id, t.data, t.godz_od, _koniec_okna(db, t)))
     if oznaczone:
-        db.commit()
+        _commit_zapis_rezerwacji(db, guards)
         for rid, d, od, do in oznaczone:
-            _nalicz_no_show_fee(db, db.get(models.Termin, rid))   # opłata za no-show (za flagą)
-            _po_zwolnieniu_stolu(db, d, od, do)
+            _bezpiecznie_po_zwolnieniu_stolu(db, d, od, do)
+    else:
+        db.rollback()
     return {"oznaczone": [rid for rid, *_ in oznaczone]}
 
 
 @app.post("/api/rezerwacje-stolik/{rid}/status", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, db: Session = Depends(get_db)):
-    t = db.get(models.Termin, rid)
+    t, guards = _zablokuj_termin(db, rid)
     if not t or t.rodzaj != "stolik":
         raise HTTPException(404, "Brak rezerwacji.")
     nowy = (dane.status or "").strip()
@@ -2169,22 +2388,25 @@ def zmien_status_rezerwacji_stolik(rid: int, dane: schemas.RezerwacjaStatusIn, d
         t.potwierdzono_at = utcnow_naive()
     elif nowy == "odwolana":
         t.odwolano_at = utcnow_naive()
-    db.commit(); db.refresh(t)
+    if nowy not in REZ_AKTYWNE:
+        reservation_service.release_termin_allocation(db, t.id)
     if nowy == "no_show":
-        _nalicz_no_show_fee(db, t)                        # opłata za no-show (za flagą no_show_fee)
-    if nowy in ("odwolana", "no_show") and t.godz_od:     # stół się zwolnił → re-optymalizacja
-        _po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
+        _nalicz_no_show_fee(db, t, commit=False)
+    _commit_zapis_rezerwacji(db, guards); db.refresh(t)
+    if nowy not in REZ_AKTYWNE and t.godz_od:                # stół się zwolnił → re-optymalizacja
+        _bezpiecznie_po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
     return _rezerwacja_out(t)
 
 
 @app.delete("/api/rezerwacje-stolik/{rid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def usun_rezerwacje_stolik(rid: int, db: Session = Depends(get_db)):
-    t = db.get(models.Termin, rid)
+    t, guards = _zablokuj_termin(db, rid)
     if t and t.rodzaj == "stolik":
         okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
-        db.delete(t); db.commit()
+        reservation_service.release_termin_allocation(db, t.id)
+        db.delete(t); _commit_zapis_rezerwacji(db, guards)
         if okno:
-            _po_zwolnieniu_stolu(db, *okno)
+            _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
 
 
 @app.post("/api/rezerwacje-stolik/{rid}/wyslij-potwierdzenie", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -2233,43 +2455,74 @@ def dodaj_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, db: Session = De
 
 @app.delete("/api/lista-oczekujacych/{wid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def usun_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
-    w = db.get(models.ListaOczekujacych, wid)
+    w, guards = _zablokuj_waitliste(db, wid)
     if w:
-        db.delete(w); db.commit()
+        reservation_service.release_waitlist_hold(db, w.id)
+        db.delete(w); _commit_zapis_rezerwacji(db, guards)
 
 
 @app.post("/api/lista-oczekujacych/{wid}/odwolaj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def odwolaj_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
-    w = db.get(models.ListaOczekujacych, wid)
+    w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
+    reservation_service.release_waitlist_hold(db, w.id)
+    w.hold_stolik_id = None; w.hold_do = None
     w.status = "odwolany"
-    db.commit(); db.refresh(w)
+    _commit_zapis_rezerwacji(db, guards); db.refresh(w)
     return _lista_out(w)
 
 
 @app.post("/api/lista-oczekujacych/{wid}/zrealizuj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
-def zrealizuj_lista_oczekujacych(wid: int, dane: schemas.ZrealizujIn, db: Session = Depends(get_db)):
+def zrealizuj_lista_oczekujacych(
+    wid: int,
+    dane: schemas.ZrealizujIn,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
     """Realizuje wpis z listy oczekujących → tworzy rezerwację na wskazanym stoliku
     (walidacja pojemności/kolizji). Wpis dostaje status 'zrealizowany'."""
-    w = db.get(models.ListaOczekujacych, wid)
+    w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
+    teraz = utcnow_naive()
+    idem = reservation_service.begin_idempotency(
+        db,
+        operation="reservation.create.waitlist:v1",
+        raw_key=idempotency_key,
+        payload={"waitlist_id": wid, **dane.model_dump(mode="json")},
+        secret=SECRET_KEY,
+        now=teraz,
+    )
+    if idem.replayed:
+        db.rollback()
+        return idem.response
     if w.status != "oczekuje":
         raise HTTPException(409, "Wpis już zrealizowany lub odwołany.")
-    w.hold_stolik_id = None; w.hold_do = None      # realizacja kończy HOLD (autoflush: kolizja go nie zobaczy)
+    reservation_service.release_waitlist_hold(db, w.id)
+    w.hold_stolik_id = None; w.hold_do = None      # realizacja kończy HOLD w tej samej transakcji
     godz = dane.godz_od or w.godz_od
     godz_do = _waliduj_rezerwacje(db, w.data, godz, None, dane.stolik_id, w.liczba_osob)
     t = models.Termin(
         data=w.data, nazwisko=w.nazwisko, telefon=w.telefon, email=w.email,
         liczba_osob=w.liczba_osob, notatka=w.notatka, status="potwierdzona", zadatek=0.0,
-        utworzono_at=utcnow_naive(), godz_od=godz, godz_do=godz_do, stolik_id=dane.stolik_id,
+        utworzono_at=teraz, godz_od=godz, godz_do=godz_do, stolik_id=dane.stolik_id,
         rodzaj="stolik", kanal="reczna")
-    db.add(t); db.flush()
-    w.status = "zrealizowany"; w.zrealizowano_at = utcnow_naive(); w.termin_id = t.id
-    db.commit(); db.refresh(t)
+    try:
+        db.add(t); db.flush()
+        _zastap_ledger_terminu(db, t, enforce_pacing=False)
+        w.status = "zrealizowany"; w.zrealizowano_at = teraz; w.termin_id = t.id
+        odpowiedz = {"rezerwacja": _rezerwacja_out(t), "wpis": _lista_out(w)}
+        reservation_service.complete_idempotency(
+            idem.record, response=odpowiedz, http_status=200, termin_id=t.id, now=teraz,
+        )
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(t)
     _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
-    return {"rezerwacja": _rezerwacja_out(t), "wpis": _lista_out(w)}
+    return odpowiedz
 
 
 def _powiadom_waitlist(db, w: models.ListaOczekujacych) -> bool:
@@ -2304,7 +2557,7 @@ def powiadom_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
 def hold_lista_oczekujacych(wid: int, dane: schemas.HoldIn, db: Session = Depends(get_db)):
     """Tymczasowo trzyma wskazany stół dla gościa z waitlisty (na `minuty`). Stół z aktywnym holdem
     znika z puli wolnych (także online) — patrz _zajete_stoly."""
-    w = db.get(models.ListaOczekujacych, wid)
+    w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
     if w.status != "oczekuje":
@@ -2318,20 +2571,30 @@ def hold_lista_oczekujacych(wid: int, dane: schemas.HoldIn, db: Session = Depend
             raise HTTPException(409, "Stolik zajęty (lub już trzymany) w tym oknie.")
     minuty = max(1, int(dane.minuty or 15))
     teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    hold_do = teraz + timedelta(minutes=minuty)
+    reservation_service.replace_waitlist_hold(
+        db,
+        waitlist_id=w.id,
+        table_id=dane.stolik_id,
+        data=w.data,
+        expires_at=hold_do,
+        now=teraz,
+    )
     w.hold_stolik_id = dane.stolik_id
-    w.hold_do = teraz + timedelta(minutes=minuty)
-    db.commit(); db.refresh(w)
+    w.hold_do = hold_do
+    _commit_zapis_rezerwacji(db, guards); db.refresh(w)
     return _lista_out(w)
 
 
 @app.post("/api/lista-oczekujacych/{wid}/zwolnij-hold", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def zwolnij_hold_lista_oczekujacych(wid: int, db: Session = Depends(get_db)):
     """Zwalnia wcześniejszy HOLD (stół wraca do puli)."""
-    w = db.get(models.ListaOczekujacych, wid)
+    w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
+    reservation_service.release_waitlist_hold(db, w.id)
     w.hold_stolik_id = None; w.hold_do = None
-    db.commit(); db.refresh(w)
+    _commit_zapis_rezerwacji(db, guards); db.refresh(w)
     return _lista_out(w)
 
 
@@ -2366,7 +2629,7 @@ def _sloty_dnia(db, data: date):
     return pary
 
 
-def _pacing_pelny(db, data, godz_od, serwis, osoby) -> bool:
+def _pacing_pelny(db, data, godz_od, serwis, osoby, pomin_id=None) -> bool:
     """Czy limit coverów serwisu jest wyczerpany dla slotu o godz_od (dołożenie rezerwacji na
     'osoby' przekroczyłoby pacing_max_rez lub pacing_max_osob). Liczy aktywne rezerwacje
     stolikowe startujące w oknie [godz_od, godz_od+okno). Brak limitów → nigdy pełny."""
@@ -2376,20 +2639,16 @@ def _pacing_pelny(db, data, godz_od, serwis, osoby) -> bool:
     if not max_rez and not max_osob:
         return False
     okno = serwis.pacing_okno_min or serwis.dlugosc_slotu_min or DOMYSLNY_SLOT_MIN
-    start_m = godz_od.hour * 60 + godz_od.minute
-    ile_rez, ile_osob = 0, 0
-    for r in db.query(models.Termin).filter(
-            models.Termin.rodzaj == "stolik", models.Termin.data == data,
-            models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).all():
-        r_m = r.godz_od.hour * 60 + r.godz_od.minute
-        if start_m <= r_m < start_m + okno:
-            ile_rez += 1
-            ile_osob += (r.liczba_osob or 0)
-    if max_rez and ile_rez + 1 > max_rez:
-        return True
-    if max_osob and ile_osob + max(1, osoby or 1) > max_osob:
-        return True
-    return False
+    return reservation_service.pacing_status(
+        db,
+        data=data,
+        start=godz_od,
+        window_min=okno,
+        party_size=osoby,
+        max_reservations=max_rez,
+        max_covers=max_osob,
+        exclude_termin_id=pomin_id,
+    )["full"]
 
 
 def _stolik_zajety(db, data, stolik_id, godz_od, godz_do) -> bool:
@@ -2397,28 +2656,16 @@ def _stolik_zajety(db, data, stolik_id, godz_od, godz_do) -> bool:
 
 
 def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
-    """Zbiór id stołów zajętych w oknie [godz_od, godz_do] — wliczając stoły składowe kombinacji."""
-    zajete = set()
-    bufor = get_lokal_config(db).rez_bufor_min or 0     # bufor sprzątania między rezerwacjami
-    q = db.query(models.Termin).filter(
-        models.Termin.rodzaj == "stolik", models.Termin.data == data,
-        models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None))
-    if pomin_id is not None:
-        q = q.filter(models.Termin.id != pomin_id)
-    for r in q.all():
-        r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
-        r_do_buf, r_od_buf = _dodaj_minuty(r_do, bufor), _dodaj_minuty(r.godz_od, -bufor)
-        if godz_od < r_do_buf and r_od_buf < godz_do:
-            zajete |= _stoly_terminu(r)
-    # Tymczasowe HOLD-y z listy oczekujących (waitlist v2) — trzymany stół jest zajęty dopóki hold aktywny.
-    teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
-    for w in db.query(models.ListaOczekujacych).filter(
-            models.ListaOczekujacych.data == data,
-            models.ListaOczekujacych.hold_stolik_id.isnot(None),
-            models.ListaOczekujacych.hold_do.isnot(None)).all():
-        if w.hold_do > teraz:
-            zajete.add(w.hold_stolik_id)
-    return zajete
+    """Zbiór stołów zajętych według kanonicznego ledgera R0b."""
+    return reservation_service.occupied_table_ids(
+        db,
+        data=data,
+        start=godz_od,
+        end=godz_do,
+        buffer_min=get_lokal_config(db).rez_bufor_min or 0,
+        exclude_termin_id=pomin_id,
+        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+    )
 
 
 def _stoly_do_seating(db):
@@ -2433,9 +2680,9 @@ def _sasiedztwo_do_seating(db):
     return [(k.stolik_a, k.stolik_b) for k in db.query(models.SasiedztwoStolow).all()]
 
 
-def _obciazenie_sekcji(db, data, godz_od, godz_do):
+def _obciazenie_sekcji(db, data, godz_od, godz_do, pomin_id=None):
     """Ile stołów zajętych per sekcja kelnerska w oknie — do balansu obłożenia w silniku."""
-    zajete = _zajete_stoly(db, data, godz_od, godz_do)
+    zajete = _zajete_stoly(db, data, godz_od, godz_do, pomin_id=pomin_id)
     if not zajete:
         return {}
     obc = {}
@@ -2466,18 +2713,32 @@ def _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby, pomin_id=None):
     return None
 
 
+def _wybierz_wolny_przydzial(db, data, godz_od, godz_do, osoby, pomin_id=None):
+    """Najlepszy pojedynczy stół lub dozwolona kombinacja ze wspólnego silnika sadzania."""
+    zajete = _zajete_stoly(db, data, godz_od, godz_do, pomin_id=pomin_id)
+    wyniki = seating.dopasuj(
+        max(1, osoby or 1),
+        _stoly_do_seating(db),
+        _kombinacje_do_seating(db),
+        zajete=zajete,
+        limit=1,
+        sasiedztwo=_sasiedztwo_do_seating(db),
+        obciazenie_sekcji=_obciazenie_sekcji(
+            db, data, godz_od, godz_do, pomin_id=pomin_id,
+        ),
+    )
+    return wyniki[0] if wyniki else None
+
+
 def _pierwszy_wolny_slot(db, data, osoby, cfg, teraz_lok):
-    """Pierwszy slot dnia z wolnym stołem dla 'osoby' (respektuje blackout/cutoff/pacing). None gdy brak."""
-    stoliki = [s for s in db.query(models.Stolik).filter_by(aktywny=True).all() if (s.pojemnosc or 0) >= osoby]
-    if not stoliki:
-        return None
+    """Pierwszy slot z przydziałem pojedynczym lub kombinacją, zgodny z pacingiem."""
     for g, serwis in _sloty_dnia(db, data):                     # blackout → [] (pusto, sam znika)
         if cfg.rez_cutoff_min and (datetime.combine(data, g) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
             continue
         if _pacing_pelny(db, data, g, serwis, osoby):
             continue
         g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
-        if any(not _stolik_zajety(db, data, s.id, g, g_do) for s in stoliki):
+        if _wybierz_wolny_przydzial(db, data, g, g_do, osoby):
             return (g, serwis)
     return None
 
@@ -2515,9 +2776,10 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
             continue                                                   # slot po cutoffie — nie pokazuj
         g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
         wolne_stoly = sum(1 for s in stoliki if not _stolik_zajety(db, data, s.id, g, g_do))
+        ma_przydzial = bool(_wybierz_wolny_przydzial(db, data, g, g_do, osoby))
         pacing_pelny = _pacing_pelny(db, data, g, serwis, osoby)
         # 'wolne' = efektywnie wolne (0 gdy pacing wyczerpany) — zgodne wstecznie z widgetem gościa.
-        out.append({"godz_od": _hm(g), "wolne": (0 if pacing_pelny else wolne_stoly),
+        out.append({"godz_od": _hm(g), "wolne": (0 if pacing_pelny else max(wolne_stoly, int(ma_przydzial))),
                     "wolne_stoly": wolne_stoly, "pacing_pelny": pacing_pelny,
                     "serwis": (serwis.nazwa if serwis and serwis.nazwa else None)})
     return {"data": str(data), "osoby": osoby, "sloty": out}
@@ -2546,85 +2808,145 @@ def online_najblizszy_termin(osoby: int = 2, od: Optional[date] = None, dni: int
 
 
 @app.post("/api/online/rezerwacja", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
-def online_rezerwacja(dane: schemas.OnlineRezerwacjaIn, request: Request, db: Session = Depends(get_db)):
-    """Publicznie: utworzenie rezerwacji online. System sam dobiera wolny stolik."""
+def online_rezerwacja(
+    dane: schemas.OnlineRezerwacjaIn,
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    """Publicznie tworzy rezerwację, płatność i ledger w jednej transakcji."""
     if not dane.nazwisko or not dane.nazwisko.strip():
         raise HTTPException(400, "Podaj imię/nazwisko.")
     if (dane.liczba_osob or 0) < 1:
         raise HTTPException(400, "Liczba osób musi być dodatnia.")
-    # Data „dziś" wg strefy LOKALU (nie UTC hosta) — inaczej w oknie nocnym (po północy lokalnej,
-    # przed północą UTC) bramka „wstecz" i dobowy klucz limitu liczyły zły dzień.
     teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
     dzis_lokalnie = teraz_lok.date()
     if dane.data < dzis_lokalnie:
         raise HTTPException(400, "Nie można rezerwować wstecz.")
-    # Polityka rezerwacji (S1) — bramki przed limitem IP, by odrzucenie nie zużywało kwoty.
-    cfg = get_lokal_config(db)
-    if cfg.rez_okno_wyprzedzenia_dni and dane.data > dzis_lokalnie + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
-        raise HTTPException(400, f"Rezerwacje można składać najwyżej {cfg.rez_okno_wyprzedzenia_dni} dni w przód.")
-    if (dane.liczba_osob or 0) < cfg.rez_min_grupa_online or \
-            (cfg.rez_max_grupa_online and dane.liczba_osob > cfg.rez_max_grupa_online):
-        raise HTTPException(400, "Liczba osób poza zakresem dozwolonym dla rezerwacji online.")
-    if _jest_blackout(db, dane.data):
-        raise HTTPException(409, "W tym dniu nie przyjmujemy rezerwacji online.")   # jawny blackout
-    if cfg.rez_cutoff_min:
-        start = datetime.combine(dane.data, dane.godz_od)
-        if (start - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
-            raise HTTPException(409, "Zbyt późno na rezerwację online w tym terminie.")
-    # Anty-DoS: twardy limit rezerwacji/dzień z jednego IP — działa NIEZALEŻNIE od telefonu/e-maila
-    # (bez tego atakujący pomijał limit poniżej, wysyłając rezerwacje bez danych kontaktu). Stan
-    # w pamięci procesu (jak limiter logowania); klucz po realnym adresie klienta.
-    ip = request.client.host if request.client else "?"
-    if not ratelimit.zuzyj_kwote(f"online-rez:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY):
-        raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online z tego adresu.")
-    # Anty-spam: limit aktywnych rezerwacji online/dzień po tym samym telefonie/e-mailu.
-    # Telefon/e-mail są szyfrowane at-rest (niedeterministycznie) — nie da się filtrować
-    # po nich w SQL; pobieramy dzienny (mały) zbiór online i porównujemy po odszyfrowaniu.
-    if dane.telefon or dane.email:
-        dzisiaj_online = db.query(models.Termin).filter(
-            models.Termin.kanal == "online", models.Termin.data == dane.data,
-            models.Termin.status.in_(REZ_AKTYWNE)).all()
-        ile = sum(1 for t in dzisiaj_online
-                  if (dane.telefon and t.telefon == dane.telefon)
-                  or (dane.email and t.email == dane.email))
-        if ile >= ONLINE_LIMIT_DZIENNY:
-            raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online.")
 
-    serwis = _serwis_dla_godziny(db, dane.data, dane.godz_od)
-    if _pacing_pelny(db, dane.data, dane.godz_od, serwis, dane.liczba_osob):
-        raise HTTPException(409, "Brak miejsc w wybranym czasie (limit rezerwacji online).")
-    godz_do = _dodaj_minuty(dane.godz_od, _turn_time(serwis, dane.liczba_osob))
-    stolik = _wybierz_wolny_stolik(db, dane.data, dane.godz_od, godz_do, dane.liczba_osob)
-    if not stolik:
-        raise HTTPException(409, "Brak wolnego stolika w wybranym czasie.")
-    cfg = get_lokal_config(db)
-    status = "potwierdzona" if cfg.rezerwacje_auto_potwierdzenie else "rezerwacja"
-    t = models.Termin(
-        data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
-        liczba_osob=dane.liczba_osob, notatka=dane.notatka, status=status, zadatek=0.0,
-        utworzono_at=utcnow_naive(), godz_od=dane.godz_od, godz_do=godz_do, stolik_id=stolik.id,
-        rodzaj="stolik", kanal="online", token_potwierdzenia=secrets.token_urlsafe(24),
-        potwierdzono_at=(utcnow_naive() if status == "potwierdzona" else None))
-    db.add(t); db.commit(); db.refresh(t)
-    wyslij_push_do_adminow(db, "Rezerwacja online",
-                           f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
-    _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
-    odp = {"token": t.token_potwierdzenia, "rezerwacja": _online_rez_out(t, stolik)}
-    # Zadatek (za flagą zadatek_wymagany) — sandbox link do zapłaty; realne pobieranie po wpięciu bramki.
-    if cfg.zadatek_wymagany and dane.liczba_osob >= (cfg.zadatek_prog_osob or 0):
-        kwota = round((cfg.zadatek_kwota_os or 0) * dane.liczba_osob, 2)
-        if kwota > 0:
-            p = platnosci.utworz_platnosc(db, t.id, kwota)
-            odp["platnosc"] = {"kwota": p.kwota, "link": p.link, "status": p.status}
+    # Singleton może zostać utworzony leniwie i wykonać commit; robimy to przed blokadą dnia.
+    get_lokal_config(db)
+    guards = reservation_service.begin_locked_write(db, [dane.data])
+    teraz = utcnow_naive()
+    try:
+        idem = reservation_service.begin_idempotency(
+            db,
+            operation="reservation.create.online:v1",
+            raw_key=idempotency_key,
+            payload=dane.model_dump(mode="json"),
+            secret=SECRET_KEY,
+            now=teraz,
+        )
+        if idem.replayed:
+            db.rollback()
+            return idem.response
+
+        cfg = get_lokal_config(db)
+        if cfg.rez_okno_wyprzedzenia_dni and dane.data > dzis_lokalnie + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
+            raise HTTPException(400, f"Rezerwacje można składać najwyżej {cfg.rez_okno_wyprzedzenia_dni} dni w przód.")
+        if (dane.liczba_osob or 0) < cfg.rez_min_grupa_online or \
+                (cfg.rez_max_grupa_online and dane.liczba_osob > cfg.rez_max_grupa_online):
+            raise HTTPException(400, "Liczba osób poza zakresem dozwolonym dla rezerwacji online.")
+        if _jest_blackout(db, dane.data):
+            raise HTTPException(409, "W tym dniu nie przyjmujemy rezerwacji online.")
+        if cfg.rez_cutoff_min:
+            start = datetime.combine(dane.data, dane.godz_od)
+            if (start - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
+                raise HTTPException(409, "Zbyt późno na rezerwację online w tym terminie.")
+
+        ip = request.client.host if request.client else "?"
+        if not ratelimit.zuzyj_kwote(
+            f"online-rez:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY,
+        ):
+            raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online z tego adresu.")
+        if dane.telefon or dane.email:
+            dzisiaj_online = db.query(models.Termin).filter(
+                models.Termin.kanal == "online",
+                models.Termin.data == dane.data,
+                models.Termin.status.in_(REZ_AKTYWNE),
+            ).all()
+            ile = sum(
+                1 for rezerwacja in dzisiaj_online
+                if (dane.telefon and rezerwacja.telefon == dane.telefon)
+                or (dane.email and rezerwacja.email == dane.email)
+            )
+            if ile >= ONLINE_LIMIT_DZIENNY:
+                raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online.")
+
+        serwis = _serwis_dla_godziny(db, dane.data, dane.godz_od)
+        godz_do = _dodaj_minuty(dane.godz_od, _turn_time(serwis, dane.liczba_osob))
+        przydzial = _wybierz_wolny_przydzial(
+            db, dane.data, dane.godz_od, godz_do, dane.liczba_osob,
+        )
+        if not przydzial:
+            raise reservation_service.ReservationError(
+                409,
+                "NO_TABLE_CANDIDATE",
+                "Brak wolnego stołu w wybranym czasie.",
+                rule="table",
+            )
+        stoliki = przydzial["stoliki"]
+        stolik = db.get(models.Stolik, stoliki[0])
+        status = "potwierdzona" if cfg.rezerwacje_auto_potwierdzenie else "rezerwacja"
+        t = models.Termin(
+            data=dane.data,
+            nazwisko=dane.nazwisko.strip(),
+            telefon=dane.telefon,
+            email=dane.email,
+            liczba_osob=dane.liczba_osob,
+            notatka=dane.notatka,
+            status=status,
+            zadatek=0.0,
+            utworzono_at=teraz,
+            godz_od=dane.godz_od,
+            godz_do=godz_do,
+            stolik_id=stoliki[0],
+            stoliki_dodatkowe=(stoliki[1:] or None),
+            auto_przydzielony=True,
+            rodzaj="stolik",
+            kanal="online",
+            token_potwierdzenia=secrets.token_urlsafe(24),
+            potwierdzono_at=(teraz if status == "potwierdzona" else None),
+        )
+        db.add(t); db.flush()
+        _zastap_ledger_terminu(
+            db,
+            t,
+            enforce_pacing=True,
+            candidates=[{"stoliki": stoliki}],
+        )
+        odp = {"token": t.token_potwierdzenia, "rezerwacja": _online_rez_out(t, stolik)}
+        if cfg.zadatek_wymagany and dane.liczba_osob >= (cfg.zadatek_prog_osob or 0):
+            kwota = round((cfg.zadatek_kwota_os or 0) * dane.liczba_osob, 2)
+            if kwota > 0:
+                p = platnosci.utworz_platnosc(db, t.id, kwota, commit=False)
+                odp["platnosc"] = {"kwota": p.kwota, "link": p.link, "status": p.status}
+        reservation_service.complete_idempotency(
+            idem.record, response=odp, http_status=201, termin_id=t.id, now=teraz,
+        )
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+
+    db.refresh(t)
+    wyslij_push_do_adminow(
+        db,
+        "Rezerwacja online",
+        f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(),
+        url="/",
+    )
+    _wyslij_potwierdzenie_rezerwacji(db, t)
     return odp
 
 
-def _nalicz_no_show_fee(db, t):
+def _nalicz_no_show_fee(db, t, *, commit=True):
     """Opłata za no-show (za flagą no_show_fee) — rekord płatności (sandbox link). Realne obciążenie
     zapisanej karty dopiero z realną bramką; tu powstaje należność do rozliczenia."""
     fee = get_lokal_config(db).no_show_fee or 0
     if fee > 0 and t is not None and t.rodzaj == "stolik":
-        platnosci.utworz_platnosc(db, t.id, fee)
+        return platnosci.utworz_platnosc(db, t.id, fee, commit=commit)
+    return None
 
 
 @app.post("/api/online/lista-oczekujacych", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
@@ -2669,26 +2991,34 @@ def online_rezerwacja_get(token: str, db: Session = Depends(get_db)):
 
 @app.post("/api/online/rezerwacja/{token}/potwierdz", dependencies=[Depends(_wymagaj_rezerwacje_online)])
 def online_rezerwacja_potwierdz(token: str, db: Session = Depends(get_db)):
-    t = _rez_po_tokenie(db, token)
+    t, guards = _zablokuj_rezerwacje_online(db, token)
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
     if t.status == "rezerwacja":
-        t.status = "potwierdzona"; t.potwierdzono_at = utcnow_naive(); db.commit(); db.refresh(t)
+        t.status = "potwierdzona"; t.potwierdzono_at = utcnow_naive()
+        _commit_zapis_rezerwacji(db, guards); db.refresh(t)
+    else:
+        db.rollback()
     return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
 
 
 @app.post("/api/online/rezerwacja/{token}/odwolaj", dependencies=[Depends(_wymagaj_rezerwacje_online)])
 def online_rezerwacja_odwolaj(token: str, db: Session = Depends(get_db)):
-    t = _rez_po_tokenie(db, token)
+    t, guards = _zablokuj_rezerwacje_online(db, token)
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
     if t.status in REZ_AKTYWNE:
         teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
         _sprawdz_okno_anulacji(get_lokal_config(db), t, teraz_lok)   # egzekwuj rez_anulacja_do_h
         stolik_wolny = _stoly_terminu(t)
-        t.status = "odwolana"; t.odwolano_at = utcnow_naive(); db.commit(); db.refresh(t)
+        okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
+        t.status = "odwolana"; t.odwolano_at = utcnow_naive()
+        reservation_service.release_termin_allocation(db, t.id)
+        _commit_zapis_rezerwacji(db, guards); db.refresh(t)
         if stolik_wolny and t.godz_od:                               # zwolniony stół → re-optymalizacja
-            _po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
+            _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
+    else:
+        db.rollback()
     return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
 
 
@@ -2696,7 +3026,7 @@ def online_rezerwacja_odwolaj(token: str, db: Session = Depends(get_db)):
 def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Session = Depends(get_db)):
     """Publicznie (magic-link): zmiana terminu/liczby osób. Egzekwuje politykę (okno anulacji, okno
     wyprzedzenia, cutoff, min/max grupa, blackout) i re-alokuje stół. 409 gdy brak miejsca."""
-    t = _rez_po_tokenie(db, token)
+    t, guards = _zablokuj_rezerwacje_online(db, token, [dane.data])
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
     if t.status not in REZ_AKTYWNE:
@@ -2721,20 +3051,43 @@ def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Sessi
         raise HTTPException(409, "W tym dniu nie przyjmujemy rezerwacji online.")
     if cfg.rez_cutoff_min and (datetime.combine(data, godz_od) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
         raise HTTPException(409, "Zbyt późno na wybrany termin.")
-    zmiana_slotu = (data != t.data or godz_od != t.godz_od)
     serwis = _serwis_dla_godziny(db, data, godz_od)
-    if zmiana_slotu and _pacing_pelny(db, data, godz_od, serwis, osoby):   # przy zmianie slotu — pacing (bez samoblokady)
-        raise HTTPException(409, "Brak miejsc w wybranym czasie.")
     godz_do = _dodaj_minuty(godz_od, _turn_time(serwis, osoby))
-    stolik = _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby, pomin_id=t.id)   # pomiń własny stół
-    if not stolik:
-        raise HTTPException(409, "Brak wolnego stolika dla nowego terminu.")
+    przydzial = _wybierz_wolny_przydzial(
+        db, data, godz_od, godz_do, osoby, pomin_id=t.id,
+    )
+    if not przydzial:
+        raise reservation_service.ReservationError(
+            409,
+            "NO_TABLE_CANDIDATE",
+            "Brak wolnego stołu dla nowego terminu.",
+            rule="table",
+        )
+    stoliki = przydzial["stoliki"]
+    stolik = db.get(models.Stolik, stoliki[0])
     stary_okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
+    stare_stoliki = _stoly_terminu(t)
     t.data = data; t.godz_od = godz_od; t.godz_do = godz_do; t.liczba_osob = osoby
-    t.stolik_id = stolik.id; t.stoliki_dodatkowe = None
-    db.commit(); db.refresh(t)
-    if stary_okno and (stary_okno[0], _hm(stary_okno[1])) != (data, _hm(godz_od)):
-        _po_zwolnieniu_stolu(db, *stary_okno)                        # stary termin zwolniony → re-optymalizacja
+    t.stolik_id = stoliki[0]; t.stoliki_dodatkowe = (stoliki[1:] or None)
+    t.auto_przydzielony = True
+    try:
+        db.flush()
+        _zastap_ledger_terminu(
+            db,
+            t,
+            enforce_pacing=True,
+            candidates=[{"stoliki": stoliki}],
+        )
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(t)
+    if stary_okno and (
+        (stary_okno[0], _hm(stary_okno[1])) != (data, _hm(godz_od))
+        or stare_stoliki != set(stoliki)
+    ):
+        _bezpiecznie_po_zwolnieniu_stolu(db, *stary_okno)            # stary termin zwolniony → re-optymalizacja
     return _online_rez_out(t, stolik)
 
 

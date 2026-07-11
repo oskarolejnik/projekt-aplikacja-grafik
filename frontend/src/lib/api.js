@@ -51,8 +51,18 @@ export const setUnauthorizedHandler = (fn) => {
   onUnauthorized = fn
 }
 
-export async function api(path, method = 'GET', body = null) {
-  const opts = { method, headers: {} }
+export const nowyKluczIdempotencji = (scope = 'request') => {
+  const losowy = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  return `${scope}-${losowy}`.slice(0, 128)
+}
+
+export async function api(path, method = 'GET', body = null, options = {}) {
+  const opts = {
+    method,
+    headers: { ...(options.headers || {}) },
+    ...(options.signal ? { signal: options.signal } : {}),
+  }
   const token = getToken()
   if (token) opts.headers['Authorization'] = `Bearer ${token}`
   if (body) {
@@ -69,7 +79,13 @@ export async function api(path, method = 'GET', body = null) {
   if (res.status === 204) return null
 
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.detail || res.statusText)
+  if (!res.ok) {
+    const error = new Error(data.detail || res.statusText)
+    error.status = res.status
+    error.code = data.code || null
+    error.availability = data.availability || null
+    throw error
+  }
   return data
 }
 

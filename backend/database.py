@@ -9,7 +9,7 @@ Kod jest niezależny od silnika dzięki SQLAlchemy.
 import os
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from models import Base
 
@@ -28,6 +28,17 @@ engine = create_engine(
     connect_args=connect_args,
     pool_pre_ping=True,  # odporność na zerwane połączenia (ważne dla Postgresa)
 )
+
+
+if DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _sqlite_foreign_keys(dbapi_connection, _connection_record):
+        """SQLite domyślnie ignoruje FK; ledger wymaga realnego CASCADE/RESTRICT."""
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -160,6 +171,173 @@ def _alembic_run(action):
     return True
 
 
+_R0B_LEDGER_TABLES = {
+    "rezerwacje_idempotencja",
+    "rezerwacje_dni_ledger",
+    "rezerwacje_stoliki_claims",
+    "rezerwacje_pacing_ledger",
+}
+_R0B_REVISION = "0051_rezerwacje_atomic_ledger"
+_PRE_R0B_REVISION = "0050_rezerwacje_source_identity"
+
+
+def _rebuild_rezerwacje_ledger():
+    """Odbudowuje bieżący ledger po ``create_all`` fallbacku.
+
+    Normalna ścieżka Alembica korzysta z backfillu migracji 0051. Ta funkcja zabezpiecza
+    instalacje bez Alembica oraz niewersjonowane bazy utworzone wcześniej przez ``create_all``.
+    Nie kopiuje PII do błędów i wykonuje całość w jednej transakcji startowej.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import inspect
+
+    import models
+    import reservation_service
+
+    schema = inspect(engine)
+    table_names = set(schema.get_table_names())
+    required_tables = {"terminy", "stoliki", "lista_oczekujacych"} | _R0B_LEDGER_TABLES
+    if not required_tables.issubset(table_names):
+        return
+    termin_columns = {column["name"] for column in schema.get_columns("terminy")}
+    waitlist_columns = {
+        column["name"] for column in schema.get_columns("lista_oczekujacych")
+    }
+    if not {
+        "data", "rodzaj", "status", "godz_od", "godz_do", "stolik_id",
+        "stoliki_dodatkowe", "liczba_osob",
+    }.issubset(termin_columns) or not {
+        "data", "status", "hold_stolik_id", "hold_do",
+    }.issubset(waitlist_columns):
+        # Bardzo stary fallback nie ma jeszcze domeny rezerwacji stolikowych; zachowaj
+        # jego dotychczasowy start zamiast wykonywać zapytania do nieistniejących kolumn.
+        return
+
+    db = SessionLocal()
+    try:
+        now = datetime.now(ZoneInfo("Europe/Warsaw")).replace(tzinfo=None)
+        active = tuple(reservation_service.ACTIVE_STATUSES)
+        dates = {
+            value for (value,) in db.query(models.Termin.data).filter(
+                models.Termin.rodzaj == "stolik",
+                models.Termin.status.in_(active),
+            ).all()
+        }
+        dates.update(
+            value for (value,) in db.query(models.ListaOczekujacych.data).filter(
+                models.ListaOczekujacych.status == "oczekuje",
+                models.ListaOczekujacych.hold_stolik_id.isnot(None),
+                models.ListaOczekujacych.hold_do > now,
+            ).all()
+        )
+        guards = reservation_service.begin_locked_write(db, dates) if dates else ()
+
+        # Rebuild jest idempotentny; rollback przy błędzie przywraca poprzedni kompletny ledger.
+        db.query(models.RezerwacjaStolikClaim).delete(synchronize_session=False)
+        db.query(models.RezerwacjaPacingLedger).delete(synchronize_session=False)
+        known_tables = {value for (value,) in db.query(models.Stolik.id).all()}
+
+        def table_ids(record):
+            raw = record.stoliki_dodatkowe
+            if raw is None:
+                extra = []
+            elif isinstance(raw, list):
+                extra = raw
+            else:
+                raise RuntimeError(
+                    f"R0B_FALLBACK_CORRUPT_EXTRA_TABLES record_id={record.id}"
+                )
+            result = []
+            for value in ([record.stolik_id] if record.stolik_id is not None else []) + extra:
+                if isinstance(value, bool):
+                    raise RuntimeError(
+                        f"R0B_FALLBACK_CORRUPT_TABLE record_id={record.id}"
+                    )
+                try:
+                    table_id = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"R0B_FALLBACK_CORRUPT_TABLE record_id={record.id}"
+                    ) from exc
+                if table_id <= 0 or table_id in result:
+                    raise RuntimeError(
+                        f"R0B_FALLBACK_DUPLICATE_TABLE record_id={record.id}"
+                    )
+                if table_id not in known_tables:
+                    raise RuntimeError(
+                        f"R0B_FALLBACK_MISSING_TABLE table_id={table_id} record_id={record.id}"
+                    )
+                result.append(table_id)
+            return result
+
+        reservations = db.query(models.Termin).filter(
+            models.Termin.rodzaj == "stolik",
+            models.Termin.status.in_(active),
+        ).order_by(models.Termin.id).all()
+        for record in reservations:
+            ids = table_ids(record)
+            if ids and record.godz_od is None:
+                raise RuntimeError(f"R0B_FALLBACK_MISSING_START record_id={record.id}")
+            if ids and record.godz_do is None:
+                raise RuntimeError(f"R0B_FALLBACK_MISSING_END record_id={record.id}")
+            reservation_service.replace_termin_allocation(
+                db,
+                termin_id=record.id,
+                data=record.data,
+                start=record.godz_od,
+                end=record.godz_do,
+                table_ids=ids,
+                party_size=record.liczba_osob or 0,
+                enforce_pacing=False,
+                now=now,
+            )
+
+        holds = db.query(models.ListaOczekujacych).filter(
+            models.ListaOczekujacych.status == "oczekuje",
+            models.ListaOczekujacych.hold_stolik_id.isnot(None),
+            models.ListaOczekujacych.hold_do > now,
+        ).order_by(models.ListaOczekujacych.id).all()
+        for hold in holds:
+            if hold.hold_stolik_id not in known_tables:
+                raise RuntimeError(
+                    f"R0B_FALLBACK_MISSING_TABLE table_id={hold.hold_stolik_id} "
+                    f"waitlist_id={hold.id}"
+                )
+            reservation_service.replace_waitlist_hold(
+                db,
+                waitlist_id=hold.id,
+                table_id=hold.hold_stolik_id,
+                data=hold.data,
+                expires_at=hold.hold_do,
+                now=now,
+            )
+
+        reservation_service.touch_days(guards)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _mark_r0b_fallback_revision():
+    """Zapobiega ponownemu CREATE TABLE 0051, gdy fallback rozbudował wersjonowaną bazę 0050."""
+    from sqlalchemy import inspect, text
+
+    if "alembic_version" not in inspect(engine).get_table_names():
+        return
+    with engine.begin() as conn:
+        current = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
+        if current == _PRE_R0B_REVISION:
+            conn.execute(
+                text("UPDATE alembic_version SET version_num=:revision"),
+                {"revision": _R0B_REVISION},
+            )
+
+
 def init_db():
     """Przygotowanie schematu, świadome Alembica (idempotentne).
 
@@ -176,6 +354,19 @@ def init_db():
     insp = inspect(engine)
     tables = set(insp.get_table_names())
 
+    if "alembic_version" in tables and _R0B_LEDGER_TABLES.issubset(tables):
+        # Poprzedni start bez Alembica mógł już utworzyć i wypełnić strukturę R0b,
+        # ale zakończyć proces przed osobnym stemplem. Nie uruchamiaj wtedy CREATE TABLE 0051.
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            current_revision = conn.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one_or_none()
+        if current_revision == _PRE_R0B_REVISION:
+            _rebuild_rezerwacje_ledger()
+            _mark_r0b_fallback_revision()
+            return
+
     if "alembic_version" not in tables and tables:
         # Baza bez metryki Alembica. Dwa przypadki:
         #  (a) schemat JUŻ kompletny (wszystkie tabele modeli istnieją — np. utworzony przez
@@ -184,10 +375,33 @@ def init_db():
         #  (b) starsza baza (sprzed Alembica, bez nowszych tabel) → oznacz BASELINE
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
-        if model_tables.issubset(tables):
+        complete_current = model_tables.issubset(tables)
+        pre_r0b_tables = model_tables - _R0B_LEDGER_TABLES
+        termin_columns = (
+            {column["name"] for column in insp.get_columns("terminy")}
+            if "terminy" in tables else set()
+        )
+        complete_pre_r0b = (
+            pre_r0b_tables.issubset(tables)
+            and {"source_type", "source_external_id"}.issubset(termin_columns)
+        )
+        if complete_current:
             _ensure_schema()
+            _rebuild_rezerwacje_ledger()
             _alembic_run(lambda command, cfg: command.stamp(cfg, "head"))
+            return
         else:
+            if complete_pre_r0b:
+                _ensure_schema()
+                if _alembic_run(
+                    lambda command, cfg: command.stamp(cfg, _PRE_R0B_REVISION)
+                ):
+                    _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+                else:
+                    Base.metadata.create_all(bind=engine)
+                    _ensure_schema()
+                    _rebuild_rezerwacje_ledger()
+                return
             # Nie dodawaj pól z najnowszych migracji przed upgrade: migracja doda je sama.
             # Jest to istotne dla 0050 (source identity), której ADD COLUMN nie jest idempotentne.
             _ensure_schema(include_source_identity=False)
@@ -199,6 +413,7 @@ def init_db():
                 # zamiast wracać z modelem wskazującym na nieistniejące source_*.
                 Base.metadata.create_all(bind=engine)
                 _ensure_schema()
+                _rebuild_rezerwacje_ledger()
         return
 
     # Pusta baza lub baza zarządzana przez Alembica → upgrade do najnowszej wersji.
@@ -206,3 +421,5 @@ def init_db():
         # Fallback bez Alembica: utwórz schemat z modeli i domknij kolumny.
         Base.metadata.create_all(bind=engine)
         _ensure_schema()
+        _rebuild_rezerwacje_ledger()
+        _mark_r0b_fallback_revision()

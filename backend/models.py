@@ -2,7 +2,7 @@
 
 from sqlalchemy import (
     Column, Integer, String, Boolean, Date, Time, DateTime, Float, JSON,
-    ForeignKey, Table, UniqueConstraint, Index, text
+    ForeignKey, Table, UniqueConstraint, CheckConstraint, Index, text
 )
 from sqlalchemy.orm import relationship, declarative_base
 
@@ -699,6 +699,121 @@ class ListaOczekujacych(Base):
     hold_do         = Column(DateTime, nullable=True)                                         # do kiedy trzymany
     token           = Column(String(64), nullable=True, index=True)                          # magic-link gościa (potwierdzenie holdu)
     kanal           = Column(String(16), nullable=False, default="reczna")                    # reczna|online
+
+
+class RezerwacjaIdempotencja(Base):
+    """Wynik operacji tworzenia rezerwacji chroniony kluczem idempotencji.
+
+    Surowy klucz oraz treść żądania nie trafiają do bazy. ``key_hash`` jest SHA-256 klucza,
+    a ``request_fingerprint`` HMAC-SHA256 znormalizowanego polecenia. Odpowiedź może zawierać
+    dane gościa lub token zarządzania, dlatego jest szyfrowana at-rest.
+    """
+    __tablename__ = "rezerwacje_idempotencja"
+    __table_args__ = (
+        UniqueConstraint("operation", "key_hash", name="uq_rezerwacje_idempotencja_operation_key"),
+        CheckConstraint("length(operation) > 0", name="ck_rezerwacje_idempotencja_operation"),
+        CheckConstraint("length(key_hash) = 64", name="ck_rezerwacje_idempotencja_key_hash"),
+        CheckConstraint(
+            "length(request_fingerprint) = 64",
+            name="ck_rezerwacje_idempotencja_fingerprint",
+        ),
+        CheckConstraint(
+            "status IN ('processing', 'succeeded')",
+            name="ck_rezerwacje_idempotencja_status",
+        ),
+        CheckConstraint(
+            "(status = 'processing' AND http_status IS NULL AND response_enc IS NULL "
+            "AND completed_at IS NULL) OR "
+            "(status = 'succeeded' AND http_status BETWEEN 200 AND 299 "
+            "AND response_enc IS NOT NULL AND completed_at IS NOT NULL)",
+            name="ck_rezerwacje_idempotencja_result",
+        ),
+        Index("ix_rezerwacje_idempotencja_expires_at", "expires_at"),
+    )
+    id                  = Column(Integer, primary_key=True)
+    operation           = Column(String(64), nullable=False)
+    key_hash            = Column(String(64), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    status              = Column(String(16), nullable=False, default="processing")
+    http_status         = Column(Integer, nullable=True)
+    response_enc        = Column(EncryptedString(), nullable=True)
+    termin_id           = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True)
+    created_at          = Column(DateTime, nullable=False)
+    completed_at        = Column(DateTime, nullable=True)
+    expires_at          = Column(DateTime, nullable=False)
+
+
+class RezerwacjaDzienLedger(Base):
+    """Trwały anchor transakcyjny dla zapisów dostępności jednego dnia."""
+    __tablename__ = "rezerwacje_dni_ledger"
+    __table_args__ = (
+        CheckConstraint("revision >= 0", name="ck_rezerwacje_dni_ledger_revision"),
+    )
+    data       = Column(Date, primary_key=True)
+    revision   = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class RezerwacjaStolikClaim(Base):
+    """Jednominutowe, półotwarte zajęcie stołu przez rezerwację albo aktywny hold waitlisty."""
+    __tablename__ = "rezerwacje_stoliki_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "stolik_id", "data", "minute",
+            name="uq_rezerwacje_stolik_claim_slot",
+        ),
+        UniqueConstraint(
+            "termin_id", "stolik_id", "data", "minute",
+            name="uq_rezerwacje_stolik_claim_termin_owner",
+        ),
+        UniqueConstraint(
+            "waitlist_id", "stolik_id", "data", "minute",
+            name="uq_rezerwacje_stolik_claim_waitlist_owner",
+        ),
+        CheckConstraint(
+            "minute >= 0 AND minute < 1440",
+            name="ck_rezerwacje_stolik_claim_minute",
+        ),
+        CheckConstraint(
+            "(termin_id IS NOT NULL AND waitlist_id IS NULL AND expires_at IS NULL) OR "
+            "(termin_id IS NULL AND waitlist_id IS NOT NULL AND expires_at IS NOT NULL)",
+            name="ck_rezerwacje_stolik_claim_owner",
+        ),
+        Index("ix_rezerwacje_stolik_claim_termin_id", "termin_id"),
+        Index("ix_rezerwacje_stolik_claim_waitlist_id", "waitlist_id"),
+        Index("ix_rezerwacje_stolik_claim_expires_at", "expires_at"),
+    )
+    id          = Column(Integer, primary_key=True)
+    termin_id   = Column(Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=True)
+    waitlist_id = Column(
+        Integer, ForeignKey("lista_oczekujacych.id", ondelete="CASCADE"), nullable=True,
+    )
+    stolik_id   = Column(Integer, ForeignKey("stoliki.id", ondelete="RESTRICT"), nullable=False)
+    data        = Column(Date, nullable=False)
+    minute      = Column(Integer, nullable=False)
+    expires_at  = Column(DateTime, nullable=True)
+    created_at  = Column(DateTime, nullable=False)
+
+
+class RezerwacjaPacingLedger(Base):
+    """Surowy wkład aktywnej rezerwacji do limitów pacingu danego dnia."""
+    __tablename__ = "rezerwacje_pacing_ledger"
+    __table_args__ = (
+        UniqueConstraint("termin_id", name="uq_rezerwacje_pacing_ledger_termin"),
+        CheckConstraint(
+            "start_minute >= 0 AND start_minute < 1440",
+            name="ck_rezerwacje_pacing_ledger_start_minute",
+        ),
+        CheckConstraint("covers >= 0", name="ck_rezerwacje_pacing_ledger_covers"),
+        Index("ix_rezerwacje_pacing_ledger_data_start", "data", "start_minute"),
+    )
+    id           = Column(Integer, primary_key=True)
+    termin_id    = Column(Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=False)
+    data         = Column(Date, nullable=False)
+    start_minute = Column(Integer, nullable=False)
+    covers       = Column(Integer, nullable=False, default=0)
+    override     = Column(Boolean, nullable=False, default=False)
+    created_at   = Column(DateTime, nullable=False)
 
 
 class ProfilGoscia(Base):

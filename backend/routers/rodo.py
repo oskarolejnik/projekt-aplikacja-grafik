@@ -58,6 +58,13 @@ def _wpis(t) -> dict:
 
 
 def _anonimizuj(db, terminy) -> int:
+    termin_ids = [t.id for t in terminy if t.id is not None]
+    if termin_ids:
+        # Zaszyfrowany wynik idempotencji nadal jest odtwarzalnym PII. Usuń jego kopię
+        # razem z anonimizacją rekordu źródłowego, w tym samym commicie.
+        db.query(models.RezerwacjaIdempotencja).filter(
+            models.RezerwacjaIdempotencja.termin_id.in_(termin_ids)
+        ).delete(synchronize_session=False)
     n = 0
     for t in terminy:
         t.nazwisko = _ANON

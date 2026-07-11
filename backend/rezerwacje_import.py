@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import models
+import reservation_service
 
 
 WARSAW = ZoneInfo("Europe/Warsaw")
@@ -1106,11 +1107,38 @@ def reconcile_reservations(
     apply_error_code: str | None = None
     if apply and batch.source_status == "ok" and missing:
         created_at = generated_at.astimezone(UTC).replace(tzinfo=None)
-        for record in missing:
-            starts_at = record.starts_at.astimezone(WARSAW)
-            ends_at = record.ends_at.astimezone(WARSAW)
-            db.add(
-                models.Termin(
+        locked_dates = tuple(sorted({
+            record.starts_at.astimezone(WARSAW).date() for record in missing
+        }))
+        try:
+            while True:
+                guards = reservation_service.begin_locked_write(db, locked_dates)
+                # Walidacja sprzed blokady byĹ‚a tylko raportem. Po zdobyciu blokad dni
+                # odczytujemy stan ponownie, aby drugi importer nie zapisaĹ‚ starej decyzji.
+                counters, locked_missing, issues = _classify(
+                    db,
+                    batch=batch,
+                    range_start=range_start,
+                    range_end=range_end,
+                    cutover_date=cutover_date,
+                )
+                guarded_dates = {guard.data for guard in guards}
+                missing_dates = {
+                    record.starts_at.astimezone(WARSAW).date()
+                    for record in locked_missing
+                }
+                if missing_dates.issubset(guarded_dates):
+                    break
+
+                # Reclassification exposed a missing record on an unlocked day.
+                # Release the partial guards and retry with the union of dates.
+                db.rollback()
+                locked_dates = tuple(sorted(set(locked_dates) | missing_dates))
+            imported_dates: set[date] = set()
+            for record in locked_missing:
+                starts_at = record.starts_at.astimezone(WARSAW)
+                ends_at = record.ends_at.astimezone(WARSAW)
+                termin = models.Termin(
                     data=starts_at.date(),
                     nazwisko=record.guest_name.strip(),
                     liczba_osob=record.party_size,
@@ -1127,17 +1155,39 @@ def reconcile_reservations(
                     source_type=record.source_type,
                     source_external_id=record.source_external_id,
                 )
-            )
-        try:
-            db.commit()
+                db.add(termin)
+                db.flush()
+                reservation_service.replace_termin_allocation(
+                    db,
+                    termin_id=termin.id,
+                    data=starts_at.date(),
+                    start=starts_at.time().replace(tzinfo=None),
+                    end=ends_at.time().replace(tzinfo=None),
+                    table_ids=(),
+                    party_size=record.party_size,
+                    enforce_pacing=False,
+                    override=True,
+                    now=created_at,
+                )
+                imported_dates.add(starts_at.date())
+
+            if not locked_missing:
+                db.rollback()
+            else:
+                reservation_service.touch_days(
+                    guard for guard in guards if guard.data in imported_dates
+                )
+                db.commit()
+                applied = len(locked_missing)
+        except reservation_service.ReservationError as exc:
+            db.rollback()
+            apply_error_code = f"ledger_{exc.code.lower()}"
         except IntegrityError:
             db.rollback()
             apply_error_code = "source_identity_conflict"
         except Exception:
             db.rollback()
             raise
-        else:
-            applied = len(missing)
         counters, _, issues = _classify(
             db,
             batch=batch,

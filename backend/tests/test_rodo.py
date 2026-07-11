@@ -4,6 +4,7 @@ Admin-only; dopasowanie gościa po odszyfrowanym telefonie (jak CRM)."""
 from datetime import date, datetime, timedelta
 
 import models
+import reservation_service
 from sms import _normalizuj_numer
 
 TEL = "600 100 200"
@@ -31,9 +32,27 @@ def test_eksport_gosc(admin_client, db):
 def test_anonimizuj_gosc(admin_client, db):
     t1 = _termin(db, data=date.today())
     t2 = _termin(db, data=date.today() - timedelta(days=10), status="odbyla")
+    teraz = datetime.now()
+    payload = {"nazwisko": "Kowalski", "telefon": TEL, "notatka": "VIP"}
+    idem = reservation_service.begin_idempotency(
+        db,
+        operation="reservation.create.manual:v1",
+        raw_key="rodo-replay-key",
+        payload=payload,
+        secret="rodo-test-secret",
+        now=teraz,
+    )
+    reservation_service.complete_idempotency(
+        idem.record,
+        response={"id": t1.id, **payload},
+        http_status=201,
+        termin_id=t1.id,
+        now=teraz,
+    )
     db.add(models.WiadomoscImprezy(termin_id=t1.id, autor="klient", tresc="mój numer 600100200",
                                    utworzono_at=datetime.now()))
     db.commit()
+    db.expunge(idem.record)
     r = admin_client.post("/api/rodo/anonimizuj-gosc", json={"klucz": KLUCZ})
     assert r.status_code == 200 and r.json()["zanonimizowano"] == 2, r.text
     for tid in (t1.id, t2.id):
@@ -42,6 +61,19 @@ def test_anonimizuj_gosc(admin_client, db):
         assert t.nazwisko == "[anonimizacja RODO]" and t.telefon is None and t.notatka is None
     # Wątek portalu (z PII) usunięty.
     assert db.query(models.WiadomoscImprezy).filter_by(termin_id=t1.id).count() == 0
+    # Zaszyfrowany wynik idempotencji też zawierał PII; po anonimizacji nie wolno go odtworzyć.
+    assert db.query(models.RezerwacjaIdempotencja).filter_by(termin_id=t1.id).count() == 0
+    replay = reservation_service.begin_idempotency(
+        db,
+        operation="reservation.create.manual:v1",
+        raw_key="rodo-replay-key",
+        payload=payload,
+        secret="rodo-test-secret",
+        now=teraz,
+    )
+    assert replay.replayed is False
+    assert replay.response is None
+    db.rollback()
 
 
 def test_retencja_anonimizuje_stare_zamkniete(admin_client, db):

@@ -4,7 +4,7 @@ import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
-import { api } from '../../lib/api'
+import { api, nowyKluczIdempotencji } from '../../lib/api'
 import { useToast } from '../ui/Toast'
 
 // Zarządzanie rezerwacjami stolików (admin): lista dnia + formularz + zmiana statusu + stoliki.
@@ -215,6 +215,7 @@ export default function RezerwacjeStolik() {
 
   const [modal, setModal] = useState(null)
   const modalInitial = useRef(null)
+  const probaZapisuRef = useRef(null)
   const reservationTriggerRef = useRef(null)
   const reservationNameRef = useRef(null)
   const [modalAction, setModalAction] = useState(null)
@@ -295,6 +296,7 @@ export default function RezerwacjeStolik() {
     const draft = { ...value }
     reservationTriggerRef.current = trigger
     modalInitial.current = reservationSnapshot(draft)
+    probaZapisuRef.current = null
     setModalFeedback(null)
     setModal(draft)
   }
@@ -310,6 +312,7 @@ export default function RezerwacjeStolik() {
       if (!discard) return
     }
     modalInitial.current = null
+    probaZapisuRef.current = null
     setModalFeedback(null)
     setModal(null)
   }
@@ -385,9 +388,18 @@ export default function RezerwacjeStolik() {
         notatka: modal.notatka?.trim() || null,
         zadatek: parseFloat(modal.zadatek) || 0,
       }
+      const fingerprint = JSON.stringify(body)
+      if (!modal.id && probaZapisuRef.current?.fingerprint !== fingerprint) {
+        probaZapisuRef.current = {
+          fingerprint,
+          key: nowyKluczIdempotencji('manual-reservation'),
+        }
+      }
       const saved = modal.id
         ? await api(`/rezerwacje-stolik/${modal.id}`, 'PUT', body)
-        : await api('/rezerwacje-stolik', 'POST', body)
+        : await api('/rezerwacje-stolik', 'POST', body, {
+          headers: { 'Idempotency-Key': probaZapisuRef.current.key },
+        })
       setRez((current) => saved.data === data
         ? replaceById(current, saved, sortReservations)
         : current.filter((row) => row.id !== saved.id))
@@ -396,8 +408,10 @@ export default function RezerwacjeStolik() {
         message: `${modal.id ? 'Zapisano' : 'Dodano'}: ${saved.nazwisko}${saved.godz_od ? `, ${saved.godz_od}` : ''}.`,
       })
       modalInitial.current = null
+      probaZapisuRef.current = null
       setModal(null)
     } catch (error) {
+      if (error.code === 'IDEMPOTENCY_KEY_REUSED') probaZapisuRef.current = null
       setModalFeedback({ type: 'error', message: error.message || 'Nie udało się zapisać rezerwacji.' })
     } finally {
       setModalAction(null)

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 import models
 import reconcile_rezerwacje as reconciliation_cli
+import reservation_service
 from rezerwacje_import import (
     WARSAW,
     ExternalReservation,
@@ -75,6 +76,9 @@ def test_dry_run_nie_zapisuje_i_ma_jawny_zakres(db):
     report = _reconcile(db, _batch(_external("google-1", date(2026, 7, 10))))
 
     assert db.query(models.Termin).count() == 0
+    assert db.query(models.RezerwacjaDzienLedger).count() == 0
+    assert db.query(models.RezerwacjaPacingLedger).count() == 0
+    assert db.query(models.RezerwacjaStolikClaim).count() == 0
     assert report["future"]["missing_in_termin"] == 1
     assert report["historical"]["missing_in_termin"] == 0
     assert report["range"]["end_exclusive"] is True
@@ -129,6 +133,116 @@ def test_apply_dwa_razy_tworzy_jeden_termin_i_zachowuje_kontakt(db):
     assert termin.email == "gosc@example.com"
     assert termin.utworzono_at == datetime(2026, 6, 15, 8)
     assert (termin.source_type, termin.source_external_id) == ("google", "google-idempotent")
+    pacing = db.query(models.RezerwacjaPacingLedger).one()
+    assert pacing.termin_id == termin.id
+    assert pacing.data == termin.data
+    assert pacing.start_minute == 18 * 60
+    assert pacing.covers == 4
+    assert pacing.override is True
+    assert db.query(models.RezerwacjaStolikClaim).count() == 0  # import pozostaje bez stołu
+    day = db.query(models.RezerwacjaDzienLedger).one()
+    assert day.data == termin.data and day.revision == 1
+
+
+def test_apply_blokuje_dni_deterministycznie_i_tworzy_ledger_dla_kazdego_importu(
+    db, monkeypatch
+):
+    captured_dates = []
+    original = reservation_service.begin_locked_write
+
+    def capture(db_session, dates):
+        captured_dates.append(tuple(dates))
+        return original(db_session, dates)
+
+    monkeypatch.setattr(reservation_service, "begin_locked_write", capture)
+    records = _batch(
+        _external("later", date(2026, 7, 11)),
+        _external("earlier", date(2026, 7, 10)),
+    )
+
+    report = _reconcile(db, records, apply=True)
+
+    assert report["apply"]["inserted"] == 2
+    assert captured_dates == [(date(2026, 7, 10), date(2026, 7, 11))]
+    assert db.query(models.Termin).count() == 2
+    assert db.query(models.RezerwacjaPacingLedger).count() == 2
+    assert db.query(models.RezerwacjaStolikClaim).count() == 0
+    days = db.query(models.RezerwacjaDzienLedger).order_by(
+        models.RezerwacjaDzienLedger.data
+    ).all()
+    assert [(day.data, day.revision) for day in days] == [
+        (date(2026, 7, 10), 1),
+        (date(2026, 7, 11), 1),
+    ]
+
+
+def test_apply_ponawia_blokady_gdy_przeniesienie_ujawnia_brak_na_inny_dzien(
+    db, monkeypatch
+):
+    first_day = date(2026, 7, 10)
+    newly_missing_day = date(2026, 7, 11)
+    moved_to_day = date(2026, 7, 12)
+    first_record = _external("initially-missing", first_day)
+    moving_record = _external("becomes-missing", newly_missing_day)
+    moving_start = moving_record.starts_at.astimezone(WARSAW)
+    moving_end = moving_record.ends_at.astimezone(WARSAW)
+    legacy = models.Termin(
+        data=newly_missing_day,
+        nazwisko=moving_record.guest_name,
+        liczba_osob=moving_record.party_size,
+        godz_od=moving_start.time().replace(tzinfo=None),
+        godz_do=moving_end.time().replace(tzinfo=None),
+        rodzaj="stolik",
+        status="potwierdzona",
+    )
+    db.add(legacy)
+    db.commit()
+
+    captured_dates = []
+    moved = False
+    original = reservation_service.begin_locked_write
+
+    def move_between_classifications(db_session, dates):
+        nonlocal moved
+        captured_dates.append(tuple(sorted(dates)))
+        if not moved:
+            db_session.get(models.Termin, legacy.id).data = moved_to_day
+            db_session.commit()
+            moved = True
+        return original(db_session, dates)
+
+    monkeypatch.setattr(
+        reservation_service,
+        "begin_locked_write",
+        move_between_classifications,
+    )
+
+    report = _reconcile(
+        db,
+        _batch(first_record, moving_record),
+        apply=True,
+    )
+
+    assert report["apply"]["inserted"] == 2
+    assert captured_dates == [
+        (first_day,),
+        (first_day, newly_missing_day),
+    ]
+    assert db.get(models.Termin, legacy.id).data == moved_to_day
+    imported = db.query(models.Termin).filter(
+        models.Termin.source_type == "google"
+    ).all()
+    assert {(termin.source_external_id, termin.data) for termin in imported} == {
+        ("initially-missing", first_day),
+        ("becomes-missing", newly_missing_day),
+    }
+    days = db.query(models.RezerwacjaDzienLedger).order_by(
+        models.RezerwacjaDzienLedger.data
+    ).all()
+    assert [(day.data, day.revision) for day in days] == [
+        (first_day, 1),
+        (newly_missing_day, 1),
+    ]
 
 
 def test_raport_rozdziela_historyczne_i_przyszle(db):
@@ -648,6 +762,9 @@ def test_unique_race_rollbackuje_caly_import_i_zwraca_bezpieczny_raport(db, monk
     }
     assert report["safe_to_cutover"] is False
     assert db.query(models.Termin).count() == 0
+    assert db.query(models.RezerwacjaDzienLedger).count() == 0
+    assert db.query(models.RezerwacjaPacingLedger).count() == 0
+    assert db.query(models.RezerwacjaStolikClaim).count() == 0
 
 
 def test_cli_apply_bez_encryption_key_konczy_sie_bledem_bez_bazy(
