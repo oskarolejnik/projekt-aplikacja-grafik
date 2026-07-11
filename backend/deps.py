@@ -217,6 +217,7 @@ def _user_out(u: models.User) -> schemas.UserOut:
         sprzataczka=_jest_sprzataczka(u.pracownik) if u.pracownik else False,
         imie=u.pracownik.imie if u.pracownik else None,
         nazwisko=u.pracownik.nazwisko if u.pracownik else None,
+        preset=uprawnienia.rozpoznaj_preset(u),
         uprawnienia_override=dict(u.uprawnienia_override or {}),
         uprawnienia=uprawnienia.efektywne(u),
     )

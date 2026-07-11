@@ -30,6 +30,7 @@ const manager = {
   pracownik_id: null,
   imie: 'Marta',
   nazwisko: 'Nowak',
+  preset: null,
   uprawnienia: ['grafik.podglad', 'raporty.podglad'],
   uprawnienia_override: {},
 }
@@ -63,6 +64,18 @@ describe('Konta permissions', () => {
       if (path === '/zaproszenia') return Promise.resolve({ zaproszenia: [] })
       if (path === '/users') return Promise.resolve(dataState.users)
       if (path === '/users/7/uprawnienia' && method === 'PUT') {
+        if (body.preset === 'recepcja_host') {
+          return Promise.resolve({
+            ...manager,
+            preset: 'recepcja_host',
+            uprawnienia: [
+              'rezerwacje.operacje',
+              'rezerwacje.host',
+              'rezerwacje.nadpisuj_limity',
+              'rezerwacje.dane_kontaktowe',
+            ],
+          })
+        }
         const overrides = body.uprawnienia_override
         const permissions = new Set(manager.uprawnienia)
         Object.entries(overrides).forEach(([key, enabled]) => enabled ? permissions.add(key) : permissions.delete(key))
@@ -117,5 +130,42 @@ describe('Konta permissions', () => {
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/users/7/uprawnienia', 'PUT', {
       uprawnienia_override: {},
     }))
+  })
+
+  it('tworzy nazwane konto Recepcja / Host jako szefa z gotowym presetem', async () => {
+    render(<Konta />)
+    await screen.findByText('manager')
+
+    fireEvent.change(screen.getByLabelText('Login'), { target: { value: 'recepcja' } })
+    fireEvent.change(screen.getByLabelText('Hasło startowe'), { target: { value: 'Start123!' } })
+    fireEvent.change(screen.getByLabelText('Zakres pracy'), { target: { value: 'recepcja_host' } })
+    expect(screen.getByText(/Konto otworzy prosty pulpit rezerwacji i hosta/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Utwórz konto' }))
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/users', 'POST', {
+      login: 'recepcja',
+      haslo: 'Start123!',
+      rola: 'szef',
+      pracownik_id: null,
+      preset: 'recepcja_host',
+    }))
+  })
+
+  it('aplikuje preset istniejącemu kontu i czytelnie oznacza gotową Recepcję / Hosta', async () => {
+    render(<Konta />)
+    await screen.findByText('manager')
+
+    fireEvent.click(screen.getByText('Dostęp'))
+    fireEvent.click(screen.getByRole('button', { name: 'Zastosuj preset' }))
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining('Zastąpi bieżący zakres dostępu'),
+      expect.objectContaining({ confirmText: 'Zastosuj preset' }),
+    ))
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/users/7/uprawnienia', 'PUT', {
+      preset: 'recepcja_host',
+    }))
+    expect(await screen.findByText('Aktywny preset')).toBeInTheDocument()
+    expect(screen.getAllByText('Recepcja / Host').length).toBeGreaterThanOrEqual(1)
   })
 })

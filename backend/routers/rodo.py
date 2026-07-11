@@ -10,13 +10,16 @@ zostają, więc raporty i scoring nie kłamią po usunięciu danych osobowych.
 """
 
 from datetime import date, timedelta
+import hashlib
+import hmac
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import models
-from auth import require_admin
+import reservation_audit
+from auth import SECRET_KEY, require_admin
 from database import get_db
 from deps import utcnow_naive
 from sms import _normalizuj_numer
@@ -40,14 +43,18 @@ def _terminy_goscia(db, klucz: str):
     return [t for t in db.query(models.Termin).all() if _klucz(t) == k]
 
 
+def _referencja_goscia(klucz: str) -> str:
+    """Nieodwracalna, stabilna referencja do audytu dostępu — nigdy surowe PII."""
+    normalized = (klucz or "").strip().lower().encode("utf-8")
+    digest = hmac.new(SECRET_KEY.encode("utf-8"), normalized, hashlib.sha256).hexdigest()
+    return f"guest_ref:{digest}"
+
+
 def _audyt(db, admin, akcja, zasob, request):
-    try:
-        ip = request.client.host if (request and request.client) else None
-        db.add(models.AuditLog(ts=utcnow_naive(), user_id=getattr(admin, "id", None),
-                               login=getattr(admin, "login", None), akcja=akcja, zasob=zasob, ip=ip))
-        db.commit()
-    except Exception:
-        db.rollback()
+    """Dodaje wpis do transakcji wywołującego; eksport bez audytu nie może się udać."""
+    ip = request.client.host if (request and request.client) else None
+    db.add(models.AuditLog(ts=utcnow_naive(), user_id=getattr(admin, "id", None),
+                           login=getattr(admin, "login", None), akcja=akcja, zasob=zasob, ip=ip))
 
 
 def _wpis(t) -> dict:
@@ -57,7 +64,7 @@ def _wpis(t) -> dict:
             "liczba_osob": t.liczba_osob, "sala": t.sala, "zadatek": t.zadatek}
 
 
-def _anonimizuj(db, terminy) -> int:
+def _anonimizuj(db, terminy, *, actor, reason: str) -> int:
     termin_ids = [t.id for t in terminy if t.id is not None]
     if termin_ids:
         # Zaszyfrowany wynik idempotencji nadal jest odtwarzalnym PII. Usuń jego kopię
@@ -67,6 +74,20 @@ def _anonimizuj(db, terminy) -> int:
         ).delete(synchronize_session=False)
     n = 0
     for t in terminy:
+        audit_before = (
+            reservation_audit.reservation_snapshot(t)
+            if t.rodzaj == "stolik" else None
+        )
+        pii_changed = {
+            field
+            for field, target in {
+                "nazwisko": _ANON,
+                "telefon": None,
+                "email": None,
+                "notatka": None,
+            }.items()
+            if getattr(t, field, None) != target
+        }
         t.nazwisko = _ANON
         t.telefon = None
         t.notatka = None
@@ -77,8 +98,18 @@ def _anonimizuj(db, terminy) -> int:
         for z in db.query(models.KpZadatek).filter_by(termin_id=t.id).all():
             z.nazwisko = None
             z.opis = _ANON               # wolny tekst z nazwiskiem gościa
+        if audit_before is not None:
+            reservation_audit.add_reservation_audit(
+                db,
+                termin=t,
+                action="edit",
+                actor=actor,
+                reason=reason,
+                before=audit_before,
+                after=t,
+                pii_changed=pii_changed,
+            )
         n += 1
-    db.commit()
     return n
 
 
@@ -93,7 +124,8 @@ def eksport_gosc(request: Request, klucz: str = Query(...), db: Session = Depend
     terminy = _terminy_goscia(db, klucz)
     if not terminy:
         raise HTTPException(404, "Nie znaleziono danych dla podanego klucza.")
-    _audyt(db, admin, "rodo_eksport_gosc", klucz, request)
+    _audyt(db, admin, "rodo_eksport_gosc", _referencja_goscia(klucz), request)
+    db.commit()
     return {"klucz": klucz, "liczba_rekordow": len(terminy),
             "rezerwacje": [_wpis(t) for t in sorted(terminy, key=lambda x: x.data)]}
 
@@ -105,8 +137,11 @@ def anonimizuj_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_d
     terminy = _terminy_goscia(db, dane.klucz)
     if not terminy:
         raise HTTPException(404, "Nie znaleziono danych dla podanego klucza.")
-    n = _anonimizuj(db, terminy)
-    _audyt(db, admin, "rodo_anonimizuj_gosc", dane.klucz, request)
+    n = _anonimizuj(db, terminy, actor=admin, reason="guest_request")
+    _audyt(
+        db, admin, "rodo_anonimizuj_gosc", _referencja_goscia(dane.klucz), request,
+    )
+    db.commit()
     return {"zanonimizowano": n}
 
 
@@ -119,6 +154,7 @@ def retencja(request: Request, miesiace: int = Query(24, ge=1), db: Session = De
     terminy = db.query(models.Termin).filter(
         models.Termin.data < prog, models.Termin.status.in_(_ZAMKNIETE)).all()
     terminy = [t for t in terminy if t.nazwisko != _ANON]   # pomiń już zanonimizowane
-    n = _anonimizuj(db, terminy)
+    n = _anonimizuj(db, terminy, actor=admin, reason="system_automation")
     _audyt(db, admin, "rodo_retencja", f"starsze niż {prog}", request)
+    db.commit()
     return {"zanonimizowano": n, "prog": str(prog), "miesiace": int(miesiace)}

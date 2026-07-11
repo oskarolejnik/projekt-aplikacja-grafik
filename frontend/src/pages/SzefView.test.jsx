@@ -7,13 +7,14 @@ const { authState, logoutMock } = vi.hoisted(() => ({
   authState: {
     permissions: ['grafik.podglad', 'raporty.podglad'],
     ready: true,
+    user: { login: 'manager', imie: 'Marta', rola: 'szef' },
   },
   logoutMock: vi.fn(),
 }))
 
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
-    user: { login: 'manager', imie: 'Marta', rola: 'szef' },
+    user: authState.user,
     logout: logoutMock,
     uprawnieniaReady: authState.ready,
     can: (permission) => authState.permissions.includes(permission),
@@ -29,6 +30,8 @@ vi.mock('../components/tabs/Zeszyt', () => ({ default: () => <div>Widok zeszytu<
 vi.mock('../components/tabs/RaportGodzin', () => ({ default: () => <div>Widok godzin</div> }))
 vi.mock('../components/tabs/SzefImprezy', () => ({ default: () => <div>Widok imprez</div> }))
 vi.mock('../components/tabs/Rezerwacje', () => ({ default: () => <div>Widok rezerwacji</div> }))
+vi.mock('../components/tabs/RezerwacjeStolik', () => ({ default: () => <div>Operacyjne rezerwacje dnia</div> }))
+vi.mock('../components/tabs/WidokHosta', () => ({ default: () => <div>Operacyjny widok hosta</div> }))
 
 import SzefView from './SzefView'
 
@@ -37,6 +40,7 @@ afterEach(() => {
   vi.clearAllMocks()
   authState.permissions = ['grafik.podglad', 'raporty.podglad']
   authState.ready = true
+  authState.user = { login: 'manager', imie: 'Marta', rola: 'szef' }
 })
 
 describe('SzefView permissions', () => {
@@ -64,6 +68,40 @@ describe('SzefView permissions', () => {
     await waitFor(() => expect(screen.getByText('Widok godzin')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Grafik' })).not.toBeInTheDocument()
     expect(screen.queryByText('Widok grafiku')).not.toBeInTheDocument()
+  })
+
+  it('daje Recepcji / Hostowi prosty workspace z właściwym widokiem domyślnym', async () => {
+    authState.user = { login: 'recepcja', imie: 'Ola', rola: 'szef', preset: 'recepcja_host' }
+    authState.permissions = ['rezerwacje.operacje', 'rezerwacje.host', 'rezerwacje.dane_kontaktowe']
+
+    render(<SzefView />)
+
+    expect(screen.getByText('Recepcja / Host · Ola')).toBeInTheDocument()
+    const nav = screen.getByRole('navigation', { name: 'Widoki recepcji' })
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Rezerwacje dzisiaj', 'Host',
+    ])
+    await waitFor(() => expect(screen.getByText('Operacyjne rezerwacje dnia')).toBeInTheDocument())
+    expect(within(nav).getByRole('button', { name: 'Rezerwacje dzisiaj' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByRole('button', { name: 'Grafik' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'Host' }))
+    expect(screen.getByText('Operacyjny widok hosta')).toBeInTheDocument()
+    expect(screen.queryByText('Operacyjne rezerwacje dnia')).not.toBeInTheDocument()
+  })
+
+  it('po cofnięciu presetu wraca do etykiety managera na podstawie bieżących praw', async () => {
+    authState.user = { login: 'recepcja', imie: 'Ola', rola: 'szef', preset: 'recepcja_host' }
+    authState.permissions = ['rezerwacje.operacje', 'rezerwacje.host']
+    const { rerender } = render(<SzefView />)
+    expect(screen.getByText('Recepcja / Host · Ola')).toBeInTheDocument()
+
+    authState.permissions = ['grafik.podglad', 'raporty.podglad']
+    rerender(<SzefView />)
+
+    expect(await screen.findByText('Panel szefa · Ola')).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Widoki szefa' })).toBeInTheDocument()
+    expect(screen.queryByText('Recepcja / Host · Ola')).not.toBeInTheDocument()
   })
 
   it('czeka na uprawnienia i pokazuje spokojny stan pusty bez montowania zakładek', () => {

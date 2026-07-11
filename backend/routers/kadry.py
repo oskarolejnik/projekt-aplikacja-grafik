@@ -31,6 +31,13 @@ router = APIRouter()
 ROLE_VALID = ("admin", "employee", "szef", "kuchnia", "szef_kuchni")
 
 
+def _override_z_presetu(rola: str, preset: str) -> dict[str, bool]:
+    try:
+        return uprawnienia.override_dla_presetu(rola, preset)
+    except ValueError as exc:
+        raise HTTPException(400, "Nieprawidłowy preset uprawnień dla tej roli.") from exc
+
+
 # --- Zarządzanie kontami (dostęp tylko admin — wymusza middleware) ---
 
 @router.get("/api/users", response_model=List[schemas.UserOut])
@@ -41,6 +48,10 @@ def list_users(db: Session = Depends(get_db)):
 def create_user(dane: schemas.UserCreate, db: Session = Depends(get_db)):
     if dane.rola not in ROLE_VALID:
         raise HTTPException(400, "Nieprawidłowa rola.")
+    override = (
+        _override_z_presetu(dane.rola, dane.preset)
+        if dane.preset is not None else None
+    )
     if db.query(models.User).filter(models.User.login == dane.login).first():
         raise HTTPException(400, "Login jest już zajęty.")
     if dane.pracownik_id is not None:
@@ -51,6 +62,7 @@ def create_user(dane: schemas.UserCreate, db: Session = Depends(get_db)):
     u = models.User(
         login=dane.login, haslo_hash=hash_password(dane.haslo),
         rola=dane.rola, pracownik_id=dane.pracownik_id,
+        uprawnienia_override=override or None,
     )
     db.add(u); db.commit(); db.refresh(u)
     return _user_out(u)
@@ -87,10 +99,21 @@ def update_user_uprawnienia(
         raise HTTPException(404, "Nie znaleziono konta.")
     if u.rola != "szef":
         raise HTTPException(400, "Uprawnienia per konto można zmieniać tylko dla roli szef.")
-    nieznane = sorted(set(dane.uprawnienia_override) - set(uprawnienia.EDYTOWALNE_ODCZYTY))
-    if nieznane:
-        raise HTTPException(400, f"Nieznane uprawnienia: {', '.join(nieznane)}.")
-    override = uprawnienia.znormalizuj_override(u.rola, dane.uprawnienia_override)
+    if dane.preset is not None and dane.uprawnienia_override is not None:
+        raise HTTPException(400, "Podaj preset albo mapę uprawnień, nie oba naraz.")
+    if dane.preset is not None:
+        override = _override_z_presetu(u.rola, dane.preset)
+    elif dane.uprawnienia_override is not None:
+        nieznane = sorted(
+            set(dane.uprawnienia_override) - set(uprawnienia.EDYTOWALNE_ODCZYTY)
+        )
+        if nieznane:
+            raise HTTPException(400, f"Nieznane uprawnienia: {', '.join(nieznane)}.")
+        override = uprawnienia.znormalizuj_override(
+            u.rola, dane.uprawnienia_override,
+        )
+    else:
+        raise HTTPException(400, "Podaj preset albo mapę uprawnień.")
     u.uprawnienia_override = override or None
     db.commit(); db.refresh(u)
     return _user_out(u)

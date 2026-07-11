@@ -7,6 +7,7 @@ Kod jest niezależny od silnika dzięki SQLAlchemy.
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, event
@@ -179,6 +180,25 @@ _R0B_LEDGER_TABLES = {
 }
 _R0B_REVISION = "0051_rezerwacje_atomic_ledger"
 _PRE_R0B_REVISION = "0050_rezerwacje_source_identity"
+_R1A_AUDIT_TABLE = "reservation_audit"
+_R1A_REVISION = "0052_reservation_audit"
+_R1A_AUDIT_COLUMNS = {
+    "id", "created_at", "reservation_ref", "termin_id", "actor_kind",
+    "actor_user_id", "actor_login", "action", "reason", "diff",
+}
+_R1A_AUDIT_MODEL = Base.metadata.tables[_R1A_AUDIT_TABLE]
+_R1A_AUDIT_INDEXES = {
+    index.name: (tuple(column.name for column in index.columns), bool(index.unique))
+    for index in _R1A_AUDIT_MODEL.indexes
+}
+_R1A_AUDIT_CHECKS = {
+    constraint.name: str(constraint.sqltext)
+    for constraint in _R1A_AUDIT_MODEL.constraints
+    if constraint.name and hasattr(constraint, "sqltext")
+}
+_R1A_AUDIT_NULLABLE = {
+    column.name: bool(column.nullable) for column in _R1A_AUDIT_MODEL.columns
+}
 
 
 def _rebuild_rezerwacje_ledger():
@@ -338,6 +358,183 @@ def _mark_r0b_fallback_revision():
             )
 
 
+def _normalise_check_sql(value) -> str:
+    value = str(value or "").lower().replace('"', "").replace("`", "")
+    value = value.replace("[", "").replace("]", "")
+    return re.sub(r"\s+", "", value)
+
+
+def _assert_r1a_constraints_enforced() -> None:
+    """Behawioralnie sprawdza CHECK-i w rollbackowanych savepointach.
+
+    PostgreSQL normalizuje treść CHECK inaczej niż SQLite, dlatego same porównanie DDL nie
+    wystarcza. Jawne ujemne identyfikatory nie zużywają sekwencji i każdy zapis jest cofany.
+    """
+    from datetime import datetime
+
+    from sqlalchemy.exc import IntegrityError
+
+    base = {
+        "created_at": datetime(2026, 7, 11, 12, 0),
+        "reservation_ref": "0" * 64,
+        "termin_id": None,
+        "actor_kind": "system",
+        "actor_user_id": None,
+        "actor_login": None,
+        "action": "create",
+        "reason": None,
+        "diff": {"changes": {}},
+    }
+    invalid_rows = (
+        {**base, "reservation_ref": "x"},
+        {**base, "actor_kind": "evil"},
+        {**base, "action": "evil"},
+        {**base, "reason": "raw guest data"},
+        {**base, "actor_kind": "user", "actor_login": None},
+        {**base, "action": "override", "reason": None},
+    )
+    with engine.connect() as conn:
+        outer = conn.begin()
+        try:
+            for offset, values in enumerate(invalid_rows, start=1):
+                nested = conn.begin_nested()
+                try:
+                    conn.execute(
+                        _R1A_AUDIT_MODEL.insert().values(id=-9_000_000 - offset, **values)
+                    )
+                except IntegrityError:
+                    nested.rollback()
+                else:
+                    nested.rollback()
+                    raise RuntimeError(
+                        "Tabela reservation_audit nie egzekwuje wymaganych ograniczeń CHECK."
+                    )
+        finally:
+            outer.rollback()
+
+
+def _validate_r1a_audit_schema(inspector=None) -> bool:
+    """Weryfikuje pełną strukturę i działanie tabeli 0052 przed oznaczeniem rewizji."""
+    from sqlalchemy import inspect
+
+    inspector = inspector or inspect(engine)
+    tables = set(inspector.get_table_names())
+    if _R1A_AUDIT_TABLE not in tables:
+        raise RuntimeError(
+            "Brak tabeli reservation_audit dla zadeklarowanej migracji 0052."
+        )
+
+    columns = {
+        column["name"]: bool(column["nullable"])
+        for column in inspector.get_columns(_R1A_AUDIT_TABLE)
+    }
+    indexes = {
+        index["name"]: (
+            tuple(index.get("column_names") or ()),
+            bool(index.get("unique")),
+        )
+        for index in inspector.get_indexes(_R1A_AUDIT_TABLE)
+    }
+    checks = {
+        constraint.get("name"): constraint.get("sqltext")
+        for constraint in inspector.get_check_constraints(_R1A_AUDIT_TABLE)
+    }
+    foreign_keys = {
+        (
+            tuple(fk.get("constrained_columns") or ()),
+            fk.get("referred_table"),
+            tuple(fk.get("referred_columns") or ()),
+            str((fk.get("options") or {}).get("ondelete") or "").upper(),
+        )
+        for fk in inspector.get_foreign_keys(_R1A_AUDIT_TABLE)
+    }
+    primary_key = tuple(
+        inspector.get_pk_constraint(_R1A_AUDIT_TABLE).get("constrained_columns") or ()
+    )
+    complete = (
+        set(columns) == _R1A_AUDIT_COLUMNS
+        and columns == _R1A_AUDIT_NULLABLE
+        and all(indexes.get(name) == expected for name, expected in _R1A_AUDIT_INDEXES.items())
+        and set(_R1A_AUDIT_CHECKS).issubset(checks)
+        and primary_key == ("id",)
+        and (("termin_id",), "terminy", ("id",), "SET NULL") in foreign_keys
+        and (("actor_user_id",), "users", ("id",), "SET NULL") in foreign_keys
+    )
+    if complete and engine.dialect.name == "sqlite":
+        complete = all(
+            _normalise_check_sql(checks[name]) == _normalise_check_sql(expected)
+            for name, expected in _R1A_AUDIT_CHECKS.items()
+        )
+    if not complete:
+        raise RuntimeError(
+            "Tabela reservation_audit jest niekompletna; nie można bezpiecznie oznaczyć migracji 0052."
+        )
+    _assert_r1a_constraints_enforced()
+    return True
+
+
+def _sanitize_legacy_rodo_audit_resources() -> int:
+    """Idempotentnie usuwa historyczne klucze gości także na ścieżkach bez Alembica."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "audit_log" not in inspector.get_table_names():
+        return 0
+    columns = {column["name"] for column in inspector.get_columns("audit_log")}
+    if not {"akcja", "zasob"}.issubset(columns):
+        return 0
+    with engine.begin() as conn:
+        result = conn.execute(text(
+            "UPDATE audit_log SET zasob = '[redacted]' "
+            "WHERE akcja IN ('rodo_eksport_gosc', 'rodo_anonimizuj_gosc') "
+            "AND zasob IS NOT NULL AND zasob <> '[redacted]' "
+            "AND zasob NOT LIKE 'guest_ref:%'"
+        ))
+        return int(result.rowcount or 0)
+
+
+def _mark_r1a_fallback_revision():
+    """Oznacza 0052 wyłącznie dla kompletnej tabeli utworzonej przez ``create_all``."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "alembic_version" not in tables or _R1A_AUDIT_TABLE not in tables:
+        return False
+    _validate_r1a_audit_schema(inspector)
+    _sanitize_legacy_rodo_audit_resources()
+    with engine.begin() as conn:
+        current = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
+        if current == _R0B_REVISION:
+            conn.execute(
+                text("UPDATE alembic_version SET version_num=:revision"),
+                {"revision": _R1A_REVISION},
+            )
+            return True
+    return current == _R1A_REVISION
+
+
+def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
+    """Rozpoznaje niewersjonowany schemat 0051 bez mylenia go z 0050.
+
+    Sam zestaw nazw tabel nie wystarcza: częściowo utworzony fallback nie może zostać
+    ostemplowany i pominięty przez Alembica. Dla tabel ledgera wymagamy dokładnego zestawu
+    kolumn bieżącego modelu; pozostałe tabele muszą odpowiadać pełnemu schematowi sprzed 0052.
+    """
+    if not (model_tables - {_R1A_AUDIT_TABLE}).issubset(tables):
+        return False
+    for table_name in _R0B_LEDGER_TABLES:
+        expected = {
+            column.name for column in Base.metadata.tables[table_name].columns
+        }
+        actual = {
+            column["name"] for column in inspector.get_columns(table_name)
+        }
+        if actual != expected:
+            return False
+    return True
+
+
 def init_db():
     """Przygotowanie schematu, świadome Alembica (idempotentne).
 
@@ -353,6 +550,7 @@ def init_db():
 
     insp = inspect(engine)
     tables = set(insp.get_table_names())
+    _sanitize_legacy_rodo_audit_resources()
 
     if "alembic_version" in tables and _R0B_LEDGER_TABLES.issubset(tables):
         # Poprzedni start bez Alembica mógł już utworzyć i wypełnić strukturę R0b,
@@ -365,6 +563,20 @@ def init_db():
         if current_revision == _PRE_R0B_REVISION:
             _rebuild_rezerwacje_ledger()
             _mark_r0b_fallback_revision()
+            if _R1A_AUDIT_TABLE in tables:
+                _mark_r1a_fallback_revision()
+            elif not _alembic_run(lambda command, cfg: command.upgrade(cfg, "head")):
+                Base.metadata.create_all(bind=engine)
+                _ensure_schema()
+                _rebuild_rezerwacje_ledger()
+                _sanitize_legacy_rodo_audit_resources()
+                _mark_r1a_fallback_revision()
+            return
+        if current_revision == _R0B_REVISION and _R1A_AUDIT_TABLE in tables:
+            _mark_r1a_fallback_revision()
+            return
+        if current_revision == _R1A_REVISION:
+            _validate_r1a_audit_schema(insp)
             return
 
     if "alembic_version" not in tables and tables:
@@ -376,7 +588,8 @@ def init_db():
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
         complete_current = model_tables.issubset(tables)
-        pre_r0b_tables = model_tables - _R0B_LEDGER_TABLES
+        complete_r0b = _is_complete_r0b_schema(insp, tables, model_tables)
+        pre_r0b_tables = model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE}
         termin_columns = (
             {column["name"] for column in insp.get_columns("terminy")}
             if "terminy" in tables else set()
@@ -386,9 +599,22 @@ def init_db():
             and {"source_type", "source_external_id"}.issubset(termin_columns)
         )
         if complete_current:
+            _validate_r1a_audit_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
+            _sanitize_legacy_rodo_audit_resources()
             _alembic_run(lambda command, cfg: command.stamp(cfg, "head"))
+            return
+        if complete_r0b:
+            # Schemat 0051 bez alembic_version ma już ledger. Stemplowanie go jako 0050
+            # uruchomiłoby ponownie CREATE TABLE 0051 i przerwało start aplikacji.
+            if _alembic_run(lambda command, cfg: command.stamp(cfg, _R0B_REVISION)):
+                _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            else:
+                Base.metadata.create_all(bind=engine)
+                _ensure_schema()
+                _rebuild_rezerwacje_ledger()
+                _sanitize_legacy_rodo_audit_resources()
             return
         else:
             if complete_pre_r0b:
@@ -401,6 +627,7 @@ def init_db():
                     Base.metadata.create_all(bind=engine)
                     _ensure_schema()
                     _rebuild_rezerwacje_ledger()
+                    _sanitize_legacy_rodo_audit_resources()
                 return
             # Nie dodawaj pól z najnowszych migracji przed upgrade: migracja doda je sama.
             # Jest to istotne dla 0050 (source identity), której ADD COLUMN nie jest idempotentne.
@@ -414,6 +641,7 @@ def init_db():
                 Base.metadata.create_all(bind=engine)
                 _ensure_schema()
                 _rebuild_rezerwacje_ledger()
+                _sanitize_legacy_rodo_audit_resources()
         return
 
     # Pusta baza lub baza zarządzana przez Alembica → upgrade do najnowszej wersji.
@@ -422,4 +650,6 @@ def init_db():
         Base.metadata.create_all(bind=engine)
         _ensure_schema()
         _rebuild_rezerwacje_ledger()
+        _sanitize_legacy_rodo_audit_resources()
         _mark_r0b_fallback_revision()
+        _mark_r1a_fallback_revision()

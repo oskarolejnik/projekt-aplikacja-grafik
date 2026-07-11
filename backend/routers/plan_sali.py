@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
+import uprawnienia
+from auth import get_current_user
 from database import get_db
 
 router = APIRouter()
@@ -33,10 +35,14 @@ def _ids_stolikow(wartosci):
     return ids
 
 
-def _rez_out(t: models.Termin) -> dict:
+def _rez_out(t: models.Termin, user: models.User) -> dict:
     return {
         "id": t.id,
-        "nazwisko": t.nazwisko,
+        "nazwisko": (
+            t.nazwisko
+            if uprawnienia.ma_user(user, "rezerwacje.dane_kontaktowe")
+            else "Gość"
+        ),
         "godz_od": t.godz_od.strftime("%H:%M") if t.godz_od else None,
         "godz_do": t.godz_do.strftime("%H:%M") if t.godz_do else None,
         "liczba_osob": t.liczba_osob,
@@ -46,7 +52,11 @@ def _rez_out(t: models.Termin) -> dict:
 
 
 @router.get("/api/plan-sali")
-def plan_sali(data: date = Query(None), db: Session = Depends(get_db)):
+def plan_sali(
+    data: date = Query(None),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
     """Plan sali na dzień `data` (domyślnie dziś): stoliki + pozycje + status z rezerwacji."""
     dzien = data or date.today()
     stoliki = db.query(models.Stolik).order_by(models.Stolik.kolejnosc, models.Stolik.id).all()
@@ -89,7 +99,7 @@ def plan_sali(data: date = Query(None), db: Session = Depends(get_db)):
             "id": s.id, "nazwa": s.nazwa, "strefa": s.strefa, "pojemnosc": s.pojemnosc,
             "pojemnosc_min": s.pojemnosc_min, "ksztalt": s.ksztalt, "cechy": s.cechy or [],
             "aktywny": s.aktywny, "plan_x": s.plan_x, "plan_y": s.plan_y, "rewir_nr": s.rewir_nr,
-            "status": status, "rezerwacje": [_rez_out(t) for t in rez], "live": live,
+            "status": status, "rezerwacje": [_rez_out(t, user) for t in rez], "live": live,
         })
 
     kombinacje = db.query(models.KombinacjaStolow).filter_by(aktywna=True).order_by(

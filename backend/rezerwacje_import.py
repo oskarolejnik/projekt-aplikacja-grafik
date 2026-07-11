@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import models
+import reservation_audit
 import reservation_service
 
 
@@ -1167,6 +1168,20 @@ def reconcile_reservations(
                     party_size=record.party_size,
                     enforce_pacing=False,
                     override=True,
+                    now=created_at,
+                )
+                reservation_audit.add_reservation_audit(
+                    db,
+                    termin=termin,
+                    action="create",
+                    actor_kind="migration",
+                    reason="import_reconciliation",
+                    after=termin,
+                    pii_changed={
+                        field
+                        for field in ("nazwisko", "telefon", "email", "source_external_id")
+                        if getattr(termin, field, None) not in (None, "")
+                    },
                     now=created_at,
                 )
                 imported_dates.add(starts_at.date())

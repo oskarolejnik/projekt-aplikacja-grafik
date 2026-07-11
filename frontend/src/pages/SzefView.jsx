@@ -11,6 +11,8 @@ import SzefGrafik from '../components/tabs/SzefGrafik'
 import SzefImprezy from '../components/tabs/SzefImprezy'
 import Zeszyt from '../components/tabs/Zeszyt'
 import Rezerwacje from '../components/tabs/Rezerwacje'
+import RezerwacjeStolik from '../components/tabs/RezerwacjeStolik'
+import WidokHosta from '../components/tabs/WidokHosta'
 
 const TABY = [
   { value: 'grafik', label: 'Grafik', permission: 'grafik.podglad', Comp: SzefGrafik },
@@ -18,7 +20,9 @@ const TABY = [
   { value: 'zeszyt', label: 'Zeszyt', permission: 'zeszyt.podglad', Comp: Zeszyt },
   { value: 'godziny', label: 'Godziny', permission: 'raporty.podglad', Comp: RaportGodzin },
   { value: 'imprezy', label: 'Imprezy', permission: 'imprezy.podglad', Comp: SzefImprezy },
-  { value: 'rezerwacje', label: 'Rezerwacje', permission: 'rezerwacje.podglad', Comp: Rezerwacje },
+  { value: 'rezerwacje', label: 'Rezerwacje (podgląd)', permission: 'rezerwacje.podglad', Comp: Rezerwacje },
+  { value: 'rezerwacje-dzisiaj', label: 'Rezerwacje dzisiaj', permission: 'rezerwacje.operacje', Comp: RezerwacjeStolik, wide: true, reservationWorkspace: true },
+  { value: 'host', label: 'Host', permission: 'rezerwacje.host', Comp: WidokHosta, wide: true, reservationWorkspace: true },
 ]
 
 // Panel „Szef" — oversight tylko do odczytu: kto pracuje + godziny (Raport godzin),
@@ -29,6 +33,9 @@ export default function SzefView() {
   const [widok, setWidok] = useState('grafik')
   const imie = user?.imie || user?.login
   const widoczneTaby = useMemo(() => TABY.filter((tab) => can(tab.permission)), [can])
+  const maWorkspaceRezerwacji = widoczneTaby.some((tab) => tab.reservationWorkspace)
+  const maInnyWorkspaceSzefa = widoczneTaby.some((tab) => !tab.reservationWorkspace)
+  const czyRecepcja = maWorkspaceRezerwacji && !maInnyWorkspaceSzefa
   const aktywnyTab = widoczneTaby.find((tab) => tab.value === widok)
     || widoczneTaby.find((tab) => tab.value === 'grafik')
     || widoczneTaby[0]
@@ -47,7 +54,7 @@ export default function SzefView() {
           <Logo className="h-8" variant="gradient" />
           <div>
             <h1 className="font-display text-base font-bold text-ink md:text-lg">{nazwa_lokalu}</h1>
-            <p className="text-xs text-muted">Panel szefa{imie ? ` · ${imie}` : ''}</p>
+            <p className="text-xs text-muted">{czyRecepcja ? 'Recepcja / Host' : 'Panel szefa'}{imie ? ` · ${imie}` : ''}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -64,10 +71,11 @@ export default function SzefView() {
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto w-full max-w-5xl px-4 py-6 pb-safe md:py-10">
+      <main className={`relative z-10 mx-auto w-full px-4 py-6 pb-safe md:py-10 ${aktywnyTab?.wide ? 'max-w-7xl' : 'max-w-5xl'}`}>
         {!uprawnieniaReady ? (
-          <div className="grid min-h-48 place-items-center" role="status" aria-label="Wczytywanie dostępu">
-            <Spinner className="h-6 w-6 text-muted" />
+          <div className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-2xl border border-line bg-white/[0.02]" role="status" aria-label="Wczytywanie dostępu">
+            <Spinner className="h-5 w-5 text-muted motion-reduce:animate-none" />
+            <p className="text-sm text-muted">Przygotowuję Twój zakres pracy…</p>
           </div>
         ) : widoczneTaby.length === 0 ? (
           <div className="rounded-2xl border border-line bg-white/[0.02] px-5 py-10 text-center">
@@ -78,7 +86,7 @@ export default function SzefView() {
           </div>
         ) : (
           <>
-            <nav className="mb-6 flex gap-2 overflow-x-auto pb-1" aria-label="Widoki szefa">
+            <nav className="mb-6 flex gap-2 overflow-x-auto pb-1" aria-label={czyRecepcja ? 'Widoki recepcji' : 'Widoki szefa'}>
               {widoczneTaby.map((tab) => (
                 <button
                   key={tab.value}

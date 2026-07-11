@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a i R0b wdrożone · następny checkpoint R1a · 11 lipca 2026
+> Status: kierunek zatwierdzony · R0a, R0b i rdzeń R1a wdrożone · następny checkpoint R1b · 12 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -27,7 +27,8 @@ Najważniejszy scenariusz operacyjny:
 - Roadmapa obejmuje również publiczny widget, komunikację, waitlistę, zadatki i wymagania RODO.
 - Recepcja korzysta z nazwanych kont i ograniczonego trybu stanowiskowego; nie dostaje konta admina.
 - „Recepcja/Host” jest presetem granularnych uprawnień, nie kolejną sztywną rolą domenową.
-- Manager i recepcja mogą przekroczyć limit po ostrzeżeniu, podaniu powodu i zapisaniu audytu.
+- Manager i recepcja mogą przekroczyć limit po ostrzeżeniu, świadomym potwierdzeniu i zapisaniu
+  audytu. Szczegółowy wybór powodu należy do pełnego evaluatora R3/R4.
 - Trwałe reguły ustawia administrator lub osoba z osobnym uprawnieniem do konfiguracji.
 - Ręcznie przypisanej rezerwacji automat nie przenosi bez jawnej decyzji człowieka.
 - Domyślny priorytet sal jest miękki; administrator może wybrać tryb ścisłego zapełniania kolejnego.
@@ -94,8 +95,8 @@ Projekt ma więcej gotowych fundamentów, niż pokazuje obecny interfejs.
 5. Priorytet zapisany na kombinacji nie wpływa dziś na ocenę kandydata.
 6. `Stolik.laczy_sie` i graf sąsiedztwa tworzą dwa potencjalne źródła prawdy.
 7. Edycja lub usunięcie stołu może pozostawić niespójne identyfikatory w polach JSON kombinacji.
-8. Sprawdzenie dostępności i zapis nie są atomowe; równoległe żądania mogą wybrać ten sam zasób.
-9. Manager ma tylko stary odczyt agregatu, a zapisy rezerwacji są faktycznie admin-only.
+8. **Zamknięte w R0b:** sprawdzenie dostępności i zapis są atomowe, a zasoby chroni ledger.
+9. **Zamknięte w R1a:** manager/Recepcja wykonują operacje według granularnych praw zamiast roli admina.
 10. `/api/rezerwacje` i `/api/me/rezerwacje` nadal mogą opierać się na legacy Google Calendar,
     zamiast na kanonicznej bazie `Termin`.
 11. Ustawienia zaawansowane istnieją w API, lecz praktycznie nie istnieją w panelu.
@@ -154,18 +155,24 @@ efektywnych uprawnień i dodajemy gotowy preset konta:
 - `rezerwacje.sala`
 - `rezerwacje.reguly`
 - `rezerwacje.analityka`
-- `rezerwacje.eksport`
-- `goscie.dane_kontaktowe`
-- `goscie.notatki`
-- `goscie.dane_wrazliwe`
+- `rezerwacje.dane_kontaktowe`
+- `rezerwacje.notatki_wewnetrzne`
+- `rezerwacje.dane_wrazliwe`
+- `rezerwacje.finanse`
 
-Preset `Recepcja/Host` włącza: podgląd, operacje, host, nadpisywanie limitów oraz dane kontaktowe
+Prawo `rezerwacje.eksport` powstanie dopiero razem z rzeczywistym eksportem bazy; nie dodajemy
+martwego przełącznika, który sugerowałby administratorowi niedostępną funkcję.
+
+Preset `Recepcja/Host` włącza: operacje, host, nadpisywanie limitów oraz dane kontaktowe
 potrzebne do obsługi bieżącej rezerwacji. Notatki wewnętrzne i dane wrażliwe wymagają osobnych
 uprawnień. Preset nie włącza konfiguracji sali, trwałych reguł, analityki ani eksportu.
 
-Uprawnienie `rezerwacje.nadpisuj_limity` jest częścią zatwierdzonego presetu Recepcji, ale zaczyna
-działać dopiero po dostarczeniu wspólnego ewaluatora reguł w R3/R4. R1 nie może udawać ostrzeżeń
-ani nadpisań dla limitów, których ręczna ścieżka jeszcze nie ocenia.
+Uprawnienie `rezerwacje.nadpisuj_limity` jest częścią zatwierdzonego presetu Recepcji. R1a egzekwuje
+istniejące limity pacingu także w ścieżce ręcznej: pierwsza próba zwraca stabilne ostrzeżenie, a jawne
+ponowienie przez uprawnione konto zapisuje kod `pacing_override` w audycie. Pełny evaluator wszystkich
+reguł, wybór szczegółowego powodu i alternatywy zostają w R3/R4; UI nie może sugerować ich wcześniej.
+Wpis R1a powstaje wyłącznie przy realnym przekroczeniu i zawiera typ reguły, stan przed operacją,
+limit oraz wartość projekcyjną po operacji — bez tekstu swobodnego i bez danych gościa.
 
 Odebranie uprawnienia działa w aktywnej sesji: odświeżony kontrakt uprawnień natychmiast maskuje
 dane, zamyka nieuprawniony panel i pokazuje bezpieczny ekran odmowy także po wejściu z bezpośredniego
@@ -447,6 +454,22 @@ Testy:
 **Done R1a:** recepcja dodaje rezerwację od początku do widocznego zapisu bez opuszczenia kontekstu
 dnia, bez utraty szkicu i bez pełnego przeładowania listy. Nie ma dostępu do finansów, grafiku ani
 ustawień lokalu.
+
+**Stan wdrożenia R1a — 12 lipca 2026:** nazwane konto `szef` może otrzymać atomowy preset
+`recepcja_host` bez tworzenia nowej roli. Backend egzekwuje dokładną macierz metoda+trasa, odświeża
+prawa z bazy przy każdym żądaniu, redaguje kontakt/notatki/finanse/dane zdrowotne oraz ponownie
+renderuje replay idempotencji według bieżących praw. Migracja `0052` dodaje transakcyjny,
+pozbawiony PII `ReservationAudit`; audyt obejmuje operacje użytkownika, hosta, gościa online,
+reoptymalizację systemową, import cutover i anonimizację RODO. Workspace Recepcji otwiera tylko
+`Rezerwacje dzisiaj` i `Host`, zachowuje szkic po błędzie, aktualizuje rekord w miejscu i nie pokazuje
+ustawień sali, notatek, finansów ani twardego DELETE. Pacing ręczny wymaga ostrzeżenia i jawnego
+ponowienia, a audyt opisuje wyłącznie rzeczywiście przekroczoną regułę. Atomowe `posadz` usuwa
+częściowy sukces dwóch osobnych zapisów hosta. Oba widoki unieważniają stare odpowiedzi po zmianie
+dnia, zamykają formularz po zmianie praw PII i odróżniają awarię od pustej sali. Pełna regresja
+backendu przeszła przed finalnym hardeningiem migracji, a po nim przechodzi 55/55 testów wszystkich
+dotkniętych modułów; frontend ma 190/190 testów i zielony build produkcyjny. Test współbieżności
+PostgreSQL pozostaje warunkowy od `TEST_POSTGRES_URL`. R1b przejmuje teraz kalendarz, bazę,
+wyszukiwanie gościa, deep-linki i pamięć kontekstu.
 
 #### R1b — Kalendarz, baza rezerwacji i ciągłość
 
@@ -804,6 +827,7 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-Po zatwierdzeniu tej roadmapy rozpoczynamy `R0` jako jeden spójny, testowany milestone. Po jego
-zamknięciu i checkpointcie Git przechodzimy do `R1`, który dostarcza pierwszą widoczną wartość:
-bezpieczne konto Recepcja/Host i wspólny workspace `Dzisiaj / Kalendarz / Baza`.
+R0a, R0b i rdzeń R1a są zamkniętymi checkpointami. Następny milestone to `R1b`: kalendarz
+dzień/tydzień, podstawowa baza rezerwacji, wyszukiwanie i deep-linki bez utraty kontekstu dnia.
+Nie rozszerzamy jeszcze konfiguratora sal ani pełnego ewaluatora R3/R4; korzystają one z gotowych
+granic uprawnień, audytu i atomowości dopiero w swoich etapach.

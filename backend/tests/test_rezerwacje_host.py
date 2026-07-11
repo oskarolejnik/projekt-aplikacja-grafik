@@ -1,6 +1,8 @@
 """Slice 4a: widok hosta — kolejka dnia, fazy operacyjne (przybył→…→wyszedł), przydział stołu.
 2026-07-13 = poniedziałek."""
 
+import models
+
 PON = "2026-07-13"
 
 
@@ -103,6 +105,25 @@ def test_host_przydziel_i_przenies_stolik(admin_client):
     # przeniesienie na S2
     r2 = admin_client.post(f"/api/host/rezerwacja/{rid}/przydziel-stolik", json={"stolik_id": s2["id"]})
     assert r2.status_code == 200 and r2.json()["stolik_id"] == s2["id"]
+
+
+def test_host_posadz_atomowo_przydziela_stol_i_faze(admin_client, db):
+    table = _stolik(admin_client, "Atom", 4)
+    rid = _rez(admin_client, godz_od="18:00", liczba_osob=2)["id"]
+
+    response = admin_client.post(
+        f"/api/host/rezerwacja/{rid}/posadz",
+        json={"stolik_id": table["id"]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["stolik_id"] == table["id"]
+    assert response.json()["faza_hosta"] == "posadzony"
+    db.expire_all()
+    saved = db.get(models.Termin, rid)
+    assert saved.stolik_id == table["id"] and saved.faza_hosta == "posadzony"
+    audit = db.query(models.ReservationAudit).filter_by(termin_id=rid, action="host").one()
+    assert {"stolik_id", "faza_hosta"} <= set(audit.diff["changes"])
 
 
 def test_host_reczny_przydzial_czysci_auto_kombinacje(admin_client):

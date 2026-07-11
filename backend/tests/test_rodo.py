@@ -2,6 +2,7 @@
 Admin-only; dopasowanie gościa po odszyfrowanym telefonie (jak CRM)."""
 
 from datetime import date, datetime, timedelta
+import json
 
 import models
 import reservation_service
@@ -25,6 +26,10 @@ def test_eksport_gosc(admin_client, db):
     body = r.json()
     assert body["liczba_rekordow"] == 2
     assert any(w["telefon"] == TEL for w in body["rezerwacje"])
+    audit = db.query(models.AuditLog).filter_by(akcja="rodo_eksport_gosc").one()
+    assert audit.zasob.startswith("guest_ref:")
+    assert len(audit.zasob) == len("guest_ref:") + 64
+    assert KLUCZ not in audit.zasob
     # Nieznany klucz → 404.
     assert admin_client.get("/api/rodo/eksport-gosc", params={"klucz": "nieistnieje"}).status_code == 404
 
@@ -74,6 +79,15 @@ def test_anonimizuj_gosc(admin_client, db):
     assert replay.replayed is False
     assert replay.response is None
     db.rollback()
+    audits = db.query(models.ReservationAudit).order_by(models.ReservationAudit.id).all()
+    assert len(audits) == 2
+    assert all(a.action == "edit" and a.reason == "guest_request" for a in audits)
+    assert all(set(a.diff["pii_changed"]) == {"nazwisko", "notatka", "telefon"} for a in audits)
+    encoded = json.dumps([a.diff for a in audits], ensure_ascii=False)
+    assert "Kowalski" not in encoded and TEL not in encoded and "VIP" not in encoded
+    access_audit = db.query(models.AuditLog).filter_by(akcja="rodo_anonimizuj_gosc").one()
+    assert access_audit.zasob.startswith("guest_ref:")
+    assert KLUCZ not in access_audit.zasob
 
 
 def test_retencja_anonimizuje_stare_zamkniete(admin_client, db):
@@ -84,6 +98,8 @@ def test_retencja_anonimizuje_stare_zamkniete(admin_client, db):
     assert r.json()["zanonimizowano"] >= 1
     assert db.get(models.Termin, stary.id).nazwisko == "[anonimizacja RODO]"   # stary → anonim
     assert db.get(models.Termin, swiezy.id).nazwisko == "Kowalski"             # świeży → bez zmian
+    audit = db.query(models.ReservationAudit).filter_by(termin_id=stary.id).one()
+    assert audit.action == "edit" and audit.reason == "system_automation"
 
 
 def test_rodo_wymaga_admina(client):

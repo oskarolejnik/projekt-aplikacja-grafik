@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api, nowyKluczIdempotencji } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../ui/Toast'
 
 // Zarządzanie rezerwacjami stolików (admin): lista dnia + formularz + zmiana statusu + stoliki.
@@ -93,7 +94,7 @@ function DialogFrame({ title, closeLabel, onClose, maxWidth = 'max-w-md', initia
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousFocus = document.activeElement
     const panel = panelRef.current
     const focusableSelector = [
@@ -190,11 +191,12 @@ function ReservationSkeleton() {
 
 function InlineFeedback({ pending, feedback, className = '' }) {
   const isError = feedback?.type === 'error'
+  const isWarning = feedback?.type === 'warning'
   return (
     <div
       role={isError ? 'alert' : 'status'}
       aria-live="polite"
-      className={`min-h-5 text-xs ${isError ? 'text-danger' : feedback?.type === 'success' ? 'text-success' : 'text-muted'} ${className}`}
+      className={`min-h-5 text-xs ${isError ? 'text-danger' : isWarning ? 'text-lemon' : feedback?.type === 'success' ? 'text-success' : 'text-muted'} ${className}`}
     >
       {pending || feedback?.message || ''}
     </div>
@@ -203,7 +205,15 @@ function InlineFeedback({ pending, feedback, className = '' }) {
 
 export default function RezerwacjeStolik() {
   const { confirm } = useToast()
+  const { can, isAdmin } = useAuth()
+  const maPrawo = (permission) => isAdmin || can(permission)
+  const canManageFloor = maPrawo('rezerwacje.sala')
+  const canViewContacts = maPrawo('rezerwacje.dane_kontaktowe')
+  const canViewNotes = maPrawo('rezerwacje.notatki_wewnetrzne')
+  const canViewFinances = maPrawo('rezerwacje.finanse')
+  const canOverrideLimits = maPrawo('rezerwacje.nadpisuj_limity')
   const [data, setData] = useState(dzisISO())
+  const dataRef = useRef(data)
   const [rez, setRez] = useState([])
   const [stoliki, setStoliki] = useState([])
   const [lista, setLista] = useState([])
@@ -212,6 +222,8 @@ export default function RezerwacjeStolik() {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState(null)
   const requestId = useRef(0)
+  const piiVisibility = `${canViewContacts}:${canViewNotes}:${canViewFinances}`
+  const piiVisibilityRef = useRef(piiVisibility)
 
   const [modal, setModal] = useState(null)
   const modalInitial = useRef(null)
@@ -248,6 +260,7 @@ export default function RezerwacjeStolik() {
       setRefreshing(true)
       setRefreshError(null)
     } else {
+      setRefreshing(false)
       setLoading(true)
       setLoadError(null)
     }
@@ -257,26 +270,43 @@ export default function RezerwacjeStolik() {
         api('/stoliki'),
         api(`/lista-oczekujacych?data=${day}`),
       ])
-      if (id !== requestId.current) return
+      if (id !== requestId.current || day !== dataRef.current) return
       setRez(sortReservations(rs.rezerwacje || []))
       setStoliki(sortTables(ss.stoliki || []))
       setLista(sortWaitlist(lo.lista || []))
     } catch (error) {
-      if (id !== requestId.current) return
+      if (id !== requestId.current || day !== dataRef.current) return
       const message = error.message || 'Nie udało się pobrać rezerwacji.'
       if (silent) setRefreshError(message)
       else setLoadError(message)
     } finally {
-      if (id !== requestId.current) return
-      if (silent) setRefreshing(false)
-      else setLoading(false)
+      if (id !== requestId.current || day !== dataRef.current) return
+      setRefreshing(false)
+      setLoading(false)
     }
-  }, [data])
+  }, [data, canViewContacts, canViewNotes, canViewFinances])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
-    api('/lokal/config').then((config) => setSaleLokalu(config.sale || [])).catch(() => {})
-  }, [])
+    const visibilityChanged = piiVisibilityRef.current !== piiVisibility
+    piiVisibilityRef.current = piiVisibility
+    if (!visibilityChanged) return
+    // Otwarty formularz może zawierać zredagowane wartości. Po zmianie praw zamykamy go,
+    // a równoległy efekt ``load`` pobiera rekord ponownie przed kolejną edycją.
+    modalInitial.current = null
+    probaZapisuRef.current = null
+    setModalFeedback(null)
+    setModal(null)
+  }, [piiVisibility])
+  useEffect(() => {
+    if (!canManageFloor) {
+      setSaleLokalu([])
+      setStolikModal(false)
+      return undefined
+    }
+    api('/rezerwacje/config').then((config) => setSaleLokalu(config.sale || [])).catch(() => {})
+    return undefined
+  }, [canManageFloor])
 
   const reservationDirty = !!modal && reservationSnapshot(modal) !== modalInitial.current
   const tableDraftDirty = !!(nowyStolik.nazwa.trim() || nowyStolik.strefa.trim() || nowyStolik.rewir_nr || Number(nowyStolik.pojemnosc) !== 2)
@@ -293,6 +323,7 @@ export default function RezerwacjeStolik() {
   }, [reservationDirty, tableDraftDirty, waitDraftDirty])
 
   const openReservation = (value, trigger = null) => {
+    if (!canViewContacts) return
     const draft = { ...value }
     reservationTriggerRef.current = trigger
     modalInitial.current = reservationSnapshot(draft)
@@ -349,6 +380,12 @@ export default function RezerwacjeStolik() {
 
   const changeDay = (nextDay) => {
     if (!nextDay || nextDay === data) return
+    dataRef.current = nextDay
+    requestId.current += 1
+    setLoading(true)
+    setRefreshing(false)
+    setLoadError(null)
+    setRefreshError(null)
     setPageFeedback(null)
     setRowFeedback({})
     setPosadzStolik({})
@@ -363,8 +400,8 @@ export default function RezerwacjeStolik() {
 
   const stolikNazwa = (id) => stoliki.find((table) => table.id === id)?.nazwa || 'Bez stolika'
 
-  const zapisz = async () => {
-    if (!modal || modalAction) return
+  const zapisz = async (przekroczLimity = false) => {
+    if (!canViewContacts || !modal || modalAction) return
     if (!modal.nazwisko?.trim()) {
       setModalFeedback({ type: 'error', message: 'Podaj nazwisko lub nazwę klienta.' })
       reservationNameRef.current?.focus()
@@ -383,10 +420,13 @@ export default function RezerwacjeStolik() {
         stolik_id: modal.stolik_id ? Number(modal.stolik_id) : null,
         liczba_osob: num(modal.liczba_osob),
         nazwisko: modal.nazwisko.trim(),
-        telefon: modal.telefon?.trim() || null,
-        email: modal.email?.trim() || null,
-        notatka: modal.notatka?.trim() || null,
-        zadatek: parseFloat(modal.zadatek) || 0,
+        ...(canViewContacts ? {
+          telefon: modal.telefon?.trim() || null,
+          email: modal.email?.trim() || null,
+        } : {}),
+        ...(canViewNotes ? { notatka: modal.notatka?.trim() || null } : {}),
+        ...(canViewFinances ? { zadatek: parseFloat(modal.zadatek) || 0 } : {}),
+        ...(przekroczLimity ? { przekrocz_limity: true } : {}),
       }
       const fingerprint = JSON.stringify(body)
       if (!modal.id && probaZapisuRef.current?.fingerprint !== fingerprint) {
@@ -405,21 +445,26 @@ export default function RezerwacjeStolik() {
         : current.filter((row) => row.id !== saved.id))
       setPageFeedback({
         type: 'success',
-        message: `${modal.id ? 'Zapisano' : 'Dodano'}: ${saved.nazwisko}${saved.godz_od ? `, ${saved.godz_od}` : ''}.`,
+        message: `${modal.id ? 'Zapisano' : 'Dodano'}: ${canViewContacts ? saved.nazwisko : 'Gość'}${saved.godz_od ? `, ${saved.godz_od}` : ''}.`,
       })
       modalInitial.current = null
       probaZapisuRef.current = null
       setModal(null)
     } catch (error) {
       if (error.code === 'IDEMPOTENCY_KEY_REUSED') probaZapisuRef.current = null
-      setModalFeedback({ type: 'error', message: error.message || 'Nie udało się zapisać rezerwacji.' })
+      const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
+      setModalFeedback({
+        type: pacingConflict && canOverrideLimits ? 'warning' : 'error',
+        message: error.message || 'Nie udało się zapisać rezerwacji.',
+        canOverride: pacingConflict && canOverrideLimits,
+      })
     } finally {
       setModalAction(null)
     }
   }
 
   const usun = async () => {
-    if (!modal?.id || modalAction) return
+    if (!isAdmin || !modal?.id || modalAction) return
     const approved = await confirm(`Usunąć rezerwację dla „${modal.nazwisko}”? Tej operacji nie można cofnąć.`, {
       title: 'Usuń rezerwację',
       confirmText: 'Usuń rezerwację',
@@ -446,22 +491,28 @@ export default function RezerwacjeStolik() {
 
   const zmienStatus = async (reservation, action) => {
     if (rowActions[reservation.id]) return
+    const operationDay = data
     setRowActions((current) => ({ ...current, [reservation.id]: action.status }))
     setRowFeedback((current) => ({ ...current, [reservation.id]: null }))
     try {
       const saved = await api(`/rezerwacje-stolik/${reservation.id}/status`, 'POST', { status: action.status })
-      setRez((current) => replaceById(current, saved, sortReservations))
-      setRowFeedback((current) => ({
-        ...current,
-        [reservation.id]: { type: 'success', message: STATUS_FEEDBACK[action.status] || 'Zapisano status.' },
-      }))
-      // Odwołanie/no-show może przeoptymalizować inne stoliki. Odświeżamy w tle bez znikania listy.
-      void load({ silent: true })
+      if (dataRef.current === operationDay) {
+        setRez((current) => replaceById(current, saved, sortReservations))
+        setRowFeedback((current) => ({
+          ...current,
+          [reservation.id]: { type: 'success', message: STATUS_FEEDBACK[action.status] || 'Zapisano status.' },
+        }))
+        // Odwołanie/no-show może przeoptymalizować inne stoliki. Odświeżamy ten sam dzień
+        // tylko wtedy, gdy operator nadal go ogląda.
+        void load({ silent: true, day: operationDay })
+      }
     } catch (error) {
-      setRowFeedback((current) => ({
-        ...current,
-        [reservation.id]: { type: 'error', message: error.message || 'Nie udało się zmienić statusu.' },
-      }))
+      if (dataRef.current === operationDay) {
+        setRowFeedback((current) => ({
+          ...current,
+          [reservation.id]: { type: 'error', message: error.message || 'Nie udało się zmienić statusu.' },
+        }))
+      }
     } finally {
       setRowActions((current) => {
         const next = { ...current }
@@ -472,7 +523,7 @@ export default function RezerwacjeStolik() {
   }
 
   const wyslijPotwierdzenie = async () => {
-    if (!modal?.id || modalAction) return
+    if (!canViewContacts || !modal?.id || modalAction) return
     setModalAction('email')
     setModalFeedback(null)
     try {
@@ -489,7 +540,7 @@ export default function RezerwacjeStolik() {
   }
 
   const dodajStolik = async () => {
-    if (tableAdding) return
+    if (!canManageFloor || tableAdding) return
     if (!nowyStolik.nazwa.trim()) {
       setTableFeedback({ type: 'error', message: 'Podaj nazwę stolika.' })
       return
@@ -514,7 +565,7 @@ export default function RezerwacjeStolik() {
   }
 
   const usunStolik = async (table) => {
-    if (tableActions[table.id]) return
+    if (!canManageFloor || tableActions[table.id]) return
     const approved = await confirm(`Usunąć stolik „${table.nazwa}”? Można usunąć tylko stolik bez historii rezerwacji i bez powiązanej kombinacji. Tej operacji nie można cofnąć.`, {
       title: 'Usuń stolik',
       confirmText: 'Usuń stolik',
@@ -543,7 +594,7 @@ export default function RezerwacjeStolik() {
   }
 
   const ustawAktywnoscStolika = async (table, aktywny) => {
-    if (tableActions[table.id]) return
+    if (!canManageFloor || tableActions[table.id]) return
     setTableActions((current) => ({ ...current, [table.id]: 'toggle' }))
     setTableRowFeedback((current) => ({ ...current, [table.id]: null }))
     try {
@@ -584,7 +635,7 @@ export default function RezerwacjeStolik() {
   }
 
   const dodajOczekujacego = async () => {
-    if (waitAdding) return
+    if (!canViewContacts || waitAdding) return
     if (!nowyOcz.nazwisko.trim()) {
       setWaitFeedback({ type: 'error', message: 'Podaj nazwisko lub nazwę klienta.' })
       return
@@ -597,11 +648,11 @@ export default function RezerwacjeStolik() {
         godz_od: nowyOcz.godz_od || null,
         liczba_osob: num(nowyOcz.liczba_osob),
         nazwisko: nowyOcz.nazwisko.trim(),
-        telefon: nowyOcz.telefon.trim() || null,
+        ...(canViewContacts ? { telefon: nowyOcz.telefon.trim() || null } : {}),
       })
       setLista((current) => replaceById(current, created, sortWaitlist))
       setNowyOcz(emptyWaitlist())
-      setWaitFeedback({ type: 'success', message: `Dodano do oczekujących: ${created.nazwisko}.` })
+      setWaitFeedback({ type: 'success', message: `Dodano do oczekujących: ${canViewContacts ? created.nazwisko : 'Gość'}.` })
     } catch (error) {
       setWaitFeedback({ type: 'error', message: error.message || 'Nie udało się dodać wpisu.' })
     } finally {
@@ -610,7 +661,7 @@ export default function RezerwacjeStolik() {
   }
 
   const usunOczekujacego = async (entry) => {
-    if (waitActions[entry.id]) return
+    if (!isAdmin || waitActions[entry.id]) return
     const approved = await confirm(`Usunąć „${entry.nazwisko}” z listy oczekujących?`, {
       title: 'Usuń wpis',
       confirmText: 'Usuń wpis',
@@ -681,7 +732,24 @@ export default function RezerwacjeStolik() {
     setWaitActions((current) => ({ ...current, [entry.id]: 'seat' }))
     setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
     try {
-      const result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', { stolik_id: Number(tableId) })
+      const payload = { stolik_id: Number(tableId) }
+      let result
+      try {
+        result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', payload)
+      } catch (error) {
+        const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
+        if (!pacingConflict || !canOverrideLimits) throw error
+        const approved = await confirm(`${error.message}\n\nPosadzić gości mimo ustawionego limitu?`, {
+          title: 'Przekroczenie limitu',
+          confirmText: 'Posadź mimo limitu',
+          cancelText: 'Wróć',
+        })
+        if (!approved) throw error
+        result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', {
+          ...payload,
+          przekrocz_limity: true,
+        })
+      }
       setLista((current) => replaceById(current, result.wpis, sortWaitlist))
       setRez((current) => result.rezerwacja.data === data
         ? replaceById(current, result.rezerwacja, sortReservations)
@@ -691,7 +759,7 @@ export default function RezerwacjeStolik() {
         ...current,
         [entry.id]: { type: 'success', message: 'Posadzono gości i utworzono rezerwację.' },
       }))
-      setPageFeedback({ type: 'success', message: `Posadzono: ${entry.nazwisko}.` })
+      setPageFeedback({ type: 'success', message: `Posadzono: ${canViewContacts ? entry.nazwisko : 'Gość'}.` })
     } catch (error) {
       setWaitRowFeedback((current) => ({
         ...current,
@@ -716,7 +784,9 @@ export default function RezerwacjeStolik() {
     <Card className="p-5 sm:p-8">
       <SectionHeader
         title="Rezerwacje stolików"
-        subtitle="Plan dnia, statusy rezerwacji, lista oczekujących i konfiguracja stolików."
+        subtitle={canManageFloor
+          ? 'Plan dnia, statusy rezerwacji, lista oczekujących i konfiguracja stolików.'
+          : 'Plan dnia, statusy rezerwacji i lista oczekujących.'}
       >
         <Button
           variant="ghost"
@@ -727,23 +797,27 @@ export default function RezerwacjeStolik() {
           <Icon name="clock" className="h-4 w-4" />
           Oczekujący ({activeWaitlist.length})
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={(event) => { tableTriggerRef.current = event.currentTarget; setStolikModal(true) }}
-          disabled={loading || !!loadError}
-        >
-          <Icon name="pin" className="h-4 w-4" />
-          Stoliki ({stoliki.length})
-        </Button>
-        <Button
-          size="sm"
-          onClick={(event) => openReservation(newReservation(data), event.currentTarget)}
-          disabled={loading || !!loadError}
-        >
-          <Icon name="plus" className="h-4 w-4" />
-          Dodaj rezerwację
-        </Button>
+        {canManageFloor ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(event) => { tableTriggerRef.current = event.currentTarget; setStolikModal(true) }}
+            disabled={loading || !!loadError}
+          >
+            <Icon name="pin" className="h-4 w-4" />
+            Stoliki ({stoliki.length})
+          </Button>
+        ) : null}
+        {canViewContacts ? (
+          <Button
+            size="sm"
+            onClick={(event) => openReservation(newReservation(data), event.currentTarget)}
+            disabled={loading || !!loadError}
+          >
+            <Icon name="plus" className="h-4 w-4" />
+            Dodaj rezerwację
+          </Button>
+        ) : null}
       </SectionHeader>
 
       <div className="mb-5 border-b border-line pb-5">
@@ -801,12 +875,13 @@ export default function RezerwacjeStolik() {
       ) : rez.length === 0 ? (
         <div className="rounded-xl border border-dashed border-line px-5 py-12 text-center">
           <p className="text-sm font-semibold text-ink">Brak rezerwacji na ten dzień</p>
-          <p className="mt-1 text-sm text-muted">Dodaj pierwszą rezerwację albo przejdź do innego dnia.</p>
+          <p className="mt-1 text-sm text-muted">{canViewContacts ? 'Dodaj pierwszą rezerwację albo przejdź do innego dnia.' : 'Przejdź do innego dnia, aby sprawdzić plan.'}</p>
         </div>
       ) : (
         <div className="space-y-2">
           {rez.map((reservation) => {
             const meta = STATUS_META[reservation.status] || STATUS_META.rezerwacja
+            const guestName = canViewContacts ? reservation.nazwisko : 'Gość'
             const currentAction = rowActions[reservation.id]
             const pendingLabel = meta.actions.find((action) => action.status === currentAction)?.pending
             return (
@@ -817,18 +892,22 @@ export default function RezerwacjeStolik() {
                     {reservation.godz_do ? <span className="text-muted">–{reservation.godz_do}</span> : null}
                   </div>
                   <div className="min-w-[10rem] flex-1">
-                    <button
-                      type="button"
-                      onClick={(event) => openReservation(reservation, event.currentTarget)}
-                      className="-my-2 min-h-11 rounded-lg text-left text-sm font-semibold text-ink transition hover:text-mint"
-                      aria-label={`Otwórz rezerwację: ${reservation.nazwisko}`}
-                    >
-                      {reservation.nazwisko}
-                    </button>
+                    {canViewContacts ? (
+                      <button
+                        type="button"
+                        onClick={(event) => openReservation(reservation, event.currentTarget)}
+                        className="-my-2 min-h-11 rounded-lg text-left text-sm font-semibold text-ink transition hover:text-mint"
+                        aria-label={`Otwórz rezerwację: ${guestName}`}
+                      >
+                        {guestName}
+                      </button>
+                    ) : (
+                      <span className="inline-flex min-h-11 items-center text-sm font-semibold text-ink">{guestName}</span>
+                    )}
                     <div className="text-xs leading-relaxed text-muted">
                       {stolikNazwa(reservation.stolik_id)}
                       {reservation.liczba_osob ? ` · ${reservation.liczba_osob} os.` : ''}
-                      {reservation.telefon ? ` · ${reservation.telefon}` : ''}
+                      {canViewContacts && reservation.telefon ? ` · ${reservation.telefon}` : ''}
                     </div>
                   </div>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${meta.className}`}>{meta.label}</span>
@@ -847,16 +926,18 @@ export default function RezerwacjeStolik() {
                         {action.label}
                       </Button>
                     ))}
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={(event) => openReservation(reservation, event.currentTarget)}
-                      disabled={!!currentAction}
-                      aria-label={`Edytuj rezerwację: ${reservation.nazwisko}`}
-                    >
-                      <Icon name="clipboard" className="h-4 w-4" />
-                      Edytuj
-                    </Button>
+                    {canViewContacts ? (
+                      <Button
+                        variant="subtle"
+                        size="sm"
+                        onClick={(event) => openReservation(reservation, event.currentTarget)}
+                        disabled={!!currentAction}
+                        aria-label={`Edytuj rezerwację: ${guestName}`}
+                      >
+                        <Icon name="clipboard" className="h-4 w-4" />
+                        Edytuj
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
                 <InlineFeedback pending={pendingLabel} feedback={rowFeedback[reservation.id]} className="mt-1 text-right" />
@@ -866,7 +947,7 @@ export default function RezerwacjeStolik() {
         </div>
       )}
 
-      {modal ? (
+      {canViewContacts && modal ? (
         <DialogFrame
           title={modal.id ? 'Edytuj rezerwację' : 'Nowa rezerwacja'}
           closeLabel="Zamknij edycję rezerwacji"
@@ -896,21 +977,29 @@ export default function RezerwacjeStolik() {
               <label className="field-label sm:col-span-2">Nazwisko / klient
                 <input ref={reservationNameRef} value={modal.nazwisko || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, nazwisko: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" placeholder="np. Nowak" autoComplete="name" />
               </label>
-              <label className="field-label">Telefon
-                <input type="tel" value={modal.telefon || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, telefon: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" autoComplete="tel" />
-              </label>
-              <label className="field-label">E-mail
-                <input type="email" value={modal.email || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, email: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" autoComplete="email" />
-              </label>
-              <label className="field-label">Zadatek (zł)
-                <input type="number" min="0" step="0.01" value={modal.zadatek ?? 0} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, zadatek: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" />
-              </label>
-              <label className="field-label sm:col-span-2">Notatka
-                <textarea rows={3} value={modal.notatka || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, notatka: event.target.value })); setModalFeedback(null) }} className="field mt-1.5 resize-y" />
-              </label>
+              {canViewContacts ? (
+                <>
+                  <label className="field-label">Telefon
+                    <input type="tel" value={modal.telefon || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, telefon: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" autoComplete="tel" />
+                  </label>
+                  <label className="field-label">E-mail
+                    <input type="email" value={modal.email || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, email: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" autoComplete="email" />
+                  </label>
+                </>
+              ) : null}
+              {canViewFinances ? (
+                <label className="field-label">Zadatek (zł)
+                  <input type="number" min="0" step="0.01" value={modal.zadatek ?? 0} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, zadatek: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" />
+                </label>
+              ) : null}
+              {canViewNotes ? (
+                <label className="field-label sm:col-span-2">Notatka
+                  <textarea rows={3} value={modal.notatka || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, notatka: event.target.value })); setModalFeedback(null) }} className="field mt-1.5 resize-y" />
+                </label>
+              ) : null}
             </div>
 
-            {modal.id && modal.email ? (
+            {canViewContacts && modal.id && modal.email ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -932,7 +1021,7 @@ export default function RezerwacjeStolik() {
             />
 
             <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-line pt-4">
-              {modal.id ? (
+              {isAdmin && modal.id ? (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -948,6 +1037,19 @@ export default function RezerwacjeStolik() {
               ) : null}
               <div className="ml-auto flex flex-wrap justify-end gap-2">
                 <Button variant="subtle" size="sm" onClick={closeReservation} disabled={!!modalAction}>Anuluj</Button>
+                {modalFeedback?.canOverride ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => zapisz(true)}
+                    disabled={!!modalAction}
+                    className="border-lemon/30 text-lemon hover:bg-lemon/10"
+                  >
+                    <Icon name="warning" className="h-4 w-4" />
+                    Zapisz mimo limitu
+                  </Button>
+                ) : null}
                 <Button type="submit" size="sm" loading={modalAction === 'save'} loadingLabel="Zapisuję…" disabled={!!modalAction && modalAction !== 'save'}>
                   <Icon name="check" className="h-4 w-4" />
                   {modalFeedback?.type === 'error' ? 'Ponów zapis' : 'Zapisz'}
@@ -958,7 +1060,7 @@ export default function RezerwacjeStolik() {
         </DialogFrame>
       ) : null}
 
-      {stolikModal ? (
+      {canManageFloor && stolikModal ? (
         <DialogFrame title="Stoliki" closeLabel="Zamknij listę stolików" onClose={closeTables} restoreFocusRef={tableTriggerRef}>
           <div className="mb-5 space-y-2">
             {stoliki.length === 0 ? <p className="text-sm text-muted">Brak stolików. Dodaj pierwszy poniżej.</p> : null}
@@ -1036,14 +1138,15 @@ export default function RezerwacjeStolik() {
             {lista.length === 0 ? <p className="text-sm text-muted">Nikt nie oczekuje w tym dniu.</p> : null}
             {lista.map((entry) => {
               const action = waitActions[entry.id]
+              const guestName = canViewContacts ? entry.nazwisko : 'Gość'
               return (
                 <div key={entry.id} className="border-b border-line py-3 last:border-0">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 text-sm text-ink">
-                      <span className="font-semibold">{entry.nazwisko}</span>
+                      <span className="font-semibold">{guestName}</span>
                       {entry.godz_od ? ` · ${entry.godz_od}` : ''}
                       {entry.liczba_osob ? ` · ${entry.liczba_osob} os.` : ''}
-                      {entry.telefon ? ` · ${entry.telefon}` : ''}
+                      {canViewContacts && entry.telefon ? ` · ${entry.telefon}` : ''}
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       {entry.status !== 'oczekuje' ? (
@@ -1051,24 +1154,26 @@ export default function RezerwacjeStolik() {
                           {entry.status === 'zrealizowany' ? 'Posadzony' : 'Odwołany'}
                         </span>
                       ) : null}
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        onClick={() => usunOczekujacego(entry)}
-                        disabled={!!action}
-                        loading={action === 'delete'}
-                        loadingLabel="Usuwam…"
-                        className="px-2 text-muted hover:text-danger"
-                        aria-label={`Usuń z listy oczekujących: ${entry.nazwisko}`}
-                      >
-                        <Icon name="trash" className="h-4 w-4" />
-                      </Button>
+                      {isAdmin ? (
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          onClick={() => usunOczekujacego(entry)}
+                          disabled={!!action}
+                          loading={action === 'delete'}
+                          loadingLabel="Usuwam…"
+                          className="px-2 text-muted hover:text-danger"
+                          aria-label={`Usuń z listy oczekujących: ${guestName}`}
+                        >
+                          <Icon name="trash" className="h-4 w-4" />
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                   {entry.status === 'oczekuje' ? (
                     <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                       <label className="min-w-0 flex-1">
-                        <span className="sr-only">Stolik dla {entry.nazwisko}</span>
+                        <span className="sr-only">Stolik dla {guestName}</span>
                         <select
                           value={posadzStolik[entry.id] || ''}
                           onChange={(event) => {
@@ -1115,30 +1220,32 @@ export default function RezerwacjeStolik() {
             })}
           </div>
 
-          <form onSubmit={(event) => { event.preventDefault(); dodajOczekujacego() }} className="border-t border-line pt-5">
-            <h4 className="mb-4 text-sm font-semibold text-ink">Dodaj oczekujących</h4>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <label className="field-label sm:col-span-2">Nazwisko / klient
-                <input value={nowyOcz.nazwisko} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, nazwisko: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="name" />
-              </label>
+          {canViewContacts ? (
+            <form onSubmit={(event) => { event.preventDefault(); dodajOczekujacego() }} className="border-t border-line pt-5">
+              <h4 className="mb-4 text-sm font-semibold text-ink">Dodaj oczekujących</h4>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <label className="field-label sm:col-span-2">Nazwisko / klient
+                  <input value={nowyOcz.nazwisko} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, nazwisko: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="name" />
+                </label>
               <label className="field-label">Preferowana godzina
                 <input type="time" value={nowyOcz.godz_od} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, godz_od: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" />
               </label>
               <label className="field-label">Liczba osób
                 <input type="number" min="1" value={nowyOcz.liczba_osob} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, liczba_osob: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" />
               </label>
-              <label className="field-label sm:col-span-2">Telefon
-                <input type="tel" value={nowyOcz.telefon} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, telefon: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="tel" />
-              </label>
-            </div>
-            <InlineFeedback pending={waitAdding ? 'Dodaję do listy…' : null} feedback={waitFeedback} className="mt-3" />
-            <div className="mt-4 flex justify-end">
-              <Button type="submit" size="sm" loading={waitAdding} loadingLabel="Dodaję…">
-                <Icon name="plus" className="h-4 w-4" />
-                {waitFeedback?.type === 'error' ? 'Ponów dodanie' : 'Dodaj do listy'}
-              </Button>
-            </div>
-          </form>
+                <label className="field-label sm:col-span-2">Telefon
+                  <input type="tel" value={nowyOcz.telefon} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, telefon: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="tel" />
+                </label>
+              </div>
+              <InlineFeedback pending={waitAdding ? 'Dodaję do listy…' : null} feedback={waitFeedback} className="mt-3" />
+              <div className="mt-4 flex justify-end">
+                <Button type="submit" size="sm" loading={waitAdding} loadingLabel="Dodaję…">
+                  <Icon name="plus" className="h-4 w-4" />
+                  {waitFeedback?.type === 'error' ? 'Ponów dodanie' : 'Dodaj do listy'}
+                </Button>
+              </div>
+            </form>
+          ) : null}
         </DialogFrame>
       ) : null}
     </Card>

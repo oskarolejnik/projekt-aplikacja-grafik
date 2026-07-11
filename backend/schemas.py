@@ -154,6 +154,7 @@ class UserOut(BaseModel):
     sprzataczka: bool = False         # techniczny z kwalifikacją „Sprzątaczka" (dostęp do zamówień)
     imie: Optional[str] = None        # uzupełniane z powiązanego Pracownika
     nazwisko: Optional[str] = None
+    preset: Optional[str] = None
     uprawnienia_override: dict[str, bool] = Field(default_factory=dict)
     uprawnienia: List[str] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
@@ -168,6 +169,7 @@ class UserCreate(BaseModel):
     haslo: str
     rola: str = "employee"
     pracownik_id: Optional[int] = None
+    preset: Optional[str] = None
 
 class UserUpdate(BaseModel):
     rola: Optional[str] = None
@@ -175,8 +177,9 @@ class UserUpdate(BaseModel):
     pracownik_id: Optional[int] = None
 
 class UserUprawnieniaUpdate(BaseModel):
-    """Pełna mapa wyjątków przesyłana przez panel kont (PUT zastępuje poprzednią)."""
-    uprawnienia_override: dict[str, StrictBool] = Field(default_factory=dict)
+    """Preset albo pełna mapa wyjątków; PUT zastępuje poprzednią konfigurację."""
+    preset: Optional[str] = None
+    uprawnienia_override: Optional[dict[str, StrictBool]] = None
     model_config = ConfigDict(extra="forbid")
 
 class ResetHasloIn(BaseModel):
@@ -516,8 +519,8 @@ class GodzinyOtwarciaIn(BaseModel):
     aktywny: bool = True
     nazwa: Optional[str] = None                       # etykieta serwisu (Lunch/Kolacja)
     turn_time_progi: Optional[List[dict]] = None       # [{do_osob,min}] — czas zasiadku wg grupy
-    pacing_max_rez: Optional[int] = None               # limit rezerwacji na okno pacingu
-    pacing_max_osob: Optional[int] = None              # limit osób na okno pacingu
+    pacing_max_rez: Optional[int] = Field(default=None, ge=0)   # 0/NULL = brak limitu
+    pacing_max_osob: Optional[int] = Field(default=None, ge=0)  # 0/NULL = brak limitu
     pacing_okno_min: Optional[int] = None              # długość okna pacingu (min); NULL = krok slotu
 
     @field_validator("turn_time_progi")
@@ -539,6 +542,14 @@ class GodzinyOtwarciaIn(BaseModel):
 class GodzinyOtwarciaOut(GodzinyOtwarciaIn):
     id: int
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("pacing_max_rez", "pacing_max_osob", mode="before")
+    @classmethod
+    def _normalizuj_historyczny_limit(cls, value):
+        """Dawne wartości <=0 oznaczały brak limitu; nie mogą psuć odczytu po walidacji."""
+        if value is None:
+            return None
+        return value if int(value) > 0 else None
 
 class WyjatekKalendarzaIn(BaseModel):
     """Nadpisanie dnia: blackout (zamknięte) lub godziny_specjalne (inne okno/slot)."""
@@ -565,6 +576,7 @@ class RezerwacjaIn(BaseModel):
     email: Optional[str] = None
     notatka: Optional[str] = None
     zadatek: float = 0.0
+    przekrocz_limity: bool = False   # jawne ponowienie po 409; wymaga osobnego uprawnienia
 
 class RezerwacjaStatusIn(BaseModel):
     status: str                    # potwierdzona | odbyla | no_show | odwolana
@@ -574,6 +586,10 @@ class HostFazaIn(BaseModel):
 
 class HostStolikIn(BaseModel):
     stolik_id: int                 # ręczny przydział/przeniesienie na konkretny stół
+
+class HostPosadzIn(BaseModel):
+    """Atomowe posadzenie; brak stolik_id uruchamia best-fit, gdy rezerwacja nie ma stołu."""
+    stolik_id: Optional[int] = None
 
 class ProfilGosciaIn(BaseModel):
     """Profil gościa 360 (upsert). Alergie/notatka = dane wrażliwe (szyfrowane at-rest)."""
@@ -601,6 +617,7 @@ class ZrealizujIn(BaseModel):
     """Realizacja wpisu z listy oczekujących → utworzenie rezerwacji stolika."""
     stolik_id: int
     godz_od: Optional[time] = None   # opcjonalne nadpisanie godziny z wpisu
+    przekrocz_limity: bool = False
 
 class HoldIn(BaseModel):
     """Tymczasowy HOLD stołu dla wpisu z listy oczekujących (waitlist v2)."""

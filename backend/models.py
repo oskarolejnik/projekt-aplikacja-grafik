@@ -816,6 +816,74 @@ class RezerwacjaPacingLedger(Base):
     created_at   = Column(DateTime, nullable=False)
 
 
+class ReservationAudit(Base):
+    """Transakcyjna historia operacji na rezerwacji stolika.
+
+    ``reservation_ref`` jest nieodwracalnym identyfikatorem technicznym, dzięki któremu
+    historia pozostaje spójna po twardym usunięciu ``Termin``. Login aktora jest
+    denormalizowany z tego samego powodu. ``diff`` może zawierać wyłącznie pola
+    operacyjne przygotowane przez moduł ``reservation_audit`` — bez danych gościa.
+    """
+    __tablename__ = "reservation_audit"
+    __table_args__ = (
+        CheckConstraint(
+            "length(reservation_ref) = 64",
+            name="ck_reservation_audit_ref",
+        ),
+        CheckConstraint(
+            "actor_kind IN ('user', 'guest', 'system', 'migration')",
+            name="ck_reservation_audit_actor_kind",
+        ),
+        CheckConstraint(
+            "action IN ('create', 'edit', 'cancel', 'delete', 'status', "
+            "'host', 'assign', 'override')",
+            name="ck_reservation_audit_action",
+        ),
+        CheckConstraint(
+            "reason IS NULL OR reason IN ("
+            "'guest_request', 'operator_correction', 'capacity_override', "
+            "'pacing_override', 'table_override', 'system_automation', "
+            "'import_reconciliation', 'other')",
+            name="ck_reservation_audit_reason",
+        ),
+        CheckConstraint(
+            "actor_kind != 'user' OR "
+            "(actor_login IS NOT NULL AND length(trim(actor_login)) > 0)",
+            name="ck_reservation_audit_user_actor",
+        ),
+        CheckConstraint(
+            "action != 'override' OR reason IS NOT NULL",
+            name="ck_reservation_audit_override_reason",
+        ),
+        Index(
+            "ix_reservation_audit_ref_created",
+            "reservation_ref", "created_at",
+        ),
+        Index(
+            "ix_reservation_audit_termin_created",
+            "termin_id", "created_at",
+        ),
+        Index(
+            "ix_reservation_audit_actor_created",
+            "actor_user_id", "created_at",
+        ),
+    )
+    id              = Column(Integer, primary_key=True)
+    created_at      = Column(DateTime, nullable=False)
+    reservation_ref = Column(String(64), nullable=False)
+    termin_id       = Column(
+        Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True,
+    )
+    actor_kind      = Column(String(16), nullable=False)
+    actor_user_id   = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    actor_login     = Column(String(64), nullable=True)
+    action          = Column(String(16), nullable=False)
+    reason          = Column(String(64), nullable=True)
+    diff            = Column(JSON, nullable=False)
+
+
 class ProfilGoscia(Base):
     """Trwały profil gościa (nadbudowa nad grupowaniem CRM po telefonie): tagi/VIP, alergie,
     preferencje, okazje. Statystyki wizyt NADAL liczone w locie z Termin — tu tylko to, czego

@@ -7,18 +7,43 @@ import { api } from '../../lib/api'
 import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 
-const PRAWA_PODGLADU = [
-  { key: 'grafik.podglad', label: 'Grafik i stoły', opis: 'Opublikowany grafik oraz bieżący widok sali.' },
-  { key: 'raporty.podglad', label: 'Raport godzin', opis: 'Czas pracy bez automatycznego dostępu do kwot.' },
-  { key: 'wyplaty.podglad', label: 'Wypłaty', opis: 'Stawki, kwoty i podsumowania finansowe w raporcie.' },
-  { key: 'zeszyt.podglad', label: 'Zeszyt kasowy', opis: 'Podgląd zapisów kasowych bez edycji.' },
-  { key: 'imprezy.podglad', label: 'Imprezy', opis: 'Kalendarz i operacyjne informacje o imprezach.' },
-  { key: 'rezerwacje.podglad', label: 'Rezerwacje', opis: 'Podgląd rezerwacji bez możliwości zarządzania.' },
+const PRESET_RECEPCJA_HOST = 'recepcja_host'
+
+const GRUPY_PRAW = [
+  {
+    label: 'Widoki managera',
+    prawa: [
+      { key: 'grafik.podglad', label: 'Grafik i stoły', opis: 'Opublikowany grafik oraz bieżący widok sali.' },
+      { key: 'raporty.podglad', label: 'Raport godzin', opis: 'Czas pracy bez automatycznego dostępu do kwot.' },
+      { key: 'wyplaty.podglad', label: 'Wypłaty', opis: 'Stawki, kwoty i podsumowania finansowe w raporcie.' },
+      { key: 'zeszyt.podglad', label: 'Zeszyt kasowy', opis: 'Podgląd zapisów kasowych bez edycji.' },
+      { key: 'imprezy.podglad', label: 'Imprezy', opis: 'Kalendarz i operacyjne informacje o imprezach.' },
+      { key: 'rezerwacje.podglad', label: 'Rezerwacje — podgląd', opis: 'Bezpieczne podsumowanie bez zarządzania.' },
+    ],
+  },
+  {
+    label: 'Rezerwacje i sala',
+    prawa: [
+      { key: 'rezerwacje.operacje', label: 'Obsługa rezerwacji', opis: 'Dodawanie, edycja, statusy i lista oczekujących.' },
+      { key: 'rezerwacje.host', label: 'Widok hosta', opis: 'Kolejka dnia, sadzanie gości i obrót stolików.' },
+      { key: 'rezerwacje.nadpisuj_limity', label: 'Przekraczanie limitów', opis: 'Kontynuacja po ostrzeżeniu, gdy operacja przekracza reguły.' },
+      { key: 'rezerwacje.sala', label: 'Konfiguracja sali', opis: 'Stoły, strefy i ich dostępność.' },
+      { key: 'rezerwacje.reguly', label: 'Reguły rezerwacji', opis: 'Godziny, limity i wyjątki kalendarza.' },
+      { key: 'rezerwacje.analityka', label: 'Analityka rezerwacji', opis: 'Obłożenie i podsumowania operacyjne.' },
+      { key: 'rezerwacje.dane_kontaktowe', label: 'Dane kontaktowe', opis: 'Telefon i adres e-mail gościa.' },
+      { key: 'rezerwacje.notatki_wewnetrzne', label: 'Notatki wewnętrzne', opis: 'Treść notatek dopisanych przez zespół.' },
+      { key: 'rezerwacje.dane_wrazliwe', label: 'Dane wrażliwe', opis: 'Informacje o alergiach i szczególnych potrzebach.' },
+      { key: 'rezerwacje.finanse', label: 'Finanse rezerwacji', opis: 'Podgląd i edycja zadatków.' },
+    ],
+  },
 ]
 
-function DostepKonta({ user, pending, onToggle, onReset }) {
+const PRAWA_DOSTEPU = GRUPY_PRAW.flatMap((grupa) => grupa.prawa)
+
+function DostepKonta({ user, pending, onToggle, onReset, onApplyPreset }) {
   const overrides = user.uprawnienia_override || {}
-  const liczbaZmian = PRAWA_PODGLADU.filter(({ key }) => key in overrides).length
+  const liczbaZmian = PRAWA_DOSTEPU.filter(({ key }) => key in overrides).length
+  const presetRecepcji = user.preset === PRESET_RECEPCJA_HOST
 
   return (
     <details className="group rounded-xl border border-line bg-white/[0.02]">
@@ -35,40 +60,67 @@ function DostepKonta({ user, pending, onToggle, onReset }) {
 
       <div className="space-y-2 border-t border-line p-3">
         <p className="mb-3 text-xs leading-relaxed text-muted">
-          Włącz tylko widoki potrzebne tej osobie. Zmiany nie dają prawa do edycji.
+          Włącz tylko te obszary i dane, których ta osoba potrzebuje w pracy.
         </p>
-        {PRAWA_PODGLADU.map((prawo) => {
-          const wlaczone = (user.uprawnienia || []).includes(prawo.key)
-          const zapisuje = pending === `${user.id}:${prawo.key}`
-          return (
-            <button
-              key={prawo.key}
-              type="button"
-              role="switch"
-              aria-checked={wlaczone}
-              disabled={!!pending}
-              onClick={() => onToggle(user, prawo.key, !wlaczone)}
-              className="flex min-h-11 w-full items-center justify-between gap-4 rounded-lg px-2 py-2 text-left transition hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mint/70 disabled:opacity-60"
-            >
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold text-ink">{prawo.label}</span>
-                <span className="block text-xs leading-relaxed text-muted">{prawo.opis}</span>
-              </span>
-              <span className="flex shrink-0 items-center gap-2">
-                <span className="hidden text-xs text-muted sm:inline">{zapisuje ? 'Zapisuję…' : wlaczone ? 'Włączone' : 'Wyłączone'}</span>
-                <span className={`relative h-6 w-11 rounded-full transition-colors ${wlaczone ? 'bg-mint' : 'bg-white/15'}`} aria-hidden>
-                  <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ${wlaczone ? 'translate-x-6' : 'translate-x-1'}`} />
-                </span>
-              </span>
-            </button>
-          )
-        })}
+
+        <div className="flex flex-col gap-3 border-b border-line pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-ink">Recepcja / Host</span>
+              {presetRecepcji ? <span className="rounded-full bg-mint/15 px-2 py-0.5 text-xs font-semibold text-mint">Aktywny preset</span> : null}
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-muted">Rezerwacje, widok hosta, kontakty i przekroczenie limitu po ostrzeżeniu — bez finansów i danych wrażliwych.</p>
+          </div>
+          <Button
+            size="sm"
+            variant={presetRecepcji ? 'subtle' : 'ghost'}
+            disabled={!!pending || presetRecepcji}
+            loading={pending === `${user.id}:preset`}
+            loadingLabel="Ustawiam…"
+            onClick={() => onApplyPreset(user)}
+            className="shrink-0"
+          >
+            {presetRecepcji ? 'Preset aktywny' : 'Zastosuj preset'}
+          </Button>
+        </div>
+
+        {GRUPY_PRAW.map((grupa) => (
+          <div key={grupa.label} className="pt-2">
+            <p className="px-2 pb-1 text-xs font-semibold text-muted">{grupa.label}</p>
+            {grupa.prawa.map((prawo) => {
+              const wlaczone = (user.uprawnienia || []).includes(prawo.key)
+              const zapisuje = pending === `${user.id}:${prawo.key}`
+              return (
+                <button
+                  key={prawo.key}
+                  type="button"
+                  role="switch"
+                  aria-checked={wlaczone}
+                  disabled={!!pending}
+                  onClick={() => onToggle(user, prawo.key, !wlaczone)}
+                  className="flex min-h-11 w-full items-center justify-between gap-4 rounded-lg px-2 py-2 text-left transition hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mint/70 disabled:opacity-60"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-ink">{prawo.label}</span>
+                    <span className="block text-xs leading-relaxed text-muted">{prawo.opis}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="hidden text-xs text-muted sm:inline">{zapisuje ? 'Zapisuję…' : wlaczone ? 'Włączone' : 'Wyłączone'}</span>
+                    <span className={`relative h-6 w-11 rounded-full transition-colors ${wlaczone ? 'bg-mint' : 'bg-white/15'}`} aria-hidden>
+                      <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ${wlaczone ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        ))}
 
         <div className="flex justify-end border-t border-line pt-3">
           <Button
             size="sm"
             variant="ghost"
-            disabled={!!pending || liczbaZmian === 0}
+            disabled={!!pending || (liczbaZmian === 0 && !presetRecepcji)}
             onClick={() => onReset(user)}
           >
             Przywróć ustawienia roli
@@ -245,11 +297,13 @@ export default function Konta() {
       return
     }
     try {
+      const presetUprawnien = rola === PRESET_RECEPCJA_HOST ? PRESET_RECEPCJA_HOST : null
       await api('/users', 'POST', {
         login: login.trim(),
         haslo,
-        rola,
+        rola: presetUprawnien ? 'szef' : rola,
         pracownik_id: pracownikId ? +pracownikId : null,
+        ...(presetUprawnien ? { preset: presetUprawnien } : {}),
       })
       setLogin(''); setHaslo(''); setPracownikId(''); setRola('employee')
       toast('Konto utworzone.', 'success')
@@ -289,12 +343,10 @@ export default function Konta() {
       toast(e.message, 'error')
     }
   }
-  const zapiszDostep = async (u, uprawnieniaOverride, pendingKey) => {
+  const zapiszDostep = async (u, body, pendingKey) => {
     setPermissionPending(pendingKey)
     try {
-      const updated = await api(`/users/${u.id}/uprawnienia`, 'PUT', {
-        uprawnienia_override: uprawnieniaOverride,
-      })
+      const updated = await api(`/users/${u.id}/uprawnienia`, 'PUT', body)
       setUsers((current) => current.map((item) => item.id === updated.id ? updated : item))
     } catch (e) {
       toast(e.message, 'error')
@@ -304,9 +356,25 @@ export default function Konta() {
   }
   const toggleDostep = (u, permission, enabled) => {
     const next = { ...(u.uprawnienia_override || {}), [permission]: enabled }
-    return zapiszDostep(u, next, `${u.id}:${permission}`)
+    return zapiszDostep(u, { uprawnienia_override: next }, `${u.id}:${permission}`)
   }
-  const resetDostep = (u) => zapiszDostep(u, {}, `${u.id}:reset`)
+  const resetDostep = (u) => zapiszDostep(u, { uprawnienia_override: {} }, `${u.id}:reset`)
+  const zastosujPresetRecepcji = async (u) => {
+    const approved = await confirm(
+      `Zastosować preset Recepcja / Host dla konta „${u.login}”? Zastąpi bieżący zakres dostępu tego konta.`,
+      {
+        title: 'Zmień zakres dostępu',
+        confirmText: 'Zastosuj preset',
+        cancelText: 'Zostaw bez zmian',
+      },
+    )
+    if (!approved) return
+    return zapiszDostep(
+      u,
+      { preset: PRESET_RECEPCJA_HOST },
+      `${u.id}:preset`,
+    )
+  }
   const resetHaslo = async (u) => {
     const nowe = Math.random().toString(36).slice(2, 10)
     try {
@@ -338,22 +406,36 @@ export default function Konta() {
         </SectionHeader>
         <div className="mx-auto max-w-lg">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="Login" className="field" autoComplete="off" />
-            <input value={haslo} onChange={(e) => setHaslo(e.target.value)} type="text" placeholder="Hasło" className="field" autoComplete="off" />
-            <select value={rola} onChange={(e) => setRola(e.target.value)} className="field">
-              <option value="employee" className="bg-surface">Pracownik obsługa</option>
-              <option value="kuchnia" className="bg-surface">Pracownik kuchnia</option>
-              <option value="szef_kuchni" className="bg-surface">Szef kuchni</option>
-              <option value="szef" className="bg-surface">Szef (podgląd)</option>
-              <option value="admin" className="bg-surface">Administrator</option>
-            </select>
-            <select value={pracownikId} onChange={(e) => setPracownikId(e.target.value)} className="field">
-              <option value="" className="bg-surface">— Pracownik (opcjonalnie) —</option>
-              {pracownicy.map((p) => (
-                <option key={p.id} value={p.id} className="bg-surface text-ink">{p.imie} {p.nazwisko}</option>
-              ))}
-            </select>
+            <label className="field-label">Login
+              <input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="np. recepcja" className="field mt-1.5" autoComplete="off" />
+            </label>
+            <label className="field-label">Hasło startowe
+              <input value={haslo} onChange={(e) => setHaslo(e.target.value)} type="text" className="field mt-1.5" autoComplete="off" />
+            </label>
+            <label className="field-label">Zakres pracy
+              <select value={rola} onChange={(e) => setRola(e.target.value)} className="field mt-1.5">
+                <option value="employee" className="bg-surface">Pracownik obsługa</option>
+                <option value="kuchnia" className="bg-surface">Pracownik kuchnia</option>
+                <option value="szef_kuchni" className="bg-surface">Szef kuchni</option>
+                <option value="szef" className="bg-surface">Szef (podgląd)</option>
+                <option value={PRESET_RECEPCJA_HOST} className="bg-surface">Recepcja / Host</option>
+                <option value="admin" className="bg-surface">Administrator</option>
+              </select>
+            </label>
+            <label className="field-label">Powiązany pracownik
+              <select value={pracownikId} onChange={(e) => setPracownikId(e.target.value)} className="field mt-1.5">
+                <option value="" className="bg-surface">Niepowiązane</option>
+                {pracownicy.map((p) => (
+                  <option key={p.id} value={p.id} className="bg-surface text-ink">{p.imie} {p.nazwisko}</option>
+                ))}
+              </select>
+            </label>
           </div>
+          {rola === PRESET_RECEPCJA_HOST ? (
+            <p className="mt-3 text-sm leading-relaxed text-muted">
+              Konto otworzy prosty pulpit rezerwacji i hosta. Nie zobaczy grafiku, finansów, notatek wewnętrznych ani danych wrażliwych.
+            </p>
+          ) : null}
           <Button className="mt-5 w-full" onClick={utworz}>
             <Icon name="plus" className="h-4 w-4" /> Utwórz konto
           </Button>
@@ -375,6 +457,9 @@ export default function Konta() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-ink">{u.login}</span>
+                    {u.preset === PRESET_RECEPCJA_HOST ? (
+                      <span className="rounded-full bg-mint/15 px-2 py-1 text-xs font-semibold text-mint">Recepcja / Host</span>
+                    ) : null}
                     {/* Rola edytowalna — zmiana zapisuje się od razu (PUT /users). */}
                     <select
                       value={u.rola}
@@ -385,7 +470,9 @@ export default function Konta() {
                       <option value="employee" className="bg-surface">Pracownik obsługa</option>
                       <option value="kuchnia" className="bg-surface">Pracownik kuchnia</option>
                       <option value="szef_kuchni" className="bg-surface">Szef kuchni</option>
-                      <option value="szef" className="bg-surface">Szef (podgląd)</option>
+                      <option value="szef" className="bg-surface">
+                        {u.preset === PRESET_RECEPCJA_HOST ? 'Recepcja / Host' : 'Szef (podgląd)'}
+                      </option>
                       <option value="admin" className="bg-surface">Administrator</option>
                     </select>
                   </div>
@@ -416,6 +503,7 @@ export default function Konta() {
                     pending={permissionPending}
                     onToggle={toggleDostep}
                     onReset={resetDostep}
+                    onApplyPreset={zastosujPresetRecepcji}
                   />
                 )}
 

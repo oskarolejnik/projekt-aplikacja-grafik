@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import models
+import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
 
@@ -17,7 +18,7 @@ _TABELE = [
     "lokal_config", "wyjatki_kalendarza", "godziny_otwarcia", "stoliki", "kombinacje_stolow",
     "terminy", "profile_gosci", "rejestracje_lokalu", "lista_oczekujacych",
     "rezerwacje_idempotencja", "rezerwacje_dni_ledger", "rezerwacje_stoliki_claims",
-    "rezerwacje_pacing_ledger", "users",
+    "rezerwacje_pacing_ledger", "reservation_audit", "users",
 ]
 
 
@@ -47,6 +48,46 @@ def _insert_active_0050_reservation(db_file):
                        '2026-07-11 10:00:00', '18:00:00', '20:00:00',
                        'reczna', 'stolik', 1)"""
         )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _create_fake_audit_schema(db_file, *, drop_version=False):
+    """Tabela o poprawnych nazwach, ale nieskutecznych CHECK-ach i błędnych indeksach."""
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            """CREATE TABLE reservation_audit (
+                id INTEGER NOT NULL PRIMARY KEY,
+                created_at DATETIME NOT NULL,
+                reservation_ref VARCHAR(64) NOT NULL,
+                termin_id INTEGER REFERENCES terminy(id) ON DELETE SET NULL,
+                actor_kind VARCHAR(16) NOT NULL,
+                actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                actor_login VARCHAR(64),
+                action VARCHAR(16) NOT NULL,
+                reason VARCHAR(64),
+                diff JSON NOT NULL,
+                CONSTRAINT ck_reservation_audit_ref CHECK (1),
+                CONSTRAINT ck_reservation_audit_actor_kind CHECK (1),
+                CONSTRAINT ck_reservation_audit_action CHECK (1),
+                CONSTRAINT ck_reservation_audit_reason CHECK (1),
+                CONSTRAINT ck_reservation_audit_user_actor CHECK (1),
+                CONSTRAINT ck_reservation_audit_override_reason CHECK (1)
+            )"""
+        )
+        con.execute(
+            "CREATE INDEX ix_reservation_audit_ref_created ON reservation_audit (id)"
+        )
+        con.execute(
+            "CREATE INDEX ix_reservation_audit_termin_created ON reservation_audit (id)"
+        )
+        con.execute(
+            "CREATE INDEX ix_reservation_audit_actor_created ON reservation_audit (id)"
+        )
+        if drop_version:
+            con.execute("DROP TABLE alembic_version")
         con.commit()
     finally:
         con.close()
@@ -112,7 +153,7 @@ def test_adopcja_niewersjonowanej_bazy_nie_dubluje_source_identity(tmp_path):
         con.close()
     assert {"source_type", "source_external_id"} <= columns
     assert "uq_terminy_source_identity" in indexes
-    assert version == "0051_rezerwacje_atomic_ledger"
+    assert version == "0052_reservation_audit"
 
 
 def test_adopcja_pelnej_niewersjonowanej_bazy_0050_backfilluje_ledger(tmp_path):
@@ -148,7 +189,7 @@ def test_adopcja_pelnej_niewersjonowanej_bazy_0050_backfilluje_ledger(tmp_path):
         ).fetchone()[0]
     finally:
         con.close()
-    assert version == "0051_rezerwacje_atomic_ledger"
+    assert version == "0052_reservation_audit"
     assert (table_claims, pacing) == (120, 1)
 
     resumed = subprocess.run(
@@ -156,6 +197,119 @@ def test_adopcja_pelnej_niewersjonowanej_bazy_0050_backfilluje_ledger(tmp_path):
         cwd=str(BACKEND), env=env, capture_output=True, text=True,
     )
     assert resumed.returncode == 0, resumed.stderr
+
+
+def test_adopcja_pelnej_niewersjonowanej_bazy_0051_nie_powtarza_create_ledger(tmp_path):
+    """Pełny ledger 0051 bez metryki ma dostać tylko migrację audytu 0052."""
+    db_file = tmp_path / "_r0b_adoption.db"
+    env = _env(db_file, "r0b-adoption")
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051_rezerwacje_atomic_ledger"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("DROP TABLE alembic_version")
+        con.commit()
+    finally:
+        con.close()
+
+    adoption = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert adoption.returncode == 0, adoption.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        version = con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        tables = {
+            row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        con.close()
+    assert version == "0052_reservation_audit"
+    assert "reservation_audit" in tables
+
+    resumed = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert resumed.returncode == 0, resumed.stderr
+
+
+@pytest.mark.parametrize("drop_version", [False, True])
+def test_adopcja_odrzuca_falszywa_tabele_audytu(tmp_path, drop_version):
+    """Ani 0051, ani pełna baza bez metryki nie mogą ostemplować atrap ograniczeń 0052."""
+    db_file = tmp_path / f"_fake_audit_{drop_version}.db"
+    env = _env(db_file, f"fake-audit-{drop_version}")
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051_rezerwacje_atomic_ledger"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    _create_fake_audit_schema(db_file, drop_version=drop_version)
+
+    adoption = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert adoption.returncode != 0
+    assert "reservation_audit" in (adoption.stdout + adoption.stderr)
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        tables = {
+            row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        version = (
+            con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+            if "alembic_version" in tables else None
+        )
+    finally:
+        con.close()
+    assert version in {None, "0051_rezerwacje_atomic_ledger"}
+
+
+def test_recovery_0050_z_ledgerem_konczy_0052_w_pierwszym_starcie(tmp_path):
+    """Crash między create_all ledgera i stemplem nie może wymagać drugiego restartu."""
+    db_file = tmp_path / "_r0b_crash_recovery.db"
+    env = _env(db_file, "r0b-crash-recovery")
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0050_rezerwacje_source_identity"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    create_ledger = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import database; "
+                "names=('rezerwacje_idempotencja','rezerwacje_dni_ledger',"
+                "'rezerwacje_stoliki_claims','rezerwacje_pacing_ledger'); "
+                "[database.Base.metadata.tables[name].create(database.engine) for name in names]"
+            ),
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert create_ledger.returncode == 0, create_ledger.stderr
+
+    recovery = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert recovery.returncode == 0, recovery.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        version = con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        tables = {
+            row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        con.close()
+    assert version == "0052_reservation_audit"
+    assert "reservation_audit" in tables
 
 
 def test_fallback_bez_alembica_backfilluje_i_oznacza_baze_0050(tmp_path):
@@ -167,6 +321,15 @@ def test_fallback_bez_alembica_backfilluje_i_oznacza_baze_0050(tmp_path):
     )
     assert upgraded.returncode == 0, upgraded.stderr
     _insert_active_0050_reservation(db_file)
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO audit_log (ts, akcja, zasob) VALUES (?, ?, ?)",
+            ("2026-07-11 10:00:00", "rodo_anonimizuj_gosc", "600100200"),
+        )
+        con.commit()
+    finally:
+        con.close()
 
     fallback = subprocess.run(
         [
@@ -186,10 +349,14 @@ def test_fallback_bez_alembica_backfilluje_i_oznacza_baze_0050(tmp_path):
         pacing = con.execute(
             "SELECT count(*) FROM rezerwacje_pacing_ledger WHERE termin_id=1"
         ).fetchone()[0]
+        rodo_resource = con.execute(
+            "SELECT zasob FROM audit_log WHERE akcja='rodo_anonimizuj_gosc'"
+        ).fetchone()[0]
     finally:
         con.close()
-    assert version == "0051_rezerwacje_atomic_ledger"
+    assert version == "0052_reservation_audit"
     assert (table_claims, pacing) == (120, 1)
+    assert rodo_resource == "[redacted]"
 
     resumed = subprocess.run(
         [sys.executable, "-c", "import database; database.init_db()"],

@@ -5,6 +5,8 @@ kanonicznym źródłem skutecznych uprawnień dla UI i redakcji danych w endpoin
 Konwencja klucza: ``<obszar>.<akcja>``.
 """
 
+from __future__ import annotations
+
 # Pełny katalog znanych uprawnień. Administrator zawsze dostaje wszystkie.
 WSZYSTKIE = [
     "pulpit.podglad",
@@ -25,6 +27,16 @@ WSZYSTKIE = [
     "imprezy.podglad",
     "rezerwacje.zarzadzaj",
     "rezerwacje.podglad",
+    "rezerwacje.operacje",
+    "rezerwacje.host",
+    "rezerwacje.nadpisuj_limity",
+    "rezerwacje.sala",
+    "rezerwacje.reguly",
+    "rezerwacje.analityka",
+    "rezerwacje.finanse",
+    "rezerwacje.dane_kontaktowe",
+    "rezerwacje.notatki_wewnetrzne",
+    "rezerwacje.dane_wrazliwe",
     "sprzatanie.zarzadzaj",
     "lokal.ustawienia",
     "integracje.podglad",
@@ -34,16 +46,39 @@ WSZYSTKIE = [
     "me.godziny",
 ]
 
-# Celowo mały katalog odczytów, które administrator może zmieniać per konto.
-# Uprawnienia do zapisu i dostęp administratora nie podlegają override'om.
+# Bezpieczny katalog praw zmienianych per konto nadzorcze. Administrator pozostaje
+# nieograniczony; zapis rezerwacji jest egzekwowany osobno przez role_guard.
 EDYTOWALNE_ODCZYTY = (
+    "pulpit.podglad",
     "grafik.podglad",
     "raporty.podglad",
     "wyplaty.podglad",
+    "rozliczenia.podglad",
     "zeszyt.podglad",
     "imprezy.podglad",
     "rezerwacje.podglad",
+    "rezerwacje.operacje",
+    "rezerwacje.host",
+    "rezerwacje.nadpisuj_limity",
+    "rezerwacje.sala",
+    "rezerwacje.reguly",
+    "rezerwacje.analityka",
+    "rezerwacje.finanse",
+    "rezerwacje.dane_kontaktowe",
+    "rezerwacje.notatki_wewnetrzne",
+    "rezerwacje.dane_wrazliwe",
 )
+
+
+PRESET_RECEPCJA_HOST = "recepcja_host"
+PRESETY = {
+    PRESET_RECEPCJA_HOST: frozenset({
+        "rezerwacje.operacje",
+        "rezerwacje.host",
+        "rezerwacje.nadpisuj_limity",
+        "rezerwacje.dane_kontaktowe",
+    }),
+}
 
 UPRAWNIENIA_ROLI = {
     "admin": list(WSZYSTKIE),
@@ -121,3 +156,27 @@ def znormalizuj_override(rola: str, mapa: dict) -> dict[str, bool]:
         and type(mapa[perm]) is bool
         and mapa[perm] != (perm in domyslne)
     }
+
+
+def override_dla_presetu(rola: str, preset: str) -> dict[str, bool]:
+    """Pełny zestaw odchyleń, który daje dokładnie wskazany preset bez nowej roli domenowej."""
+    if rola != "szef" or preset not in PRESETY:
+        raise ValueError("unsupported permission preset")
+    docelowe = PRESETY[preset]
+    domyslne = set(UPRAWNIENIA_ROLI[rola])
+    return {
+        perm: perm in docelowe
+        for perm in EDYTOWALNE_ODCZYTY
+        if (perm in docelowe) != (perm in domyslne)
+    }
+
+
+def rozpoznaj_preset(user) -> str | None:
+    """Zwraca nazwę presetu tylko przy dokładnym dopasowaniu skutecznych praw konta."""
+    if getattr(user, "rola", None) != "szef":
+        return None
+    effective = set(efektywne(user))
+    for name, permissions in PRESETY.items():
+        if effective == set(permissions):
+            return name
+    return None

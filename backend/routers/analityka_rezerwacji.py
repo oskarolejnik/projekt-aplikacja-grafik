@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 import models
+import uprawnienia
+from auth import get_current_user
 from database import get_db
 from deps import modul_aktywny
 
@@ -20,6 +22,7 @@ router = APIRouter()
 _AKTYWNE = ("rezerwacja", "potwierdzona")
 _KANALY = ("online", "reczna", "google", "ical", "walk_in")
 DNI_PL = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Nd"]
+MAX_ANALYTICS_DAYS = 366
 
 
 def _wymagaj_rezerwacje(db: Session = Depends(get_db)):
@@ -35,14 +38,23 @@ def _mediana(xs):
     return xs[n // 2] if n % 2 else round((xs[n // 2 - 1] + xs[n // 2]) / 2, 1)
 
 
+def _waliduj_zakres(start: date, end: date) -> int:
+    if end < start:
+        raise HTTPException(400, "Zakres dat jest odwrócony.")
+    dni = (end - start).days + 1
+    if dni > MAX_ANALYTICS_DAYS:
+        raise HTTPException(400, f"Zakres analityki może obejmować maksymalnie {MAX_ANALYTICS_DAYS} dni.")
+    return dni
+
+
 @router.get("/api/analityka/rezerwacje", dependencies=[Depends(_wymagaj_rezerwacje)])
 def analityka_rezerwacje(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     """Zbiorcza analityka rezerwacji stolikowych w oknie [start, end]: covery, statusy (no-show %),
     mix kanałów, lead time, rozkład wielkości grup, szczyty (dzień tygodnia × godzina)."""
+    dni = _waliduj_zakres(start, end)
     rez = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data >= start, models.Termin.data <= end).all()
 
-    dni = (end - start).days + 1
     covery_wg_dnia = defaultdict(lambda: {"covery": 0, "rezerwacje": 0})
     covery_suma = 0
     st = {"odbyla": 0, "no_show": 0, "odwolana": 0, "aktywne": 0}
@@ -98,7 +110,12 @@ def analityka_rezerwacje(start: date = Query(...), end: date = Query(...), db: S
 
 
 @router.get("/api/analityka/oblozenie", dependencies=[Depends(_wymagaj_rezerwacje)])
-def analityka_oblozenie(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
+def analityka_oblozenie(
+    start: date = Query(...),
+    end: date = Query(...),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
     """Obłożenie stołowe/miejscowe + RevPASH (dzienny + agregat) w oknie [start, end].
 
     Stołogodziny DOSTĘPNE = aktywne stoły × godziny serwisów danego dnia (blackout z WyjatekKalendarza
@@ -106,8 +123,7 @@ def analityka_oblozenie(start: date = Query(...), end: date = Query(...), db: Se
     dostępne stołogodziny — ziarnistość DZIENNA (jedyny wspólny klucz rezerwacja↔utarg to data;
     per-stolik/wydatki gościa wymagają strumienia rachunków z POS → poza tym slice)."""
     import main   # lazy: helpery godzin/turn-time/rozbicia kombinacji (unik cyklu importu z main)
-    if end < start:
-        raise HTTPException(400, "Zakres dat jest odwrócony.")
+    _waliduj_zakres(start, end)
 
     stoly = db.query(models.Stolik).filter_by(aktywny=True).all()
     liczba_stolow, miejsca = len(stoly), sum((s.pojemnosc or 0) for s in stoly)
@@ -128,6 +144,7 @@ def analityka_oblozenie(start: date = Query(...), end: date = Query(...), db: Se
     def _proc(licz, mian):
         return round(licz / mian * 100) if mian else 0
 
+    pokaz_finanse = uprawnienia.ma_user(user, "rozliczenia.podglad")
     per_dzien, agr = [], defaultdict(float)
     d = start
     while d <= end:
@@ -154,8 +171,8 @@ def analityka_oblozenie(start: date = Query(...), end: date = Query(...), db: Se
             "oblozenie_stolowe_proc": _proc(wyk_stolog, dost_stolog),
             "oblozenie_miejscowe_proc": _proc(wyk_miejscog, dost_miejscog),
             "covery": covery,
-            "utarg_netto": round(netto, 2) if ma_utarg else None,
-            "revpash": round(netto / dost_stolog, 2) if (dost_stolog and ma_utarg) else None,
+            "utarg_netto": round(netto, 2) if (pokaz_finanse and ma_utarg) else None,
+            "revpash": round(netto / dost_stolog, 2) if (pokaz_finanse and dost_stolog and ma_utarg) else None,
         })
         agr["dost_stolog"] += dost_stolog; agr["wyk_stolog"] += wyk_stolog
         agr["dost_miejscog"] += dost_miejscog; agr["wyk_miejscog"] += wyk_miejscog
@@ -165,13 +182,15 @@ def analityka_oblozenie(start: date = Query(...), end: date = Query(...), db: Se
     return {
         "start": str(start), "end": str(end), "stoly_aktywne": liczba_stolow, "miejsca": miejsca,
         "per_dzien": per_dzien,
+        "dane_finansowe_ukryte": not pokaz_finanse,
         "agregat": {
             "dostepne_stologodziny": round(agr["dost_stolog"], 1),
             "wykorzystane_stologodziny": round(agr["wyk_stolog"], 1),
             "oblozenie_stolowe_proc": _proc(agr["wyk_stolog"], agr["dost_stolog"]),
             "oblozenie_miejscowe_proc": _proc(agr["wyk_miejscog"], agr["dost_miejscog"]),
             "covery": int(agr["covery"]),
-            "utarg_netto": round(agr["utarg"], 2) if utarg else None,
-            "revpash": round(agr["utarg"] / agr["dost_stolog"], 2) if (agr["dost_stolog"] and utarg) else None,
+            "utarg_netto": round(agr["utarg"], 2) if (pokaz_finanse and utarg) else None,
+            "revpash": round(agr["utarg"] / agr["dost_stolog"], 2)
+            if (pokaz_finanse and agr["dost_stolog"] and utarg) else None,
         },
     }

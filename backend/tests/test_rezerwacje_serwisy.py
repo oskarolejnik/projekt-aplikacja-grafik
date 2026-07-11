@@ -5,6 +5,8 @@ osobny `client` (bez tokenu); admin konfiguruje przez `admin_client`.
 2026-07-13 i 2026-07-20 to poniedziałki (weekday=0).
 """
 
+import models
+
 PON = "2026-07-13"
 PON2 = "2026-07-20"
 
@@ -114,12 +116,73 @@ def test_pacing_limit_osob(admin_client, client):
     assert rez(2).status_code == 201           # +2 = 6 = limit (nie przekracza)
 
 
-def test_admin_omija_pacing(admin_client):
-    # host ma ostatnie słowo — panel nie egzekwuje pacingu (tylko kolizje/pojemność)
+def test_admin_przekracza_pacing_dopiero_po_jawnym_ostrzezeniu(admin_client, db):
+    # Pierwsza próba respektuje limit; druga musi być świadomym ponowieniem.
     s = _stolik(admin_client, nazwa="S1")
     s2 = _stolik(admin_client, nazwa="S2")
     _serwis(admin_client, pacing_max_rez=1)
-    assert admin_client.post("/api/rezerwacje-stolik", json={"data": PON, "godz_od": "18:00",
-        "stolik_id": s["id"], "liczba_osob": 2, "nazwisko": "A"}).status_code == 201
-    assert admin_client.post("/api/rezerwacje-stolik", json={"data": PON, "godz_od": "18:00",
-        "stolik_id": s2["id"], "liczba_osob": 2, "nazwisko": "B"}).status_code == 201
+    first = admin_client.post("/api/rezerwacje-stolik", json={"data": PON, "godz_od": "18:00",
+        "stolik_id": s["id"], "liczba_osob": 2, "nazwisko": "A", "przekrocz_limity": True})
+    assert first.status_code == 201
+    assert db.query(models.ReservationAudit).filter_by(
+        termin_id=first.json()["id"], action="override",
+    ).count() == 0
+    body = {"data": PON, "godz_od": "18:00",
+            "stolik_id": s2["id"], "liczba_osob": 2, "nazwisko": "B"}
+    blocked = admin_client.post("/api/rezerwacje-stolik", json=body)
+    assert blocked.status_code == 409
+    assert blocked.json()["code"] == "PACING_RESERVATION_LIMIT"
+    overridden = admin_client.post(
+        "/api/rezerwacje-stolik", json={**body, "przekrocz_limity": True},
+    )
+    assert overridden.status_code == 201
+    reservation_id = overridden.json()["id"]
+    assert db.query(models.RezerwacjaPacingLedger).filter_by(
+        termin_id=reservation_id, override=True,
+    ).count() == 1
+    audit = db.query(models.ReservationAudit).filter_by(
+        termin_id=reservation_id, action="override",
+    ).one()
+    assert audit.reason == "pacing_override"
+    assert audit.diff["override"] == {
+        "violations": [{
+            "rule": "pacing_reservations",
+            "observed": 1,
+            "limit": 1,
+            "projected": 2,
+        }],
+    }
+
+
+def test_ujemny_pacing_jest_odrzucany_a_historyczny_nie_blokuje_override(admin_client, db):
+    invalid = admin_client.post("/api/godziny-otwarcia", json={
+        "dzien_tygodnia": 0,
+        "godz_od": "12:00",
+        "godz_do": "23:00",
+        "pacing_max_rez": -1,
+    })
+    assert invalid.status_code == 422
+
+    service = _serwis(admin_client)
+    legacy = db.get(models.GodzinyOtwarcia, service["id"])
+    legacy.pacing_max_rez = -1
+    legacy.pacing_max_osob = -5
+    db.commit()
+    listed = admin_client.get("/api/godziny-otwarcia")
+    assert listed.status_code == 200, listed.text
+    listed_service = next(row for row in listed.json()["godziny"] if row["id"] == service["id"])
+    assert listed_service["pacing_max_rez"] is None
+    assert listed_service["pacing_max_osob"] is None
+    table = _stolik(admin_client, nazwa="LegacyLimit")
+    created = admin_client.post("/api/rezerwacje-stolik", json={
+        "data": PON,
+        "godz_od": "18:00",
+        "stolik_id": table["id"],
+        "liczba_osob": 2,
+        "nazwisko": "Historyczna konfiguracja",
+        "przekrocz_limity": True,
+    })
+    assert created.status_code == 201, created.text
+    assert db.query(models.ReservationAudit).filter_by(
+        termin_id=created.json()["id"], action="override",
+    ).count() == 0

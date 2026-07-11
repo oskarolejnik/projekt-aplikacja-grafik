@@ -85,6 +85,116 @@ def test_me_uprawnienia_zwraca_efektywne_override(client):
     assert "grafik.podglad" in body["uprawnienia"]
 
 
+def test_create_user_atomowo_naklada_preset_recepcja_host(admin_client, db):
+    preset = uprawnienia.PRESET_RECEPCJA_HOST
+
+    r = admin_client.post(
+        "/api/users",
+        json={
+            "login": "recepcja_preset",
+            "haslo": "bezpieczne-haslo",
+            "rola": "szef",
+            "preset": preset,
+        },
+    )
+
+    assert r.status_code == 201
+    body = r.json()
+    assert body["rola"] == "szef"
+    assert body["preset"] == preset
+    assert set(body["uprawnienia"]) == set(uprawnienia.PRESETY[preset])
+    assert body["uprawnienia_override"] == uprawnienia.override_dla_presetu(
+        "szef", preset,
+    )
+    db.expire_all()
+    user = db.query(models.User).filter_by(login="recepcja_preset").one()
+    assert user.rola == "szef"
+    assert user.uprawnienia_override == body["uprawnienia_override"]
+
+
+def test_create_user_odrzuca_bledny_preset_lub_role_atomowo(admin_client, db):
+    przypadki = (
+        ("employee", uprawnienia.PRESET_RECEPCJA_HOST),
+        ("szef", "nieznany_preset"),
+        ("szef", ""),
+        ("recepcja", uprawnienia.PRESET_RECEPCJA_HOST),
+    )
+
+    for index, (rola, preset) in enumerate(przypadki):
+        login = f"bledny_preset_{index}"
+        r = admin_client.post(
+            "/api/users",
+            json={
+                "login": login,
+                "haslo": "bezpieczne-haslo",
+                "rola": rola,
+                "preset": preset,
+            },
+        )
+        assert r.status_code == 400
+        db.expire_all()
+        assert db.query(models.User).filter_by(login=login).first() is None
+
+
+def test_put_uprawnien_przyjmuje_preset_i_nadal_przyjmuje_mape(admin_client, db):
+    szef = factories.UserFactory(
+        login="szef_preset_put",
+        rola="szef",
+        pracownik=None,
+        uprawnienia_override={"wyplaty.podglad": False},
+    )
+    preset = uprawnienia.PRESET_RECEPCJA_HOST
+
+    r = admin_client.put(
+        f"/api/users/{szef.id}/uprawnienia",
+        json={"preset": preset},
+    )
+    assert r.status_code == 200
+    assert r.json()["preset"] == preset
+    assert set(r.json()["uprawnienia"]) == set(uprawnienia.PRESETY[preset])
+
+    r = admin_client.put(
+        f"/api/users/{szef.id}/uprawnienia",
+        json={"uprawnienia_override": {"wyplaty.podglad": False}},
+    )
+    assert r.status_code == 200
+    assert r.json()["preset"] is None
+    assert r.json()["uprawnienia_override"] == {"wyplaty.podglad": False}
+    db.expire_all()
+    assert db.get(models.User, szef.id).uprawnienia_override == {
+        "wyplaty.podglad": False,
+    }
+
+
+def test_put_uprawnien_odrzuca_bledny_lub_niejednoznaczny_preset_atomowo(
+    admin_client, db
+):
+    poczatkowe = {"wyplaty.podglad": False}
+    szef = factories.UserFactory(
+        login="szef_preset_walidacja",
+        rola="szef",
+        pracownik=None,
+        uprawnienia_override=poczatkowe,
+    )
+    payloady = (
+        {"preset": "nieznany_preset"},
+        {
+            "preset": uprawnienia.PRESET_RECEPCJA_HOST,
+            "uprawnienia_override": {},
+        },
+        {},
+    )
+
+    for payload in payloady:
+        r = admin_client.put(
+            f"/api/users/{szef.id}/uprawnienia",
+            json=payload,
+        )
+        assert r.status_code == 400
+        db.expire_all()
+        assert db.get(models.User, szef.id).uprawnienia_override == poczatkowe
+
+
 def test_admin_ustawia_i_resetuje_override_do_roli(admin_client, db):
     szef = factories.UserFactory(login="szef_uprawnienia", rola="szef", pracownik=None)
 

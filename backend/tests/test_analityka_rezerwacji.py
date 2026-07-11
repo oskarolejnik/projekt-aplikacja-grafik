@@ -7,6 +7,16 @@ import datetime as dt
 import models
 
 
+def test_analityka_odrzuca_zbyt_szeroki_i_odwrocony_zakres(admin_client):
+    for endpoint in ("rezerwacje", "oblozenie"):
+        assert admin_client.get(
+            f"/api/analityka/{endpoint}?start=2025-01-01&end=2026-12-31"
+        ).status_code == 400
+        assert admin_client.get(
+            f"/api/analityka/{endpoint}?start=2026-07-02&end=2026-07-01"
+        ).status_code == 400
+
+
 def _termin(db, **kw):
     base = dict(rodzaj="stolik", nazwisko="Gość", status="potwierdzona", kanal="reczna",
                 zadatek=0.0, utworzono_at=dt.datetime(2026, 7, 1, 12, 0))

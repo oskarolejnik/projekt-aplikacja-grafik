@@ -142,6 +142,18 @@ def test_apply_dwa_razy_tworzy_jeden_termin_i_zachowuje_kontakt(db):
     assert db.query(models.RezerwacjaStolikClaim).count() == 0  # import pozostaje bez stołu
     day = db.query(models.RezerwacjaDzienLedger).one()
     assert day.data == termin.data and day.revision == 1
+    audit = db.query(models.ReservationAudit).one()
+    assert audit.termin_id == termin.id
+    assert audit.actor_kind == "migration"
+    assert audit.action == "create"
+    assert audit.reason == "import_reconciliation"
+    assert set(audit.diff["pii_changed"]) == {
+        "email", "nazwisko", "source_external_id", "telefon",
+    }
+    encoded = json.dumps(audit.diff, ensure_ascii=False)
+    assert "600 700 800" not in encoded
+    assert "gosc@example.com" not in encoded
+    assert "google-idempotent" not in encoded
 
 
 def test_apply_blokuje_dni_deterministycznie_i_tworzy_ledger_dla_kazdego_importu(

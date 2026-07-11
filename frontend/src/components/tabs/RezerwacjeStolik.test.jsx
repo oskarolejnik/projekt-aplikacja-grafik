@@ -3,9 +3,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock, confirmMock } = vi.hoisted(() => ({
+const { apiMock, confirmMock, authState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   confirmMock: vi.fn(),
+  authState: { isAdmin: true, permissions: [] },
 }))
 
 vi.mock('../../lib/api', () => ({
@@ -14,6 +15,12 @@ vi.mock('../../lib/api', () => ({
 }))
 vi.mock('../ui/Toast', () => ({
   useToast: () => ({ confirm: confirmMock, toast: vi.fn() }),
+}))
+vi.mock('../../context/AuthContext', () => ({
+  useAuth: () => ({
+    isAdmin: authState.isAdmin,
+    can: (permission) => authState.permissions.includes(permission),
+  }),
 }))
 vi.mock('../../lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
 
@@ -69,7 +76,7 @@ function mockInitial({ reservations = [], tables = [TABLE], waitlist = [] } = {}
     if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: reservations })
     if (path === '/stoliki') return Promise.resolve({ stoliki: tables })
     if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: waitlist })
-    if (path === '/lokal/config') return Promise.resolve({ sale: ['Sala', 'Taras'] })
+    if (path === '/rezerwacje/config') return Promise.resolve({ sale: ['Sala', 'Taras'] })
     return Promise.reject(new Error(`Nieoczekiwany endpoint: GET ${path}`))
   })
 }
@@ -78,6 +85,8 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   confirmMock.mockResolvedValue(true)
+  authState.isAdmin = true
+  authState.permissions = []
 })
 
 describe('Rezerwacje stolików', () => {
@@ -104,7 +113,7 @@ describe('Rezerwacje stolików', () => {
       }
       if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
-      if (path === '/lokal/config') return Promise.resolve({ sale: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
       if (path === `/rezerwacje-stolik/${RESERVATION.id}/status` && method === 'POST') {
         return new Promise((resolve) => { resolveStatus = resolve })
       }
@@ -138,7 +147,7 @@ describe('Rezerwacje stolików', () => {
       }
       if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
-      if (path === '/lokal/config') return Promise.resolve({ sale: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
       if (path === '/rezerwacje-stolik' && method === 'POST') {
         idempotencyKeys.push(options?.headers?.['Idempotency-Key'])
         attempts += 1
@@ -204,7 +213,7 @@ describe('Rezerwacje stolików', () => {
       }
       if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
-      if (path === '/lokal/config') return Promise.resolve({ sale: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
       if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/zrealizuj` && method === 'POST') {
         return new Promise((resolve) => { resolveSeat = resolve })
       }
@@ -237,7 +246,7 @@ describe('Rezerwacje stolików', () => {
         return Promise.resolve({ stoliki: [TABLE] })
       }
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
-      if (path === '/lokal/config') return Promise.resolve({ sale: ['Sala'] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: ['Sala'] })
       if (path === '/stoliki' && method === 'POST') {
         attempts += 1
         return attempts === 1
@@ -268,7 +277,7 @@ describe('Rezerwacje stolików', () => {
       if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
       if (path === '/stoliki' && !method) return Promise.resolve({ stoliki: [TABLE] })
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
-      if (path === '/lokal/config') return Promise.resolve({ sale: ['Sala'] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: ['Sala'] })
       if (path === `/stoliki/${TABLE.id}` && method === 'PUT') {
         return Promise.resolve({ ...TABLE, ...body })
       }
@@ -299,7 +308,7 @@ describe('Rezerwacje stolików', () => {
       }
       if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
-      if (path === '/lokal/config') return Promise.resolve({ sale: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
       return Promise.resolve({})
     })
 
@@ -312,5 +321,267 @@ describe('Rezerwacje stolików', () => {
     expect(await screen.findByText('Brak rezerwacji na ten dzień')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Dodaj rezerwację' })).toBeEnabled()
     expect(attempts).toBe(2)
+  })
+
+  it('bez danych kontaktowych zostawia bezpieczny podgląd i statusy, ale nie oferuje tworzenia ani edycji', async () => {
+    authState.isAdmin = false
+    authState.permissions = ['rezerwacje.operacje']
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [{ ...RESERVATION, notatka: 'VIP przy oknie', zadatek: 120 }] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+
+    expect(await screen.findByText('Gość')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Stoliki/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Dodaj rezerwację' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Edytuj rezerwację/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Otwórz rezerwację/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Potwierdź' })).toBeInTheDocument()
+    expect(screen.queryByText('Nowak')).not.toBeInTheDocument()
+    expect(screen.queryByText(RESERVATION.telefon)).not.toBeInTheDocument()
+    expect(apiMock).not.toHaveBeenCalledWith('/lokal/config')
+    expect(apiMock).not.toHaveBeenCalledWith('/rezerwacje/config')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Oczekujący (1)' }))
+    expect(screen.queryByText(WAITLIST_ENTRY.telefon)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Telefon')).not.toBeInTheDocument()
+    expect(screen.queryByText('Dodaj oczekujących')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: `Usuń z listy oczekujących: ${WAITLIST_ENTRY.nazwisko}` })).not.toBeInTheDocument()
+  })
+
+  it('po nadaniu praw przeładowuje zredagowane dane przed odblokowaniem edycji', async () => {
+    authState.isAdmin = false
+    authState.permissions = ['rezerwacje.operacje']
+    let listLoads = 0
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/rezerwacje-stolik?')) {
+        listLoads += 1
+        const visible = authState.permissions.includes('rezerwacje.dane_kontaktowe')
+        return Promise.resolve({
+          rezerwacje: [visible
+            ? { ...RESERVATION, notatka: 'Prawdziwa notatka', zadatek: 120 }
+            : { ...RESERVATION, nazwisko: 'Gość', telefon: null, email: null, notatka: null, zadatek: null }],
+        })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    const { rerender } = render(<RezerwacjeStolik />)
+    expect(await screen.findByText('Gość')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Edytuj rezerwację/ })).not.toBeInTheDocument()
+
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.notatki_wewnetrzne',
+      'rezerwacje.finanse',
+    ]
+    rerender(<RezerwacjeStolik />)
+
+    const edit = await screen.findByRole('button', { name: 'Edytuj rezerwację: Nowak' })
+    expect(listLoads).toBe(2)
+    fireEvent.click(edit)
+    expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Nowak')
+    expect(screen.getByLabelText('Notatka')).toHaveValue('Prawdziwa notatka')
+    expect(screen.getByLabelText('Zadatek (zł)')).toHaveValue(120)
+  })
+
+  it('zamyka otwarty formularz po zmianie widoczności PII i otwiera go ponownie ze świeżymi danymi', async () => {
+    authState.isAdmin = false
+    authState.permissions = ['rezerwacje.operacje', 'rezerwacje.dane_kontaktowe']
+    let listLoads = 0
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/rezerwacje-stolik?')) {
+        listLoads += 1
+        const full = authState.permissions.includes('rezerwacje.notatki_wewnetrzne')
+        return Promise.resolve({
+          rezerwacje: [{
+            ...RESERVATION,
+            notatka: full ? 'Świeża notatka' : null,
+            zadatek: full ? 180 : null,
+          }],
+        })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    const { rerender } = render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edytuj rezerwację: Nowak' }))
+    expect(screen.getByRole('dialog', { name: 'Edytuj rezerwację' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Notatka')).not.toBeInTheDocument()
+
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.notatki_wewnetrzne',
+      'rezerwacje.finanse',
+    ]
+    rerender(<RezerwacjeStolik />)
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const edit = await screen.findByRole('button', { name: 'Edytuj rezerwację: Nowak' })
+    expect(listLoads).toBe(2)
+    fireEvent.click(edit)
+    expect(screen.getByLabelText('Notatka')).toHaveValue('Świeża notatka')
+    expect(screen.getByLabelText('Zadatek (zł)')).toHaveValue(180)
+  })
+
+  it('nie przywraca poprzedniego dnia po zakończeniu mutacji statusu', async () => {
+    const nextDay = '2030-01-02'
+    const nextReservation = { ...RESERVATION, id: 8, data: nextDay, nazwisko: 'Jutrzejsza' }
+    let resolveStatus
+    const listPaths = []
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/rezerwacje-stolik?')) {
+        listPaths.push(path)
+        return Promise.resolve({
+          rezerwacje: path.includes(nextDay) ? [nextReservation] : [RESERVATION],
+        })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      if (path === `/rezerwacje-stolik/${RESERVATION.id}/status` && method === 'POST') {
+        return new Promise((resolve) => { resolveStatus = resolve })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Potwierdź' }))
+    fireEvent.change(screen.getByLabelText('Dzień rezerwacji'), { target: { value: nextDay } })
+    expect(await screen.findByText('Jutrzejsza')).toBeInTheDocument()
+
+    await act(async () => resolveStatus({ ...RESERVATION, status: 'potwierdzona' }))
+    expect(screen.getByText('Jutrzejsza')).toBeInTheDocument()
+    expect(screen.queryByText('Nowak')).not.toBeInTheDocument()
+    expect(listPaths.filter((path) => path.includes(TEST_DATE))).toHaveLength(1)
+  })
+
+  it('kończy wskaźnik cichego odświeżenia po przejściu do nowego dnia', async () => {
+    const nextDay = '2030-01-03'
+    const nextReservation = { ...RESERVATION, id: 9, data: nextDay, nazwisko: 'Nowy dzień' }
+    let oldLoads = 0
+    let resolveOldRefresh
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/rezerwacje-stolik?')) {
+        if (path.includes(nextDay)) return Promise.resolve({ rezerwacje: [nextReservation] })
+        oldLoads += 1
+        if (oldLoads === 1) return Promise.resolve({ rezerwacje: [RESERVATION] })
+        return new Promise((resolve) => { resolveOldRefresh = resolve })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      if (path === `/rezerwacje-stolik/${RESERVATION.id}/status` && method === 'POST') {
+        return Promise.resolve({ ...RESERVATION, status: 'potwierdzona' })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Potwierdź' }))
+    await waitFor(() => expect(oldLoads).toBe(2))
+    expect(screen.getByText('Aktualizuję…')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Dzień rezerwacji'), { target: { value: nextDay } })
+    expect(await screen.findByText('Nowy dzień')).toBeInTheDocument()
+    expect(screen.queryByText('Aktualizuję…')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Potwierdź' })).toBeEnabled()
+
+    await act(async () => resolveOldRefresh({ rezerwacje: [{ ...RESERVATION, nazwisko: 'Stary dzień' }] }))
+    expect(screen.getByText('Nowy dzień')).toBeInTheDocument()
+    expect(screen.queryByText('Stary dzień')).not.toBeInTheDocument()
+  })
+
+  it('po konflikcie pacingu pokazuje świadome przekroczenie tylko z uprawnieniem', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.nadpisuj_limity',
+    ]
+    let attempts = 0
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje-stolik' && method === 'POST') {
+        attempts += 1
+        if (attempts === 1) {
+          const error = new Error('Osiągnięto limit nowych rezerwacji.')
+          error.code = 'PACING_RESERVATION_LIMIT'
+          return Promise.reject(error)
+        }
+        return Promise.resolve({ ...RESERVATION, ...body, id: 55, status: 'potwierdzona' })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj rezerwację' }))
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Limitowana' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
+
+    expect(await screen.findByText('Osiągnięto limit nowych rezerwacji.')).toHaveClass('text-lemon')
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz mimo limitu' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const overrideBody = apiMock.mock.calls.filter(
+      ([path, method]) => path === '/rezerwacje-stolik' && method === 'POST',
+    )[1][2]
+    expect(overrideBody.przekrocz_limity).toBe(true)
+  })
+
+  it('preset Recepcji zachowuje tworzenie i kontakty, ale ukrywa salę, finanse, notatki i DELETE', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.host',
+      'rezerwacje.nadpisuj_limity',
+      'rezerwacje.dane_kontaktowe',
+    ]
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [{ ...RESERVATION, notatka: 'VIP przy oknie', zadatek: 120 }] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === `/rezerwacje-stolik/${RESERVATION.id}` && method === 'PUT') {
+        return Promise.resolve({ ...RESERVATION, ...body, notatka: null, zadatek: null })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+
+    expect(await screen.findByRole('button', { name: 'Dodaj rezerwację' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Stoliki/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edytuj rezerwację: Nowak' }))
+    expect(screen.getByLabelText('Telefon')).toHaveValue(RESERVATION.telefon)
+    expect(screen.getByLabelText('E-mail')).toHaveValue(RESERVATION.email)
+    expect(screen.queryByLabelText('Notatka')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Zadatek (zł)')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Usuń' })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Nowak-Kowalski' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      `/rezerwacje-stolik/${RESERVATION.id}`,
+      'PUT',
+      expect.objectContaining({
+        nazwisko: 'Nowak-Kowalski',
+        telefon: RESERVATION.telefon,
+        email: RESERVATION.email,
+      }),
+    ))
+    const updateBody = apiMock.mock.calls.find(([path, method]) => path === `/rezerwacje-stolik/${RESERVATION.id}` && method === 'PUT')[2]
+    expect(updateBody).not.toHaveProperty('notatka')
+    expect(updateBody).not.toHaveProperty('zadatek')
   })
 })
