@@ -142,6 +142,10 @@ def test_import_ics_tworzy_termin_i_impreze(admin_client, db):
     assert t.telefon == "609 228 774"
     assert t.zadatek == 500.0
     assert t.status == "rezerwacja"
+    assert t.kanal == "ical"
+    # Import imprez ma własną tożsamość ``ical_uid``. Pola ``source_*`` są
+    # zarezerwowane dla kontrolowanego importu rezerwacji stolikowych.
+    assert (t.source_type, t.source_external_id) == (None, None)
     # Sparowana Impreza istnieje, godzina celowo „Brak"
     imp = db.query(models.Impreza).filter_by(sciezka_pliku="ical:event-A@icloud").one()
     assert imp.klient == "Jarkowski"
@@ -171,6 +175,8 @@ def test_import_ics_tylko_dodaje_nie_nadpisuje(admin_client, db):
     assert body["dodano_terminy"] == 0
     assert body["pominieto"] == 4
     assert db.query(models.Termin).filter_by(ical_uid="event-A@icloud").count() == 1  # brak duplikatu
+    assert db.query(models.Termin).filter_by(
+        source_type="ical", source_external_id="event-A@icloud").count() == 0
     t2 = db.query(models.Termin).filter_by(ical_uid="event-A@icloud").one()
     assert t2.nazwisko == "ZMIENIONE RECZNIE"   # ręczna zmiana zachowana
     assert t2.liczba_osob == 99

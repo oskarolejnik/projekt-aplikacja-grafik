@@ -501,10 +501,10 @@ export default function RezerwacjeStolik() {
 
   const usunStolik = async (table) => {
     if (tableActions[table.id]) return
-    const approved = await confirm(`Usunąć stolik „${table.nazwa}”? Rezerwacje przypisane do niego pozostaną bez stolika.`, {
+    const approved = await confirm(`Usunąć stolik „${table.nazwa}”? Można usunąć tylko stolik bez historii rezerwacji i bez powiązanej kombinacji. Tej operacji nie można cofnąć.`, {
       title: 'Usuń stolik',
       confirmText: 'Usuń stolik',
-      cancelText: 'Zostaw',
+      cancelText: 'Zachowaj stolik',
     })
     if (!approved) return
     setTableActions((current) => ({ ...current, [table.id]: 'delete' }))
@@ -512,14 +512,53 @@ export default function RezerwacjeStolik() {
     try {
       await api(`/stoliki/${table.id}`, 'DELETE')
       setStoliki((current) => current.filter((item) => item.id !== table.id))
-      setRez((current) => current.map((reservation) =>
-        reservation.stolik_id === table.id ? { ...reservation, stolik_id: null } : reservation))
       setTableFeedback({ type: 'success', message: `Usunięto stolik: ${table.nazwa}.` })
       void load({ silent: true })
     } catch (error) {
       setTableRowFeedback((current) => ({
         ...current,
         [table.id]: { type: 'error', message: error.message || 'Nie udało się usunąć stolika.' },
+      }))
+    } finally {
+      setTableActions((current) => {
+        const next = { ...current }
+        delete next[table.id]
+        return next
+      })
+    }
+  }
+
+  const ustawAktywnoscStolika = async (table, aktywny) => {
+    if (tableActions[table.id]) return
+    setTableActions((current) => ({ ...current, [table.id]: 'toggle' }))
+    setTableRowFeedback((current) => ({ ...current, [table.id]: null }))
+    try {
+      const updated = await api(`/stoliki/${table.id}`, 'PUT', {
+        nazwa: table.nazwa,
+        strefa: table.strefa || null,
+        pojemnosc: table.pojemnosc,
+        laczy_sie: !!table.laczy_sie,
+        aktywny,
+        kolejnosc: table.kolejnosc || 0,
+        rewir_nr: table.rewir_nr || null,
+        pojemnosc_min: table.pojemnosc_min || null,
+        ksztalt: table.ksztalt || null,
+        cechy: table.cechy || null,
+        priorytet: table.priorytet ?? null,
+        sekcja: table.sekcja || null,
+      })
+      setStoliki((current) => replaceById(current, updated, sortTables))
+      setTableRowFeedback((current) => ({
+        ...current,
+        [table.id]: {
+          type: 'success',
+          message: aktywny ? 'Stolik znów jest dostępny.' : 'Stolik wyłączono z nowych rezerwacji.',
+        },
+      }))
+    } catch (error) {
+      setTableRowFeedback((current) => ({
+        ...current,
+        [table.id]: { type: 'error', message: error.message || 'Nie udało się zmienić dostępności stolika.' },
       }))
     } finally {
       setTableActions((current) => {
@@ -917,19 +956,32 @@ export default function RezerwacjeStolik() {
                     {table.strefa ? <span className="text-muted"> · {table.strefa}</span> : null}
                     <span className="text-muted"> · {table.pojemnosc} os.</span>
                     {table.rewir_nr ? <span className="ml-2 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted">POS {table.rewir_nr}</span> : null}
+                    {!table.aktywny ? <span className="ml-2 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted">Nieaktywny</span> : null}
                   </div>
-                  <Button
-                    variant="subtle"
-                    size="sm"
-                    onClick={() => usunStolik(table)}
-                    loading={tableActions[table.id] === 'delete'}
-                    loadingLabel="Usuwam…"
-                    disabled={!!tableActions[table.id]}
-                    className="px-2 text-muted hover:text-danger"
-                    aria-label={`Usuń stolik: ${table.nazwa}`}
-                  >
-                    <Icon name="trash" className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => ustawAktywnoscStolika(table, !table.aktywny)}
+                      loading={tableActions[table.id] === 'toggle'}
+                      loadingLabel={table.aktywny ? 'Wyłączam…' : 'Włączam…'}
+                      disabled={!!tableActions[table.id]}
+                    >
+                      {table.aktywny ? 'Wyłącz' : 'Włącz'}
+                    </Button>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => usunStolik(table)}
+                      loading={tableActions[table.id] === 'delete'}
+                      loadingLabel="Usuwam…"
+                      disabled={!!tableActions[table.id]}
+                      className="px-2 text-muted hover:text-danger"
+                      aria-label={`Usuń stolik: ${table.nazwa}`}
+                    >
+                      <Icon name="trash" className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
                 <InlineFeedback feedback={tableRowFeedback[table.id]} className="mt-1 text-right" />
               </div>

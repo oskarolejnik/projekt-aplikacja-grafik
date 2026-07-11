@@ -47,6 +47,35 @@ def test_kombinacja_gdy_stol_skladowy_zajety_odpada():
     assert seating.dopasuj(6, stoly, komb, zajete={2}) == []   # brak innej opcji na 6 os.
 
 
+def test_uszkodzona_lub_zduplikowana_kombinacja_nie_staje_sie_kandydatem():
+    stoly = [_t(1, 4), _t(2, 4)]
+    kombinacje = [
+        {"id": 10, "nazwa": "Osierocona", "stoliki": [1, 2, 999], "pojemnosc_max": 12},
+        {"id": 11, "nazwa": "Duplikat", "stoliki": [1, 1], "pojemnosc_max": 10},
+    ]
+    assert seating.dopasuj(10, stoly, kombinacje, zajete=set()) == []
+
+
+def test_jawny_zakres_kombinacji_ma_pierwszenstwo_nad_grafem():
+    stoly = [_t(1, 4), _t(2, 4)]
+    kombinacje = [{
+        "id": 10, "nazwa": "Tylko do 6", "stoliki": [1, 2],
+        "pojemnosc_min": 5, "pojemnosc_max": 6,
+    }]
+    assert seating.dopasuj(8, stoly, kombinacje, zajete=set(), sasiedztwo=[(1, 2)]) == []
+
+
+def test_top_nie_zwraca_tego_samego_zestawu_wielokrotnie():
+    stoly = [_t(1, 4), _t(2, 4)]
+    kombinacje = [
+        {"id": 10, "nazwa": "Gorsza", "stoliki": [1, 2], "pojemnosc_max": 8, "priorytet": 10},
+        {"id": 11, "nazwa": "Lepsza", "stoliki": [1, 2], "pojemnosc_max": 8, "priorytet": 1},
+    ]
+    wynik = seating.dopasuj(8, stoly, kombinacje, zajete=set())
+    assert len(wynik) == 1
+    assert wynik[0]["nazwa"] == "Lepsza"
+
+
 def test_preferencja_strefy():
     stoly = [_t(1, 4, strefa="sala"), _t(2, 4, strefa="ogród")]
     k = seating.dopasuj(4, stoly, [], zajete=set(), preferencje={"strefa": "ogród"})
@@ -63,6 +92,18 @@ def test_priorytet_rozstrzyga_remis():
     stoly = [_t(1, 4, priorytet=5), _t(2, 4, priorytet=1)]
     k = seating.dopasuj(4, stoly, [], zajete=set())
     assert k[0]["stoliki"] == [2]              # niższy priorytet = wcześniej
+
+
+def test_priorytet_kombinacji_rozstrzyga_remis():
+    stoly = [_t(1, 4), _t(2, 4), _t(3, 4), _t(4, 4)]
+    kombinacje = [
+        {"id": 10, "nazwa": "K1+K2", "stoliki": [1, 2], "pojemnosc_max": 8, "priorytet": 10},
+        {"id": 11, "nazwa": "K3+K4", "stoliki": [3, 4], "pojemnosc_max": 8, "priorytet": 1},
+    ]
+
+    k = seating.dopasuj(8, stoly, kombinacje, zajete=set())
+
+    assert k[0]["stoliki"] == [3, 4]            # niższy priorytet kombinacji = wcześniej
 
 
 def test_top3_limit_i_kolejnosc():

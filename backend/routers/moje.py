@@ -652,7 +652,9 @@ def moje_godziny(
 # --- REZERWACJE (pracownik: tylko sumy dzienne) ---
 
 @router.get("/api/me/rezerwacje")
-def moje_rezerwacje(user: models.User = Depends(get_current_user)):
+def moje_rezerwacje(
+    user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
     """Pracownik: TYLKO sumy dzienne (liczba rezerwacji + suma osób), bez godzin i danych klienta."""
-    dane = rezerwacje.rezerwacje_per_dzien(30)
+    dane = rezerwacje.czytaj_rezerwacje(db, 30)
     return {"dni": [{"data": d["data"], "liczba": d["liczba"], "osoby": d["osoby"]} for d in dane]}

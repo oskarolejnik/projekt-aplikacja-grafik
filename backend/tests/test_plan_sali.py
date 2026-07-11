@@ -11,9 +11,12 @@ def _stolik(db, nazwa, **kw):
     return s
 
 
-def _rez(db, stolik, data, godz, status="rezerwacja", nazwisko="Gość"):
+def _rez(
+    db, stolik, data, godz, status="rezerwacja", nazwisko="Gość", stoliki_dodatkowe=None
+):
     t = models.Termin(data=data, nazwisko=nazwisko, rodzaj="stolik",
-                      stolik_id=stolik.id, godz_od=godz, status=status, liczba_osob=2)
+                      stolik_id=stolik.id, stoliki_dodatkowe=stoliki_dodatkowe,
+                      godz_od=godz, status=status, liczba_osob=2)
     db.add(t); db.commit()
     return t
 
@@ -40,6 +43,43 @@ def test_status_z_rezerwacji(admin_client, db):
     assert by["S1"]["rezerwacje"][0]["godz_od"] == "18:00"
     assert b["podsumowanie"]["zarezerwowane"] == 2
     assert set(b["strefy"]) == {"sala", "ogród"}
+
+
+def test_kombinacja_oznacza_wszystkie_stoly_jako_zarezerwowane(admin_client, db):
+    dzis = dt.date.today()
+    s1 = _stolik(db, "K1", pojemnosc=4)
+    s2 = _stolik(db, "K2", pojemnosc=4)
+    s3 = _stolik(db, "K3", pojemnosc=4)
+    wolny = _stolik(db, "K4", pojemnosc=4)
+    rezerwacja = _rez(
+        db, s1, dzis, dt.time(18, 0), stoliki_dodatkowe=[s2.id, s3.id]
+    )
+
+    plan = admin_client.get(f"/api/plan-sali?data={dzis}").json()
+    by_id = {s["id"]: s for s in plan["stoliki"]}
+
+    for sid in (s1.id, s2.id, s3.id):
+        assert by_id[sid]["status"] == "zarezerwowany"
+        assert [r["id"] for r in by_id[sid]["rezerwacje"]] == [rezerwacja.id]
+    assert by_id[wolny.id]["status"] == "wolny"
+    assert plan["podsumowanie"]["zarezerwowane"] == 3
+
+
+def test_plan_sali_pomija_uszkodzone_id_w_legacy_json(admin_client, db):
+    dzis = dt.date.today()
+    glowny = _stolik(db, "L1", pojemnosc=4)
+    dodatkowy = _stolik(db, "L2", pojemnosc=4)
+    scalar_main = _stolik(db, "L3", pojemnosc=4)
+    _rez(db, glowny, dzis, dt.time(18, 0),
+         stoliki_dodatkowe=[dodatkowy.id, "x", None, dodatkowy.id])
+    _rez(db, scalar_main, dzis, dt.time(20, 0), stoliki_dodatkowe=123)
+
+    odpowiedz = admin_client.get(f"/api/plan-sali?data={dzis}")
+    assert odpowiedz.status_code == 200
+    by_id = {s["id"]: s for s in odpowiedz.json()["stoliki"]}
+    assert by_id[glowny.id]["status"] == "zarezerwowany"
+    assert by_id[dodatkowy.id]["status"] == "zarezerwowany"
+    assert by_id[scalar_main.id]["status"] == "zarezerwowany"
 
 
 def test_status_wolny_w_inny_dzien(admin_client, db):

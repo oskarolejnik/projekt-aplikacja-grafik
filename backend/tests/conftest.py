@@ -108,6 +108,13 @@ def _bez_provisioningu(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _domyslny_tryb_odczytu_rezerwacji(monkeypatch):
+    """Lokalny .env nie może przełączać testów na shadow/canonical ani wymuszać daty cutoveru."""
+    monkeypatch.delenv("REZERWACJE_READ_MODE", raising=False)
+    monkeypatch.delenv("REZERWACJE_CUTOVER_DATE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _subskrypcja_pelna(_reset_schema):
     """Tier-gating: Free odblokowuje TYLKO rdzeń, więc domyślny plan (free) blokowałby moduły
     rezerwacji/imprez/POS w większości testów funkcjonalnych. Ustawiamy Premium/aktywna (pełny

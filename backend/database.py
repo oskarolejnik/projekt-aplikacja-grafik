@@ -41,7 +41,7 @@ def get_db():
         db.close()
 
 
-def _ensure_schema():
+def _ensure_schema(*, include_source_identity: bool = True):
     """Lekka auto-migracja: dodaje brakujące kolumny w istniejących tabelach
     (create_all nie modyfikuje już istniejących tabel). Działa na SQLite i PostgreSQL."""
     from sqlalchemy import inspect, text
@@ -113,6 +113,15 @@ def _ensure_schema():
             if "ical_uid" not in kolumny:
                 conn.execute(text("ALTER TABLE terminy ADD COLUMN ical_uid VARCHAR"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_terminy_ical_uid ON terminy (ical_uid)"))
+            if include_source_identity:
+                if "source_type" not in kolumny:
+                    conn.execute(text("ALTER TABLE terminy ADD COLUMN source_type VARCHAR(32)"))
+                if "source_external_id" not in kolumny:
+                    conn.execute(text("ALTER TABLE terminy ADD COLUMN source_external_id VARCHAR(512)"))
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_terminy_source_identity "
+                    "ON terminy (source_type, source_external_id)"
+                ))
     if "rozliczenia_dnia_kelnerzy" in insp.get_table_names():
         kolumny = {c["name"] for c in insp.get_columns("rozliczenia_dnia_kelnerzy")}
         with engine.begin() as conn:
@@ -174,12 +183,22 @@ def init_db():
         #      (NIE odtwarzaj migracji, bo kolumny/tabele już są).
         #  (b) starsza baza (sprzed Alembica, bez nowszych tabel) → oznacz BASELINE
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
-        _ensure_schema()
         model_tables = set(Base.metadata.tables.keys())
         if model_tables.issubset(tables):
+            _ensure_schema()
             _alembic_run(lambda command, cfg: command.stamp(cfg, "head"))
-        elif _alembic_run(lambda command, cfg: command.stamp(cfg, "0001_baseline")):
-            _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+        else:
+            # Nie dodawaj pól z najnowszych migracji przed upgrade: migracja doda je sama.
+            # Jest to istotne dla 0050 (source identity), której ADD COLUMN nie jest idempotentne.
+            _ensure_schema(include_source_identity=False)
+        if not model_tables.issubset(tables):
+            if _alembic_run(lambda command, cfg: command.stamp(cfg, "0001_baseline")):
+                _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            else:
+                # Pakiet bez Alembica: co najmniej utwórz brakujące tabele i domknij pola,
+                # zamiast wracać z modelem wskazującym na nieistniejące source_*.
+                Base.metadata.create_all(bind=engine)
+                _ensure_schema()
         return
 
     # Pusta baza lub baza zarządzana przez Alembica → upgrade do najnowszej wersji.

@@ -1473,26 +1473,42 @@ def _dlugosc_dla(db, data, godz_od, liczba_osob) -> int:
     return _turn_time(_serwis_dla_godziny(db, data, godz_od), liczba_osob)
 
 
+def _ids_stolikow(wartosci) -> set[int]:
+    """Normalizuje JSON-ową listę id; stare/uszkodzone elementy nie mogą wywrócić operacji ochronnej."""
+    if not isinstance(wartosci, (list, tuple, set)):
+        return set()
+    ids = set()
+    for wartosc in (wartosci or []):
+        try:
+            ids.add(int(wartosc))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
 def _stoly_terminu(t) -> set:
     """Wszystkie stoły zajmowane przez rezerwację: wiodący (stolik_id) + składowe kombinacji."""
-    stoly = set()
+    stoly = _ids_stolikow(t.stoliki_dodatkowe)
     if t.stolik_id:
         stoly.add(t.stolik_id)
-    for i in (t.stoliki_dodatkowe or []):
-        stoly.add(int(i))
     return stoly
 
 
-def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomin_id=None):
-    """Walidacja rezerwacji stolika: pojemność + brak kolizji w oknie [godz_od, godz_do].
-    Zwraca policzone godz_do. Bez stolika/godziny nie ma okna kolizji."""
-    if stolik_id is None:
+def _waliduj_przydzial_rezerwacji(
+    db, data, godz_od, godz_do, stoliki, liczba_osob, pomin_id=None, pojemnosc_override=None,
+):
+    """Waliduje cały przydział (pojedynczy stół albo zachowaną kombinację) i zwraca godz_do."""
+    ids = _ids_stolikow(stoliki)
+    if not ids:
         return godz_do
-    stolik = db.get(models.Stolik, stolik_id)
-    if not stolik or not stolik.aktywny:
+    rekordy = [db.get(models.Stolik, sid) for sid in sorted(ids)]
+    if any(not stolik or not stolik.aktywny for stolik in rekordy):
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
-    if liczba_osob and stolik.pojemnosc and liczba_osob > stolik.pojemnosc:
-        raise HTTPException(400, f"Stolik „{stolik.nazwa}” mieści {stolik.pojemnosc} os. (próba: {liczba_osob}).")
+    pojemnosc_fizyczna = sum((stolik.pojemnosc or 0) for stolik in rekordy)
+    pojemnosc = pojemnosc_override if pojemnosc_override is not None else pojemnosc_fizyczna
+    if liczba_osob and liczba_osob > pojemnosc:
+        nazwa = " + ".join(stolik.nazwa for stolik in rekordy)
+        raise HTTPException(400, f"Przydział „{nazwa}” mieści {pojemnosc} os. (próba: {liczba_osob}).")
     if godz_od is None:
         return godz_do
     if godz_do is None:
@@ -1504,13 +1520,65 @@ def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomi
     if pomin_id is not None:
         q = q.filter(models.Termin.id != pomin_id)
     for r in q.all():
-        if stolik_id not in _stoly_terminu(r):       # także gdy stół jest składową kombinacji innej rezerwacji
+        if not (ids & _stoly_terminu(r)):
             continue
         r_do = r.godz_do or _dodaj_minuty(r.godz_od, _dlugosc_dla(db, data, r.godz_od, r.liczba_osob))
         r_do_buf, r_od_buf = _dodaj_minuty(r_do, bufor), _dodaj_minuty(r.godz_od, -bufor)
         if godz_od < r_do_buf and r_od_buf < godz_do:   # nachodzą (z buforem sprzątania)
             raise HTTPException(409, f"Stolik zajęty w tym czasie (kolizja od {r.godz_od.strftime('%H:%M')}).")
     return godz_do
+
+
+def _waliduj_rezerwacje(db, data, godz_od, godz_do, stolik_id, liczba_osob, pomin_id=None):
+    """Kompatybilna walidacja ręcznego przydziału pojedynczego stolika."""
+    stoliki = [stolik_id] if stolik_id is not None else []
+    return _waliduj_przydzial_rezerwacji(
+        db, data, godz_od, godz_do, stoliki, liczba_osob, pomin_id=pomin_id)
+
+
+def _jawne_kombinacje_dla_zestawu(db, stoliki):
+    ids = _ids_stolikow(stoliki)
+    return [k for k in db.query(models.KombinacjaStolow).filter_by(aktywna=True).all()
+            if _ids_stolikow(k.stoliki) == ids]
+
+
+def _pojemnosc_zachowanego_zestawu(db, stoliki):
+    ids = _ids_stolikow(stoliki)
+    jawne = _jawne_kombinacje_dla_zestawu(db, ids)
+    if not jawne:
+        return None
+    rekordy = [db.get(models.Stolik, sid) for sid in ids]
+    if any(stolik is None for stolik in rekordy):
+        # Właściwa walidacja przydziału zwróci czytelne 400; nie wywracaj starego,
+        # osieroconego JSON-u wyjątkiem AttributeError przed tą walidacją.
+        return None
+    fizyczna = sum((stolik.pojemnosc or 0) for stolik in rekordy)
+    return max((k.pojemnosc_max or fizyczna) for k in jawne)
+
+
+def _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, liczba_osob):
+    """Zmiana liczby gości musi pozostawić istniejący zestaw legalnym kandydatem silnika."""
+    ids = _ids_stolikow(stoliki)
+    if len(ids) < 2:
+        return
+    osoby = max(1, int(liczba_osob or 1))
+    jawne = _jawne_kombinacje_dla_zestawu(db, ids)
+    if jawne:
+        pojemnosc_fizyczna = sum(
+            (db.get(models.Stolik, sid).pojemnosc or 0) for sid in ids)
+        dozwolone = any(
+            (k.pojemnosc_min or 1) <= osoby <= (k.pojemnosc_max or pojemnosc_fizyczna)
+            for k in jawne
+        )
+    else:
+        kandydaci = seating.kandydaci(
+            osoby, _stoly_do_seating(db), [], sasiedztwo=_sasiedztwo_do_seating(db))
+        dozwolone = any(_ids_stolikow(k["stoliki"]) == ids for k in kandydaci)
+    if not dozwolone:
+        raise HTTPException(
+            400,
+            "Ta liczba gości nie mieści się w dozwolonym zakresie przypisanej kombinacji stołów.",
+        )
 
 
 def _hm(t):
@@ -1560,8 +1628,14 @@ def get_stoliki(db: Session = Depends(get_db)):
     return {"stoliki": [schemas.StolikOut.model_validate(s).model_dump() for s in rows]}
 
 
+def _waliduj_parametry_stolika(dane: schemas.StolikIn):
+    if dane.pojemnosc_min is not None and dane.pojemnosc_min > dane.pojemnosc:
+        raise HTTPException(400, "Minimalna liczba osób nie może przekraczać liczby miejsc stolika.")
+
+
 @app.post("/api/stoliki", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def dodaj_stolik(dane: schemas.StolikIn, db: Session = Depends(get_db)):
+    _waliduj_parametry_stolika(dane)
     s = models.Stolik(**dane.model_dump()); db.add(s); db.commit(); db.refresh(s)
     return schemas.StolikOut.model_validate(s).model_dump()
 
@@ -1571,6 +1645,19 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
     s = db.get(models.Stolik, sid)
     if not s:
         raise HTTPException(404, "Brak stolika.")
+    _waliduj_parametry_stolika(dane)
+    if s.aktywny and not dane.aktywny:
+        dzis_lokalny = (_teraz_lokalnie() or datetime.now()).date()
+        przyszle = db.query(models.Termin).filter(
+            models.Termin.rodzaj == "stolik",
+            models.Termin.data >= dzis_lokalny,
+            models.Termin.status.in_(REZ_AKTYWNE),
+        ).all()
+        if any(sid in _stoly_terminu(termin) for termin in przyszle):
+            raise HTTPException(
+                409,
+                "Stolik ma aktywne lub przyszłe rezerwacje. Najpierw przepnij je na inne stoły.",
+            )
     for k, v in dane.model_dump().items():
         setattr(s, k, v)
     db.commit(); db.refresh(s)
@@ -1581,7 +1668,18 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
 def usun_stolik(sid: int, db: Session = Depends(get_db)):
     s = db.get(models.Stolik, sid)
     if s:
-        db.query(models.Termin).filter_by(stolik_id=sid).update({"stolik_id": None})
+        # Id stolika jest częścią historii rezerwacji i JSON-owych składów kombinacji. Ciche
+        # usunięcie zostawiałoby osierocone identyfikatory, których FK nie potrafi ochronić.
+        # Używany stolik można bezpiecznie wyłączyć (`aktywny=false`), ale nie usuwać fizycznie.
+        if db.query(models.Termin.id).filter(models.Termin.stolik_id == sid).first():
+            raise HTTPException(409, "Stolik jest przypisany do rezerwacji. Zamiast usuwać, oznacz go jako nieaktywny.")
+        dodatkowe = db.query(models.Termin.stoliki_dodatkowe).filter(
+            models.Termin.stoliki_dodatkowe.isnot(None)).all()
+        if any(sid in _ids_stolikow(wartosc) for (wartosc,) in dodatkowe):
+            raise HTTPException(409, "Stolik należy do przydziału wielostolikowego. Najpierw zmień przypisane rezerwacje.")
+        kombinacje = db.query(models.KombinacjaStolow.stoliki).all()
+        if any(sid in _ids_stolikow(wartosc) for (wartosc,) in kombinacje):
+            raise HTTPException(409, "Stolik należy do kombinacji. Najpierw usuń lub zmień tę kombinację.")
         db.delete(s); db.commit()
 
 
@@ -1605,6 +1703,15 @@ def _suma_pojemnosci(db, ids) -> int:
     return sum((db.get(models.Stolik, i).pojemnosc or 0) for i in ids)
 
 
+def _pojemnosc_kombinacji(db, ids, minimum, maksimum) -> int:
+    efektywne_maksimum = maksimum or _suma_pojemnosci(db, ids)
+    if efektywne_maksimum < 1:
+        raise HTTPException(400, "Kombinacja musi mieć dodatnią pojemność.")
+    if minimum is not None and minimum > efektywne_maksimum:
+        raise HTTPException(400, "Minimalna liczba osób nie może przekraczać maksymalnej.")
+    return efektywne_maksimum
+
+
 @app.get("/api/kombinacje", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def get_kombinacje(db: Session = Depends(get_db)):
     rows = db.query(models.KombinacjaStolow).order_by(
@@ -1615,9 +1722,11 @@ def get_kombinacje(db: Session = Depends(get_db)):
 @app.post("/api/kombinacje", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def dodaj_kombinacje(dane: schemas.KombinacjaStolowIn, db: Session = Depends(get_db)):
     ids = _waliduj_sklad_kombinacji(db, dane.stoliki)
+    pojemnosc_max = _pojemnosc_kombinacji(
+        db, ids, dane.pojemnosc_min, dane.pojemnosc_max)
     k = models.KombinacjaStolow(
         nazwa=dane.nazwa.strip(), stoliki=ids, pojemnosc_min=dane.pojemnosc_min,
-        pojemnosc_max=(dane.pojemnosc_max or _suma_pojemnosci(db, ids)),
+        pojemnosc_max=pojemnosc_max,
         aktywna=dane.aktywna, priorytet=dane.priorytet)
     db.add(k); db.commit(); db.refresh(k)
     return schemas.KombinacjaStolowOut.model_validate(k).model_dump()
@@ -1629,8 +1738,10 @@ def edytuj_kombinacje(kid: int, dane: schemas.KombinacjaStolowIn, db: Session = 
     if not k:
         raise HTTPException(404, "Brak kombinacji.")
     ids = _waliduj_sklad_kombinacji(db, dane.stoliki)
+    pojemnosc_max = _pojemnosc_kombinacji(
+        db, ids, dane.pojemnosc_min, dane.pojemnosc_max)
     k.nazwa = dane.nazwa.strip(); k.stoliki = ids; k.pojemnosc_min = dane.pojemnosc_min
-    k.pojemnosc_max = (dane.pojemnosc_max or _suma_pojemnosci(db, ids))
+    k.pojemnosc_max = pojemnosc_max
     k.aktywna = dane.aktywna; k.priorytet = dane.priorytet
     db.commit(); db.refresh(k)
     return schemas.KombinacjaStolowOut.model_validate(k).model_dump()
@@ -1879,6 +1990,7 @@ def host_przydziel_stolik(rid: int, dane: schemas.HostStolikIn, db: Session = De
     _waliduj_rezerwacje(db, t.data, t.godz_od, godz_do, dane.stolik_id, t.liczba_osob, pomin_id=rid)
     t.stolik_id = dane.stolik_id
     t.stoliki_dodatkowe = None          # ręczny pojedynczy stół kasuje wcześniejszą kombinację
+    t.auto_przydzielony = False         # od tej chwili źródłem przydziału jest decyzja operatora
     t.godz_do = godz_do
     db.commit(); db.refresh(t)
     return _host_out(t, utcnow_naive())
@@ -1916,9 +2028,9 @@ def get_rezerwacje_stolik(start: date = Query(...), end: date = Query(...),
                                        models.Termin.data >= start, models.Termin.data <= end)
     if status:
         q = q.filter(models.Termin.status == status)
-    if stolik_id:
-        q = q.filter(models.Termin.stolik_id == stolik_id)
     rows = q.order_by(models.Termin.data, models.Termin.godz_od).all()
+    if stolik_id:
+        rows = [t for t in rows if stolik_id in _stoly_terminu(t)]
     return {"rezerwacje": [_rezerwacja_out(t) for t in rows]}
 
 
@@ -1944,12 +2056,29 @@ def edytuj_rezerwacje_stolik(rid: int, dane: schemas.RezerwacjaIn, db: Session =
     t = db.get(models.Termin, rid)
     if not t or t.rodzaj != "stolik":
         raise HTTPException(404, "Brak rezerwacji.")
-    godz_do = _waliduj_rezerwacje(db, dane.data, dane.godz_od, dane.godz_do,
-                                  dane.stolik_id, dane.liczba_osob, pomin_id=rid)
+    zachowaj_przydzial = bool(
+        dane.stolik_id is not None
+        and dane.stolik_id == t.stolik_id
+    )
+    stoliki = _stoly_terminu(t) if zachowaj_przydzial else [dane.stolik_id]
+    pojemnosc_override = (
+        _pojemnosc_zachowanego_zestawu(db, stoliki)
+        if zachowaj_przydzial and len(stoliki) > 1 else None
+    )
+    godz_do = _waliduj_przydzial_rezerwacji(
+        db, dane.data, dane.godz_od, dane.godz_do, stoliki, dane.liczba_osob,
+        pomin_id=rid, pojemnosc_override=pojemnosc_override)
+    if zachowaj_przydzial and len(stoliki) > 1 and dane.liczba_osob != t.liczba_osob:
+        _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, dane.liczba_osob)
     t.data = dane.data; t.nazwisko = dane.nazwisko.strip(); t.telefon = dane.telefon
     t.email = dane.email; t.liczba_osob = dane.liczba_osob; t.notatka = dane.notatka
     t.zadatek = float(dane.zadatek or 0); t.godz_od = dane.godz_od; t.godz_do = godz_do
     t.stolik_id = dane.stolik_id
+    if not zachowaj_przydzial:
+        # Zmiana (także na „bez stolika”) jest ręcznym, pojedynczym przydziałem. Nie wolno
+        # zachować niewidocznych składników wcześniejszej kombinacji ani flagi AUTO.
+        t.stoliki_dodatkowe = None
+        t.auto_przydzielony = False
     db.commit(); db.refresh(t)
     return _rezerwacja_out(t)
 
@@ -2319,7 +2448,8 @@ def _obciazenie_sekcji(db, data, godz_od, godz_do):
 
 def _kombinacje_do_seating(db):
     return [{"id": k.id, "nazwa": k.nazwa, "stoliki": k.stoliki or [],
-             "pojemnosc_min": k.pojemnosc_min, "pojemnosc_max": k.pojemnosc_max}
+             "pojemnosc_min": k.pojemnosc_min, "pojemnosc_max": k.pojemnosc_max,
+             "priorytet": k.priorytet or 0}
             for k in db.query(models.KombinacjaStolow).filter_by(aktywna=True).all()]
 
 
@@ -3521,7 +3651,7 @@ def import_imprez_ics(payload: dict, db: Session = Depends(get_db)):
                 data=d, nazwisko=nazwa, typ=r.get("typ"),
                 liczba_osob=liczba, telefon=r.get("telefon"), sala=r.get("sala"),
                 notatka=r.get("notatka"), status="rezerwacja",
-                zadatek=float(r.get("zadatek") or 0), ical_uid=uid,
+                zadatek=float(r.get("zadatek") or 0), ical_uid=uid, kanal="ical",
                 utworzono_at=utcnow_naive(),
             ))
             dodano_terminy += 1
@@ -4187,11 +4317,11 @@ def gastro_rozliczenia(start: date = Query(...), end: date = Query(...), db: Ses
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# REZERWACJE (Google Calendar) — odczyt; pracownik widzi tylko sumy dzienne.
+# REZERWACJE — wspólny agregat; źródło wybiera kontrolowany tryb legacy/shadow/canonical.
 @app.get("/api/rezerwacje")
-def get_rezerwacje():
+def get_rezerwacje(db: Session = Depends(get_db)):
     """Admin + szef: rezerwacje na 30 dni — per dzień z rozbiciem per godzina."""
-    return {"dni": rezerwacje.rezerwacje_per_dzien(30)}
+    return {"dni": rezerwacje.czytaj_rezerwacje(db, 30)}
 
 
 # ── SERWOWANIE FRONTENDU (zbudowany React z frontend/dist) ─────────────────

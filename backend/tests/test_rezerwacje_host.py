@@ -105,6 +105,25 @@ def test_host_przydziel_i_przenies_stolik(admin_client):
     assert r2.status_code == 200 and r2.json()["stolik_id"] == s2["id"]
 
 
+def test_host_reczny_przydzial_czysci_auto_kombinacje(admin_client):
+    s1 = _stolik(admin_client, "S1", 4)
+    s2 = _stolik(admin_client, "S2", 4)
+    admin_client.post("/api/kombinacje", json={
+        "nazwa": "S1+S2", "stoliki": [s1["id"], s2["id"]], "pojemnosc_min": 5,
+    })
+    rid = _rez(admin_client, godz_od="18:00", liczba_osob=6)["id"]
+    auto = admin_client.post(f"/api/rezerwacje-stolik/{rid}/auto-przydziel").json()["rezerwacja"]
+    assert auto["auto_przydzielony"] is True and auto["stoliki_dodatkowe"]
+
+    s3 = _stolik(admin_client, "S3", 6)
+    reczna = admin_client.post(
+        f"/api/host/rezerwacja/{rid}/przydziel-stolik", json={"stolik_id": s3["id"]})
+    assert reczna.status_code == 200, reczna.text
+    assert reczna.json()["stolik_id"] == s3["id"]
+    assert reczna.json()["stoliki_dodatkowe"] == []
+    assert reczna.json()["auto_przydzielony"] is False
+
+
 def test_host_przydziel_kolizja_409(admin_client):
     s1 = _stolik(admin_client, "S1", 4)
     _rez(admin_client, godz_od="18:00", stolik_id=s1["id"], liczba_osob=2)      # S1 zajęty 18–20

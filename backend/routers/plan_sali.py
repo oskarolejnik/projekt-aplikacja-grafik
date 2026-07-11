@@ -21,6 +21,18 @@ router = APIRouter()
 _AKTYWNE = ("rezerwacja", "potwierdzona")
 
 
+def _ids_stolikow(wartosci):
+    if not isinstance(wartosci, (list, tuple, set)):
+        return set()
+    ids = set()
+    for wartosc in (wartosci or []):
+        try:
+            ids.add(int(wartosc))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
 def _rez_out(t: models.Termin) -> dict:
     return {
         "id": t.id,
@@ -46,8 +58,12 @@ def plan_sali(data: date = Query(None), db: Session = Depends(get_db)):
 
     per_stolik = defaultdict(list)
     for t in rezerwacje:
+        stoly_terminu = set()
         if t.stolik_id:
-            per_stolik[t.stolik_id].append(t)
+            stoly_terminu.add(t.stolik_id)
+        stoly_terminu.update(_ids_stolikow(t.stoliki_dodatkowe))
+        for sid in stoly_terminu:
+            per_stolik[sid].append(t)
 
     # Live obłożenie z POS (Gastro) — po numerze rewiru; podpięte tylko dla stolików z rewir_nr.
     stan = {s.rewir_nr: s for s in db.query(models.StanStolow).all()}

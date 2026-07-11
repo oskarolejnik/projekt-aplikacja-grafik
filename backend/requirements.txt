@@ -10,6 +10,7 @@ bcrypt==4.1.3
 cryptography>=43,<50          # szyfrowanie danych wrażliwych at-rest (Fernet); floor 43 = nowsze fixy
 PyJWT==2.10.1                 # aktualny 2.x (fixy walidacji iss/aud)
 python-dotenv==1.0.1
+tzdata==2026.2                 # IANA Europe/Warsaw także na Windows/minimalnych obrazach
 pywebpush==1.14.1
 google-api-python-client==2.137.0
 google-auth==2.32.0

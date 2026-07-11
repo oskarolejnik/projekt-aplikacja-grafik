@@ -476,12 +476,12 @@ class UpgradeIn(BaseModel):
 class StolikIn(BaseModel):
     nazwa: str
     strefa: Optional[str] = None
-    pojemnosc: int = 2
+    pojemnosc: int = Field(default=2, ge=1)
     laczy_sie: bool = False
     aktywny: bool = True
     kolejnosc: int = 0
     rewir_nr: Optional[int] = None   # powiązanie z rewirem POS (live obłożenie)
-    pojemnosc_min: Optional[int] = None            # min. wielkość grupy (seating); NULL = 1
+    pojemnosc_min: Optional[int] = Field(default=None, ge=1)  # min. grupy; NULL = 1
     ksztalt: Optional[str] = None                  # kwadrat/okragly/prostokat
     cechy: Optional[List[str]] = None              # ["okno","loza","ogrod","dostepny"]
     priorytet: Optional[int] = None                # kolejność sadzania (mniej = wcześniej)
@@ -494,8 +494,8 @@ class KombinacjaStolowIn(BaseModel):
     """Predefiniowana kombinacja stołów (łączenie pod większe grupy)."""
     nazwa: str
     stoliki: List[int]                             # id stołów składowych (≥2, walidowane w endpoincie)
-    pojemnosc_min: Optional[int] = None
-    pojemnosc_max: Optional[int] = None            # None → suma pojemności składowych
+    pojemnosc_min: Optional[int] = Field(default=None, ge=1)
+    pojemnosc_max: Optional[int] = Field(default=None, ge=1)  # None → suma pojemności składowych
     aktywna: bool = True
     priorytet: int = 0
 class KombinacjaStolowOut(KombinacjaStolowIn):
@@ -559,7 +559,7 @@ class RezerwacjaIn(BaseModel):
     godz_od: Optional[time] = None
     godz_do: Optional[time] = None
     stolik_id: Optional[int] = None
-    liczba_osob: Optional[int] = None
+    liczba_osob: Optional[int] = Field(default=None, ge=1)
     nazwisko: str                  # klient
     telefon: Optional[str] = None
     email: Optional[str] = None

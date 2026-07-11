@@ -302,6 +302,14 @@ class Termin(Base):
     """Termin w kalendarzu imprez (ręczny, dodawany przez admina). Zadatek dopasowywany z KP
     (po nazwisku + dacie) lub przypisywany ręcznie ze skrzynki — osobny etap."""
     __tablename__ = "terminy"
+    __table_args__ = (
+        Index(
+            "uq_terminy_source_identity",
+            "source_type",
+            "source_external_id",
+            unique=True,
+        ),
+    )
     id           = Column(Integer, primary_key=True, index=True)
     data         = Column(Date, nullable=False, index=True)   # data imprezy
     nazwisko     = Column(String, nullable=False)             # klient
@@ -316,6 +324,10 @@ class Termin(Base):
     zadatek      = Column(Float, nullable=False, default=0.0)  # przypisany zadatek (z KP / ręcznie)
     utworzono_at = Column(DateTime, nullable=True)
     ical_uid     = Column(String, nullable=True, index=True)   # UID wydarzenia z iCloud (.ics) — klucz dedupu importu; NULL dla wpisów ręcznych
+    # Stabilna proweniencja importu. Para identyfikuje rekord w systemie źródłowym
+    # i umożliwia idempotentny import podczas kontrolowanego cutoveru rezerwacji.
+    source_type        = Column(String(32), nullable=True)
+    source_external_id = Column(String(512), nullable=True)
     # Portal klienta imprezy (roadmapa v2): sekretny token publicznego linku (/?impreza=TOKEN).
     # NULL = portal nie wygenerowany. Regeneracja unieważnia stary link.
     portal_token = Column(String(64), nullable=True, unique=True, index=True)

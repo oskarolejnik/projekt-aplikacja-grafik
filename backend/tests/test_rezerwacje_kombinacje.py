@@ -48,6 +48,29 @@ def test_kombinacja_override_pojemnosci(admin_client):
     assert k["pojemnosc_max"] == 10 and k["pojemnosc_min"] == 6
 
 
+def test_kombinacja_odrzuca_niespojny_lub_zerowy_zakres(admin_client):
+    a = _stolik(admin_client, nazwa="S1", pojemnosc=2)
+    b = _stolik(admin_client, nazwa="S2", pojemnosc=2)
+    assert admin_client.post("/api/kombinacje", json={
+        "nazwa": "Błędna", "stoliki": [a["id"], b["id"]],
+        "pojemnosc_min": 5, "pojemnosc_max": 4,
+    }).status_code == 400
+    assert admin_client.post("/api/kombinacje", json={
+        "nazwa": "Zero", "stoliki": [a["id"], b["id"]], "pojemnosc_max": 0,
+    }).status_code == 422
+    assert admin_client.get("/api/kombinacje").json()["kombinacje"] == []
+
+
+def test_stolik_musi_miec_dodatnia_pojemnosc(admin_client):
+    assert admin_client.post("/api/stoliki", json={
+        "nazwa": "Uszkodzony", "pojemnosc": 0,
+    }).status_code == 422
+    assert admin_client.post("/api/stoliki", json={
+        "nazwa": "Niespójny", "pojemnosc": 2, "pojemnosc_min": 3,
+    }).status_code == 400
+    assert admin_client.get("/api/stoliki").json()["stoliki"] == []
+
+
 def test_kombinacja_wymaga_dwoch_roznych_stolow(admin_client):
     a = _stolik(admin_client, nazwa="S1")
     assert admin_client.post("/api/kombinacje", json={"nazwa": "X", "stoliki": [a["id"]]}).status_code == 400
@@ -72,6 +95,23 @@ def test_kombinacja_edycja_i_usuwanie(admin_client):
     assert admin_client.get("/api/kombinacje").json()["kombinacje"] == []
 
 
+def test_nie_mozna_usunac_stolika_uzytego_w_kombinacji(admin_client):
+    a = _stolik(admin_client, nazwa="S1", pojemnosc=2)
+    b = _stolik(admin_client, nazwa="S2", pojemnosc=2)
+    kombinacja = admin_client.post(
+        "/api/kombinacje", json={"nazwa": "S1+S2", "stoliki": [a["id"], b["id"]]}
+    ).json()
+
+    r = admin_client.delete(f"/api/stoliki/{a['id']}")
+
+    assert r.status_code == 409
+    pozostale = admin_client.get("/api/kombinacje").json()["kombinacje"]
+    assert next(k for k in pozostale if k["id"] == kombinacja["id"])["stoliki"] == [
+        a["id"], b["id"]
+    ]
+    assert any(s["id"] == a["id"] for s in admin_client.get("/api/stoliki").json()["stoliki"])
+
+
 def test_kombinacje_sortowane_po_priorytecie(admin_client):
     a = _stolik(admin_client, nazwa="S1")
     b = _stolik(admin_client, nazwa="S2")
@@ -79,6 +119,28 @@ def test_kombinacje_sortowane_po_priorytecie(admin_client):
     admin_client.post("/api/kombinacje", json={"nazwa": "A", "stoliki": [a["id"], b["id"]], "priorytet": 1})
     nazwy = [k["nazwa"] for k in admin_client.get("/api/kombinacje").json()["kombinacje"]]
     assert nazwy == ["A", "B"]
+
+
+def test_silnik_respektuje_priorytet_predefiniowanej_kombinacji(admin_client):
+    a = _stolik(admin_client, nazwa="S1", pojemnosc=4)
+    b = _stolik(admin_client, nazwa="S2", pojemnosc=4)
+    c = _stolik(admin_client, nazwa="S3", pojemnosc=4)
+    d = _stolik(admin_client, nazwa="S4", pojemnosc=4)
+    admin_client.post(
+        "/api/kombinacje",
+        json={"nazwa": "S1+S2", "stoliki": [a["id"], b["id"]], "priorytet": 10},
+    )
+    admin_client.post(
+        "/api/kombinacje",
+        json={"nazwa": "S3+S4", "stoliki": [c["id"], d["id"]], "priorytet": 1},
+    )
+
+    r = admin_client.get(
+        "/api/host/sugestia-stolika?data=2026-07-13&godz_od=18:00&osoby=8"
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["kandydaci"][0]["stoliki"] == [c["id"], d["id"]]
 
 
 # ── Ekspozycja na planie sali ────────────────────────────────────────────────

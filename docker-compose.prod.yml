@@ -35,9 +35,16 @@ services:
       RCP_INGEST_TOKEN: ${RCP_INGEST_TOKEN:-}
       TOKEN_TTL_MINUTES: ${TOKEN_TTL_MINUTES:-720}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      REZERWACJE_READ_MODE: ${REZERWACJE_READ_MODE:-legacy}
+      REZERWACJE_CUTOVER_DATE: ${REZERWACJE_CUTOVER_DATE:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-}
+      GOOGLE_SA_JSON: ${GOOGLE_SA_JSON:-/run/secrets/lokalo/google_sa.json}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+    volumes:
+      # Opcjonalne: dla legacy/shadow umieść konto serwisowe w ./secrets/google_sa.json.
+      - ./secrets:/run/secrets/lokalo:ro
     depends_on:
       db:
         condition: service_healthy

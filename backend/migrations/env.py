@@ -26,7 +26,9 @@ config = context.config
 # Logowanie wg alembic.ini (best-effort — nie wywracaj migracji przez konfig logów).
 if config.config_file_name is not None:
     try:
-        fileConfig(config.config_file_name)
+        # Migracje są też uruchamiane programowo podczas startu aplikacji. Domyślne
+        # ``disable_existing_loggers=True`` wyciszałoby wtedy m.in. raport shadow-read.
+        fileConfig(config.config_file_name, disable_existing_loggers=False)
     except Exception:
         pass
 

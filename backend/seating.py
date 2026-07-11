@@ -6,7 +6,7 @@ najlepszy). Wołany przez /api/host/sugestia-stolika (top-N) i /api/rezerwacje-s
 
 Wejście to zwykłe słowniki (odseparowane od SQLAlchemy):
   stolik:     {"id","nazwa","pojemnosc","pojemnosc_min"?,"cechy"?,"priorytet"?,"strefa"?,"sekcja"?}
-  kombinacja: {"id","nazwa","stoliki":[id,…],"pojemnosc_min"?,"pojemnosc_max"?}
+  kombinacja: {"id","nazwa","stoliki":[id,…],"pojemnosc_min"?,"pojemnosc_max"?,"priorytet"?}
   zajete:     zbiór/lista id stołów zajętych w rozważanym oknie czasu
   sasiedztwo: lista krawędzi [(id_a,id_b),…] — które stoły da się złączyć (auto-kombinacje)
   obciazenie_sekcji: {sekcja: liczba_zajętych} — do balansu obłożenia kelnerów
@@ -16,7 +16,7 @@ Wejście to zwykłe słowniki (odseparowane od SQLAlchemy):
 DOMYSLNE_WAGI = {
     "marnowanie": 1.0,    # kara za pusty stół (nadmiar miejsc = pojemność − osoby)
     "kombinacja": 2.0,    # kara za łączenie stołów (wolimy jeden stół, gdy się mieści)
-    "priorytet": 0.3,     # priorytet stołu (mniejszy = chętniej sadzany)
+    "priorytet": 0.3,     # priorytet stołu/kombinacji (mniejszy = chętniej sadzany)
     "preferencja": 1.5,   # bonus (obniża koszt) za zgodność cech z preferencją gościa
     "strefa": 0.4,        # kara za niezgodność strefy z preferencją
     "balans_sekcji": 0.5,  # kara za dokładanie do już obłożonej sekcji kelnerskiej
@@ -77,16 +77,38 @@ def kandydaci(osoby, stoliki, kombinacje, sasiedztwo=None):
                         "suma_pojemnosci": _poj(s), "kombinacja": False, "_stoly": [s]})
     by_id = {s["id"]: s for s in stoliki}
     for k in kombinacje:
-        czlonkowie = [by_id[i] for i in (k.get("stoliki") or []) if i in by_id]
-        if len(czlonkowie) < 2:
-            continue                                  # niekompletna kombinacja (usunięty stół) — pomiń
+        raw_stoliki = k.get("stoliki")
+        if not isinstance(raw_stoliki, (list, tuple)):
+            continue
+        try:
+            requested = [int(i) for i in raw_stoliki]
+        except (TypeError, ValueError):
+            continue
+        if len(requested) < 2 or len(set(requested)) != len(requested):
+            continue                                  # uszkodzony/zdublowany skład — pomiń
+        czlonkowie = [by_id[i] for i in requested if i in by_id]
+        if len(czlonkowie) != len(requested):
+            continue                                  # choć jeden brakujący stół unieważnia CAŁĄ kombinację
         poj_max = k.get("pojemnosc_max") or sum(_poj(s) for s in czlonkowie)
         poj_min = k.get("pojemnosc_min") or 1
         if poj_min <= osoby <= poj_max:
             out.append({"stoliki": [s["id"] for s in czlonkowie], "nazwa": k.get("nazwa"),
-                        "suma_pojemnosci": poj_max, "kombinacja": True, "_stoly": czlonkowie})
+                        "suma_pojemnosci": poj_max, "kombinacja": True, "_stoly": czlonkowie,
+                        "_priorytet_kombinacji": k.get("priorytet") or 0})
     if sasiedztwo:
         widziane = {frozenset(k["stoliki"]) for k in out}
+        # Jawna definicja administratora ma pierwszeństwo nad grafem także wtedy, gdy dana
+        # grupa wypada poza jej min/max. Graf nie może obchodzić ustawionego zakresu.
+        for definicja in kombinacje:
+            raw_stoliki = definicja.get("stoliki")
+            if not isinstance(raw_stoliki, (list, tuple)):
+                continue
+            try:
+                ids = [int(i) for i in raw_stoliki]
+            except (TypeError, ValueError):
+                continue
+            if len(ids) >= 2 and len(set(ids)) == len(ids):
+                widziane.add(frozenset(ids))
         for k in _kombinacje_z_grafu(osoby, stoliki, sasiedztwo):
             fs = frozenset(k["stoliki"])
             if fs not in widziane:
@@ -105,6 +127,7 @@ def koszt(kand, osoby, zajete, preferencje, wagi, obciazenie_sekcji=None):
     c += w["kombinacja"] * (len(kand["stoliki"]) - 1)
     prio = [(s.get("priorytet") or 0) for s in kand["_stoly"]]
     c += w["priorytet"] * (sum(prio) / len(prio) if prio else 0)
+    c += w["priorytet"] * (kand.get("_priorytet_kombinacji") or 0)
     if nadmiar >= HOLDBACK_PROG:                      # hold-back: chroni duże stoły przed małą grupą
         c += w["holdback"] * nadmiar ** 2
     if obciazenie_sekcji:                             # balans: nie dokładaj do obłożonej sekcji
@@ -125,18 +148,27 @@ def dopasuj(osoby, stoliki, kombinacje, zajete=(), preferencje=None, wagi=None, 
     """Top-N kandydatów posortowanych po koszcie. [] gdy brak dopasowania.
     Sortowanie remisów: mniej stołów (prostota), potem id (deterministycznie)."""
     osoby = max(1, int(osoby or 1))
-    wynik = []
+    najlepsze_zestawy = {}
     for kand in kandydaci(osoby, stoliki, kombinacje, sasiedztwo=sasiedztwo):
         c = koszt(kand, osoby, zajete, preferencje, wagi, obciazenie_sekcji=obciazenie_sekcji)
         if c is None:
             continue
-        wynik.append({
+        oceniony = {
             "stoliki": kand["stoliki"], "nazwa": kand["nazwa"],
             "suma_pojemnosci": kand["suma_pojemnosci"], "kombinacja": kand["kombinacja"],
             "nadmiar_miejsc": max(0, kand["suma_pojemnosci"] - osoby),
             "koszt": round(c, 3),
             "skladniki": {"marnowanie": max(0, kand["suma_pojemnosci"] - osoby),
                           "kombinacja": len(kand["stoliki"]) - 1},
-        })
+        }
+        klucz = frozenset(kand["stoliki"])
+        poprzedni = najlepsze_zestawy.get(klucz)
+        if poprzedni is None or (
+            oceniony["koszt"], oceniony["nazwa"] or ""
+        ) < (
+            poprzedni["koszt"], poprzedni["nazwa"] or ""
+        ):
+            najlepsze_zestawy[klucz] = oceniony
+    wynik = list(najlepsze_zestawy.values())
     wynik.sort(key=lambda x: (x["koszt"], len(x["stoliki"]), x["stoliki"]))
     return wynik[:limit] if limit else wynik

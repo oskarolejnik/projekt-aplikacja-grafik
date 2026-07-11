@@ -25,6 +25,17 @@ def test_stolik_crud(admin_client):
     assert admin_client.delete(f"/api/stoliki/{s['id']}").status_code == 204
 
 
+def test_nie_mozna_usunac_stolika_z_historii_rezerwacji(admin_client):
+    s = _stolik(admin_client)
+    rid = _rez(admin_client, data="2026-01-01", godz_od="18:00", stolik_id=s["id"],
+               nazwisko="Historia", liczba_osob=2).json()["id"]
+    assert admin_client.post(
+        f"/api/rezerwacje-stolik/{rid}/status", json={"status": "odbyla"}).status_code == 200
+
+    assert admin_client.delete(f"/api/stoliki/{s['id']}").status_code == 409
+    assert any(x["id"] == s["id"] for x in admin_client.get("/api/stoliki").json()["stoliki"])
+
+
 def test_config_zawiera_flage_modul_rezerwacje(admin_client):
     # Regresja: LokalConfigOut musi zwracać modul_rezerwacje (inaczej front nie pokaże zakładki).
     cfg = admin_client.get("/api/lokal/config").json()
@@ -49,6 +60,8 @@ def test_rezerwacja_tworzenie_i_pojemnosc(admin_client):
     r2 = _rez(admin_client, data="2026-07-01", godz_od="12:00", stolik_id=s["id"],
               liczba_osob=5, nazwisko="ZaDuzo")
     assert r2.status_code == 400
+    assert _rez(admin_client, data="2026-07-01", godz_od="12:00",
+                liczba_osob=0, nazwisko="Zero").status_code == 422
 
 
 def test_kolizja_slotow(admin_client):

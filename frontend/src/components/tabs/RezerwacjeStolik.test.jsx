@@ -16,6 +16,14 @@ vi.mock('../../lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
 
 import RezerwacjeStolik from './RezerwacjeStolik'
 
+const localDateISO = () => {
+  const today = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+}
+
+const TEST_DATE = localDateISO()
+
 const TABLE = {
   id: 3,
   nazwa: 'T3',
@@ -28,7 +36,7 @@ const TABLE = {
 
 const RESERVATION = {
   id: 7,
-  data: '2026-07-10',
+  data: TEST_DATE,
   godz_od: '18:00',
   godz_do: '20:00',
   stolik_id: TABLE.id,
@@ -45,7 +53,7 @@ const RESERVATION = {
 
 const WAITLIST_ENTRY = {
   id: 11,
-  data: '2026-07-10',
+  data: TEST_DATE,
   godz_od: '19:00',
   liczba_osob: 2,
   nazwisko: 'Kowalska',
@@ -244,6 +252,31 @@ describe('Rezerwacje stolików', () => {
     expect(screen.getByText('Dodano stolik: T8.')).toBeInTheDocument()
     expect(attempts).toBe(2)
     expect(tableLoads).toBe(1)
+  })
+
+  it('wyłącza nieużywany stolik bez usuwania go z konfiguracji', async () => {
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki' && !method) return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/lokal/config') return Promise.resolve({ sale: ['Sala'] })
+      if (path === `/stoliki/${TABLE.id}` && method === 'PUT') {
+        return Promise.resolve({ ...TABLE, ...body })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Stoliki (1)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Wyłącz' }))
+
+    expect(await screen.findByText('Nieaktywny')).toBeInTheDocument()
+    expect(screen.getByText('Stolik wyłączono z nowych rezerwacji.')).toBeInTheDocument()
+    expect(apiMock).toHaveBeenCalledWith(
+      `/stoliki/${TABLE.id}`,
+      'PUT',
+      expect.objectContaining({ aktywny: false, nazwa: TABLE.nazwa, pojemnosc: TABLE.pojemnosc }),
+    )
   })
 
   it('po błędzie pierwszego wczytania pokazuje lokalny retry i blokuje zapis w ciemno', async () => {
