@@ -36,7 +36,7 @@ vi.mock('../ui/Toast', () => ({
 }))
 
 vi.mock('./RezerwacjeStolik', () => ({
-  default: ({ date, reservationId, suspendReservationDialog, onGuestProfileOpen }) => {
+  default: ({ date, reservationId, suspendReservationDialog, onGuestProfileOpen, onOpenRooms }) => {
     const [note, setNote] = useState('')
     return (
       <div>
@@ -49,6 +49,9 @@ vi.mock('./RezerwacjeStolik', () => ({
         </label>
         {reservationId && !suspendReservationDialog ? (
           <button type="button" onClick={() => onGuestProfileOpen?.(reservationId)}>Profil gościa</button>
+        ) : null}
+        {auth.isAdmin || auth.permissions.has('rezerwacje.sala') ? (
+          <button type="button" onClick={onOpenRooms}>Konfiguruj sale</button>
         ) : null}
       </div>
     )
@@ -94,6 +97,15 @@ vi.mock('./GuestProfileDialog', () => ({
       Profil rezerwacji {reservationId}
       <button type="button" onClick={() => onDirtyChange?.(true)}>Zmień profil testowo</button>
       <button type="button" onClick={onClose}>Wróć do rezerwacji</button>
+    </div>
+  ),
+}))
+
+vi.mock('./PlanSali', () => ({
+  default: ({ roomId, onRoomChange }) => (
+    <div>
+      <span data-testid="floor-room">{roomId ?? 'brak'}</span>
+      <button type="button" onClick={() => onRoomChange?.(9)}>Wybierz salę 9</button>
     </div>
   ),
 }))
@@ -158,6 +170,34 @@ describe('ReservationsWorkspace', () => {
     expect(screen.getByRole('button', { name: /Kalendarz/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Baza/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Host/ })).not.toBeInTheDocument()
+  })
+
+  it('otwiera konfigurację sal z widoku dnia, bez piątego segmentu operacyjnego', async () => {
+    setPermissions('rezerwacje.operacje', 'rezerwacje.sala')
+    render(<ReservationsWorkspace />)
+
+    const operationalNav = screen.getByRole('navigation', { name: 'Widoki rezerwacji' })
+    expect(operationalNav.querySelectorAll('button')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Konfiguruj sale' }))
+
+    expect(await screen.findByRole('heading', { name: 'Konfiguracja sal' })).toBeInTheDocument()
+    expect(window.location.hash).toBe('#/rezerwacje/sale')
+    fireEvent.click(screen.getByRole('button', { name: 'Wybierz salę 9' }))
+    expect(window.location.hash).toBe('#/rezerwacje/sale?sala=9')
+    expect(screen.getByTestId('floor-room')).toHaveTextContent('9')
+    expect(screen.getByRole('button', { name: 'Wróć do rezerwacji' })).toBeInTheDocument()
+  })
+
+  it('dla konta floor-only pokazuje samą konfigurację bez martwego powrotu', async () => {
+    setPermissions('rezerwacje.sala')
+    setHash('#/rezerwacje/sale?sala=9')
+
+    render(<ReservationsWorkspace />)
+
+    expect(await screen.findByRole('heading', { name: 'Konfiguracja sal' })).toBeInTheDocument()
+    expect(screen.getByTestId('floor-room')).toHaveTextContent('9')
+    expect(screen.queryByRole('navigation', { name: 'Widoki rezerwacji' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Wróć do rezerwacji' })).not.toBeInTheDocument()
   })
 
   it('normalizuje niedozwolony deep link konta host-only bez montowania PII', async () => {

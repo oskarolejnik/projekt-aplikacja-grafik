@@ -14,6 +14,7 @@ import {
   subscribeReservationRoute,
 } from './lib/reservationRoute'
 import { readReservationSession, reservationHistoryState } from './lib/reservationSession'
+import { confirmReservationLeave, hasReservationLeaveGuard } from './lib/reservationLeaveGuard'
 
 const loadPulpit = () => import('./components/tabs/Pulpit')
 const loadPrognozaObsady = () => import('./components/tabs/PrognozaObsady')
@@ -34,7 +35,6 @@ const loadReservationsWorkspace = () => import('./components/tabs/ReservationsWo
 const loadAnalitykaRezerwacji = () => import('./components/tabs/AnalitykaRezerwacji')
 const loadCrmGoscie = () => import('./components/tabs/CrmGoscie')
 const loadGieldaZmian = () => import('./components/tabs/GieldaZmian')
-const loadPlanSali = () => import('./components/tabs/PlanSali')
 const loadUstawienia = () => import('./components/tabs/Ustawienia')
 const loadEksport = () => import('./components/tabs/Eksport')
 const loadOgloszenia = () => import('./components/tabs/Ogloszenia')
@@ -85,7 +85,6 @@ const TABS = [
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', kat: 'kasa', title: 'Eksport danych', load: loadEksport },
   // Goście — rezerwacje i relacje.
   { id: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar', kat: 'goscie', title: 'Rezerwacje', load: loadReservationsWorkspace, modul: 'modul_rezerwacje' },
-  { id: 'plan-sali', label: 'Plan sali', icon: 'office', kat: 'goscie', title: 'Plan sali — rozmieszczenie stolików', load: loadPlanSali, modul: 'modul_rezerwacje' },
   { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', load: loadCrmGoscie, modul: 'modul_rezerwacje' },
   { id: 'analityka-rezerwacji', label: 'Analityka rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Analityka rezerwacji — covery, no-show, szczyty', load: loadAnalitykaRezerwacji, modul: 'modul_rezerwacje' },
   // Imprezy — eventy i zapytania. Rozliczenia wydarzeń pozostają w kalendarzu imprez.
@@ -129,6 +128,8 @@ export default function Dashboard() {
   const [lazyAttempt, setLazyAttempt] = useState(0)
   const mobileMenuButtonRef = useRef(null)
   const mobileDrawerRef = useRef(null)
+  const reservationLeaveBypassRef = useRef(false)
+  const reservationLeaveFlowRef = useRef(null)
   // Konfiguracja lokalu — chowamy zakładki wyłączonych modułów (np. modul_rezerwacje).
   useEffect(() => {
     let mounted = true
@@ -163,11 +164,46 @@ export default function Dashboard() {
     return () => document.removeEventListener('keydown', esc)
   }, [])
 
-  useEffect(() => subscribeReservationRoute((reservationRoute) => {
+  useEffect(() => subscribeReservationRoute((reservationRoute, event) => {
     if (reservationRoute) {
       setActive('rezerwacje')
+      const flow = reservationLeaveFlowRef.current
+      if (flow) {
+        flow.restored = true
+        if (flow.decision !== null) {
+          reservationLeaveFlowRef.current = null
+          if (flow.decision) {
+            reservationLeaveBypassRef.current = true
+            window.history.back()
+          }
+        }
+      }
       return
     }
+
+    if (event?.type === 'popstate' && reservationLeaveBypassRef.current) {
+      reservationLeaveBypassRef.current = false
+    } else if (event?.type === 'popstate' && hasReservationLeaveGuard()) {
+      if (!reservationLeaveFlowRef.current) {
+        const flow = { restored: false, decision: null }
+        reservationLeaveFlowRef.current = flow
+        window.history.forward()
+        void confirmReservationLeave().then((decision) => {
+          if (reservationLeaveFlowRef.current !== flow) return
+          flow.decision = decision
+          if (!flow.restored) return
+          reservationLeaveFlowRef.current = null
+          if (decision) {
+            reservationLeaveBypassRef.current = true
+            window.history.back()
+          }
+        })
+      }
+      return
+    }
+    // Back zmienia hash dwoma zdarzeniami. Pusty `hashchange` pomiędzy
+    // `popstate` i odtworzonym wpisem nie może odmontować chronionego workspace.
+    if (reservationLeaveFlowRef.current) return
     const restored = window.history.state?.lokaloDashboardTab
     setActive(TAB_BY_ID.has(restored) ? restored : 'pulpit')
   }), [])
@@ -236,7 +272,11 @@ export default function Dashboard() {
     }
   }, [])
 
-  const select = (id, section) => {
+  const select = async (id, section) => {
+    if (id !== 'rezerwacje' && readReservationRoute() && hasReservationLeaveGuard()) {
+      const leave = await confirmReservationLeave()
+      if (!leave) return
+    }
     if (id === 'ustawienia' && section) setSettingsSection(section)
     if (id === 'rezerwacje') {
       if (!readReservationRoute()) {

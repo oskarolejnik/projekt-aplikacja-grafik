@@ -4,6 +4,8 @@ Scenariusz re-alokacji: grupa 3 osób ląduje na kombinacji S1+S2 (bo S3 zajęty
 na S3 auto-przydzielona rezerwacja przeskakuje na tańszy pojedynczy S3.
 """
 
+import main as app_main
+
 PRZESZLOSC = "2020-01-06"      # poniedziałek w przeszłości (auto-no-show zawsze przeterminowane)
 PRZYSZLOSC = "2090-01-02"      # daleka przyszłość (nigdy nie przeterminowane)
 DZIEN = "2026-07-13"           # poniedziałek — scenariusz re-alokacji
@@ -51,7 +53,7 @@ def test_odwolanie_realokuje_auto_na_lepszy_stol(admin_client):
     assert g["stolik_id"] == s3 and g["stoliki_dodatkowe"] == []
 
 
-def test_reopt_nie_dubluje_stolu_dwoch_rezerwacji(admin_client):
+def test_reopt_nie_dubluje_stolu_dwoch_rezerwacji(admin_client, monkeypatch):
     """Regresja: gdy DWIE auto-rezerwacje nachodzą na to samo zwolnione okno, re-optymalizacja
     nie może posadzić obu na tym samym zwolnionym stole. Sesja ma autoflush=False — bezpieczeństwo
     zależy od tożsamościowej mapy ORM (przydział poprzedniej rezerwacji w pętli jest już widoczny)."""
@@ -66,8 +68,22 @@ def test_reopt_nie_dubluje_stolu_dwoch_rezerwacji(admin_client):
     # A → kombinacja [Z,W], B → kombinacja [V,U] (X zajęty blokadą)
     assert set(admin_client.post(f"/api/rezerwacje-stolik/{r_a}/auto-przydziel").json()["przydzial"]["stoliki"]) == {z, w}
     assert set(admin_client.post(f"/api/rezerwacje-stolik/{r_b}/auto-przydziel").json()["przydzial"]["stoliki"]) == {v, u}
+    lock_calls = []
+    real_lock_tables = app_main.reservation_service.lock_tables
+
+    def recording_lock_tables(db, table_ids):
+        ids = tuple(table_ids)
+        lock_calls.append(ids)
+        return real_lock_tables(db, ids)
+
+    monkeypatch.setattr(
+        app_main.reservation_service, "lock_tables", recording_lock_tables,
+    )
     # odwołanie blokady zwalnia X (cap 3) → jedna z rezerwacji może na niego przeskoczyć — ale NIE OBIE
     assert admin_client.post(f"/api/rezerwacje-stolik/{blok}/status", json={"status": "odwolana"}).status_code == 200
+    # Pierwsza blokada reoptymalizacji obejmuje wszystkie aktywne stoły w jednej,
+    # globalnie rosnącej kolejności. Dopiero potem wolno blokować podzbiory.
+    assert lock_calls[0] == tuple(sorted((x, z, w, v, u)))
     ga, gb = _rez_out(admin_client, DZIEN, r_a), _rez_out(admin_client, DZIEN, r_b)
     stoly_a = set([ga["stolik_id"]] + ga["stoliki_dodatkowe"])
     stoly_b = set([gb["stolik_id"]] + gb["stoliki_dodatkowe"])

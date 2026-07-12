@@ -24,7 +24,13 @@ def _rez(
 def test_plan_pusty(admin_client):
     b = admin_client.get("/api/plan-sali").json()
     assert b["stoliki"] == []
-    assert b["podsumowanie"] == {"wolne": 0, "zarezerwowane": 0, "nieaktywne": 0, "zajete_live": 0}
+    assert b["podsumowanie"] == {
+        "bez_rezerwacji": 0,
+        "zarezerwowane": 0,
+        "wstrzymane": 0,
+        "nieaktywne": 0,
+        "zajete_live": 0,
+    }
 
 
 def test_status_z_rezerwacji(admin_client, db):
@@ -61,7 +67,7 @@ def test_kombinacja_oznacza_wszystkie_stoly_jako_zarezerwowane(admin_client, db)
     for sid in (s1.id, s2.id, s3.id):
         assert by_id[sid]["status"] == "zarezerwowany"
         assert [r["id"] for r in by_id[sid]["rezerwacje"]] == [rezerwacja.id]
-    assert by_id[wolny.id]["status"] == "wolny"
+    assert by_id[wolny.id]["status"] == "bez_rezerwacji"
     assert plan["podsumowanie"]["zarezerwowane"] == 3
 
 
@@ -82,19 +88,19 @@ def test_plan_sali_pomija_uszkodzone_id_w_legacy_json(admin_client, db):
     assert by_id[scalar_main.id]["status"] == "zarezerwowany"
 
 
-def test_status_wolny_w_inny_dzien(admin_client, db):
+def test_status_bez_rezerwacji_w_inny_dzien(admin_client, db):
     s = _stolik(db, "A1")
     _rez(db, s, dt.date.today(), dt.time(18, 0))
     jutro = dt.date.today() + dt.timedelta(days=1)
     b = admin_client.get(f"/api/plan-sali?data={jutro}").json()
-    assert b["stoliki"][0]["status"] == "wolny"
+    assert b["stoliki"][0]["status"] == "bez_rezerwacji"
 
 
 def test_odwolana_rezerwacja_nie_liczy_sie(admin_client, db):
     s = _stolik(db, "B1")
     _rez(db, s, dt.date.today(), dt.time(18, 0), status="odwolana")
     b = admin_client.get("/api/plan-sali").json()
-    assert b["stoliki"][0]["status"] == "wolny"
+    assert b["stoliki"][0]["status"] == "bez_rezerwacji"
 
 
 def test_live_oblozenie_z_pos(admin_client, db):
@@ -104,6 +110,7 @@ def test_live_oblozenie_z_pos(admin_client, db):
     st = next(x for x in b["stoliki"] if x["nazwa"] == "L1")
     assert st["rewir_nr"] == 42
     assert st["live"]["zajete"] is True and st["live"]["otwarte"] == 3
+    assert st["status"] == "zajety_live"
     assert b["podsumowanie"]["zajete_live"] == 1
 
 

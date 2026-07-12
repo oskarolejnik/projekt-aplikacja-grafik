@@ -49,7 +49,6 @@ const STATUS_FEEDBACK = {
   odwolana: 'Odwołano rezerwację.',
 }
 
-const emptyTable = () => ({ nazwa: '', strefa: '', pojemnosc: 2, rewir_nr: '' })
 const emptyWaitlist = () => ({ godz_od: '', liczba_osob: '', nazwisko: '', telefon: '' })
 const newReservation = (data) => ({
   data,
@@ -128,6 +127,7 @@ export default function RezerwacjeStolik({
   onReservationClose,
   suspendReservationDialog = false,
   onGuestProfileOpen,
+  onOpenRooms,
 } = {}) {
   const { confirm } = useToast()
   const { can, isAdmin } = useAuth()
@@ -168,15 +168,6 @@ export default function RezerwacjeStolik({
   const [rowActions, setRowActions] = useState({})
   const [rowFeedback, setRowFeedback] = useState({})
   const [pageFeedback, setPageFeedback] = useState(null)
-
-  const [stolikModal, setStolikModal] = useState(false)
-  const tableTriggerRef = useRef(null)
-  const [nowyStolik, setNowyStolik] = useState(emptyTable)
-  const [saleLokalu, setSaleLokalu] = useState([])
-  const [tableAdding, setTableAdding] = useState(false)
-  const [tableActions, setTableActions] = useState({})
-  const [tableFeedback, setTableFeedback] = useState(null)
-  const [tableRowFeedback, setTableRowFeedback] = useState({})
 
   const [listaModal, setListaModal] = useState(false)
   const waitlistTriggerRef = useRef(null)
@@ -287,29 +278,18 @@ export default function RezerwacjeStolik({
     setModal(null)
     if (modal || (selectionControlled && reservationId != null)) onReservationClose?.()
   }, [cancelMutationContinuations, piiVisibility])
-  useEffect(() => {
-    if (!canManageFloor) {
-      setSaleLokalu([])
-      setStolikModal(false)
-      return undefined
-    }
-    api('/rezerwacje/config').then((config) => setSaleLokalu(config.sale || [])).catch(() => {})
-    return undefined
-  }, [canManageFloor])
-
   const reservationDirty = !!modal && reservationSnapshot(modal) !== modalInitial.current
-  const tableDraftDirty = !!(nowyStolik.nazwa.trim() || nowyStolik.strefa.trim() || nowyStolik.rewir_nr || Number(nowyStolik.pojemnosc) !== 2)
   const waitDraftDirty = !!(nowyOcz.nazwisko.trim() || nowyOcz.godz_od || nowyOcz.liczba_osob || nowyOcz.telefon.trim())
 
   useEffect(() => {
-    if (!(reservationDirty || tableDraftDirty || waitDraftDirty)) return undefined
+    if (!(reservationDirty || waitDraftDirty)) return undefined
     const warn = (event) => {
       event.preventDefault()
       event.returnValue = ''
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [reservationDirty, tableDraftDirty, waitDraftDirty])
+  }, [reservationDirty, waitDraftDirty])
 
   const openReservation = useCallback((value, trigger = null, { notify = true } = {}) => {
     if (!canViewContacts) return
@@ -388,21 +368,6 @@ export default function RezerwacjeStolik({
     rez,
     selectionControlled,
   ])
-
-  const closeTables = async () => {
-    if (tableAdding || Object.keys(tableActions).length) return
-    if (tableDraftDirty) {
-      const discard = await confirm('Odrzucić rozpoczęty formularz nowego stolika?', {
-        title: 'Niezapisany stolik',
-        confirmText: 'Odrzuć formularz',
-        cancelText: 'Wróć',
-      })
-      if (!discard) return
-    }
-    setNowyStolik(emptyTable())
-    setTableFeedback(null)
-    setStolikModal(false)
-  }
 
   const closeWaitlist = async () => {
     if (waitAdding || Object.keys(waitActions).length) return
@@ -602,116 +567,6 @@ export default function RezerwacjeStolik({
     }
   }
 
-  const dodajStolik = async () => {
-    if (!canManageFloor || tableAdding) return
-    if (!nowyStolik.nazwa.trim()) {
-      setTableFeedback({ type: 'error', message: 'Podaj nazwę stolika.' })
-      return
-    }
-    setTableAdding(true)
-    setTableFeedback(null)
-    const mutation = startMutation()
-    try {
-      const created = await api('/stoliki', 'POST', {
-        nazwa: nowyStolik.nazwa.trim(),
-        strefa: nowyStolik.strefa.trim() || null,
-        pojemnosc: Number(nowyStolik.pojemnosc) || 2,
-        rewir_nr: nowyStolik.rewir_nr ? Number(nowyStolik.rewir_nr) : null,
-      }, { signal: mutation.controller.signal })
-      if (!mutationIsCurrent(mutation)) return
-      setStoliki((current) => replaceById(current, created, sortTables))
-      setNowyStolik(emptyTable())
-      setTableFeedback({ type: 'success', message: `Dodano stolik: ${created.nazwa}.` })
-    } catch (error) {
-      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
-      setTableFeedback({ type: 'error', message: error.message || 'Nie udało się dodać stolika.' })
-    } finally {
-      finishMutation(mutation)
-      if (mutationIsCurrent(mutation)) setTableAdding(false)
-    }
-  }
-
-  const usunStolik = async (table) => {
-    if (!canManageFloor || tableActions[table.id]) return
-    const confirmGeneration = mutationGenerationRef.current
-    const approved = await confirm(`Usunąć stolik „${table.nazwa}”? Można usunąć tylko stolik bez historii rezerwacji i bez powiązanej kombinacji. Tej operacji nie można cofnąć.`, {
-      title: 'Usuń stolik',
-      confirmText: 'Usuń stolik',
-      cancelText: 'Zachowaj stolik',
-    })
-    if (!approved || confirmGeneration !== mutationGenerationRef.current) return
-    setTableActions((current) => ({ ...current, [table.id]: 'delete' }))
-    setTableRowFeedback((current) => ({ ...current, [table.id]: null }))
-    const mutation = startMutation()
-    try {
-      await api(`/stoliki/${table.id}`, 'DELETE', null, { signal: mutation.controller.signal })
-      if (!mutationIsCurrent(mutation)) return
-      setStoliki((current) => current.filter((item) => item.id !== table.id))
-      setTableFeedback({ type: 'success', message: `Usunięto stolik: ${table.nazwa}.` })
-      void load({ silent: true })
-    } catch (error) {
-      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
-      setTableRowFeedback((current) => ({
-        ...current,
-        [table.id]: { type: 'error', message: error.message || 'Nie udało się usunąć stolika.' },
-      }))
-    } finally {
-      finishMutation(mutation)
-      if (!mutationIsCurrent(mutation)) return
-      setTableActions((current) => {
-        const next = { ...current }
-        delete next[table.id]
-        return next
-      })
-    }
-  }
-
-  const ustawAktywnoscStolika = async (table, aktywny) => {
-    if (!canManageFloor || tableActions[table.id]) return
-    setTableActions((current) => ({ ...current, [table.id]: 'toggle' }))
-    setTableRowFeedback((current) => ({ ...current, [table.id]: null }))
-    const mutation = startMutation()
-    try {
-      const updated = await api(`/stoliki/${table.id}`, 'PUT', {
-        nazwa: table.nazwa,
-        strefa: table.strefa || null,
-        pojemnosc: table.pojemnosc,
-        laczy_sie: !!table.laczy_sie,
-        aktywny,
-        kolejnosc: table.kolejnosc || 0,
-        rewir_nr: table.rewir_nr || null,
-        pojemnosc_min: table.pojemnosc_min || null,
-        ksztalt: table.ksztalt || null,
-        cechy: table.cechy || null,
-        priorytet: table.priorytet ?? null,
-        sekcja: table.sekcja || null,
-      }, { signal: mutation.controller.signal })
-      if (!mutationIsCurrent(mutation)) return
-      setStoliki((current) => replaceById(current, updated, sortTables))
-      setTableRowFeedback((current) => ({
-        ...current,
-        [table.id]: {
-          type: 'success',
-          message: aktywny ? 'Stolik znów jest dostępny.' : 'Stolik wyłączono z nowych rezerwacji.',
-        },
-      }))
-    } catch (error) {
-      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
-      setTableRowFeedback((current) => ({
-        ...current,
-        [table.id]: { type: 'error', message: error.message || 'Nie udało się zmienić dostępności stolika.' },
-      }))
-    } finally {
-      finishMutation(mutation)
-      if (!mutationIsCurrent(mutation)) return
-      setTableActions((current) => {
-        const next = { ...current }
-        delete next[table.id]
-        return next
-      })
-    }
-  }
-
   const dodajOczekujacego = async () => {
     if (!canViewContacts || waitAdding) return
     if (!nowyOcz.nazwisko.trim()) {
@@ -885,9 +740,7 @@ export default function RezerwacjeStolik({
     <Card className="p-5 sm:p-8">
       <SectionHeader
         title="Rezerwacje stolików"
-        subtitle={canManageFloor
-          ? 'Plan dnia, statusy rezerwacji, lista oczekujących i konfiguracja stolików.'
-          : 'Plan dnia, statusy rezerwacji i lista oczekujących.'}
+        subtitle="Plan dnia, statusy rezerwacji i lista oczekujących."
       >
         <Button
           variant="ghost"
@@ -902,11 +755,10 @@ export default function RezerwacjeStolik({
           <Button
             variant="ghost"
             size="sm"
-            onClick={(event) => { tableTriggerRef.current = event.currentTarget; setStolikModal(true) }}
-            disabled={loading || !!loadError}
+            onClick={onOpenRooms}
           >
-            <Icon name="pin" className="h-4 w-4" />
-            Stoliki ({stoliki.length})
+            <Icon name="office" className="h-4 w-4" />
+            Konfiguruj sale
           </Button>
         ) : null}
         {canViewContacts ? (
@@ -1167,78 +1019,6 @@ export default function RezerwacjeStolik({
                   {modalFeedback?.type === 'error' ? 'Ponów zapis' : 'Zapisz'}
                 </Button>
               </div>
-            </div>
-          </form>
-        </DialogFrame>
-      ) : null}
-
-      {canManageFloor && stolikModal ? (
-        <DialogFrame title="Stoliki" closeLabel="Zamknij listę stolików" onClose={closeTables} restoreFocusRef={tableTriggerRef}>
-          <div className="mb-5 space-y-2">
-            {stoliki.length === 0 ? <p className="text-sm text-muted">Brak stolików. Dodaj pierwszy poniżej.</p> : null}
-            {stoliki.map((table) => (
-              <div key={table.id} className="border-b border-line py-2 last:border-0">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 text-sm text-ink">
-                    <span className="font-semibold">{table.nazwa}</span>
-                    {table.strefa ? <span className="text-muted"> · {table.strefa}</span> : null}
-                    <span className="text-muted"> · {table.pojemnosc} os.</span>
-                    {table.rewir_nr ? <span className="ml-2 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted">POS {table.rewir_nr}</span> : null}
-                    {!table.aktywny ? <span className="ml-2 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted">Nieaktywny</span> : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => ustawAktywnoscStolika(table, !table.aktywny)}
-                      loading={tableActions[table.id] === 'toggle'}
-                      loadingLabel={table.aktywny ? 'Wyłączam…' : 'Włączam…'}
-                      disabled={!!tableActions[table.id]}
-                    >
-                      {table.aktywny ? 'Wyłącz' : 'Włącz'}
-                    </Button>
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => usunStolik(table)}
-                      loading={tableActions[table.id] === 'delete'}
-                      loadingLabel="Usuwam…"
-                      disabled={!!tableActions[table.id]}
-                      className="px-2 text-muted hover:text-danger"
-                      aria-label={`Usuń stolik: ${table.nazwa}`}
-                    >
-                      <Icon name="trash" className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-                <InlineFeedback feedback={tableRowFeedback[table.id]} className="mt-1 text-right" />
-              </div>
-            ))}
-          </div>
-
-          <form onSubmit={(event) => { event.preventDefault(); dodajStolik() }} className="border-t border-line pt-5">
-            <h4 className="mb-4 text-sm font-semibold text-ink">Dodaj stolik</h4>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <label className="field-label">Nazwa
-                <input value={nowyStolik.nazwa} disabled={tableAdding} onChange={(event) => { setNowyStolik((current) => ({ ...current, nazwa: event.target.value })); setTableFeedback(null) }} className="field mt-1.5" placeholder="np. T4" />
-              </label>
-              <label className="field-label">Sala / strefa
-                <input value={nowyStolik.strefa} disabled={tableAdding} onChange={(event) => { setNowyStolik((current) => ({ ...current, strefa: event.target.value })); setTableFeedback(null) }} list="strefy-lokalu" className="field mt-1.5" placeholder="np. Taras" />
-                <datalist id="strefy-lokalu">{saleLokalu.map((room) => <option key={room} value={room} />)}</datalist>
-              </label>
-              <label className="field-label">Liczba miejsc
-                <input type="number" min="1" value={nowyStolik.pojemnosc} disabled={tableAdding} onChange={(event) => { setNowyStolik((current) => ({ ...current, pojemnosc: event.target.value })); setTableFeedback(null) }} className="field mt-1.5" />
-              </label>
-              <label className="field-label">Rewir POS (opcjonalnie)
-                <input type="number" min="1" value={nowyStolik.rewir_nr} disabled={tableAdding} onChange={(event) => { setNowyStolik((current) => ({ ...current, rewir_nr: event.target.value })); setTableFeedback(null) }} className="field mt-1.5" />
-              </label>
-            </div>
-            <InlineFeedback pending={tableAdding ? 'Dodaję stolik…' : null} feedback={tableFeedback} className="mt-3" />
-            <div className="mt-4 flex justify-end">
-              <Button type="submit" size="sm" loading={tableAdding} loadingLabel="Dodaję…">
-                <Icon name="plus" className="h-4 w-4" />
-                {tableFeedback?.type === 'error' ? 'Ponów dodanie' : 'Dodaj stolik'}
-              </Button>
             </div>
           </form>
         </DialogFrame>

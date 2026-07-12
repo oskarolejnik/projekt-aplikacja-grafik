@@ -594,6 +594,146 @@ class LokalConfig(Base):
     pos_mapa_rewirow           = Column(JSON, nullable=True)   # NULL = stałe STOLY_* (main.py); patrz docs/POS-INTEGRACJA.md
 
 
+class SalaRezerwacyjna(Base):
+    """Pierwszoklasowa sala modułu rezerwacji."""
+    __tablename__ = "sale_rezerwacyjne"
+    __table_args__ = (
+        UniqueConstraint("nazwa", name="uq_sale_rezerwacyjne_nazwa"),
+        Index(
+            "uq_sale_rezerwacyjne_nazwa_klucz",
+            "nazwa_klucz",
+            unique=True,
+        ),
+        CheckConstraint("length(trim(nazwa)) > 0", name="ck_sale_rezerwacyjne_nazwa"),
+        CheckConstraint("kolejnosc >= 0", name="ck_sale_rezerwacyjne_kolejnosc"),
+    )
+    id        = Column(Integer, primary_key=True, index=True)
+    # Legacy Stolik.strefa ma 32 znaki i pozostaje projekcją nazwy sali.
+    nazwa     = Column(String(32), nullable=False)
+    nazwa_klucz = Column(String(128), nullable=False)
+    aktywna   = Column(Boolean, nullable=False, default=True)
+    kolejnosc = Column(Integer, nullable=False, default=0)
+
+    stoliki = relationship("Stolik", back_populates="sala")
+    plany = relationship("PlanSali", back_populates="sala", cascade="all, delete-orphan")
+
+
+class PlanSali(Base):
+    """Kontener historii wersji układu jednej sali."""
+    __tablename__ = "plany_sali"
+    __table_args__ = (
+        UniqueConstraint("sala_id", name="uq_plany_sali_sala"),
+        CheckConstraint("length(trim(nazwa)) > 0", name="ck_plany_sali_nazwa"),
+    )
+    id      = Column(Integer, primary_key=True, index=True)
+    sala_id = Column(
+        Integer, ForeignKey("sale_rezerwacyjne.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    nazwa   = Column(String(64), nullable=False)
+
+    sala = relationship("SalaRezerwacyjna", back_populates="plany")
+    wersje = relationship(
+        "WersjaPlanuSali", back_populates="plan", cascade="all, delete-orphan",
+        order_by="WersjaPlanuSali.numer",
+    )
+
+
+class WersjaPlanuSali(Base):
+    """Wersja robocza lub opublikowany, historyczny snapshot planu."""
+    __tablename__ = "wersje_planu_sali"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "numer", name="uq_wersje_planu_sali_plan_numer"),
+        CheckConstraint("numer >= 1", name="ck_wersje_planu_sali_numer"),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'retired')",
+            name="ck_wersje_planu_sali_status",
+        ),
+        CheckConstraint("rewizja >= 0", name="ck_wersje_planu_sali_rewizja"),
+        CheckConstraint(
+            "(status = 'draft' AND opublikowano_at IS NULL AND opublikowal_id IS NULL) OR "
+            "(status = 'published' AND opublikowano_at IS NOT NULL) OR status = 'retired'",
+            name="ck_wersje_planu_sali_publikacja",
+        ),
+        CheckConstraint(
+            "zaktualizowano_at >= utworzono_at",
+            name="ck_wersje_planu_sali_czas_aktualizacji",
+        ),
+        CheckConstraint(
+            "opublikowano_at IS NULL OR opublikowano_at >= utworzono_at",
+            name="ck_wersje_planu_sali_czas_publikacji",
+        ),
+        Index("ix_wersje_planu_sali_plan_status", "plan_id", "status"),
+        Index(
+            "uq_wersje_planu_sali_jeden_draft", "plan_id", unique=True,
+            sqlite_where=text("status = 'draft'"),
+            postgresql_where=text("status = 'draft'"),
+        ),
+        Index(
+            "uq_wersje_planu_sali_jeden_published", "plan_id", unique=True,
+            sqlite_where=text("status = 'published'"),
+            postgresql_where=text("status = 'published'"),
+        ),
+    )
+    id                = Column(Integer, primary_key=True, index=True)
+    plan_id           = Column(
+        Integer, ForeignKey("plany_sali.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    numer             = Column(Integer, nullable=False)
+    status            = Column(String(16), nullable=False, default="draft")
+    rewizja           = Column(Integer, nullable=False, default=0)
+    autor_id          = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    opublikowal_id    = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    utworzono_at      = Column(DateTime, nullable=False)
+    zaktualizowano_at = Column(DateTime, nullable=False)
+    opublikowano_at   = Column(DateTime, nullable=True)
+
+    plan = relationship("PlanSali", back_populates="wersje")
+    pozycje = relationship(
+        "PozycjaStolikaPlanu", back_populates="wersja", cascade="all, delete-orphan",
+    )
+
+
+class PozycjaStolikaPlanu(Base):
+    """Geometria i widoczność stabilnego stolika w konkretnej wersji planu."""
+    __tablename__ = "pozycje_stolikow_planu"
+    __table_args__ = (
+        UniqueConstraint(
+            "wersja_id", "stolik_id", name="uq_pozycje_stolikow_wersja_stolik",
+        ),
+        CheckConstraint("plan_x >= 0 AND plan_x <= 100", name="ck_pozycje_stolikow_plan_x"),
+        CheckConstraint("plan_y >= 0 AND plan_y <= 100", name="ck_pozycje_stolikow_plan_y"),
+        CheckConstraint(
+            "szerokosc >= 1 AND szerokosc <= 100", name="ck_pozycje_stolikow_szerokosc",
+        ),
+        CheckConstraint(
+            "wysokosc >= 1 AND wysokosc <= 100", name="ck_pozycje_stolikow_wysokosc",
+        ),
+        CheckConstraint("obrot >= 0 AND obrot < 360", name="ck_pozycje_stolikow_obrot"),
+        Index("ix_pozycje_stolikow_planu_wersja_id", "wersja_id"),
+        Index("ix_pozycje_stolikow_planu_stolik_id", "stolik_id"),
+    )
+    id               = Column(Integer, primary_key=True, index=True)
+    wersja_id        = Column(
+        Integer, ForeignKey("wersje_planu_sali.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    stolik_id        = Column(
+        Integer, ForeignKey("stoliki.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    plan_x           = Column(Integer, nullable=False)
+    plan_y           = Column(Integer, nullable=False)
+    szerokosc        = Column(Integer, nullable=False, default=12)
+    wysokosc         = Column(Integer, nullable=False, default=12)
+    obrot            = Column(Integer, nullable=False, default=0)
+    aktywny_w_planie = Column(Boolean, nullable=False, default=True)
+
+    wersja = relationship("WersjaPlanuSali", back_populates="pozycje")
+    stolik = relationship("Stolik")
+
+
 class Stolik(Base):
     """Stolik/zasób do rezerwacji (moduł rezerwacji). Strefa = sala/ogród (string, mapuje na
     Termin.sala). Pojemność kontroluje walidację rezerwacji."""
@@ -601,6 +741,10 @@ class Stolik(Base):
     id        = Column(Integer, primary_key=True, index=True)
     nazwa     = Column(String(32), nullable=False)            # np. „S1", „Loża 3"
     strefa    = Column(String(32), nullable=True)             # sala/ogród/antresola
+    sala_id   = Column(
+        Integer, ForeignKey("sale_rezerwacyjne.id"),
+        nullable=True, index=True,
+    )
     pojemnosc = Column(Integer, nullable=False, default=2)
     laczy_sie = Column(Boolean, nullable=False, default=False)  # czy można łączyć (later)
     aktywny   = Column(Boolean, nullable=False, default=True)
@@ -616,6 +760,7 @@ class Stolik(Base):
     cechy         = Column(JSON, nullable=True)        # ["okno","loza","ogrod","dostepny"]
     priorytet     = Column(Integer, nullable=True)     # kolejność sadzania (mniej = wcześniej); NULL = 0
     sekcja        = Column(String(32), nullable=True)  # sekcja kelnerska (do balansu); NULL = fallback do strefy
+    sala = relationship("SalaRezerwacyjna", back_populates="stoliki")
 
 
 class KombinacjaStolow(Base):

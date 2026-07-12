@@ -218,6 +218,44 @@ def _dialect_name(db) -> str:
     return db.get_bind().dialect.name
 
 
+def begin_floor_plan_write(db) -> None:
+    """Serializuje publikację planu z zapisami rezerwacji na SQLite.
+
+    PostgreSQL synchronizuje się później na tych samych wierszach ``stoliki``
+    co rezerwacje i holdy. SQLite nie ma ``FOR UPDATE``, więc publikacja musi
+    zdobyć blokadę zapisu przed pierwszym odczytem walidacyjnym.
+    """
+    if _dialect_name(db) != "sqlite":
+        return
+    db.rollback()
+    try:
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    except OperationalError as exc:
+        db.rollback()
+        raise ReservationError(
+            503,
+            "RESERVATION_BUSY",
+            "Inna zmiana rezerwacji jest w toku. Spróbuj ponownie za chwilę.",
+            rule="transaction",
+        ) from exc
+
+
+def lock_tables(db, table_ids: Iterable[int]) -> tuple[models.Stolik, ...]:
+    """Zwraca stabilnie posortowane stoły i blokuje je na PostgreSQL."""
+    ids = tuple(sorted({int(value) for value in table_ids if value is not None}))
+    if not ids:
+        return ()
+    statement = (
+        select(models.Stolik)
+        .where(models.Stolik.id.in_(ids))
+        .order_by(models.Stolik.id)
+        .execution_options(populate_existing=True)
+    )
+    if _dialect_name(db) == "postgresql":
+        statement = statement.with_for_update()
+    return tuple(db.execute(statement).scalars().all())
+
+
 def begin_locked_write(db, dates: Iterable[date]) -> tuple[models.RezerwacjaDzienLedger, ...]:
     """Rozpoczyna świeżą transakcję zapisu i blokuje dni w kolejności rosnącej.
 

@@ -216,6 +216,8 @@ READ_ONLY_POST_ODCZYT = frozenset({"/api/rezerwacje-stolik/wyszukaj"})
 # zapobiega przypadkowemu objęciu podobnie nazwanej przyszłej trasy.
 PII_NO_STORE_PREFIXES = (
     "/api/crm",
+    "/api/plan-sali",
+    "/api/sale-rezerwacyjne",
     "/api/rezerwacje-stolik",
     "/api/rezerwacje",
     "/api/me/rezerwacje",
@@ -1566,8 +1568,8 @@ def _waliduj_przydzial_rezerwacji(
     ids = _ids_stolikow(stoliki)
     if not ids:
         return godz_do
-    rekordy = [db.get(models.Stolik, sid) for sid in sorted(ids)]
-    if any(not stolik or not stolik.aktywny for stolik in rekordy):
+    rekordy = reservation_service.lock_tables(db, ids)
+    if len(rekordy) != len(ids) or any(not stolik.aktywny for stolik in rekordy):
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
     pojemnosc_fizyczna = sum((stolik.pojemnosc or 0) for stolik in rekordy)
     pojemnosc = pojemnosc_override if pojemnosc_override is not None else pojemnosc_fizyczna
@@ -1639,6 +1641,9 @@ def _zastap_ledger_terminu(
         reservation_service.release_termin_allocation(db, t.id)
         return reservation_service.AvailabilityResult(available=True)
     ids = _ids_stolikow(stoliki if stoliki is not None else _stoly_terminu(t))
+    locked_tables = reservation_service.lock_tables(db, ids)
+    if len(locked_tables) != len(ids) or any(not stolik.aktywny for stolik in locked_tables):
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
     pacing = _parametry_pacingu(db, t.data, t.godz_od)
     return reservation_service.replace_termin_allocation(
         db,
@@ -1958,14 +1963,65 @@ def get_stoliki(db: Session = Depends(get_db)):
     return {"stoliki": [schemas.StolikOut.model_validate(s).model_dump() for s in rows]}
 
 
-def _waliduj_parametry_stolika(dane: schemas.StolikIn):
+def _waliduj_parametry_stolika(dane: schemas.StolikIn, db: Session):
+    if dane.sala_id is not None:
+        sala = db.get(models.SalaRezerwacyjna, dane.sala_id)
+        if sala is not None:
+            # ``strefa`` pozostaje projekcją dla starszych ekranów i silnika sadzania.
+            dane.strefa = sala.nazwa
+    else:
+        nazwa_strefy = (dane.strefa or "").strip().casefold()
+        if nazwa_strefy:
+            sala = next(
+                (
+                    candidate
+                    for candidate in db.query(models.SalaRezerwacyjna).all()
+                    if (candidate.nazwa or "").strip().casefold() == nazwa_strefy
+                ),
+                None,
+            )
+            if sala is not None:
+                dane.sala_id = sala.id
+                dane.strefa = sala.nazwa
     if dane.pojemnosc_min is not None and dane.pojemnosc_min > dane.pojemnosc:
         raise HTTPException(400, "Minimalna liczba osób nie może przekraczać liczby miejsc stolika.")
 
 
+    if dane.sala_id is not None and db.get(models.SalaRezerwacyjna, dane.sala_id) is None:
+        raise HTTPException(400, "Nieznana sala rezerwacyjna.")
+
+
+def _sala_ma_wersjonowany_plan(db: Session, sala_id: Optional[int]) -> bool:
+    return bool(
+        sala_id is not None
+        and db.query(models.PlanSali.id).filter_by(sala_id=sala_id).first()
+    )
+
+
+def _wymagaj_szkicu_planu(message: str):
+    raise HTTPException(
+        409,
+        detail={
+            "code": "FLOOR_PLAN_VERSIONING_REQUIRED",
+            "message": message,
+        },
+    )
+
+
 @app.post("/api/stoliki", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def dodaj_stolik(dane: schemas.StolikIn, db: Session = Depends(get_db)):
-    _waliduj_parametry_stolika(dane)
+    _waliduj_parametry_stolika(dane, db)
+    if (
+        dane.sala_id is None
+        and db.query(models.SalaRezerwacyjna.id).first() is not None
+    ):
+        _wymagaj_szkicu_planu(
+            "Najpierw dodaj salę w konfiguracji, a następnie utwórz w niej stół."
+        )
+    if _sala_ma_wersjonowany_plan(db, dane.sala_id):
+        _wymagaj_szkicu_planu(
+            "Dodaj stół w konfiguracji sali. Pozostanie nieaktywny do publikacji planu."
+        )
     s = models.Stolik(**dane.model_dump()); db.add(s); db.commit(); db.refresh(s)
     return schemas.StolikOut.model_validate(s).model_dump()
 
@@ -1975,7 +2031,26 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
     s = db.get(models.Stolik, sid)
     if not s:
         raise HTTPException(404, "Brak stolika.")
-    _waliduj_parametry_stolika(dane)
+    previous_room_id = s.sala_id
+    previous_active = s.aktywny
+    _waliduj_parametry_stolika(dane, db)
+    if (
+        previous_room_id != dane.sala_id
+        and (
+            _sala_ma_wersjonowany_plan(db, previous_room_id)
+            or _sala_ma_wersjonowany_plan(db, dane.sala_id)
+        )
+    ):
+        _wymagaj_szkicu_planu(
+            "Przeniesienie stołu między salami wymaga zmiany w szkicu planu."
+        )
+    if (
+        previous_active != dane.aktywny
+        and _sala_ma_wersjonowany_plan(db, previous_room_id)
+    ):
+        _wymagaj_szkicu_planu(
+            "Włączanie i wyłączanie stołu wymaga zmiany w szkicu planu."
+        )
     if s.aktywny and not dane.aktywny:
         dzis_lokalny = (_teraz_lokalnie() or datetime.now()).date()
         przyszle = db.query(models.Termin).filter(
@@ -1987,6 +2062,15 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
             raise HTTPException(
                 409,
                 "Stolik ma aktywne lub przyszłe rezerwacje. Najpierw przepnij je na inne stoły.",
+            )
+        reservation_service.cleanup_expired_holds(
+            db,
+            _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        if db.query(models.RezerwacjaStolikClaim.id).filter_by(stolik_id=sid).first():
+            raise HTTPException(
+                409,
+                "Stolik ma aktywne zajęcie lub hold. Najpierw zwolnij go w rezerwacjach.",
             )
     for k, v in dane.model_dump().items():
         setattr(s, k, v)
@@ -2019,6 +2103,11 @@ def usun_stolik(sid: int, db: Session = Depends(get_db)):
                 409,
                 "Stolik ma aktywne zajęcie lub hold. Najpierw zwolnij go w rezerwacjach.",
             )
+        if db.query(models.PozycjaStolikaPlanu.id).filter_by(stolik_id=sid).first():
+            raise HTTPException(
+                409,
+                "Stolik należy do historii planu sali. Zamiast usuwać, wyłącz go w nowym szkicu.",
+            )
         db.delete(s); db.commit()
 
 
@@ -2035,6 +2124,16 @@ def _waliduj_sklad_kombinacji(db, stoliki):
     for sid in ids:
         if not db.get(models.Stolik, sid):
             raise HTTPException(400, f"Nieznany stolik (id={sid}).")
+    nieaktywne = [sid for sid in ids if not db.get(models.Stolik, sid).aktywny]
+    if nieaktywne:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "TABLE_NOT_OPERATIONAL",
+                "message": "Kombinacja może zawierać wyłącznie aktywne stoliki.",
+                "table_ids": nieaktywne,
+            },
+        )
     return ids
 
 
@@ -2839,6 +2938,17 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
     Posadzonych gości nie ruszamy. Zwraca też wpisy listy oczekujących pasujące do okna — jako
     propozycję dla hosta (realizacja pozostaje ręczna)."""
     guards = reservation_service.begin_locked_write(db, [data])
+    # Reoptymalizacja może po kolei rozważać różne, zachodzące na siebie
+    # kombinacje. Na PostgreSQL blokujemy więc cały zbiór kandydatów raz,
+    # globalnie po rosnącym ID, zanim pierwsza rezerwacja zacznie zmieniać
+    # przydział. Kolejne blokady podzbiorów są już wtedy reentrantne w tej
+    # samej transakcji. SQLite nadal polega na BEGIN IMMEDIATE powyżej.
+    active_table_ids = [
+        stolik_id
+        for (stolik_id,) in db.query(models.Stolik.id).filter_by(aktywny=True)
+        .order_by(models.Stolik.id).all()
+    ]
+    reservation_service.lock_tables(db, active_table_ids)
     przesadzone = []
     auto = (db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == data,
@@ -3239,7 +3349,8 @@ def hold_lista_oczekujacych(
         raise HTTPException(404, "Brak wpisu.")
     if w.status != "oczekuje":
         raise HTTPException(409, "Wpis nie oczekuje już na stolik.")
-    stolik = db.get(models.Stolik, dane.stolik_id)
+    locked_tables = reservation_service.lock_tables(db, [dane.stolik_id])
+    stolik = locked_tables[0] if locked_tables else None
     if not stolik or not stolik.aktywny:
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
     if w.godz_od:                                   # gdy znamy porę — sprawdź wolność stołu w oknie gościa

@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a, R0b, R1a i R1b wdrożone · następny checkpoint R2 (sale i publikowany plan stołów) · 12 lipca 2026
+> Status: kierunek zatwierdzony · R0a, R0b, R1a, R1b i R2.1 wdrożone · następny checkpoint R2.2 (sąsiedztwo i kanoniczne kombinacje) · 12 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -90,7 +90,8 @@ Projekt ma więcej gotowych fundamentów, niż pokazuje obecny interfejs.
 1. Publiczny widget korzysta z prostszego wyboru pojedynczego stołu, a nie ze wspólnego silnika
    kombinacji i priorytetów.
 2. Pacing dotyczy startów online; nie opisuje jeszcze całej jednoczesnej pojemności operacyjnej.
-3. Sala jest tekstową `strefą`, a nie encją z własną strategią, kolejnością i limitem.
+3. **Częściowo zamknięte w R2.1:** sala jest encją z własnym planem i kolejnością; strategia
+   zapełniania oraz limity pozostają w R2.2/R3.
 4. Plan sali nie zaznacza poprawnie wszystkich stołów dodatkowych kombinacji.
 5. Priorytet zapisany na kombinacji nie wpływa dziś na ocenę kandydata.
 6. `Stolik.laczy_sie` i graf sąsiedztwa tworzą dwa potencjalne źródła prawdy.
@@ -530,6 +531,25 @@ revokacja, rate limit i audyt PIN-u pozostają osobnym etapem.
 
 **Cel:** administrator opisuje prawdziwy układ lokalu i możliwe połączenia.
 
+**Stan wdrożenia (12 lipca 2026):** R2.1 jest ukończone. Dostarcza pierwszoklasowe sale,
+`Stolik.sala_id` z kontrolowanym fallbackiem `strefa`, migracje 0053–0054 z bezpiecznym
+backfillem, round-tripem i Unicode-safe kluczem nazw sal, dokładnie jeden plan na salę, wersje
+`draft/published/retired`, optimistic revision,
+pełny snapshot pozycji oraz atomową publikację współdzielącą blokady z rezerwacjami i holdami.
+Konfiguracja jest częścią `ReservationsWorkspace`; obsługuje wiele sal, dodawanie nieaktywnego
+stołu do szkicu, drag, klawiaturę i pola geometrii, jawny zapis/publikację/odrzucenie, zachowanie
+lokalnych zmian także przy wyjściu z workspace, retry właściwej operacji, konflikty między kartami,
+stałe proporcje planu na różnych ekranach i konto `floor-only`.
+Stary modal bezpośredniej edycji stolików w planie dnia został zastąpiony jednym przejściem
+`Konfiguruj sale`, aby wszystkie zmiany układu przechodziły przez szkic i publikację.
+Operacyjny plan czyta wyłącznie opublikowane pozycje i opisuje fakty (`bez_rezerwacji`, hold,
+rezerwacja, POS), bez obietnicy dostępności przed R3/R4.
+
+R2 nie jest jeszcze zamknięte. R2.2 ma dodać wersjonowane krawędzie sąsiedztwa i kanoniczne
+kombinacje, właściwości stołów w snapshotach, tryb „Połącz stoły”, sprawdzian grupy 18-osobowej,
+undo/redo, przyciąganie i wyrównywanie oraz strategię/priorytet sal. Nie należy udawać tych
+możliwości na podstawie legacy `lacze_sie`, `sasiedztwo` lub `KombinacjaStolow`.
+
 Backend/migracja:
 
 - `SalaRezerwacyjna`, `Stolik.sala_id`, strategia i priorytet sali.
@@ -557,7 +577,7 @@ Testy:
 - publikacja przy przyszłej rezerwacji na usuwanym stole: blokada, mapowanie lub data wejścia,
 - klawiatura, dotyk i długi tekst nazw sal.
 
-**Done:** administrator potrafi odwzorować wiele sal i zweryfikować fizycznie możliwe kombinacje
+**Kryterium zamknięcia całego R2:** administrator potrafi odwzorować wiele sal i zweryfikować fizycznie możliwe kombinacje
 bez wpływania na działający serwis przed publikacją.
 
 ### R3 — Reguły dostępności, serwisy i symulator
@@ -870,8 +890,8 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a, R0b, R1a i R1b są zamkniętymi checkpointami. Następny milestone to `R2`: encja sali,
-wersjonowany plan stołów, bezpieczna publikacja oraz kanoniczne kombinacje. Nie rozszerzamy jeszcze
+R0a, R0b, R1a, R1b i R2.1 są zamkniętymi checkpointami. Następny milestone to `R2.2`:
+wersjonowane sąsiedztwo, kanoniczne kombinacje, właściwości stołów i narzędzia edytora. Nie rozszerzamy jeszcze
 pełnego ewaluatora R3/R4; korzysta on z gotowych granic uprawnień, audytu i atomowości dopiero w
 swoim etapie. Serwerowa blokada stanowiska z sesją operatora i PIN-em pozostaje oddzielnym zadaniem,
 którego nie wolno udawać samą zasłoną frontendu.

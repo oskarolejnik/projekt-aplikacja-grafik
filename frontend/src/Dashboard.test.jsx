@@ -4,12 +4,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Dashboard from './Dashboard'
+import { registerReservationLeaveGuard } from './lib/reservationLeaveGuard'
 import { writeReservationSession } from './lib/reservationSession'
 
 const { apiMock, logoutMock, dashboardState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   logoutMock: vi.fn(),
-  dashboardState: { pulpitError: false, pracownicyLoads: 0 },
+  dashboardState: { pulpitError: false, pracownicyLoads: 0, reservationUnmounts: 0 },
 }))
 
 vi.mock('./lib/api', () => ({ api: apiMock, getApiBase: () => '' }))
@@ -36,7 +37,10 @@ vi.mock('./components/tabs/Pracownicy', () => {
   return { default: () => <div>Treść pracowników</div> }
 })
 vi.mock('./components/tabs/ReservationsWorkspace', () => ({
-  default: () => <div>Workspace rezerwacji</div>,
+  default: () => {
+    React.useEffect(() => () => { dashboardState.reservationUnmounts += 1 }, [])
+    return <div>Workspace rezerwacji</div>
+  },
 }))
 
 const CONFIG = {
@@ -57,6 +61,7 @@ describe('Dashboard', () => {
     logoutMock.mockReset()
     dashboardState.pulpitError = false
     dashboardState.pracownicyLoads = 0
+    dashboardState.reservationUnmounts = 0
     apiMock.mockImplementation((path) => {
       if (path === '/lokal/config') return Promise.resolve(CONFIG)
       if (path === '/subskrypcja') return Promise.resolve({ stan: 'aktywna' })
@@ -87,6 +92,7 @@ describe('Dashboard', () => {
 
     fireEvent.click(goscie)
     expect(screen.getByRole('button', { name: 'Rezerwacje' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Plan sali' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Widok hosta' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Rezerwacje stolików' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Rezerwacje (ruch)' })).not.toBeInTheDocument()
@@ -164,6 +170,56 @@ describe('Dashboard', () => {
 
     expect(await screen.findByText('Treść pulpitu')).toBeInTheDocument()
     expect(window.location.hash).toBe('')
+  })
+
+  it('nie opuszcza workspace bez decyzji o odrzuceniu lokalnego szkicu', async () => {
+    window.history.replaceState({}, '', '/#/rezerwacje/sale?sala=1')
+    const leaveGuard = vi.fn().mockResolvedValue(false)
+    const unregister = registerReservationLeaveGuard(leaveGuard)
+
+    try {
+      render(<Dashboard />)
+      expect(await screen.findByText('Workspace rezerwacji')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Ustawienia lokalu' }))
+      await waitFor(() => expect(leaveGuard).toHaveBeenCalledTimes(1))
+      expect(screen.getByText('Workspace rezerwacji')).toBeInTheDocument()
+      expect(window.location.hash).toBe('#/rezerwacje/sale?sala=1')
+
+      leaveGuard.mockResolvedValue(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Ustawienia lokalu' }))
+
+      expect(await screen.findByText('Ustawienia: lokal')).toBeInTheDocument()
+      expect(window.location.hash).toBe('')
+    } finally {
+      unregister()
+    }
+  })
+
+  it('chroni lokalny szkic także przy przycisku Wstecz przeglądarki', async () => {
+    window.history.replaceState({ lokaloDashboardTab: 'pulpit' }, '', '/')
+    window.history.pushState({ lokaloDashboardTab: 'rezerwacje' }, '', '/#/rezerwacje/sale?sala=1')
+    const leaveGuard = vi.fn().mockResolvedValue(false)
+    const unregister = registerReservationLeaveGuard(leaveGuard)
+
+    try {
+      render(<Dashboard />)
+      expect(await screen.findByText('Workspace rezerwacji')).toBeInTheDocument()
+
+      act(() => window.history.back())
+      await waitFor(() => expect(leaveGuard).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(window.location.hash).toBe('#/rezerwacje/sale?sala=1'))
+      expect(screen.getByText('Workspace rezerwacji')).toBeInTheDocument()
+      expect(dashboardState.reservationUnmounts).toBe(0)
+
+      leaveGuard.mockResolvedValue(true)
+      act(() => window.history.back())
+      await waitFor(() => expect(leaveGuard).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(window.location.hash).toBe(''))
+      expect(await screen.findByText('Treść pulpitu')).toBeInTheDocument()
+    } finally {
+      unregister()
+    }
   })
 
   it('po ponownym wejściu przywraca ostatni bezpieczny kontekst operatora', async () => {

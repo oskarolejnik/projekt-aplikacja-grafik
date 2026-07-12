@@ -247,66 +247,32 @@ describe('Rezerwacje stolików', () => {
     expect(listLoads).toBe(1)
   })
 
-  it('zachowuje formularz stolika po błędzie i dodaje go lokalnie po retry', async () => {
-    let attempts = 0
-    let tableLoads = 0
-    apiMock.mockImplementation((path, method, body) => {
-      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
-      if (path === '/stoliki' && (!method || method === 'GET')) {
-        tableLoads += 1
-        return Promise.resolve({ stoliki: [TABLE] })
-      }
-      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
-      if (path === '/rezerwacje/config') return Promise.resolve({ sale: ['Sala'] })
-      if (path === '/stoliki' && method === 'POST') {
-        attempts += 1
-        return attempts === 1
-          ? Promise.reject(new Error('Serwer niedostępny.'))
-          : Promise.resolve({ ...TABLE, ...body, id: 8 })
-      }
-      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
-    })
+  it('prowadzi do wersjonowanej konfiguracji sal zamiast martwego modalu stolików', async () => {
+    mockInitial()
+    const onOpenRooms = vi.fn()
 
-    render(<RezerwacjeStolik />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Stoliki (1)' }))
-    const name = screen.getByLabelText('Nazwa')
-    fireEvent.change(name, { target: { value: 'T8' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Dodaj stolik' }))
+    render(<RezerwacjeStolik onOpenRooms={onOpenRooms} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Konfiguruj sale' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Serwer niedostępny.')
-    expect(name).toHaveValue('T8')
-    fireEvent.click(screen.getByRole('button', { name: 'Ponów dodanie' }))
-
-    expect(await screen.findByText('T8')).toBeInTheDocument()
-    expect(screen.getByText('Dodano stolik: T8.')).toBeInTheDocument()
-    expect(attempts).toBe(2)
-    expect(tableLoads).toBe(1)
+    expect(onOpenRooms).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog', { name: 'Stoliki' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Dodaj stolik' })).not.toBeInTheDocument()
+    expect(apiMock.mock.calls.some(([path, method]) => (
+      path === '/stoliki' && ['POST', 'PUT', 'DELETE'].includes(method)
+    ))).toBe(false)
   })
 
-  it('wyłącza nieużywany stolik bez usuwania go z konfiguracji', async () => {
-    apiMock.mockImplementation((path, method, body) => {
-      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
-      if (path === '/stoliki' && (!method || method === 'GET')) return Promise.resolve({ stoliki: [TABLE] })
-      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
-      if (path === '/rezerwacje/config') return Promise.resolve({ sale: ['Sala'] })
-      if (path === `/stoliki/${TABLE.id}` && method === 'PUT') {
-        return Promise.resolve({ ...TABLE, ...body })
-      }
-      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
-    })
+  it('nie uzależnia przejścia do konfiguracji sal od stanu odczytu planu dnia', async () => {
+    apiMock.mockRejectedValue(new Error('Brak odpowiedzi serwera.'))
+    const onOpenRooms = vi.fn()
 
-    render(<RezerwacjeStolik />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Stoliki (1)' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Wyłącz' }))
+    render(<RezerwacjeStolik onOpenRooms={onOpenRooms} />)
 
-    expect(await screen.findByText('Nieaktywny')).toBeInTheDocument()
-    expect(screen.getByText('Stolik wyłączono z nowych rezerwacji.')).toBeInTheDocument()
-    expect(apiMock).toHaveBeenCalledWith(
-      `/stoliki/${TABLE.id}`,
-      'PUT',
-      expect.objectContaining({ aktywny: false, nazwa: TABLE.nazwa, pojemnosc: TABLE.pojemnosc }),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('Brak odpowiedzi serwera.')
+    const roomsButton = screen.getByRole('button', { name: 'Konfiguruj sale' })
+    expect(roomsButton).toBeEnabled()
+    fireEvent.click(roomsButton)
+    expect(onOpenRooms).toHaveBeenCalledOnce()
   })
 
   it('po błędzie pierwszego wczytania pokazuje lokalny retry i blokuje zapis w ciemno', async () => {
@@ -348,7 +314,7 @@ describe('Rezerwacje stolików', () => {
     render(<RezerwacjeStolik />)
 
     expect(await screen.findByText('Gość')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Stoliki/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Konfiguruj sale' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Dodaj rezerwację' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Edytuj rezerwację/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Otwórz rezerwację/ })).not.toBeInTheDocument()
@@ -573,7 +539,7 @@ describe('Rezerwacje stolików', () => {
     render(<RezerwacjeStolik />)
 
     expect(await screen.findByRole('button', { name: 'Dodaj rezerwację' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Stoliki/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Konfiguruj sale' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Edytuj rezerwację: Nowak' }))
     expect(screen.getByLabelText('Telefon')).toHaveValue(RESERVATION.telefon)
     expect(screen.getByLabelText('E-mail')).toHaveValue(RESERVATION.email)

@@ -2,6 +2,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from datetime import date, time
 from typing import Literal, Optional, List
 
+from reservation_names import normalize_room_name
+
 class OfertaZmianyIn(BaseModel):
     """Wystawienie przydziału na giełdę wymiany zmian."""
     przydzial_id: int
@@ -28,6 +30,64 @@ class PlanPozycjaIn(BaseModel):
     id: int
     plan_x: int
     plan_y: int
+
+class SalaRezerwacyjnaIn(BaseModel):
+    nazwa: str = Field(min_length=1, max_length=32)
+    aktywna: bool = True
+    kolejnosc: int = Field(default=0, ge=0)
+
+    @field_validator("nazwa")
+    @classmethod
+    def _nazwa_bez_pustych_znakow(cls, value):
+        value = normalize_room_name(value)
+        if not value:
+            raise ValueError("Nazwa sali nie może być pusta.")
+        if len(value) > 32:
+            raise ValueError("Nazwa sali może mieć maksymalnie 32 znaki.")
+        return value
+
+
+class PozycjaStolikaPlanuIn(BaseModel):
+    stolik_id: int = Field(gt=0)
+    plan_x: int = Field(ge=0, le=100)
+    plan_y: int = Field(ge=0, le=100)
+    szerokosc: int = Field(default=12, ge=1, le=100)
+    wysokosc: int = Field(default=12, ge=1, le=100)
+    obrot: int = Field(default=0, ge=0, lt=360)
+    aktywny_w_planie: bool = True
+
+    @field_validator("plan_x", "plan_y", "szerokosc", "wysokosc", "obrot", mode="before")
+    @classmethod
+    def _zaokraglij_geometrie_z_drag_and_drop(cls, value):
+        # Pointer events operują na procentach zmiennoprzecinkowych, a trwały kontrakt
+        # planu używa deterministycznych liczb całkowitych.
+        if isinstance(value, bool):
+            return value
+        return round(float(value))
+
+
+class SzkicPlanuSaliIn(BaseModel):
+    expected_revision: int = Field(ge=0)
+    pozycje: List[PozycjaStolikaPlanuIn]
+
+
+class PublikujPlanSaliIn(BaseModel):
+    expected_revision: int = Field(ge=0)
+
+
+class NowyStolikSzkicuIn(BaseModel):
+    expected_revision: int = Field(ge=0)
+    nazwa: str = Field(min_length=1, max_length=32)
+    pojemnosc: int = Field(default=2, ge=1, le=50)
+
+    @field_validator("nazwa")
+    @classmethod
+    def _nazwa_nowego_stolika(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Nazwa stołu nie może być pusta.")
+        return value
+
 
 class StanowiskoBase(BaseModel):
     nazwa: str; tylko_weekend: bool = False
@@ -477,7 +537,8 @@ class UpgradeIn(BaseModel):
 # --- MODUŁ REZERWACJI ---
 
 class StolikIn(BaseModel):
-    nazwa: str
+    nazwa: str = Field(min_length=1, max_length=32)
+    sala_id: Optional[int] = None
     strefa: Optional[str] = None
     pojemnosc: int = Field(default=2, ge=1)
     laczy_sie: bool = False
@@ -489,6 +550,15 @@ class StolikIn(BaseModel):
     cechy: Optional[List[str]] = None              # ["okno","loza","ogrod","dostepny"]
     priorytet: Optional[int] = None                # kolejność sadzania (mniej = wcześniej)
     sekcja: Optional[str] = None                   # sekcja kelnerska (balans obłożenia)
+
+    @field_validator("nazwa")
+    @classmethod
+    def _nazwa_stolika_bez_pustych_znakow(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Nazwa stołu nie może być pusta.")
+        return value
+
 class StolikOut(StolikIn):
     id: int
     model_config = ConfigDict(from_attributes=True)

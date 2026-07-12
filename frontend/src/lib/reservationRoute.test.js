@@ -58,6 +58,11 @@ describe('reservationRoute', () => {
       view: 'today',
       date: '2026-08-17',
     })).toBe('#/rezerwacje/dzisiaj?data=2026-08-17')
+
+    expect(buildReservationHash({
+      view: 'rooms',
+      roomId: 7,
+    })).toBe('#/rezerwacje/sale?sala=7')
   })
 
   it('normalizuje niepoprawne wartości i zakres dat', () => {
@@ -86,6 +91,7 @@ describe('reservationRoute', () => {
       offset: 0,
       reservationId: null,
       profileReservationId: null,
+      roomId: null,
     })
   })
 

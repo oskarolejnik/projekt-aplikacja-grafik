@@ -5,6 +5,7 @@ const VIEW_TO_PATH = {
   calendar: 'kalendarz',
   database: 'baza',
   host: 'host',
+  rooms: 'sale',
 }
 
 const PATH_TO_VIEW = Object.fromEntries(
@@ -84,6 +85,7 @@ export function normalizeReservationRoute(value = {}, fallbackDate = localDateIs
     // tego samego ID zaznaczenia zapobiega rozjazdowi profilu i karty pod spodem.
     reservationId: profileReservationId || positiveId(value.reservationId),
     profileReservationId,
+    roomId: positiveId(value.roomId),
   }
 }
 
@@ -104,6 +106,7 @@ export function readReservationRoute(hash = globalThis.location?.hash || '') {
     offset: params.get('offset'),
     reservationId: params.get('rezerwacja'),
     profileReservationId: params.get('gosc'),
+    roomId: params.get('sala'),
   })
 }
 
@@ -111,7 +114,9 @@ export function buildReservationHash(value) {
   const route = normalizeReservationRoute(value)
   const params = new URLSearchParams()
 
-  if (route.view === 'database') {
+  if (route.view === 'rooms') {
+    if (route.roomId) params.set('sala', String(route.roomId))
+  } else if (route.view === 'database') {
     params.set('od', route.from)
     params.set('do', route.to)
     if (route.status) params.set('status', route.status)

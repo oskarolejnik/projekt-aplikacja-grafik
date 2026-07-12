@@ -45,6 +45,15 @@ _HOST_RESERVATION_ITEM = re.compile(
 _CRM_RESERVATION_PROFILE = re.compile(
     r"^/api/crm/rezerwacje/[1-9]\d*/profil$"
 )
+_RESERVATION_ROOM_ITEM = re.compile(
+    r"^/api/sale-rezerwacyjne/(?P<id>[1-9]\d*)$"
+)
+_RESERVATION_ROOM_PLAN = re.compile(
+    r"^/api/sale-rezerwacyjne/(?P<id>[1-9]\d*)/plan(?:/(?P<action>szkic|publikuj))?$"
+)
+_RESERVATION_ROOM_DRAFT_TABLES = re.compile(
+    r"^/api/sale-rezerwacyjne/[1-9]\d*/plan/szkic/stoliki$"
+)
 
 _PROTECTED_PREFIXES = (
     "/api/rezerwacje-stolik",
@@ -57,6 +66,7 @@ _PROTECTED_PREFIXES = (
     "/api/wyjatki-kalendarza",
     "/api/rezerwacje/config",
     "/api/plan-sali",
+    "/api/sale-rezerwacyjne",
     "/api/analityka/rezerwacje",
     "/api/analityka/oblozenie",
     "/api/crm/rezerwacje",
@@ -70,6 +80,30 @@ def _chroniona_przestrzen(path: str) -> bool:
 def requirement_for(method: str, path: str) -> Requirement | None:
     """Zwraca wymagania albo ``None``, gdy trasa nie należy do tej polityki."""
     method = method.upper()
+
+    if path == "/api/sale-rezerwacyjne":
+        if method == "GET":
+            return Requirement(any_of=(HOST, FLOOR))
+        if method == "POST":
+            return Requirement(all_of=(FLOOR,))
+        return ADMIN_ONLY
+
+    if _RESERVATION_ROOM_ITEM.fullmatch(path):
+        return Requirement(all_of=(FLOOR,)) if method == "PUT" else ADMIN_ONLY
+
+    if _RESERVATION_ROOM_DRAFT_TABLES.fullmatch(path):
+        return Requirement(all_of=(FLOOR,)) if method == "POST" else ADMIN_ONLY
+
+    room_plan = _RESERVATION_ROOM_PLAN.fullmatch(path)
+    if room_plan:
+        action = room_plan.group("action")
+        if action is None and method == "GET":
+            return Requirement(any_of=(HOST, FLOOR))
+        if action == "szkic" and method in {"GET", "POST", "PUT", "DELETE"}:
+            return Requirement(all_of=(FLOOR,))
+        if action == "publikuj" and method == "POST":
+            return Requirement(all_of=(FLOOR,))
+        return ADMIN_ONLY
 
     if path == "/api/rezerwacje-stolik":
         if method == "GET":

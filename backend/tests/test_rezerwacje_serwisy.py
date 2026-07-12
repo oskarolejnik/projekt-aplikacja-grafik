@@ -5,10 +5,37 @@ osobny `client` (bez tokenu); admin konfiguruje przez `admin_client`.
 2026-07-13 i 2026-07-20 to poniedziałki (weekday=0).
 """
 
+import database
 import models
+import reservation_service
 
 PON = "2026-07-13"
 PON2 = "2026-07-20"
+
+
+def test_lock_tables_odswieza_stan_z_identity_map(db):
+    stolik = models.Stolik(
+        nazwa="S-lock", pojemnosc=4, aktywny=True, kolejnosc=0,
+    )
+    db.add(stolik)
+    db.commit()
+    stale = db.get(models.Stolik, stolik.id)
+    assert stale.aktywny is True
+
+    other = database.SessionLocal()
+    try:
+        changed = other.get(models.Stolik, stolik.id)
+        changed.aktywny = False
+        other.commit()
+    finally:
+        other.close()
+
+    # Sesja A nadal ma starą instancję, ale odczyt blokujący musi zastąpić
+    # jej stan najświeższymi wartościami z bazy po ewentualnym oczekiwaniu.
+    assert stale.aktywny is True
+    locked = reservation_service.lock_tables(db, [stolik.id])
+    assert locked == (stale,)
+    assert locked[0].aktywny is False
 
 
 def _enable_online(admin_client):

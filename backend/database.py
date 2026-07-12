@@ -172,6 +172,19 @@ def _alembic_run(action):
     return True
 
 
+def _require_alembic_run(action):
+    """R2 ma migrację danych, której ``create_all`` nie potrafi odtworzyć.
+
+    Od 0053 brak Alembica nie może już cicho utworzyć samego schematu modeli i
+    oznaczyć bazy jako aktualnej bez sal oraz opublikowanych planów.
+    """
+    if not _alembic_run(action):
+        raise RuntimeError(
+            "R2_MIGRATION_REQUIRES_ALEMBIC: zainstaluj Alembic i uruchom "
+            "`alembic upgrade head`; create_all nie wykonuje backfillu planów sali."
+        )
+
+
 _R0B_LEDGER_TABLES = {
     "rezerwacje_idempotencja",
     "rezerwacje_dni_ledger",
@@ -182,6 +195,73 @@ _R0B_REVISION = "0051_rezerwacje_atomic_ledger"
 _PRE_R0B_REVISION = "0050_rezerwacje_source_identity"
 _R1A_AUDIT_TABLE = "reservation_audit"
 _R1A_REVISION = "0052_reservation_audit"
+_R2_REVISION = "0054_room_name_key"
+_R2_TABLES = {
+    "sale_rezerwacyjne",
+    "plany_sali",
+    "wersje_planu_sali",
+    "pozycje_stolikow_planu",
+}
+_R2_COLUMNS = {
+    "sale_rezerwacyjne": {
+        "id", "nazwa", "nazwa_klucz", "aktywna", "kolejnosc",
+    },
+    "plany_sali": {"id", "sala_id", "nazwa"},
+    "wersje_planu_sali": {
+        "id", "plan_id", "numer", "status", "rewizja", "autor_id",
+        "opublikowal_id", "utworzono_at", "zaktualizowano_at",
+        "opublikowano_at",
+    },
+    "pozycje_stolikow_planu": {
+        "id", "wersja_id", "stolik_id", "plan_x", "plan_y", "szerokosc",
+        "wysokosc", "obrot", "aktywny_w_planie",
+    },
+}
+def _strip_r2_outer_parentheses(sql: str) -> str:
+    """Usuwa wyłącznie pary obejmujące całe wyrażenie, bez parsowania logiki."""
+    while sql.startswith("(") and sql.endswith(")"):
+        depth = 0
+        closes_at_end = False
+        for index, char in enumerate(sql):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    closes_at_end = index == len(sql) - 1
+                    break
+        if not closes_at_end:
+            break
+        sql = sql[1:-1]
+    return sql
+
+
+def _normalize_r2_index_predicate(value):
+    if value is None:
+        return None
+    sql = re.sub(r"\s+", "", str(value).casefold())
+    sql = sql.replace('"', "").replace("`", "").replace("[", "").replace("]", "")
+    sql = _strip_r2_outer_parentheses(sql)
+    sql = re.sub(r"::(?:text|charactervarying(?:\(\d+\))?)", "", sql)
+    sql = _strip_r2_outer_parentheses(sql)
+    sql = sql.replace("(status)", "status")
+    return sql or None
+
+
+def _r2_index_predicate_matches(actual, expected) -> bool:
+    actual_sql = _normalize_r2_index_predicate(actual)
+    expected_sql = _normalize_r2_index_predicate(expected)
+    if expected_sql is None:
+        return actual_sql is None
+    actual_match = re.fullmatch(r"status='(draft|published)'", actual_sql or "")
+    expected_match = re.fullmatch(r"status='(draft|published)'", expected_sql)
+    return bool(
+        actual_match
+        and expected_match
+        and actual_match.group(1) == expected_match.group(1)
+    )
+
+
 _R1A_AUDIT_COLUMNS = {
     "id", "created_at", "reservation_ref", "termin_id", "actor_kind",
     "actor_user_id", "actor_login", "action", "reason", "diff",
@@ -521,7 +601,7 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     ostemplowany i pominięty przez Alembica. Dla tabel ledgera wymagamy dokładnego zestawu
     kolumn bieżącego modelu; pozostałe tabele muszą odpowiadać pełnemu schematowi sprzed 0052.
     """
-    if not (model_tables - {_R1A_AUDIT_TABLE}).issubset(tables):
+    if not (model_tables - {_R1A_AUDIT_TABLE} - _R2_TABLES).issubset(tables):
         return False
     for table_name in _R0B_LEDGER_TABLES:
         expected = {
@@ -535,6 +615,282 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     return True
 
 
+def _validate_r2_adoption_schema(inspector=None) -> bool:
+    """Weryfikuje niewersjonowaną bazę R2 przed stemplem bieżącego head.
+
+    Sama obecność tabel nie dowodzi wykonania migracji danych: każdy stół musi
+    należeć do sali, a sala musi mieć opublikowany plan. Walidator jest używany
+    wyłącznie przy adopcji bazy bez ``alembic_version``.
+    """
+    from sqlalchemy import CheckConstraint, inspect, text
+    from reservation_names import room_name_key
+
+    inspector = inspector or inspect(engine)
+    if engine.dialect.name == "postgresql":
+        raise RuntimeError(
+            "R2_POSTGRES_ADOPTION_REQUIRES_VERIFIED_STAMP: automatyczna adopcja "
+            "niewersjonowanej bazy PostgreSQL jest zablokowana, ponieważ sama "
+            "introspekcja nazw CHECK nie dowodzi ich działania. Zweryfikuj ręcznie "
+            "CHECK/UNIQUE/FK oraz backfill R2, następnie wykonaj "
+            "`alembic stamp 0054_room_name_key` i `alembic upgrade head`."
+        )
+
+    def normalized_sql(value) -> str:
+        raw = "" if value is None else str(value)
+        sql = re.sub(r"\s+", "", raw.casefold())
+        sql = sql.replace('"', "").replace("`", "").replace("[", "").replace("]", "")
+        while sql.startswith("(") and sql.endswith(")"):
+            sql = sql[1:-1]
+        return sql
+
+    tables = set(inspector.get_table_names())
+    if not _R2_TABLES.issubset(tables) or "stoliki" not in tables:
+        raise RuntimeError(
+            "Schemat R2 jest niekompletny; nie można oznaczyć bieżącej migracji."
+        )
+
+    for table_name, expected in _R2_COLUMNS.items():
+        actual = {
+            column["name"] for column in inspector.get_columns(table_name)
+        }
+        if actual != expected:
+            raise RuntimeError(
+                f"Tabela {table_name} jest niekompletna; nie można oznaczyć bieżącej migracji."
+            )
+    stoliki_columns = {
+        column["name"] for column in inspector.get_columns("stoliki")
+    }
+    if "sala_id" not in stoliki_columns:
+        raise RuntimeError(
+            "Brak stoliki.sala_id; nie można oznaczyć bieżącej migracji."
+        )
+
+    required_indexes = {
+        "sale_rezerwacyjne": {
+            "ix_sale_rezerwacyjne_id", "uq_sale_rezerwacyjne_nazwa",
+            "uq_sale_rezerwacyjne_nazwa_klucz",
+        },
+        "plany_sali": {
+            "ix_plany_sali_id", "ix_plany_sali_sala_id",
+            "uq_plany_sali_sala",
+        },
+        "wersje_planu_sali": {
+            "ix_wersje_planu_sali_id",
+            "ix_wersje_planu_sali_plan_id",
+            "ix_wersje_planu_sali_plan_status",
+            "uq_wersje_planu_sali_plan_numer",
+            "uq_wersje_planu_sali_jeden_draft",
+            "uq_wersje_planu_sali_jeden_published",
+        },
+        "pozycje_stolikow_planu": {
+            "ix_pozycje_stolikow_planu_id",
+            "ix_pozycje_stolikow_planu_wersja_id",
+            "ix_pozycje_stolikow_planu_stolik_id",
+            "uq_pozycje_stolikow_wersja_stolik",
+        },
+        "stoliki": {"ix_stoliki_sala_id"},
+    }
+    for table_name, expected in required_indexes.items():
+        actual = {
+            index["name"] for index in inspector.get_indexes(table_name)
+            if index.get("name")
+        }
+        unique_constraints = {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(table_name)
+            if constraint.get("name")
+        }
+        if not expected.issubset(actual | unique_constraints):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma wymaganych indeksów R2."
+            )
+
+    # Nazwa obiektu nie wystarcza do bezpiecznej adopcji: fałszywy zwykły
+    # indeks o nazwie indeksu UNIQUE nie może pozwolić na stamp bieżącego head.
+    expected_index_shapes = {
+        "sale_rezerwacyjne": {
+            "uq_sale_rezerwacyjne_nazwa_klucz": (
+                ("nazwa_klucz",), True, None,
+            ),
+        },
+        "wersje_planu_sali": {
+            "ix_wersje_planu_sali_plan_status": (("plan_id", "status"), False, None),
+            "uq_wersje_planu_sali_jeden_draft": (
+                ("plan_id",), True, "status = 'draft'",
+            ),
+            "uq_wersje_planu_sali_jeden_published": (
+                ("plan_id",), True, "status = 'published'",
+            ),
+        },
+        "pozycje_stolikow_planu": {
+            "ix_pozycje_stolikow_planu_wersja_id": (("wersja_id",), False, None),
+            "ix_pozycje_stolikow_planu_stolik_id": (("stolik_id",), False, None),
+        },
+        "stoliki": {
+            "ix_stoliki_sala_id": (("sala_id",), False, None),
+        },
+    }
+    for table_name, shapes in expected_index_shapes.items():
+        actual = {
+            index["name"]: index for index in inspector.get_indexes(table_name)
+            if index.get("name")
+        }
+        for name, (columns, unique, predicate) in shapes.items():
+            index = actual.get(name)
+            dialect_options = index.get("dialect_options", {}) if index else {}
+            where = " ".join(
+                str(value).casefold()
+                for key, value in dialect_options.items()
+                if key.endswith("_where") and value is not None
+            )
+            if (
+                index is None
+                or tuple(index.get("column_names") or ()) != columns
+                or bool(index.get("unique")) is not unique
+                or (
+                    not _r2_index_predicate_matches(where, predicate)
+                )
+            ):
+                raise RuntimeError(
+                    f"Indeks {name} ma nieprawidłową definicję R2."
+                )
+
+    expected_uniques = {
+        "sale_rezerwacyjne": {
+            "uq_sale_rezerwacyjne_nazwa": ("nazwa",),
+        },
+        "plany_sali": {
+            "uq_plany_sali_sala": ("sala_id",),
+        },
+        "wersje_planu_sali": {
+            "uq_wersje_planu_sali_plan_numer": ("plan_id", "numer"),
+        },
+        "pozycje_stolikow_planu": {
+            "uq_pozycje_stolikow_wersja_stolik": ("wersja_id", "stolik_id"),
+        },
+    }
+    for table_name, expected in expected_uniques.items():
+        actual = {
+            item.get("name"): tuple(item.get("column_names") or ())
+            for item in inspector.get_unique_constraints(table_name)
+            if item.get("name")
+        }
+        if any(actual.get(name) != columns for name, columns in expected.items()):
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidłowe ograniczenie UNIQUE R2."
+            )
+
+    for table_name in _R2_TABLES:
+        model_table = Base.metadata.tables[table_name]
+        actual_columns = {
+            column["name"]: column for column in inspector.get_columns(table_name)
+        }
+        if any(
+            bool(actual_columns[column.name].get("nullable")) != bool(column.nullable)
+            for column in model_table.columns
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidłową nullowalność R2."
+            )
+        expected_checks = {
+            constraint.name: normalized_sql(constraint.sqltext)
+            for constraint in model_table.constraints
+            if isinstance(constraint, CheckConstraint) and constraint.name
+        }
+        actual_checks = {
+            constraint.get("name"): normalized_sql(constraint.get("sqltext"))
+            for constraint in inspector.get_check_constraints(table_name)
+            if constraint.get("name")
+        }
+        missing_checks = set(expected_checks) - set(actual_checks)
+        # SQLite zwraca zapis CHECK bez przepisywania, więc możemy porównać go
+        # dokładnie. PostgreSQL normalizuje IN do ANY i dodaje casty; tam pełne
+        # bezpieczeństwo adopcji zapewniają nazwy ograniczeń oraz osobno
+        # sprawdzane kolumny/nullowalność/UNIQUE/FK/indeksy i spójność danych.
+        mismatched_checks = engine.dialect.name == "sqlite" and any(
+            actual_checks.get(name) != sql for name, sql in expected_checks.items()
+        )
+        if missing_checks or mismatched_checks:
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma wymaganych CHECK R2."
+            )
+
+    expected_fks = {
+        "stoliki": {("sala_id",): ("sale_rezerwacyjne", ("id",), None)},
+        "plany_sali": {("sala_id",): ("sale_rezerwacyjne", ("id",), "RESTRICT")},
+        "wersje_planu_sali": {
+            ("plan_id",): ("plany_sali", ("id",), "CASCADE"),
+            ("autor_id",): ("users", ("id",), "SET NULL"),
+            ("opublikowal_id",): ("users", ("id",), "SET NULL"),
+        },
+        "pozycje_stolikow_planu": {
+            ("wersja_id",): ("wersje_planu_sali", ("id",), "CASCADE"),
+            ("stolik_id",): ("stoliki", ("id",), "RESTRICT"),
+        },
+    }
+    for table_name, expected in expected_fks.items():
+        actual = {}
+        for foreign_key in inspector.get_foreign_keys(table_name):
+            columns = tuple(foreign_key.get("constrained_columns") or ())
+            options = foreign_key.get("options") or {}
+            actual[columns] = (
+                foreign_key.get("referred_table"),
+                tuple(foreign_key.get("referred_columns") or ()),
+                (options.get("ondelete") or "").upper() or None,
+            )
+        if any(actual.get(columns) != definition for columns, definition in expected.items()):
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidłowy klucz obcy R2."
+            )
+
+    with engine.connect() as conn:
+        invalid_room_keys = sum(
+            1
+            for row in conn.execute(text(
+                "SELECT nazwa, nazwa_klucz FROM sale_rezerwacyjne"
+            )).mappings()
+            if room_name_key(row["nazwa"] or "") != row["nazwa_klucz"]
+        )
+        missing_rooms = conn.execute(text(
+            "SELECT count(*) FROM stoliki WHERE sala_id IS NULL"
+        )).scalar_one()
+        rooms_without_published_plan = conn.execute(text(
+            "SELECT count(*) FROM sale_rezerwacyjne s "
+            "WHERE (SELECT count(*) FROM plany_sali p WHERE p.sala_id = s.id) != 1 "
+            "OR (SELECT count(*) FROM plany_sali p "
+            "    JOIN wersje_planu_sali w ON w.plan_id = p.id "
+            "    WHERE p.sala_id = s.id AND w.status = 'published') != 1"
+        )).scalar_one()
+        tables_without_position = conn.execute(text(
+            "SELECT count(*) FROM stoliki s "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM pozycje_stolikow_planu pos "
+            "  JOIN wersje_planu_sali w ON w.id = pos.wersja_id "
+            "  JOIN plany_sali p ON p.id = w.plan_id "
+            "  WHERE pos.stolik_id = s.id AND p.sala_id = s.sala_id "
+            "    AND w.status = 'published'"
+            ")"
+        )).scalar_one()
+        cross_room_positions = conn.execute(text(
+            "SELECT count(*) FROM pozycje_stolikow_planu pos "
+            "JOIN wersje_planu_sali w ON w.id = pos.wersja_id "
+            "JOIN plany_sali p ON p.id = w.plan_id "
+            "JOIN stoliki s ON s.id = pos.stolik_id "
+            "WHERE p.sala_id <> s.sala_id"
+        )).scalar_one()
+    if (
+        invalid_room_keys
+        or missing_rooms
+        or rooms_without_published_plan
+        or tables_without_position
+        or cross_room_positions
+    ):
+        raise RuntimeError(
+            "Backfill R2 jest niekompletny; nie można oznaczyć bieżącej migracji."
+        )
+    return True
+
+
 def init_db():
     """Przygotowanie schematu, świadome Alembica (idempotentne).
 
@@ -543,8 +899,8 @@ def init_db():
       bez odtwarzania danych. Dotyczy istniejącego wdrożenia produkcyjnego.
     • Pusta baza (nowy klient / dev / Electron) lub baza zarządzana przez Alembica:
       `upgrade head` — buduje schemat z migracji lub stosuje nowe migracje.
-    • Brak zainstalowanego Alembica → bezpieczny fallback create_all + _ensure_schema
-      (zachowanie jak dawniej).
+    • Od 0053 brak Alembica kończy start kontrolowanym błędem: create_all nie
+      wykonuje backfillu sal i opublikowanych wersji planu.
     """
     from sqlalchemy import inspect
 
@@ -565,18 +921,15 @@ def init_db():
             _mark_r0b_fallback_revision()
             if _R1A_AUDIT_TABLE in tables:
                 _mark_r1a_fallback_revision()
-            elif not _alembic_run(lambda command, cfg: command.upgrade(cfg, "head")):
-                Base.metadata.create_all(bind=engine)
-                _ensure_schema()
-                _rebuild_rezerwacje_ledger()
-                _sanitize_legacy_rodo_audit_resources()
-                _mark_r1a_fallback_revision()
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
             return
         if current_revision == _R0B_REVISION and _R1A_AUDIT_TABLE in tables:
             _mark_r1a_fallback_revision()
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
             return
         if current_revision == _R1A_REVISION:
             _validate_r1a_audit_schema(insp)
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
             return
 
     if "alembic_version" not in tables and tables:
@@ -589,7 +942,9 @@ def init_db():
         model_tables = set(Base.metadata.tables.keys())
         complete_current = model_tables.issubset(tables)
         complete_r0b = _is_complete_r0b_schema(insp, tables, model_tables)
-        pre_r0b_tables = model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE}
+        pre_r0b_tables = (
+            model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE} - _R2_TABLES
+        )
         termin_columns = (
             {column["name"] for column in insp.get_columns("terminy")}
             if "terminy" in tables else set()
@@ -603,53 +958,46 @@ def init_db():
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
             _sanitize_legacy_rodo_audit_resources()
-            _alembic_run(lambda command, cfg: command.stamp(cfg, "head"))
+            if _R2_TABLES.issubset(tables):
+                _validate_r2_adoption_schema(insp)
+                revision = _R2_REVISION
+            else:
+                revision = _R1A_REVISION
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, revision)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
             return
         if complete_r0b:
             # Schemat 0051 bez alembic_version ma już ledger. Stemplowanie go jako 0050
             # uruchomiłoby ponownie CREATE TABLE 0051 i przerwało start aplikacji.
-            if _alembic_run(lambda command, cfg: command.stamp(cfg, _R0B_REVISION)):
-                _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            if _R1A_AUDIT_TABLE in tables:
+                _validate_r1a_audit_schema(insp)
+                revision = _R1A_REVISION
             else:
-                Base.metadata.create_all(bind=engine)
-                _ensure_schema()
-                _rebuild_rezerwacje_ledger()
-                _sanitize_legacy_rodo_audit_resources()
+                revision = _R0B_REVISION
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, revision)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
             return
         else:
             if complete_pre_r0b:
                 _ensure_schema()
-                if _alembic_run(
+                _require_alembic_run(
                     lambda command, cfg: command.stamp(cfg, _PRE_R0B_REVISION)
-                ):
-                    _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
-                else:
-                    Base.metadata.create_all(bind=engine)
-                    _ensure_schema()
-                    _rebuild_rezerwacje_ledger()
-                    _sanitize_legacy_rodo_audit_resources()
+                )
+                _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
                 return
             # Nie dodawaj pól z najnowszych migracji przed upgrade: migracja doda je sama.
             # Jest to istotne dla 0050 (source identity), której ADD COLUMN nie jest idempotentne.
             _ensure_schema(include_source_identity=False)
         if not model_tables.issubset(tables):
-            if _alembic_run(lambda command, cfg: command.stamp(cfg, "0001_baseline")):
-                _alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
-            else:
-                # Pakiet bez Alembica: co najmniej utwórz brakujące tabele i domknij pola,
-                # zamiast wracać z modelem wskazującym na nieistniejące source_*.
-                Base.metadata.create_all(bind=engine)
-                _ensure_schema()
-                _rebuild_rezerwacje_ledger()
-                _sanitize_legacy_rodo_audit_resources()
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, "0001_baseline")
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
         return
 
     # Pusta baza lub baza zarządzana przez Alembica → upgrade do najnowszej wersji.
-    if not _alembic_run(lambda command, cfg: command.upgrade(cfg, "head")):
-        # Fallback bez Alembica: utwórz schemat z modeli i domknij kolumny.
-        Base.metadata.create_all(bind=engine)
-        _ensure_schema()
-        _rebuild_rezerwacje_ledger()
-        _sanitize_legacy_rodo_audit_resources()
-        _mark_r0b_fallback_revision()
-        _mark_r1a_fallback_revision()
+    _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
