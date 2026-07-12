@@ -30,13 +30,13 @@ vi.mock('../components/tabs/Zeszyt', () => ({ default: () => <div>Widok zeszytu<
 vi.mock('../components/tabs/RaportGodzin', () => ({ default: () => <div>Widok godzin</div> }))
 vi.mock('../components/tabs/SzefImprezy', () => ({ default: () => <div>Widok imprez</div> }))
 vi.mock('../components/tabs/Rezerwacje', () => ({ default: () => <div>Widok rezerwacji</div> }))
-vi.mock('../components/tabs/RezerwacjeStolik', () => ({ default: () => <div>Operacyjne rezerwacje dnia</div> }))
-vi.mock('../components/tabs/WidokHosta', () => ({ default: () => <div>Operacyjny widok hosta</div> }))
+vi.mock('../components/tabs/ReservationsWorkspace', () => ({ default: () => <div>Workspace rezerwacji</div> }))
 
 import SzefView from './SzefView'
 
 afterEach(() => {
   cleanup()
+  window.history.replaceState(null, '', '/')
   vi.clearAllMocks()
   authState.permissions = ['grafik.podglad', 'raporty.podglad']
   authState.ready = true
@@ -79,15 +79,38 @@ describe('SzefView permissions', () => {
     expect(screen.getByText('Recepcja / Host · Ola')).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: 'Widoki recepcji' })
     expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Rezerwacje dzisiaj', 'Host',
+      'Rezerwacje',
     ])
-    await waitFor(() => expect(screen.getByText('Operacyjne rezerwacje dnia')).toBeInTheDocument())
-    expect(within(nav).getByRole('button', { name: 'Rezerwacje dzisiaj' })).toHaveAttribute('aria-current', 'page')
+    await waitFor(() => expect(screen.getByText('Workspace rezerwacji')).toBeInTheDocument())
+    expect(within(nav).getByRole('button', { name: 'Rezerwacje' })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByRole('button', { name: 'Grafik' })).not.toBeInTheDocument()
+  })
 
-    fireEvent.click(within(nav).getByRole('button', { name: 'Host' }))
-    expect(screen.getByText('Operacyjny widok hosta')).toBeInTheDocument()
-    expect(screen.queryByText('Operacyjne rezerwacje dnia')).not.toBeInTheDocument()
+  it('zachowuje stary, bezpieczny podgląd dla managera bez praw operacyjnych', async () => {
+    authState.permissions = ['rezerwacje.podglad']
+
+    render(<SzefView />)
+
+    const nav = screen.getByRole('navigation', { name: 'Widoki szefa' })
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Rezerwacje (podgląd)',
+    ])
+    expect(await screen.findByText('Widok rezerwacji')).toBeInTheDocument()
+    expect(screen.queryByText('Workspace rezerwacji')).not.toBeInTheDocument()
+  })
+
+  it('po odebraniu praw operacyjnych zamyka workspace i usuwa jego deep link', async () => {
+    authState.permissions = ['rezerwacje.operacje', 'rezerwacje.dane_kontaktowe']
+    window.history.replaceState({}, '', '/#/rezerwacje/baza?od=2026-07-01&do=2026-07-31')
+    const { rerender } = render(<SzefView />)
+    expect(await screen.findByText('Workspace rezerwacji')).toBeInTheDocument()
+
+    authState.permissions = ['grafik.podglad']
+    rerender(<SzefView />)
+
+    expect(await screen.findByText('Widok grafiku')).toBeInTheDocument()
+    await waitFor(() => expect(window.location.hash).toBe(''))
+    expect(screen.queryByText('Workspace rezerwacji')).not.toBeInTheDocument()
   })
 
   it('po cofnięciu presetu wraca do etykiety managera na podstawie bieżących praw', async () => {

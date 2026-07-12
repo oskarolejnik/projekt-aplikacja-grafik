@@ -184,4 +184,57 @@ describe('Widok hosta — prywatność', () => {
     expect(screen.queryByText('Kowalska')).not.toBeInTheDocument()
     expect(queuePaths).toHaveLength(2)
   })
+
+  it('w trybie kontrolowanym zgłasza zmianę dnia i pobiera dopiero datę podaną przez rodzica', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    const firstDay = '2030-03-01'
+    const nextDay = '2030-03-02'
+    const onDateChange = vi.fn()
+    const paths = []
+    apiMock.mockImplementation((path) => {
+      if (path.startsWith('/host/kolejka?')) {
+        paths.push(path)
+        const next = path.includes(nextDay)
+        return Promise.resolve({
+          ...queue,
+          nadchodzace: [{ ...reservation, id: next ? 9 : 8, nazwisko: next ? 'Drugi dzień' : 'Pierwszy dzień' }],
+        })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [] })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+
+    const { rerender } = render(<WidokHosta date={firstDay} onDateChange={onDateChange} />)
+    expect(await screen.findByText('Pierwszy dzień')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Dzień widoku hosta'), { target: { value: nextDay } })
+    expect(onDateChange).toHaveBeenCalledWith(nextDay)
+    expect(screen.getByLabelText('Dzień widoku hosta')).toHaveValue(firstDay)
+
+    rerender(<WidokHosta date={nextDay} onDateChange={onDateChange} />)
+    expect(await screen.findByText('Drugi dzień')).toBeInTheDocument()
+    expect(paths).toContain(`/host/kolejka?data=${nextDay}`)
+  })
+
+  it('nie pobiera ani nie uruchamia pollingu, gdy jest nieaktywny, i zachowuje ostatnie dane', async () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval')
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval')
+    const { rerender } = render(<WidokHosta active={false} />)
+
+    expect(apiMock).not.toHaveBeenCalled()
+    expect(intervalSpy).not.toHaveBeenCalled()
+
+    rerender(<WidokHosta active />)
+    expect(await screen.findByText('Gość')).toBeInTheDocument()
+    expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 30000)
+    const callsAfterLoad = apiMock.mock.calls.length
+
+    rerender(<WidokHosta active={false} />)
+    expect(screen.getByText('Gość')).toBeInTheDocument()
+    expect(clearIntervalSpy).toHaveBeenCalled()
+    expect(apiMock).toHaveBeenCalledTimes(callsAfterLoad)
+
+    intervalSpy.mockRestore()
+    clearIntervalSpy.mockRestore()
+  })
 })

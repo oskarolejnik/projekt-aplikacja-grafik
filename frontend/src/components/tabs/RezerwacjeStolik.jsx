@@ -7,16 +7,14 @@ import { Icon } from '../../lib/icons'
 import { api, nowyKluczIdempotencji } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../ui/Toast'
+import { warsawDateISO } from '../../lib/date'
+import { shiftDateIso } from '../../lib/reservationRoute'
 
 // Zarządzanie rezerwacjami stolików (admin): lista dnia + formularz + zmiana statusu + stoliki.
 // Backend: /api/rezerwacje-stolik, /api/stoliki. Moduł za flagą LokalConfig.modul_rezerwacje.
 
 const num = (v) => (v === '' || v == null ? null : parseInt(v, 10))
-const dzisISO = () => {
-  const today = new Date()
-  const pad = (value) => String(value).padStart(2, '0')
-  return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
-}
+const dzisISO = () => warsawDateISO()
 const parseDay = (value) => new Date(`${value}T12:00:00`)
 
 const STATUS_META = {
@@ -203,7 +201,13 @@ function InlineFeedback({ pending, feedback, className = '' }) {
   )
 }
 
-export default function RezerwacjeStolik() {
+export default function RezerwacjeStolik({
+  date: controlledDate,
+  onDateChange,
+  reservationId,
+  onReservationOpen,
+  onReservationClose,
+} = {}) {
   const { confirm } = useToast()
   const { can, isAdmin } = useAuth()
   const maPrawo = (permission) => isAdmin || can(permission)
@@ -212,8 +216,13 @@ export default function RezerwacjeStolik() {
   const canViewNotes = maPrawo('rezerwacje.notatki_wewnetrzne')
   const canViewFinances = maPrawo('rezerwacje.finanse')
   const canOverrideLimits = maPrawo('rezerwacje.nadpisuj_limity')
-  const [data, setData] = useState(dzisISO())
+  const dateControlled = controlledDate !== undefined
+  const selectionControlled = reservationId !== undefined
+  const [localDate, setLocalDate] = useState(dzisISO())
+  const data = dateControlled ? controlledDate : localDate
   const dataRef = useRef(data)
+  const loadedDayRef = useRef(null)
+  const invalidSelectionRef = useRef(null)
   const [rez, setRez] = useState([])
   const [stoliki, setStoliki] = useState([])
   const [lista, setLista] = useState([])
@@ -260,6 +269,7 @@ export default function RezerwacjeStolik() {
       setRefreshing(true)
       setRefreshError(null)
     } else {
+      loadedDayRef.current = null
       setRefreshing(false)
       setLoading(true)
       setLoadError(null)
@@ -271,6 +281,7 @@ export default function RezerwacjeStolik() {
         api(`/lista-oczekujacych?data=${day}`),
       ])
       if (id !== requestId.current || day !== dataRef.current) return
+      loadedDayRef.current = day
       setRez(sortReservations(rs.rezerwacje || []))
       setStoliki(sortTables(ss.stoliki || []))
       setLista(sortWaitlist(lo.lista || []))
@@ -286,6 +297,20 @@ export default function RezerwacjeStolik() {
     }
   }, [data, canViewContacts, canViewNotes, canViewFinances])
 
+  useEffect(() => {
+    if (!data || dataRef.current === data) return
+    dataRef.current = data
+    loadedDayRef.current = null
+    requestId.current += 1
+    setLoading(true)
+    setRefreshing(false)
+    setLoadError(null)
+    setRefreshError(null)
+    setPageFeedback(null)
+    setRowFeedback({})
+    setPosadzStolik({})
+  }, [data])
+
   useEffect(() => { load() }, [load])
   useEffect(() => {
     const visibilityChanged = piiVisibilityRef.current !== piiVisibility
@@ -297,6 +322,7 @@ export default function RezerwacjeStolik() {
     probaZapisuRef.current = null
     setModalFeedback(null)
     setModal(null)
+    if (modal || (selectionControlled && reservationId != null)) onReservationClose?.()
   }, [piiVisibility])
   useEffect(() => {
     if (!canManageFloor) {
@@ -322,7 +348,7 @@ export default function RezerwacjeStolik() {
     return () => window.removeEventListener('beforeunload', warn)
   }, [reservationDirty, tableDraftDirty, waitDraftDirty])
 
-  const openReservation = (value, trigger = null) => {
+  const openReservation = useCallback((value, trigger = null, { notify = true } = {}) => {
     if (!canViewContacts) return
     const draft = { ...value }
     reservationTriggerRef.current = trigger
@@ -330,7 +356,8 @@ export default function RezerwacjeStolik() {
     probaZapisuRef.current = null
     setModalFeedback(null)
     setModal(draft)
-  }
+    if (notify && draft.id != null) onReservationOpen?.(draft.id)
+  }, [canViewContacts, onReservationOpen])
 
   const closeReservation = async ({ force = false } = {}) => {
     if (modalAction) return
@@ -346,7 +373,58 @@ export default function RezerwacjeStolik() {
     probaZapisuRef.current = null
     setModalFeedback(null)
     setModal(null)
+    onReservationClose?.()
   }
+
+  useEffect(() => {
+    if (!selectionControlled) return
+
+    const selectedKey = reservationId == null ? null : String(reservationId)
+    if (selectedKey == null) {
+      invalidSelectionRef.current = null
+      if (modal?.id != null && !reservationDirty && !modalAction) {
+        modalInitial.current = null
+        probaZapisuRef.current = null
+        setModalFeedback(null)
+        setModal(null)
+      }
+      return
+    }
+
+    if (!canViewContacts || loading || loadError || loadedDayRef.current !== data) return
+    const selected = rez.find((row) => String(row.id) === selectedKey)
+    if (!selected) {
+      if (modal?.id != null && !reservationDirty && !modalAction) {
+        modalInitial.current = null
+        probaZapisuRef.current = null
+        setModalFeedback(null)
+        setModal(null)
+      }
+      const invalidKey = `${data}:${selectedKey}`
+      if (invalidSelectionRef.current !== invalidKey) {
+        invalidSelectionRef.current = invalidKey
+        onReservationClose?.()
+      }
+      return
+    }
+
+    invalidSelectionRef.current = null
+    if (String(modal?.id) === selectedKey || modalAction || (modal && reservationDirty)) return
+    openReservation(selected, null, { notify: false })
+  }, [
+    canViewContacts,
+    data,
+    loadError,
+    loading,
+    modal,
+    modalAction,
+    onReservationClose,
+    openReservation,
+    reservationDirty,
+    reservationId,
+    rez,
+    selectionControlled,
+  ])
 
   const closeTables = async () => {
     if (tableAdding || Object.keys(tableActions).length) return
@@ -380,7 +458,10 @@ export default function RezerwacjeStolik() {
 
   const changeDay = (nextDay) => {
     if (!nextDay || nextDay === data) return
+    onDateChange?.(nextDay)
+    if (dateControlled) return
     dataRef.current = nextDay
+    loadedDayRef.current = null
     requestId.current += 1
     setLoading(true)
     setRefreshing(false)
@@ -389,13 +470,11 @@ export default function RezerwacjeStolik() {
     setPageFeedback(null)
     setRowFeedback({})
     setPosadzStolik({})
-    setData(nextDay)
+    setLocalDate(nextDay)
   }
 
   const przesun = (delta) => {
-    const next = parseDay(data)
-    next.setDate(next.getDate() + delta)
-    changeDay(next.toISOString().slice(0, 10))
+    changeDay(shiftDateIso(data, delta))
   }
 
   const stolikNazwa = (id) => stoliki.find((table) => table.id === id)?.nazwa || 'Bez stolika'
@@ -450,6 +529,7 @@ export default function RezerwacjeStolik() {
       modalInitial.current = null
       probaZapisuRef.current = null
       setModal(null)
+      onReservationClose?.()
     } catch (error) {
       if (error.code === 'IDEMPOTENCY_KEY_REUSED') probaZapisuRef.current = null
       const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
@@ -481,6 +561,7 @@ export default function RezerwacjeStolik() {
       setPageFeedback({ type: 'success', message: `Usunięto rezerwację: ${deletedName}.` })
       modalInitial.current = null
       setModal(null)
+      onReservationClose?.()
       void load({ silent: true })
     } catch (error) {
       setModalFeedback({ type: 'error', message: error.message || 'Nie udało się usunąć rezerwacji.' })

@@ -7,6 +7,13 @@ import { useAuth } from './context/AuthContext'
 import { useBranding } from './context/BrandingContext'
 import { api } from './lib/api'
 import { LazyErrorBoundary, LazyFallback } from './components/ui/LazyFallback'
+import {
+  clearReservationRoute,
+  navigateReservationRoute,
+  readReservationRoute,
+  subscribeReservationRoute,
+} from './lib/reservationRoute'
+import { readReservationSession, reservationActorKey } from './lib/reservationSession'
 
 const loadPulpit = () => import('./components/tabs/Pulpit')
 const loadPrognozaObsady = () => import('./components/tabs/PrognozaObsady')
@@ -23,8 +30,7 @@ const loadRozliczeniaPodglad = () => import('./components/tabs/RozliczeniaPodgla
 const loadZeszytPanel = () => import('./components/tabs/ZeszytPanel')
 const loadKalendarzImprez = () => import('./components/tabs/KalendarzImprez')
 const loadStolyLive = () => import('./components/tabs/StolyLive')
-const loadRezerwacjeStolik = () => import('./components/tabs/RezerwacjeStolik')
-const loadWidokHosta = () => import('./components/tabs/WidokHosta')
+const loadReservationsWorkspace = () => import('./components/tabs/ReservationsWorkspace')
 const loadAnalitykaRezerwacji = () => import('./components/tabs/AnalitykaRezerwacji')
 const loadCrmGoscie = () => import('./components/tabs/CrmGoscie')
 const loadGieldaZmian = () => import('./components/tabs/GieldaZmian')
@@ -78,8 +84,7 @@ const TABS = [
   { id: 'antyfraud', label: 'Antyfraud POS', icon: 'warning', kat: 'kasa', title: 'Antyfraud POS — storna i rabaty', load: loadAntyfraudPos, modul: 'modul_pos' },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', kat: 'kasa', title: 'Eksport danych', load: loadEksport },
   // Goście — rezerwacje i relacje.
-  { id: 'widok-hosta', label: 'Widok hosta', icon: 'users', kat: 'goscie', title: 'Widok hosta — kolejka dnia i sadzanie', load: loadWidokHosta, modul: 'modul_rezerwacje' },
-  { id: 'rezerwacje-stolik', label: 'Rezerwacje stolików', icon: 'pin', kat: 'goscie', title: 'Rezerwacje stolików', load: loadRezerwacjeStolik, modul: 'modul_rezerwacje' },
+  { id: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar', kat: 'goscie', title: 'Rezerwacje', load: loadReservationsWorkspace, modul: 'modul_rezerwacje' },
   { id: 'plan-sali', label: 'Plan sali', icon: 'office', kat: 'goscie', title: 'Plan sali — rozmieszczenie stolików', load: loadPlanSali, modul: 'modul_rezerwacje' },
   { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', load: loadCrmGoscie, modul: 'modul_rezerwacje' },
   { id: 'analityka-rezerwacji', label: 'Analityka rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Analityka rezerwacji — covery, no-show, szczyty', load: loadAnalitykaRezerwacji, modul: 'modul_rezerwacje' },
@@ -108,20 +113,31 @@ const BUILD = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'dev'
 
 export default function Dashboard() {
   const { user, logout } = useAuth()
+  const reservationActor = reservationActorKey(user)
   const { nazwa_lokalu } = useBranding()
-  const [active, setActive] = useState('pulpit')
+  const [active, setActive] = useState(() => readReservationRoute()
+    ? 'rezerwacje'
+    : 'pulpit')
   const [openCat, setOpenCat] = useState(null)     // dropdown kategorii (desktop)
   const [openAcc, setOpenAcc] = useState('pulpit') // rozwinięty akordeon (mobile)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState('lokal')
   const [cfg, setCfg] = useState({})
+  const [cfgReady, setCfgReady] = useState(false)
   const [flotaEnabled, setFlotaEnabled] = useState(false)   // panel operatora tylko na matce
   const [sub, setSub] = useState(null)                      // stan subskrypcji (baner grace/blokada)
   const [lazyAttempt, setLazyAttempt] = useState(0)
   const mobileMenuButtonRef = useRef(null)
   const mobileDrawerRef = useRef(null)
   // Konfiguracja lokalu — chowamy zakładki wyłączonych modułów (np. modul_rezerwacje).
-  useEffect(() => { api('/lokal/config').then(setCfg).catch(() => {}) }, [])
+  useEffect(() => {
+    let mounted = true
+    api('/lokal/config')
+      .then((value) => { if (mounted) setCfg(value) })
+      .catch(() => {})
+      .finally(() => { if (mounted) setCfgReady(true) })
+    return () => { mounted = false }
+  }, [])
   useEffect(() => { api('/subskrypcja').then(setSub).catch(() => {}) }, [])
   // Zakładka „Flota" pojawia się tylko na instancji-matce (samoobsługa włączona).
   useEffect(() => { api('/flota').then((f) => setFlotaEnabled(!!f.enabled)).catch(() => {}) }, [])
@@ -132,7 +148,11 @@ export default function Dashboard() {
   const modulOk = (m) => cfg[m] && (!dostepne || dostepne.includes(m))
   const visibleTabs = TABS.filter((t) => (!t.modul || modulOk(t.modul)) && (!t.operator || flotaEnabled))
   const kategorie = KATEGORIE.filter((k) => visibleTabs.some((t) => t.kat === k.id))
-  const current = TABS.find((t) => t.id === active)
+  const requested = TABS.find((t) => t.id === active) || TAB_BY_ID.get('pulpit')
+  const requestedVisible = visibleTabs.some((tab) => tab.id === requested.id)
+  const current = requested.modul && (!cfgReady || !requestedVisible)
+    ? TAB_BY_ID.get('pulpit')
+    : requested
   const Active = useMemo(() => lazy(current.load), [current.load, lazyAttempt])
   const aktywnaKat = current.kat
 
@@ -142,6 +162,21 @@ export default function Dashboard() {
     document.addEventListener('keydown', esc)
     return () => document.removeEventListener('keydown', esc)
   }, [])
+
+  useEffect(() => subscribeReservationRoute((reservationRoute) => {
+    if (reservationRoute) {
+      setActive('rezerwacje')
+      return
+    }
+    const restored = window.history.state?.lokaloDashboardTab
+    setActive(TAB_BY_ID.has(restored) ? restored : 'pulpit')
+  }), [])
+
+  useEffect(() => {
+    if (!cfgReady || active !== 'rezerwacje' || requestedVisible) return
+    clearReservationRoute({ replace: true, state: { lokaloDashboardTab: 'pulpit' } })
+    setActive('pulpit')
+  }, [active, cfgReady, requestedVisible])
   // Otwarta szuflada startuje z rozwiniętą kategorią bieżącej zakładki.
   useEffect(() => { if (mobileOpen) setOpenAcc(aktywnaKat) }, [mobileOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -203,6 +238,27 @@ export default function Dashboard() {
 
   const select = (id, section) => {
     if (id === 'ustawienia' && section) setSettingsSection(section)
+    if (id === 'rezerwacje') {
+      if (!readReservationRoute()) {
+        window.history.replaceState({
+          ...(window.history.state || {}),
+          lokaloDashboardTab: active,
+        }, '', window.location.href)
+        navigateReservationRoute(readReservationSession(user)?.route || { view: 'today' }, {
+          state: {
+            lokaloDashboardTab: 'rezerwacje',
+            ...(reservationActor ? { lokaloReservationActor: reservationActor } : {}),
+          },
+        })
+      }
+    } else if (readReservationRoute()) {
+      clearReservationRoute({ state: { lokaloDashboardTab: id } })
+    } else {
+      window.history.replaceState({
+        ...(window.history.state || {}),
+        lokaloDashboardTab: id,
+      }, '', window.location.href)
+    }
     setActive(id)
     setOpenCat(null)
     setMobileOpen(false)
@@ -444,7 +500,7 @@ export default function Dashboard() {
           </div>
         )}
         <div key={active} className="mx-auto w-full max-w-7xl animate-fade-up">
-          <div className="mb-5 flex items-baseline gap-3 md:mb-6">
+          {current.id !== 'rezerwacje' ? <div className="mb-5 flex items-baseline gap-3 md:mb-6">
             {current.kat !== 'ustawienia' && (
               <span className="hidden text-sm font-medium text-muted/70 md:inline">
                 {KATEGORIE.find((k) => k.id === current.kat)?.label}
@@ -452,7 +508,7 @@ export default function Dashboard() {
               </span>
             )}
             <h2 className="font-display text-lg font-bold text-ink md:text-xl">{current.title}</h2>
-          </div>
+          </div> : null}
           <LazyErrorBoundary
             resetKey={`${active}:${lazyAttempt}`}
             onRetry={() => setLazyAttempt((attempt) => attempt + 1)}

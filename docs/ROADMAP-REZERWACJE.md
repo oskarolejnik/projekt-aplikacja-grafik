@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a, R0b i rdzeń R1a wdrożone · następny checkpoint R1b · 12 lipca 2026
+> Status: kierunek zatwierdzony · R0a, R0b, R1a i rdzeń R1b wdrożone · następny checkpoint R1b.2 (bezpieczny handoff CRM i blokada stanowiska) · 12 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -110,7 +110,7 @@ Wewnątrz powstaje `ReservationsWorkspace` z podwidokami zapisanymi w URL:
 | Widok | Pierwsze pytanie użytkownika | Najważniejsza akcja |
 |---|---|---|
 | `Dzisiaj` | Kto zaraz przyjdzie i co dzieje się na sali? | `Dodaj rezerwację` |
-| `Kalendarz` | Gdzie mam wolne miejsce w wybranym dniu/tygodniu? | `Znajdź termin` |
+| `Kalendarz` | Jak rozkładają się rezerwacje w wybranym dniu/tygodniu? | `Otwórz dzień` |
 | `Baza rezerwacji` | Jak znaleźć i obsłużyć dowolną rezerwację? | `Wyszukaj` |
 | `Sale i stoły` | Jak wygląda lokal i które stoły można łączyć? | `Edytuj plan` |
 | `Dostępność` | Kiedy i na jakich zasadach przyjmujemy gości? | `Zapisz reguły` |
@@ -473,7 +473,8 @@ wyszukiwanie gościa, deep-linki i pamięć kontekstu.
 
 #### R1b — Kalendarz, baza rezerwacji i ciągłość
 
-- Widok `Kalendarz` dzień/tydzień z osią czasu i szybkim przejściem do wolnego slotu.
+- Widok `Kalendarz` dzień/tydzień z agendą zajętości i szybkim przejściem do dnia. Do czasu pełnego
+  evaluatora R3/R4 puste miejsce nie jest nazywane „wolnym slotem”.
 - Podstawowa `Baza rezerwacji`: wyszukiwanie po nazwisku/telefonie, statusie i zakresie dat.
 - URL przechowuje podwidok, datę, podstawowe filtry i wybraną rezerwację.
 - Pamięć sesji przechowuje scroll, sortowanie i otwarty panel osobno dla użytkownika/lokalu.
@@ -482,6 +483,27 @@ wyszukiwanie gościa, deep-linki i pamięć kontekstu.
 
 **Done R1b:** przejście między dniem, bazą i kartą gościa nie zeruje kontekstu ani nie przenosi
 stanu między operatorami wspólnego urządzenia.
+
+**Stan wdrożenia rdzenia R1b — 12 lipca 2026:** administrator, manager i preset Recepcja/Host
+korzystają z jednego `ReservationsWorkspace`; stare osobne wejścia `Rezerwacje stolików` i `Host`
+zostały scalone. Workspace ma działające podwidoki `Dzisiaj`, `Kalendarz`, `Baza` i opcjonalny
+`Host`, filtrowane bieżącymi uprawnieniami. Namespacowany hash URL przechowuje wyłącznie bezpieczny
+kontekst (widok, daty, status, sort, offset i opaque ID), nie koliduje z publicznymi parametrami
+aplikacji i obsługuje reload oraz Back/Forward. Wpisy historii są oznaczone instancją i operatorem;
+powrót do wpisu innego użytkownika jest kanonizowany przed pobraniem PII.
+
+Backend udostępnia redagowany detail po ID oraz ograniczone do 366 dni, paginowane wyszukiwanie
+POST po nazwisku/telefonie, statusie i zakresie. Fraza PII pozostaje w body i pamięci aktywnego
+widoku — nigdy w URL ani session storage. Kalendarz i Baza unieważniają stare requesty oraz nie
+pokazują starego snapshotu pod nową datą lub filtrem. Deep-link z samym ID odnajduje aktualny dzień
+rekordu. Kontekst nie-PII i scroll są pamiętane osobno dla użytkownika/instancji, także po
+doładowaniu dłuższej treści. Wylogowanie, 401 i zmiana instancji czyszczą pamięć, trasę oraz szkice
+komponentów. Wszystkie operacyjne daty „Dzisiaj” używają `Europe/Warsaw`.
+
+R1b nie jest jeszcze formalnie zamknięte: obecny CRM pozostaje admin-only i używa potencjalnie
+surowego klucza gościa, dlatego nie dostał niebezpiecznego deep-linku. R1b.2 ma najpierw dodać
+opaque kontrakt `reservation_id → profil`, kontrolowany `returnTo` oraz czyszczenie po przyszłej
+blokadzie stanowiska. Dopiero wtedy pełne kryterium Done obejmie ścieżkę do karty gościa.
 
 ### R2 — Sale i publikowany plan stołów
 
@@ -827,7 +849,7 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a, R0b i rdzeń R1a są zamkniętymi checkpointami. Następny milestone to `R1b`: kalendarz
-dzień/tydzień, podstawowa baza rezerwacji, wyszukiwanie i deep-linki bez utraty kontekstu dnia.
-Nie rozszerzamy jeszcze konfiguratora sal ani pełnego ewaluatora R3/R4; korzystają one z gotowych
-granic uprawnień, audytu i atomowości dopiero w swoich etapach.
+R0a, R0b, R1a i rdzeń R1b są zamkniętymi checkpointami. Następny milestone to `R1b.2`: opaque
+handoff z rezerwacji do CRM, dokładny `returnTo` oraz kontrakt przyszłej blokady stanowiska. Po jego
+zamknięciu przechodzimy do R2. Nie rozszerzamy jeszcze konfiguratora sal ani pełnego ewaluatora
+R3/R4; korzystają one z gotowych granic uprawnień, audytu i atomowości dopiero w swoich etapach.

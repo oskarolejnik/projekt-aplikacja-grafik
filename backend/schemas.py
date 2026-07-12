@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from datetime import date, time
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 class OfertaZmianyIn(BaseModel):
     """Wystawienie przydziału na giełdę wymiany zmian."""
@@ -577,6 +577,34 @@ class RezerwacjaIn(BaseModel):
     notatka: Optional[str] = None
     zadatek: float = 0.0
     przekrocz_limity: bool = False   # jawne ponowienie po 409; wymaga osobnego uprawnienia
+
+class RezerwacjeWyszukajIn(BaseModel):
+    """PII-safe kontrakt bazy rezerwacji.
+
+    Fraza trafia do body POST, a nie do URL, żeby nazwisko lub telefon nie były
+    utrwalane w historii przeglądarki ani standardowych access logach.
+    """
+    start: date
+    end: date
+    query: Optional[str] = Field(default=None, max_length=80)
+    status: Optional[Literal[
+        "rezerwacja", "potwierdzona", "odbyla", "no_show", "odwolana",
+    ]] = None
+    sort: Literal["data_desc", "data_asc", "nazwisko_asc"] = "data_desc"
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=100)
+
+    @field_validator("query")
+    @classmethod
+    def waliduj_query(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) < 2:
+            raise ValueError("Wyszukiwana fraza musi mieć co najmniej 2 znaki.")
+        return value
 
 class RezerwacjaStatusIn(BaseModel):
     status: str                    # potwierdzona | odbyla | no_show | odwolana

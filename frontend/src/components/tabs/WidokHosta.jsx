@@ -7,12 +7,14 @@ import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../ui/Toast'
+import { warsawDateISO } from '../../lib/date'
+import { shiftDateIso } from '../../lib/reservationRoute'
 
 // Widok hosta — operacyjna tablica dnia: nadchodzący → na sali (timer obrotu) → zakończeni.
 // Jedno kliknięcie „Posadź" dobiera stół silnikiem best-fit (auto) albo sadza na wybranym.
 // Backend: /api/host/kolejka, /api/host/rezerwacja/{id}/faza|przydziel-stolik, /api/rezerwacje-stolik/{id}/auto-przydziel.
 
-const dzisISO = () => new Date().toISOString().slice(0, 10)
+const dzisISO = () => warsawDateISO()
 const fld = 'rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-mint'
 
 // Kolor timera obrotu: mięta < 90 min, cytryna 90–119, czerwień ≥ 120 (przekroczony zasiadek).
@@ -24,12 +26,14 @@ const FAZA_META = {
   oplacony: { l: 'Opłacony', kol: 'bg-white/10 text-ink' },
 }
 
-export default function WidokHosta() {
+export default function WidokHosta({ date: controlledDate, onDateChange, active = true } = {}) {
   const { toast } = useToast()
   const { can, isAdmin } = useAuth()
   const canViewSensitive = isAdmin || can('rezerwacje.dane_wrazliwe')
   const canViewContacts = isAdmin || can('rezerwacje.dane_kontaktowe')
-  const [data, setData] = useState(dzisISO())
+  const dateControlled = controlledDate !== undefined
+  const [localDate, setLocalDate] = useState(dzisISO())
+  const data = dateControlled ? controlledDate : localDate
   const dataRef = useRef(data)
   const [kolejka, setKolejka] = useState(null)
   const [stoliki, setStoliki] = useState([])
@@ -44,6 +48,7 @@ export default function WidokHosta() {
   const hasDataRef = useRef(false)
 
   const load = useCallback(async ({ quiet = false, day = data } = {}) => {
+    if (!active) return
     const id = ++requestId.current
     if (quiet) {
       setRefreshing(true)
@@ -71,14 +76,41 @@ export default function WidokHosta() {
       setRefreshing(false)
       setLoading(false)
     }
-  }, [data, canViewContacts, canViewSensitive])
+  }, [active, data, canViewContacts, canViewSensitive])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (!data || dataRef.current === data) return
+    dataRef.current = data
+    requestId.current += 1
+    hasDataRef.current = false
+    setKolejka(null)
+    setLoading(true)
+    setLoadError(null)
+    setRefreshError(null)
+    setRefreshing(false)
+    setPick({})
+    setRowFeedback({})
+  }, [data])
+
+  useEffect(() => {
+    if (!active) {
+      requestId.current += 1
+      setRefreshing(false)
+      return
+    }
+    load()
+  }, [active, load])
   // Cicha aktualizacja timerów obrotu co 30 s (bez migotania spinnera).
-  useEffect(() => { const id = setInterval(() => load({ quiet: true }), 30000); return () => clearInterval(id) }, [load])
+  useEffect(() => {
+    if (!active) return undefined
+    const id = setInterval(() => load({ quiet: true }), 30000)
+    return () => clearInterval(id)
+  }, [active, load])
 
   const changeDay = (nextDay) => {
     if (!nextDay || nextDay === data) return
+    onDateChange?.(nextDay)
+    if (dateControlled) return
     dataRef.current = nextDay
     requestId.current += 1
     hasDataRef.current = false
@@ -89,9 +121,9 @@ export default function WidokHosta() {
     setRefreshing(false)
     setPick({})
     setRowFeedback({})
-    setData(nextDay)
+    setLocalDate(nextDay)
   }
-  const przesun = (delta) => { const d = new Date(data); d.setDate(d.getDate() + delta); changeDay(d.toISOString().slice(0, 10)) }
+  const przesun = (delta) => changeDay(shiftDateIso(data, delta))
   const stolikNazwa = (id) => stoliki.find((s) => s.id === id)?.nazwa || `#${id}`
   const stoleLabel = (r) => {
     const ids = [r.stolik_id, ...(r.stoliki_dodatkowe || [])].filter(Boolean)
@@ -149,7 +181,7 @@ export default function WidokHosta() {
     }
   }
 
-  const dataLabel = new Date(data).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })
+  const dataLabel = new Date(`${data}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })
   const P = kolejka?.podsumowanie || {}
   const wolneStoly = stoliki.filter((s) => s.aktywny)
 

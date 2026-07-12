@@ -14,6 +14,9 @@ const NAZWY_MC = ['styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec', 
 export function generujOpcjeTygodni(poczatekTygodnia = 2) {
   const opcje = []
   const dzis = new Date()
+  // Zakres jest datą kalendarzową lokalu, nie chwilą UTC. `toISOString()` cofał
+  // lokalną północ o jeden dzień w Europe/Warsaw i przesuwał cały grafik.
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   // konwencja configu: 0=pon…6=nie → JS getDay(): 0=nie, 1=pon…6=sob
   const jsDzien = (Number.isInteger(poczatekTygodnia) ? ((poczatekTygodnia % 7) + 7) % 7 + 1 : 3) % 7
   const startTygodnia = new Date(dzis)
@@ -29,8 +32,8 @@ export function generujOpcjeTygodni(poczatekTygodnia = 2) {
     const koniec = new Date(start)
     koniec.setDate(start.getDate() + 6)
 
-    const sStr = start.toISOString().slice(0, 10)
-    const kStr = koniec.toISOString().slice(0, 10)
+    const sStr = iso(start)
+    const kStr = iso(koniec)
     const value = `${sStr}|${kStr}`
     if (i === 0) biezacy = value
     if (i === 1) przyszly = value

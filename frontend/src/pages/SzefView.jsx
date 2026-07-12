@@ -11,8 +11,14 @@ import SzefGrafik from '../components/tabs/SzefGrafik'
 import SzefImprezy from '../components/tabs/SzefImprezy'
 import Zeszyt from '../components/tabs/Zeszyt'
 import Rezerwacje from '../components/tabs/Rezerwacje'
-import RezerwacjeStolik from '../components/tabs/RezerwacjeStolik'
-import WidokHosta from '../components/tabs/WidokHosta'
+import ReservationsWorkspace from '../components/tabs/ReservationsWorkspace'
+import {
+  clearReservationRoute,
+  navigateReservationRoute,
+  readReservationRoute,
+  subscribeReservationRoute,
+} from '../lib/reservationRoute'
+import { readReservationSession, reservationActorKey } from '../lib/reservationSession'
 
 const TABY = [
   { value: 'grafik', label: 'Grafik', permission: 'grafik.podglad', Comp: SzefGrafik },
@@ -20,19 +26,33 @@ const TABY = [
   { value: 'zeszyt', label: 'Zeszyt', permission: 'zeszyt.podglad', Comp: Zeszyt },
   { value: 'godziny', label: 'Godziny', permission: 'raporty.podglad', Comp: RaportGodzin },
   { value: 'imprezy', label: 'Imprezy', permission: 'imprezy.podglad', Comp: SzefImprezy },
-  { value: 'rezerwacje', label: 'Rezerwacje (podgląd)', permission: 'rezerwacje.podglad', Comp: Rezerwacje },
-  { value: 'rezerwacje-dzisiaj', label: 'Rezerwacje dzisiaj', permission: 'rezerwacje.operacje', Comp: RezerwacjeStolik, wide: true, reservationWorkspace: true },
-  { value: 'host', label: 'Host', permission: 'rezerwacje.host', Comp: WidokHosta, wide: true, reservationWorkspace: true },
+  { value: 'rezerwacje-podglad', label: 'Rezerwacje (podgląd)', permission: 'rezerwacje.podglad', Comp: Rezerwacje, legacyReservation: true },
+  {
+    value: 'rezerwacje',
+    label: 'Rezerwacje',
+    anyPermission: ['rezerwacje.operacje', 'rezerwacje.host'],
+    Comp: ReservationsWorkspace,
+    wide: true,
+    reservationWorkspace: true,
+  },
 ]
 
 // Panel „Szef" — oversight tylko do odczytu: kto pracuje + godziny (Raport godzin),
 // opublikowany grafik, kalendarz imprez. Bez żadnej edycji.
 export default function SzefView() {
   const { user, logout, can, uprawnieniaReady = true } = useAuth()
+  const reservationActor = reservationActorKey(user)
   const { nazwa_lokalu } = useBranding()
-  const [widok, setWidok] = useState('grafik')
+  const [widok, setWidok] = useState(() => readReservationRoute()
+    ? 'rezerwacje'
+    : 'grafik')
   const imie = user?.imie || user?.login
-  const widoczneTaby = useMemo(() => TABY.filter((tab) => can(tab.permission)), [can])
+  const maOperacyjnyDostepRezerwacji = can('rezerwacje.operacje') || can('rezerwacje.host')
+  const widoczneTaby = useMemo(() => TABY.filter((tab) => {
+    if (tab.legacyReservation && maOperacyjnyDostepRezerwacji) return false
+    if (tab.anyPermission) return tab.anyPermission.some((permission) => can(permission))
+    return can(tab.permission)
+  }), [can, maOperacyjnyDostepRezerwacji])
   const maWorkspaceRezerwacji = widoczneTaby.some((tab) => tab.reservationWorkspace)
   const maInnyWorkspaceSzefa = widoczneTaby.some((tab) => !tab.reservationWorkspace)
   const czyRecepcja = maWorkspaceRezerwacji && !maInnyWorkspaceSzefa
@@ -45,6 +65,50 @@ export default function SzefView() {
     if (!uprawnieniaReady || !aktywnyTab || widok === aktywnyTab.value) return
     setWidok(aktywnyTab.value)
   }, [aktywnyTab, uprawnieniaReady, widok])
+
+  useEffect(() => subscribeReservationRoute((reservationRoute) => {
+    if (reservationRoute) {
+      setWidok('rezerwacje')
+      return
+    }
+    const restored = window.history.state?.lokaloManagerTab
+    if (restored) setWidok(restored)
+  }), [])
+
+  useEffect(() => {
+    if (!uprawnieniaReady || !readReservationRoute() || maWorkspaceRezerwacji) return
+    const fallback = aktywnyTab?.value || widoczneTaby[0]?.value || 'grafik'
+    clearReservationRoute({ replace: true, state: { lokaloManagerTab: fallback } })
+  }, [aktywnyTab, maWorkspaceRezerwacji, uprawnieniaReady, widoczneTaby])
+
+  const selectView = (value) => {
+    if (value === 'rezerwacje') {
+      if (!readReservationRoute()) {
+        window.history.replaceState({
+          ...(window.history.state || {}),
+          lokaloManagerTab: widok,
+        }, '', window.location.href)
+        navigateReservationRoute(
+          readReservationSession(user)?.route
+            || { view: can('rezerwacje.operacje') ? 'today' : 'host' },
+          {
+            state: {
+              lokaloManagerTab: 'rezerwacje',
+              ...(reservationActor ? { lokaloReservationActor: reservationActor } : {}),
+            },
+          },
+        )
+      }
+    } else if (readReservationRoute()) {
+      clearReservationRoute({ state: { lokaloManagerTab: value } })
+    } else {
+      window.history.replaceState({
+        ...(window.history.state || {}),
+        lokaloManagerTab: value,
+      }, '', window.location.href)
+    }
+    setWidok(value)
+  }
 
   return (
     <div className="relative min-h-dvh bg-bg">
@@ -91,7 +155,7 @@ export default function SzefView() {
                 <button
                   key={tab.value}
                   type="button"
-                  onClick={() => setWidok(tab.value)}
+                  onClick={() => selectView(tab.value)}
                   aria-current={widok === tab.value ? 'page' : undefined}
                   className={`min-h-11 shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition active:scale-[0.98] ${
                     widok === tab.value ? 'bg-mint text-bg' : 'border border-line bg-white/[0.03] text-muted hover:text-ink'
@@ -108,7 +172,7 @@ export default function SzefView() {
                 {aktywnyTab.value === 'zeszyt' ? (
                   <Active readOnly endpoint="/szef/zeszyt" />
                 ) : aktywnyTab.value === 'grafik' ? (
-                  <Active onOpenLive={() => setWidok('stoly')} />
+                  <Active onOpenLive={() => selectView('stoly')} />
                 ) : (
                   <Active />
                 )}

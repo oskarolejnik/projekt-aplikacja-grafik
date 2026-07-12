@@ -203,6 +203,9 @@ TRASY_PUBLICZNE = (
 # Wyjątki od degradacji READ_ONLY — zapis dozwolony mimo nieaktywnej subskrypcji:
 # logowanie, kreator pierwszej konfiguracji, przedłużenie subskrypcji, health.
 READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health", "/api/rodo")
+# Odczytowe komendy POST mają dokładne dopasowanie metoda+trasa. Nie dodajemy ich do
+# prefiksowej listy powyżej, żeby przyszła podtrasa zapisu nie odziedziczyła wyjątku.
+READ_ONLY_POST_ODCZYT = frozenset({"/api/rezerwacje-stolik/wyszukaj"})
 
 # Przestrzenie, w których rola nadzorcza ma PEŁNY dostęp (też zapisy). Każdy taki
 # endpoint sam pilnuje, że dotyczy wyłącznie swojej domeny (np. grafik kuchni).
@@ -227,7 +230,11 @@ async def role_guard(request: Request, call_next):
 
     # 1) Degradacja READ_ONLY: nieaktywna subskrypcja → zapisy zwracają 402.
     #    Celowo PRZED autoryzacją (zachowanie historyczne: 402 także bez tokenu).
-    if metoda in ("POST", "PUT", "DELETE", "PATCH") and not _sciezka_na_whitelist(path, READ_ONLY_WYJATKI):
+    if (
+        metoda in ("POST", "PUT", "DELETE", "PATCH")
+        and not (metoda == "POST" and path in READ_ONLY_POST_ODCZYT)
+        and not _sciezka_na_whitelist(path, READ_ONLY_WYJATKI)
+    ):
         _db = SessionLocal()
         try:
             synchronizuj_subskrypcje(_db)   # trial→Free po wygaśnięciu, ZANIM ocenimy READ_ONLY
@@ -1413,6 +1420,7 @@ REZ_PRZEJSCIA = {
 }
 REZ_AKTYWNE = ("rezerwacja", "potwierdzona")   # blokują stolik (liczą się do kolizji)
 DOMYSLNY_SLOT_MIN = 120
+MAX_REZERWACJE_SEARCH_DAYS = 366
 
 # Faza operacyjna hosta (obok status księgowego). NULL = jeszcze nie przyszedł.
 HOST_FAZY = ("przybyl", "posadzony", "rachunek", "oplacony", "wyszedl")
@@ -1845,6 +1853,47 @@ def _rezerwacja_out(t: models.Termin, user=None) -> dict:
         "kanal": t.kanal,
         "ukryte_pola": ukryte,
     }
+
+
+def _waliduj_zakres_bazy_rezerwacji(start: date, end: date) -> None:
+    if end < start:
+        raise HTTPException(400, "Zakres dat jest odwrócony.")
+    dni = (end - start).days + 1
+    if dni > MAX_REZERWACJE_SEARCH_DAYS:
+        raise HTTPException(
+            400,
+            f"Baza rezerwacji może obejmować maksymalnie {MAX_REZERWACJE_SEARCH_DAYS} dni.",
+        )
+
+
+def _pasuje_do_wyszukiwania_rezerwacji(t: models.Termin, query: Optional[str]) -> bool:
+    if not query:
+        return True
+    fraza = query.casefold()
+    if fraza in (t.nazwisko or "").casefold():
+        return True
+    # EncryptedString używa niedeterministycznego Ferneta, więc telefonu nie da się
+    # bezpiecznie filtrować przez SQL. Porównujemy cyfry dopiero po odszyfrowaniu
+    # kandydatów z ograniczonego zakresu dat; minimum 3 cyfry ogranicza przypadkowe trafienia.
+    cyfry_query = "".join(ch for ch in query if ch.isdigit())
+    if len(cyfry_query) < 3:
+        return False
+    cyfry_telefonu = "".join(ch for ch in (t.telefon or "") if ch.isdigit())
+    return cyfry_query in cyfry_telefonu
+
+
+def _sortuj_baze_rezerwacji(rows, sort: str):
+    def chronologicznie(t):
+        return t.data, t.godz_od or time.min, t.id
+
+    if sort == "data_desc":
+        return sorted(rows, key=chronologicznie, reverse=True)
+    if sort == "nazwisko_asc":
+        return sorted(
+            rows,
+            key=lambda t: ((t.nazwisko or "").casefold(), t.data, t.godz_od or time.min, t.id),
+        )
+    return sorted(rows, key=chronologicznie)
 
 
 def _tresc_potwierdzenia(t: models.Termin, cfg) -> str:
@@ -2449,6 +2498,49 @@ def get_rezerwacje_stolik(start: date = Query(...), end: date = Query(...),
     if stolik_id:
         rows = [t for t in rows if stolik_id in _stoly_terminu(t)]
     return {"rezerwacje": [_rezerwacja_out(t, user) for t in rows]}
+
+
+@app.post("/api/rezerwacje-stolik/wyszukaj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def wyszukaj_rezerwacje_stolik(
+    dane: schemas.RezerwacjeWyszukajIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Baza rezerwacji z PII w body, ograniczonym zakresem i deterministyczną paginacją."""
+    if not _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
+        # Obrona warstwowa na wypadek przyszłej regresji w centralnej mapie metoda+trasa.
+        raise HTTPException(403, "Brak uprawnienia do danych kontaktowych gości.")
+    _waliduj_zakres_bazy_rezerwacji(dane.start, dane.end)
+
+    q = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik",
+        models.Termin.data >= dane.start,
+        models.Termin.data <= dane.end,
+    )
+    if dane.status:
+        q = q.filter(models.Termin.status == dane.status)
+    rows = [t for t in q.all() if _pasuje_do_wyszukiwania_rezerwacji(t, dane.query)]
+    rows = _sortuj_baze_rezerwacji(rows, dane.sort)
+    total = len(rows)
+    page = rows[dane.offset:dane.offset + dane.limit]
+    return {
+        "rezerwacje": [_rezerwacja_out(t, user) for t in page],
+        "total": total,
+        "offset": dane.offset,
+        "limit": dane.limit,
+    }
+
+
+@app.get("/api/rezerwacje-stolik/{rid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def get_rezerwacja_stolik(
+    rid: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    t = db.get(models.Termin, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    return _rezerwacja_out(t, user)
 
 
 @app.post("/api/rezerwacje-stolik", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])

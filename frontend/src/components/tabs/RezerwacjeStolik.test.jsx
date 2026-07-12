@@ -584,4 +584,108 @@ describe('Rezerwacje stolików', () => {
     expect(updateBody).not.toHaveProperty('notatka')
     expect(updateBody).not.toHaveProperty('zadatek')
   })
+
+  it('w trybie kontrolowanym zgłasza zmianę dnia i czeka na nową wartość z rodzica', async () => {
+    const firstDay = '2030-02-01'
+    const nextDay = '2030-02-02'
+    const onDateChange = vi.fn()
+    const paths = []
+    apiMock.mockImplementation((path) => {
+      if (path.startsWith('/rezerwacje-stolik?')) {
+        paths.push(path)
+        return Promise.resolve({
+          rezerwacje: [{
+            ...RESERVATION,
+            data: path.includes(nextDay) ? nextDay : firstDay,
+            nazwisko: path.includes(nextDay) ? 'Drugi dzień' : 'Pierwszy dzień',
+          }],
+        })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: GET ${path}`))
+    })
+
+    const { rerender } = render(<RezerwacjeStolik date={firstDay} onDateChange={onDateChange} />)
+    expect(await screen.findByText('Pierwszy dzień')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Dzień rezerwacji'), { target: { value: nextDay } })
+    expect(onDateChange).toHaveBeenCalledWith(nextDay)
+    expect(screen.getByLabelText('Dzień rezerwacji')).toHaveValue(firstDay)
+
+    rerender(<RezerwacjeStolik date={nextDay} onDateChange={onDateChange} />)
+    expect(await screen.findByText('Drugi dzień')).toBeInTheDocument()
+    expect(paths.some((path) => path.includes(`start=${nextDay}&end=${nextDay}`))).toBe(true)
+  })
+
+  it('otwiera rezerwację wskazaną zewnętrznym id dopiero z właściwie załadowanego dnia', async () => {
+    const onReservationOpen = vi.fn()
+    const onReservationClose = vi.fn()
+    mockInitial({ reservations: [RESERVATION] })
+
+    const { rerender } = render(
+      <RezerwacjeStolik
+        date={TEST_DATE}
+        reservationId={RESERVATION.id}
+        onReservationOpen={onReservationOpen}
+        onReservationClose={onReservationClose}
+      />,
+    )
+
+    expect(await screen.findByRole('dialog', { name: 'Edytuj rezerwację' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Nowak')
+    expect(onReservationOpen).not.toHaveBeenCalled()
+
+    rerender(
+      <RezerwacjeStolik
+        date={TEST_DATE}
+        reservationId={null}
+        onReservationOpen={onReservationOpen}
+        onReservationClose={onReservationClose}
+      />,
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('nie zamyka niezapisanego formularza po wyczyszczeniu zewnętrznego selection', async () => {
+    mockInitial({ reservations: [RESERVATION] })
+    const onReservationClose = vi.fn()
+    const { rerender } = render(
+      <RezerwacjeStolik date={TEST_DATE} reservationId={RESERVATION.id} onReservationClose={onReservationClose} />,
+    )
+    expect(await screen.findByRole('dialog', { name: 'Edytuj rezerwację' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Niezapisany szkic' } })
+
+    rerender(<RezerwacjeStolik date={TEST_DATE} reservationId={null} onReservationClose={onReservationClose} />)
+
+    expect(screen.getByRole('dialog', { name: 'Edytuj rezerwację' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Niezapisany szkic')
+  })
+
+  it('zgłasza lokalne otwarcie i zwykłe zamknięcie, ale nie otwiera obcego id', async () => {
+    const onReservationOpen = vi.fn()
+    const onReservationClose = vi.fn()
+    mockInitial({ reservations: [RESERVATION] })
+    const { rerender } = render(
+      <RezerwacjeStolik onReservationOpen={onReservationOpen} onReservationClose={onReservationClose} />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edytuj rezerwację: Nowak' }))
+    expect(onReservationOpen).toHaveBeenCalledWith(RESERVATION.id)
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij edycję rezerwacji' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(onReservationClose).toHaveBeenCalledTimes(1)
+
+    onReservationClose.mockClear()
+    rerender(
+      <RezerwacjeStolik
+        reservationId={9999}
+        onReservationOpen={onReservationOpen}
+        onReservationClose={onReservationClose}
+      />,
+    )
+    await waitFor(() => expect(onReservationClose).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
 })

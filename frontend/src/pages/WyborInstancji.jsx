@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { setApiBase, sprawdzInstancje } from '../lib/api'
+import { setApiBase, setToken, sprawdzInstancje } from '../lib/api'
+import { clearReservationRoute } from '../lib/reservationRoute'
+import { clearReservationSessions } from '../lib/reservationSession'
 import { Logo } from '../components/Logo'
 import { Spinner } from '../components/ui/Spinner'
 
@@ -20,6 +22,9 @@ export default function WyborInstancji({ onGotowe }) {
     const ok = await sprawdzInstancje(url)
     setBusy(false)
     if (!ok) { setBlad('Nie znaleziono Lokalo pod tym adresem. Sprawdź pisownię i połączenie.'); return }
+    clearReservationSessions()
+    clearReservationRoute({ replace: true })
+    setToken(null)
     setApiBase(url)
     if (onGotowe) onGotowe()
     else window.location.reload()

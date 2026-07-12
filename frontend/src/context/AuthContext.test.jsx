@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock, getTokenMock, setTokenMock, setUnauthorizedHandlerMock } = vi.hoisted(() => ({
+const { apiMock, getTokenMock, setTokenMock, setUnauthorizedHandlerMock, routeClearMock, sessionsClearMock, authHandlers } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   getTokenMock: vi.fn(),
   setTokenMock: vi.fn(),
   setUnauthorizedHandlerMock: vi.fn(),
+  routeClearMock: vi.fn(),
+  sessionsClearMock: vi.fn(),
+  authHandlers: { unauthorized: null },
 }))
 
 vi.mock('../lib/api', () => ({
@@ -16,11 +19,13 @@ vi.mock('../lib/api', () => ({
   setToken: setTokenMock,
   setUnauthorizedHandler: setUnauthorizedHandlerMock,
 }))
+vi.mock('../lib/reservationRoute', () => ({ clearReservationRoute: routeClearMock }))
+vi.mock('../lib/reservationSession', () => ({ clearReservationSessions: sessionsClearMock }))
 
 import { AuthProvider, useAuth } from './AuthContext'
 
 function Probe() {
-  const { loading, uprawnieniaReady, uprawnienia, can } = useAuth()
+  const { loading, uprawnieniaReady, uprawnienia, can, logout } = useAuth()
   return (
     <div>
       <span>{loading ? 'sesja-loading' : 'sesja-ready'}</span>
@@ -28,6 +33,7 @@ function Probe() {
       <span>{can('grafik.podglad') ? 'ma-grafik' : 'brak-grafiku'}</span>
       <span>{can('wyplaty.podglad') ? 'ma-wyplaty' : 'brak-wyplat'}</span>
       <span>{uprawnienia.join(',')}</span>
+      <button type="button" onClick={logout}>Wyloguj testowo</button>
     </div>
   )
 }
@@ -36,6 +42,8 @@ describe('AuthContext permissions', () => {
   beforeEach(() => {
     getTokenMock.mockReturnValue('token')
     apiMock.mockReset()
+    authHandlers.unauthorized = null
+    setUnauthorizedHandlerMock.mockImplementation((handler) => { authHandlers.unauthorized = handler })
   })
 
   afterEach(() => {
@@ -99,5 +107,38 @@ describe('AuthContext permissions', () => {
     await waitFor(() => expect(screen.getByText('brak-wyplat')).toBeInTheDocument())
     expect(screen.getByText('ma-grafik')).toBeInTheDocument()
     expect(apiMock).toHaveBeenCalledWith('/me/uprawnienia')
+  })
+
+  it('czyści kontekst rezerwacji przy jawnym wylogowaniu', async () => {
+    apiMock.mockResolvedValue({
+      id: 7,
+      login: 'manager',
+      rola: 'szef',
+      uprawnienia: ['rezerwacje.operacje'],
+    })
+    render(<AuthProvider><Probe /></AuthProvider>)
+    await waitFor(() => expect(screen.getByText('sesja-ready')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wyloguj testowo' }))
+
+    expect(sessionsClearMock).toHaveBeenCalledOnce()
+    expect(routeClearMock).toHaveBeenCalledWith({ replace: true })
+    expect(setTokenMock).toHaveBeenCalledWith(null)
+  })
+
+  it('czyści ten sam kontekst po odpowiedzi 401', async () => {
+    apiMock.mockResolvedValue({
+      id: 7,
+      login: 'manager',
+      rola: 'szef',
+      uprawnienia: ['rezerwacje.operacje'],
+    })
+    render(<AuthProvider><Probe /></AuthProvider>)
+    await waitFor(() => expect(authHandlers.unauthorized).toEqual(expect.any(Function)))
+
+    act(() => authHandlers.unauthorized())
+
+    expect(sessionsClearMock).toHaveBeenCalledOnce()
+    expect(routeClearMock).toHaveBeenCalledWith({ replace: true })
   })
 })

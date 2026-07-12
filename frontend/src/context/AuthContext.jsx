@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { api, setToken, getToken, setUnauthorizedHandler } from '../lib/api'
+import { clearReservationRoute } from '../lib/reservationRoute'
+import { clearReservationSessions } from '../lib/reservationSession'
 
 // Stan uwierzytelnienia: token w localStorage + dane zalogowanego użytkownika.
 const AuthContext = createContext(null)
@@ -11,6 +13,8 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   const logout = useCallback(() => {
+    clearReservationSessions()
+    clearReservationRoute({ replace: true })
     setToken(null)
     setUser(null)
     setUprawnienia([])
@@ -78,7 +82,11 @@ export function AuthProvider({ children }) {
 
   // Reakcja na 401 z dowolnego zapytania + walidacja zapisanego tokenu na starcie.
   useEffect(() => {
-    setUnauthorizedHandler(() => setUser(null))
+    setUnauthorizedHandler(() => {
+      clearReservationSessions()
+      clearReservationRoute({ replace: true })
+      setUser(null)
+    })
     const t = getToken()
     if (!t) {
       setLoading(false)

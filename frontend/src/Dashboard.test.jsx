@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import React from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Dashboard from './Dashboard'
+import { writeReservationSession } from './lib/reservationSession'
 
 const { apiMock, logoutMock, dashboardState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
@@ -11,7 +12,7 @@ const { apiMock, logoutMock, dashboardState } = vi.hoisted(() => ({
   dashboardState: { pulpitError: false, pracownicyLoads: 0 },
 }))
 
-vi.mock('./lib/api', () => ({ api: apiMock }))
+vi.mock('./lib/api', () => ({ api: apiMock, getApiBase: () => '' }))
 vi.mock('./context/AuthContext', () => ({
   useAuth: () => ({ user: { login: 'admin' }, logout: logoutMock }),
 }))
@@ -34,6 +35,9 @@ vi.mock('./components/tabs/Pracownicy', () => {
   dashboardState.pracownicyLoads += 1
   return { default: () => <div>Treść pracowników</div> }
 })
+vi.mock('./components/tabs/ReservationsWorkspace', () => ({
+  default: () => <div>Workspace rezerwacji</div>,
+}))
 
 const CONFIG = {
   modul_rezerwacje: true,
@@ -47,6 +51,8 @@ describe('Dashboard', () => {
   afterEach(cleanup)
 
   beforeEach(() => {
+    window.history.replaceState(null, '', '/')
+    window.sessionStorage.clear()
     apiMock.mockReset()
     logoutMock.mockReset()
     dashboardState.pulpitError = false
@@ -80,7 +86,9 @@ describe('Dashboard', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Imprezy' })).toBeInTheDocument())
 
     fireEvent.click(goscie)
-    expect(screen.getByRole('button', { name: 'Rezerwacje stolików' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rezerwacje' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Widok hosta' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rezerwacje stolików' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Rezerwacje (ruch)' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Imprezy' }))
@@ -141,6 +149,50 @@ describe('Dashboard', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Przejdź do subskrypcji' }))
     expect(await screen.findByText('Ustawienia: plan')).toBeInTheDocument()
+  })
+
+  it('otwiera workspace rezerwacji z bezpośredniego linku i obsługuje powrót', async () => {
+    window.history.replaceState({}, '', '/#/rezerwacje/kalendarz?data=2026-07-20')
+    render(<Dashboard />)
+
+    expect(await screen.findByText('Workspace rezerwacji')).toBeInTheDocument()
+
+    act(() => {
+      window.history.replaceState({ lokaloDashboardTab: 'pulpit' }, '', '/')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(await screen.findByText('Treść pulpitu')).toBeInTheDocument()
+    expect(window.location.hash).toBe('')
+  })
+
+  it('po ponownym wejściu przywraca ostatni bezpieczny kontekst operatora', async () => {
+    writeReservationSession({ login: 'admin' }, {
+      route: { view: 'calendar', date: '2026-07-22', mode: 'day' },
+    })
+    render(<Dashboard />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Goście' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Rezerwacje' }))
+
+    expect(await screen.findByText('Workspace rezerwacji')).toBeInTheDocument()
+    expect(window.location.hash).toBe('#/rezerwacje/kalendarz?data=2026-07-22&zakres=day')
+  })
+
+  it('nie montuje deep linku rezerwacji, gdy moduł lokalu jest wyłączony', async () => {
+    window.history.replaceState({}, '', '/#/rezerwacje/baza?od=2026-07-01&do=2026-07-31')
+    apiMock.mockImplementation((path) => {
+      if (path === '/lokal/config') return Promise.resolve({ ...CONFIG, modul_rezerwacje: false })
+      if (path === '/subskrypcja') return Promise.resolve({ stan: 'aktywna' })
+      if (path === '/flota') return Promise.resolve({ enabled: false })
+      return Promise.resolve({})
+    })
+
+    render(<Dashboard />)
+
+    expect(await screen.findByText('Treść pulpitu')).toBeInTheDocument()
+    await waitFor(() => expect(window.location.hash).toBe(''))
+    expect(screen.queryByText('Workspace rezerwacji')).not.toBeInTheDocument()
   })
 
   it('ponawia ładowanie uszkodzonej zakładki bez przeładowania panelu', async () => {

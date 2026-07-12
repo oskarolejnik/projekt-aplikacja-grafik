@@ -74,9 +74,16 @@ def requirement_for(method: str, path: str) -> Requirement | None:
             return Requirement(all_of=(OPERATIONS, CONTACT))
         return ADMIN_ONLY
 
+    if path == "/api/rezerwacje-stolik/wyszukaj":
+        if method == "POST":
+            return Requirement(all_of=(OPERATIONS, CONTACT))
+        return ADMIN_ONLY
+
     match = _RESERVATION_ITEM.fullmatch(path)
     if match:
         action = match.group("action")
+        if action is None and method == "GET":
+            return Requirement(all_of=(OPERATIONS,))
         if action is None and method == "PUT":
             return Requirement(all_of=(OPERATIONS, CONTACT))
         if action == "auto-przydziel" and method == "POST":
