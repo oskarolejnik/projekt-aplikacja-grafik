@@ -67,14 +67,7 @@ def test_parsowanie_i_dopasowanie_zadatkow(client, admin_client, db, monkeypatch
         {"id": "z1", "kwota": 500, "opis": "Zadatek za komunie p.Nowak 15.05.2027", "data": "2026-06-10"},
         {"id": "z2", "kwota": 500, "opis": "kaucja za koryta", "data": "2026-06-10"},
     ]}, headers={"X-RCP-Token": "tok123"})
-    body = admin_client.get("/api/zadatki").json()
-    assert [z["id"] for z in body["przypisane"]] == ["z1"]
-    assert [z["id"] for z in body["do_przypisania"]] == ["z2"]
-    # termin pokazuje zadatek_kp 500
+    # auto-dopasowanie przy ingescie: z1 (Nowak 15.05.2027) dopina się do terminu → zadatek_kp;
+    # z2 (bez rozpoznanej daty) zostaje niedopasowany. Ręczna skrzynka KP (/api/zadatki) usunięta.
     t = admin_client.get("/api/terminy?start=2027-05-01&end=2027-05-31").json()["terminy"][0]
     assert t["zadatek_kp"] == 500.0
-    # ręczne przypisanie z2 + odpięcie
-    assert admin_client.put(f"/api/zadatki/z2/przypisz?termin_id={t['id']}").status_code == 204
-    assert admin_client.get("/api/zadatki").json()["do_przypisania"] == []
-    assert admin_client.put("/api/zadatki/z2/odepnij").status_code == 204
-    assert len(admin_client.get("/api/zadatki").json()["do_przypisania"]) == 1

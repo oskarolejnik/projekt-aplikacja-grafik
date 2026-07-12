@@ -5435,47 +5435,6 @@ def gastro_zadatki_ingest(payload: dict, request: Request, db: Session = Depends
     return {"ok": True, "zadatki": n}
 
 
-def _zadatek_out(db, z) -> dict:
-    t = db.get(models.Termin, z.termin_id) if z.termin_id else None
-    return {"id": z.id, "numer": z.numer, "kwota": z.kwota, "opis": z.opis, "data": str(z.data),
-            "nazwisko": z.nazwisko, "data_imprezy": str(z.data_imprezy) if z.data_imprezy else None,
-            "termin_id": z.termin_id,
-            "termin": ({"id": t.id, "nazwisko": t.nazwisko, "data": str(t.data), "typ": t.typ} if t else None)}
-
-
-@app.get("/api/zadatki")
-def get_zadatki(db: Session = Depends(get_db)):
-    """Zadatki KP: przypisane do terminów + skrzynka „do przypisania" (niedopasowane)."""
-    rows = db.query(models.KpZadatek).order_by(models.KpZadatek.data.desc()).all()
-    return {"przypisane": [_zadatek_out(db, z) for z in rows if z.termin_id],
-            "do_przypisania": [_zadatek_out(db, z) for z in rows if not z.termin_id]}
-
-
-@app.post("/api/zadatki/dopasuj")
-def dopasuj_zadatki(db: Session = Depends(get_db)):
-    n = sum(1 for z in db.query(models.KpZadatek).filter(models.KpZadatek.termin_id.is_(None)).all()
-            if _dopasuj_zadatek(db, z))
-    db.commit()
-    return {"dopasowano": n}
-
-
-@app.put("/api/zadatki/{zid}/przypisz", status_code=204)
-def przypisz_zadatek(zid: str, termin_id: int = Query(...), db: Session = Depends(get_db)):
-    z = db.get(models.KpZadatek, zid)
-    if not z:
-        raise HTTPException(404, "Brak zadatku.")
-    if not db.get(models.Termin, termin_id):
-        raise HTTPException(404, "Brak terminu.")
-    z.termin_id = termin_id; db.commit()
-
-
-@app.put("/api/zadatki/{zid}/odepnij", status_code=204)
-def odepnij_zadatek(zid: str, db: Session = Depends(get_db)):
-    z = db.get(models.KpZadatek, zid)
-    if z:
-        z.termin_id = None; db.commit()
-
-
 @app.get("/api/gastro/rozliczenia")
 def gastro_rozliczenia(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     """Podgląd zebranych rozliczeń kelnerów (admin) — zgrupowane per rozliczenie.
