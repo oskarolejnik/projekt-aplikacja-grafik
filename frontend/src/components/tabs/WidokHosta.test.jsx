@@ -3,10 +3,17 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock, toastMock, authState } = vi.hoisted(() => ({
+const { apiMock, toastMock, authState, privacyState, subscribePurgeMock } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   toastMock: vi.fn(),
   authState: { isAdmin: false, permissions: [] },
+  privacyState: { callback: null },
+  subscribePurgeMock: vi.fn((callback) => {
+    privacyState.callback = callback
+    return () => {
+      if (privacyState.callback === callback) privacyState.callback = null
+    }
+  }),
 }))
 
 vi.mock('../../lib/api', () => ({ api: apiMock }))
@@ -18,6 +25,9 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 vi.mock('../ui/Toast', () => ({ useToast: () => ({ toast: toastMock }) }))
 vi.mock('../../lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
+vi.mock('../../lib/reservationPrivacy', () => ({
+  subscribeReservationPrivacyPurge: subscribePurgeMock,
+}))
 
 import WidokHosta from './WidokHosta'
 
@@ -56,6 +66,7 @@ describe('Widok hosta — prywatność', () => {
 
   afterEach(() => {
     cleanup()
+    privacyState.callback = null
     vi.clearAllMocks()
   })
 
@@ -98,7 +109,9 @@ describe('Widok hosta — prywatność', () => {
     expect(apiMock.mock.calls.filter(([path]) => path === '/host/rezerwacja/7/posadz')).toHaveLength(1)
 
     await act(async () => resolveSeat({ ...reservation, faza_hosta: 'posadzony' }))
-    await waitFor(() => expect(toastMock).toHaveBeenCalledWith('Posadzono.', 'success'))
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith(
+      'Posadzono.', 'success', { scope: 'reservations' },
+    ))
   })
 
   it('ignoruje spóźnioną odpowiedź poprzedniego dnia', async () => {
@@ -127,6 +140,29 @@ describe('Widok hosta — prywatność', () => {
     expect(screen.queryByText('Starsza')).not.toBeInTheDocument()
     expect(screen.getByText('Nowsza')).toBeInTheDocument()
     expect(screen.getByLabelText('Dzień widoku hosta')).toHaveValue('2030-01-02')
+  })
+
+  it('purge abortuje odczyt kolejki i ignoruje spóźniony snapshot PII', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    let resolveQueue
+    let requestSignal
+    apiMock.mockImplementation((path, _method, _body, options) => {
+      if (path.startsWith('/host/kolejka?')) {
+        requestSignal = options.signal
+        return new Promise((resolve) => { resolveQueue = resolve })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [] })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+
+    render(<WidokHosta />)
+    await waitFor(() => expect(requestSignal).toBeInstanceOf(AbortSignal))
+
+    act(() => privacyState.callback?.({ reason: 'workstation-locked' }))
+    expect(requestSignal.aborted).toBe(true)
+
+    await act(async () => resolveQueue(queue))
+    expect(screen.queryByText('Kowalska')).not.toBeInTheDocument()
   })
 
   it('pokazuje awarię jako błąd z retry, a nie jako pustą salę', async () => {
@@ -236,5 +272,64 @@ describe('Widok hosta — prywatność', () => {
 
     intervalSpy.mockRestore()
     clearIntervalSpy.mockRestore()
+  })
+
+  it('po purge ignoruje spoznione powodzenie sadzania i nie odtwarza toastu', async () => {
+    let resolveSeat
+    let mutationSignal
+    let queueLoads = 0
+    apiMock.mockImplementation((path, method, _body, options) => {
+      if (path.startsWith('/host/kolejka?')) {
+        queueLoads += 1
+        return Promise.resolve(queue)
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [] })
+      if (path === '/host/rezerwacja/7/posadz' && method === 'POST') {
+        mutationSignal = options.signal
+        return new Promise((resolve) => { resolveSeat = resolve })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<WidokHosta />)
+    fireEvent.click(await screen.findByRole('button', { name: /Posad/ }))
+    await waitFor(() => expect(mutationSignal).toBeInstanceOf(AbortSignal))
+
+    act(() => privacyState.callback?.({ reason: 'workstation-locked' }))
+    expect(mutationSignal.aborted).toBe(true)
+    await act(async () => resolveSeat({ ...reservation, faza_hosta: 'posadzony' }))
+
+    expect(toastMock).not.toHaveBeenCalled()
+    expect(queueLoads).toBe(1)
+  })
+
+  it('po purge ignoruje spozniony blad zmiany fazy i nie odtwarza toastu', async () => {
+    let rejectPhase
+    let mutationSignal
+    const seatedQueue = {
+      ...queue,
+      nadchodzace: [],
+      na_sali: [{ ...reservation, faza_hosta: 'posadzony', minuty_od_posadzenia: 10 }],
+    }
+    apiMock.mockImplementation((path, method, _body, options) => {
+      if (path.startsWith('/host/kolejka?')) return Promise.resolve(seatedQueue)
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [] })
+      if (path === '/host/rezerwacja/7/faza' && method === 'POST') {
+        mutationSignal = options.signal
+        return new Promise((_resolve, reject) => { rejectPhase = reject })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<WidokHosta />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Rachunek' }))
+    await waitFor(() => expect(mutationSignal).toBeInstanceOf(AbortSignal))
+
+    act(() => privacyState.callback?.({ reason: 'workstation-locked' }))
+    expect(mutationSignal.aborted).toBe(true)
+    await act(async () => rejectPhase(new Error('Serwer odrzucil zmiane.')))
+
+    expect(toastMock).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

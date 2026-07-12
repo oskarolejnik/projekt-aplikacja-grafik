@@ -177,6 +177,10 @@ describe('Dashboard', () => {
 
     expect(await screen.findByText('Workspace rezerwacji')).toBeInTheDocument()
     expect(window.location.hash).toBe('#/rezerwacje/kalendarz?data=2026-07-22&zakres=day')
+    expect(window.history.state).toMatchObject({
+      lokaloReservationActor: expect.any(String),
+      lokaloReservationPrivacyEpoch: expect.any(String),
+    })
   })
 
   it('nie montuje deep linku rezerwacji, gdy moduł lokalu jest wyłączony', async () => {

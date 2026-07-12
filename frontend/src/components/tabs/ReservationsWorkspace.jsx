@@ -10,16 +10,20 @@ import {
 } from '../../lib/reservationRoute'
 import {
   readReservationSession,
-  reservationActorKey,
+  reservationHistoryBelongsTo,
+  reservationHistoryState,
   writeReservationSession,
 } from '../../lib/reservationSession'
+import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
 import { Icon } from '../../lib/icons'
 import { Banner } from '../ui/Banner'
 import { Button } from '../ui/Button'
+import { useToast } from '../ui/Toast'
 import RezerwacjeStolik from './RezerwacjeStolik'
 import WidokHosta from './WidokHosta'
 import ReservationsCalendar from './ReservationsCalendar'
 import ReservationsDatabase from './ReservationsDatabase'
+import GuestProfileDialog from './GuestProfileDialog'
 
 const VIEW_META = {
   today: { label: 'Dzisiaj', icon: 'clock' },
@@ -42,7 +46,7 @@ const scrollElement = (root) => {
 
 export default function ReservationsWorkspace() {
   const { user, can, isAdmin } = useAuth()
-  const actorKey = reservationActorKey(user)
+  const { confirm } = useToast()
   const rootRef = useRef(null)
   const remembered = useRef(readReservationSession(user))
   const scrollPositions = useRef(remembered.current?.scroll || {})
@@ -50,10 +54,21 @@ export default function ReservationsWorkspace() {
   const scrollContainerRef = useRef(null)
   const pendingScrollRestore = useRef(null)
   const selectionDates = useRef(new Map())
+  const selectionControllerRef = useRef(null)
+  const guestProfileDirtyRef = useRef(false)
+  const guestBackGuardRef = useRef({
+    bypass: false,
+    confirming: false,
+    generation: 0,
+    promptAfterRestore: false,
+    restoring: false,
+    restoringProfileId: null,
+  })
   const lastSelectionId = useRef(null)
   const [selectionReady, setSelectionReady] = useState(null)
   const [selectionError, setSelectionError] = useState(null)
   const [selectionRetry, setSelectionRetry] = useState(0)
+  const [privacyVersion, setPrivacyVersion] = useState(0)
 
   const has = useCallback((permission) => isAdmin || can(permission), [can, isAdmin])
   const canOperate = has('rezerwacje.operacje')
@@ -68,8 +83,7 @@ export default function ReservationsWorkspace() {
 
   const [route, setRoute] = useState(() => {
     const fromUrl = readReservationRoute()
-    const historyActor = window.history.state?.lokaloReservationActor
-    const safeUrl = fromUrl && (!historyActor || historyActor === actorKey) ? fromUrl : null
+    const safeUrl = fromUrl && reservationHistoryBelongsTo(user, window.history.state) ? fromUrl : null
     return normalizeReservationRoute(
       safeUrl || remembered.current?.route || { view: availableViews[0] || 'today' },
     )
@@ -86,16 +100,20 @@ export default function ReservationsWorkspace() {
       ...options,
       state: {
         ...(options.state || {}),
-        ...(actorKey ? { lokaloReservationActor: actorKey } : {}),
+        ...reservationHistoryState(user),
       },
     })
-  }, [actorKey])
+  }, [user])
 
   const patchRoute = useCallback((patch, options = {}) => {
     const current = routeRef.current
     const nextPatch = typeof patch === 'function' ? patch(current) : patch
     commitRoute({ ...current, ...nextPatch }, options)
   }, [commitRoute])
+
+  const handleGuestProfileDirtyChange = useCallback((dirty) => {
+    guestProfileDirtyRef.current = Boolean(dirty)
+  }, [])
 
   const restorePendingScroll = useCallback(() => {
     const container = scrollContainerRef.current
@@ -106,35 +124,130 @@ export default function ReservationsWorkspace() {
     if (maxScroll >= target) pendingScrollRestore.current = null
   }, [])
 
-  useEffect(() => subscribeReservationRoute((next) => {
-    if (!next) return
-    const historyActor = window.history.state?.lokaloReservationActor
-    if (historyActor && actorKey && historyActor !== actorKey) {
-      commitRoute(remembered.current?.route || { view: availableViews[0] || 'today' }, { replace: true })
-      return
+  useEffect(() => {
+    let active = true
+    const guard = guestBackGuardRef.current
+
+    const applyRoute = (next) => {
+      if (!next) {
+        const fallback = normalizeReservationRoute({
+          ...(remembered.current?.route || {}),
+          view: availableViews[0] || 'today',
+          reservationId: null,
+          profileReservationId: null,
+        })
+        routeRef.current = fallback
+        setRoute(fallback)
+        return
+      }
+      if (!reservationHistoryBelongsTo(user, window.history.state)) {
+        commitRoute(remembered.current?.route || { view: availableViews[0] || 'today' }, { replace: true })
+        return
+      }
+      routeRef.current = next
+      setRoute(next)
     }
-    routeRef.current = next
-    setRoute(next)
-  }), [actorKey, availableViews, commitRoute])
+
+    const confirmRestoredBack = () => {
+      if (!guard.promptAfterRestore || guard.confirming) return
+      guard.promptAfterRestore = false
+      guard.confirming = true
+      const generation = guard.generation
+      void confirm(
+        'Odrzucić niezapisane zmiany w profilu gościa?',
+        {
+          title: 'Niezapisane zmiany',
+          confirmText: 'Odrzuć zmiany',
+          cancelText: 'Wróć do profilu',
+        },
+      ).then((discard) => {
+        if (!active || guard.generation !== generation) return
+        guard.confirming = false
+        if (!discard) return
+        guard.bypass = true
+        window.history.back()
+      })
+    }
+
+    const unsubscribe = subscribeReservationRoute((next, event) => {
+      const eventType = event?.type
+
+      // Pierwszy Back już przesunął wskaźnik historii. Wracamy istniejącym
+      // wpisem forward (bez tworzenia duplikatu), a dopiero potem pytamy o szkic.
+      if (guard.restoring) {
+        if (eventType === 'hashchange') return
+        if (eventType === 'popstate') {
+          if (next?.profileReservationId !== guard.restoringProfileId) {
+            window.history.forward()
+            return
+          }
+          guard.restoring = false
+          guard.restoringProfileId = null
+          applyRoute(next)
+          confirmRestoredBack()
+          return
+        }
+      }
+
+      if (guard.bypass && eventType === 'popstate') {
+        guard.bypass = false
+        applyRoute(next)
+        return
+      }
+
+      const currentProfileId = routeRef.current.profileReservationId
+      const closesDirtyProfile = Boolean(
+        currentProfileId
+        && next?.profileReservationId !== currentProfileId
+        && guestProfileDirtyRef.current,
+      )
+      if (eventType === 'popstate' && closesDirtyProfile) {
+        guard.restoring = true
+        guard.restoringProfileId = currentProfileId
+        guard.promptAfterRestore = !guard.confirming
+        window.history.forward()
+        return
+      }
+
+      applyRoute(next)
+    })
+
+    return () => {
+      active = false
+      guard.generation += 1
+      guard.bypass = false
+      guard.confirming = false
+      guard.promptAfterRestore = false
+      guard.restoring = false
+      guard.restoringProfileId = null
+      unsubscribe()
+    }
+  }, [availableViews, commitRoute, confirm, user])
 
   useEffect(() => {
     if (!availableViews.length) return
     const nextView = availableViews.includes(route.view) ? route.view : availableViews[0]
-    const mustClearSelection = !canViewContacts && route.reservationId
+    const mustClearSelection = (!canOperate || !canViewContacts)
+      && (route.reservationId || route.profileReservationId)
     const canonical = normalizeReservationRoute({
       ...route,
       view: nextView,
       reservationId: mustClearSelection ? null : route.reservationId,
+      profileReservationId: mustClearSelection ? null : route.profileReservationId,
     })
     const currentHash = readReservationRoute()
-    const historyActor = window.history.state?.lokaloReservationActor
     const needsUrl = !currentHash
       || buildReservationHash(canonical) !== window.location.hash
-      || (historyActor && actorKey && historyActor !== actorKey)
-    if (canonical.view !== route.view || canonical.reservationId !== route.reservationId || needsUrl) {
+      || !reservationHistoryBelongsTo(user, window.history.state)
+    if (
+      canonical.view !== route.view
+      || canonical.reservationId !== route.reservationId
+      || canonical.profileReservationId !== route.profileReservationId
+      || needsUrl
+    ) {
       commitRoute(canonical, { replace: true })
     }
-  }, [actorKey, availableViews, canViewContacts, commitRoute, route])
+  }, [availableViews, canOperate, canViewContacts, commitRoute, route, user])
 
   useEffect(() => {
     const reservationId = route.reservationId
@@ -160,11 +273,13 @@ export default function ReservationsWorkspace() {
 
     let current = true
     const controller = new AbortController()
+    selectionControllerRef.current?.abort()
+    selectionControllerRef.current = controller
     setSelectionReady(null)
     setSelectionError(null)
     api(`/rezerwacje-stolik/${reservationId}`, 'GET', null, { signal: controller.signal })
       .then((reservation) => {
-        if (!current) return
+        if (!current || controller.signal.aborted) return
         selectionDates.current.set(reservationId, reservation.data)
         if (routeRef.current.view !== 'today' || routeRef.current.date !== reservation.data) {
           commitRoute({
@@ -177,16 +292,17 @@ export default function ReservationsWorkspace() {
         setSelectionReady(reservationId)
       })
       .catch((error) => {
-        if (!current || error?.name === 'AbortError') return
+        if (!current || controller.signal.aborted || error?.name === 'AbortError') return
         setSelectionError(error.message || 'Nie udało się otworzyć wskazanej rezerwacji.')
         if ([403, 404].includes(error?.status)) {
           selectionDates.current.delete(reservationId)
-          patchRoute({ reservationId: null }, { replace: true })
+          patchRoute({ reservationId: null, profileReservationId: null }, { replace: true })
         }
       })
     return () => {
       current = false
       controller.abort()
+      if (selectionControllerRef.current === controller) selectionControllerRef.current = null
     }
   }, [canOperate, canViewContacts, commitRoute, patchRoute, route, selectionRetry])
 
@@ -199,6 +315,37 @@ export default function ReservationsWorkspace() {
       return next
     })
   }, [safeView])
+
+  useEffect(() => subscribeReservationPrivacyPurge(() => {
+    guestProfileDirtyRef.current = false
+    const guard = guestBackGuardRef.current
+    guard.bypass = false
+    guard.confirming = false
+    guard.generation += 1
+    guard.promptAfterRestore = false
+    guard.restoring = false
+    guard.restoringProfileId = null
+    selectionControllerRef.current?.abort()
+    selectionControllerRef.current = null
+    selectionDates.current.clear()
+    lastSelectionId.current = null
+    setSelectionReady(null)
+    setSelectionError(null)
+    setSelectionRetry(0)
+    setVisited(new Set(safeView ? [safeView] : []))
+    setPrivacyVersion((value) => value + 1)
+    const fromUrl = readReservationRoute()
+    const cleanRoute = normalizeReservationRoute({
+      ...(fromUrl || routeRef.current),
+      view: availableViews.includes(fromUrl?.view)
+        ? fromUrl.view
+        : (availableViews[0] || 'today'),
+      reservationId: null,
+      profileReservationId: null,
+    })
+    routeRef.current = cleanRoute
+    setRoute(cleanRoute)
+  }), [availableViews, safeView])
 
   useLayoutEffect(() => {
     if (!safeView) return
@@ -249,7 +396,7 @@ export default function ReservationsWorkspace() {
     if (view === safeView) return
     if (routeRef.current.reservationId) selectionDates.current.delete(routeRef.current.reservationId)
     setSelectionError(null)
-    patchRoute({ view, reservationId: null })
+    patchRoute({ view, reservationId: null, profileReservationId: null })
   }
 
   const openReservation = (reservation) => {
@@ -260,6 +407,7 @@ export default function ReservationsWorkspace() {
       view: 'today',
       date: reservation.data,
       reservationId: withDetails,
+      profileReservationId: null,
     }, { state: withDetails ? { lokaloReservationOverlay: true } : {} })
   }
 
@@ -270,7 +418,38 @@ export default function ReservationsWorkspace() {
       window.history.back()
       return
     }
-    patchRoute({ reservationId: null }, { replace: true })
+    patchRoute({ reservationId: null, profileReservationId: null }, { replace: true })
+  }
+
+  const openGuestProfile = (reservationId) => {
+    if (!canOperate || !canViewContacts || !reservationId) return
+    guestProfileDirtyRef.current = false
+    const returnTo = normalizeReservationRoute({
+      ...routeRef.current,
+      reservationId,
+      profileReservationId: null,
+    })
+    commitRoute({
+      ...returnTo,
+      profileReservationId: reservationId,
+    }, {
+      state: {
+        lokaloReservationGuestOverlay: true,
+        lokaloReservationReturnTo: returnTo,
+      },
+    })
+  }
+
+  const closeGuestProfile = ({ dirtyConfirmed = false } = {}) => {
+    if (
+      window.history.state?.lokaloReservationGuestOverlay
+      && reservationHistoryBelongsTo(user, window.history.state)
+    ) {
+      if (dirtyConfirmed) guestBackGuardRef.current.bypass = true
+      window.history.back()
+      return
+    }
+    patchRoute({ profileReservationId: null }, { replace: true })
   }
 
   if (!safeView) {
@@ -332,17 +511,20 @@ export default function ReservationsWorkspace() {
       {availableViews.includes('today') && visited.has('today') ? (
         <section hidden={safeView !== 'today'} inert={safeView !== 'today' ? '' : undefined} aria-label="Rezerwacje dnia">
           <RezerwacjeStolik
+            key={`today:${privacyVersion}`}
             date={route.date}
-            onDateChange={(date) => patchRoute({ date, reservationId: null })}
+            onDateChange={(date) => patchRoute({ date, reservationId: null, profileReservationId: null })}
             reservationId={canViewContacts && selectionReady === route.reservationId ? route.reservationId : null}
+            suspendReservationDialog={Boolean(route.profileReservationId)}
             onReservationOpen={(reservationId) => {
               selectionDates.current.set(reservationId, route.date)
               patchRoute(
-                { reservationId },
+                { reservationId, profileReservationId: null },
                 { state: { lokaloReservationOverlay: true } },
               )
             }}
             onReservationClose={closeReservation}
+            onGuestProfileOpen={openGuestProfile}
           />
         </section>
       ) : null}
@@ -350,13 +532,14 @@ export default function ReservationsWorkspace() {
       {availableViews.includes('calendar') && visited.has('calendar') ? (
         <section hidden={safeView !== 'calendar'} inert={safeView !== 'calendar' ? '' : undefined} aria-label="Kalendarz rezerwacji">
           <ReservationsCalendar
+            key={`calendar:${privacyVersion}`}
             date={route.date}
             mode={route.mode}
             status={route.status}
             active={safeView === 'calendar'}
             canOpenDetails={canViewContacts}
             onContextChange={(patch, options) => patchRoute(patch, options)}
-            onOpenDay={(date) => patchRoute({ view: 'today', date, reservationId: null })}
+            onOpenDay={(date) => patchRoute({ view: 'today', date, reservationId: null, profileReservationId: null })}
             onOpenReservation={openReservation}
           />
         </section>
@@ -365,6 +548,7 @@ export default function ReservationsWorkspace() {
       {availableViews.includes('database') && visited.has('database') ? (
         <section hidden={safeView !== 'database'} inert={safeView !== 'database' ? '' : undefined} aria-label="Baza rezerwacji">
           <ReservationsDatabase
+            key={`database:${privacyVersion}`}
             route={route}
             active={safeView === 'database'}
             onContextChange={(patch, options) => patchRoute(patch, options)}
@@ -376,11 +560,21 @@ export default function ReservationsWorkspace() {
       {availableViews.includes('host') && visited.has('host') ? (
         <section hidden={safeView !== 'host'} inert={safeView !== 'host' ? '' : undefined} aria-label="Widok hosta">
           <WidokHosta
+            key={`host:${privacyVersion}`}
             date={route.date}
-            onDateChange={(date) => patchRoute({ date, reservationId: null })}
+            onDateChange={(date) => patchRoute({ date, reservationId: null, profileReservationId: null })}
             active={safeView === 'host'}
           />
         </section>
+      ) : null}
+
+      {canOperate && canViewContacts && route.profileReservationId ? (
+        <GuestProfileDialog
+          reservationId={route.profileReservationId}
+          onClose={closeGuestProfile}
+          onDirtyChange={handleGuestProfileDirtyChange}
+          closeLabel="Wróć do rezerwacji"
+        />
       ) : null}
     </div>
   )

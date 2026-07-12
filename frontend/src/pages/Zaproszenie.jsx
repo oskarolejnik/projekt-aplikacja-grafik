@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api, setToken } from '../lib/api'
+import { api } from '../lib/api'
+import { establishAuthenticatedSession } from '../lib/authTransition'
 import { Logo } from '../components/Logo'
 import { Spinner } from '../components/ui/Spinner'
 
@@ -41,7 +42,7 @@ export default function Zaproszenie({ token }) {
         email: email.trim(),
         haslo,
       })
-      setToken(r.access_token)
+      establishAuthenticatedSession(r.access_token)
       window.location.href = '/'   // pełne przeładowanie → App routuje wg roli konta
     } catch (err) {
       setFormBlad(err.message)

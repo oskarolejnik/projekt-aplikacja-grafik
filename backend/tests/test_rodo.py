@@ -6,6 +6,7 @@ import json
 
 import models
 import reservation_service
+from crm_identity import hash_key, reservation_fallback_hash
 from sms import _normalizuj_numer
 
 TEL = "600 100 200"
@@ -22,6 +23,10 @@ def test_eksport_gosc(admin_client, db):
     _termin(db, data=date.today())
     _termin(db, data=date.today() - timedelta(days=30), status="odbyla")
     r = admin_client.get("/api/rodo/eksport-gosc", params={"klucz": KLUCZ})
+    assert r.headers["cache-control"] == "private, no-store"
+    assert "authorization" in {
+        part.strip().casefold() for part in r.headers["vary"].split(",")
+    }
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["liczba_rekordow"] == 2
@@ -56,6 +61,13 @@ def test_anonimizuj_gosc(admin_client, db):
     )
     db.add(models.WiadomoscImprezy(termin_id=t1.id, autor="klient", tresc="mój numer 600100200",
                                    utworzono_at=datetime.now()))
+    db.add(models.ProfilGoscia(
+        klucz_hash=hash_key(KLUCZ),
+        nazwisko="Kowalski",
+        alergie="orzechy",
+        notatka="Poufny profil gościa",
+        utworzono_at=datetime.now(),
+    ))
     db.commit()
     db.expunge(idem.record)
     r = admin_client.post("/api/rodo/anonimizuj-gosc", json={"klucz": KLUCZ})
@@ -66,6 +78,7 @@ def test_anonimizuj_gosc(admin_client, db):
         assert t.nazwisko == "[anonimizacja RODO]" and t.telefon is None and t.notatka is None
     # Wątek portalu (z PII) usunięty.
     assert db.query(models.WiadomoscImprezy).filter_by(termin_id=t1.id).count() == 0
+    assert db.query(models.ProfilGoscia).filter_by(klucz_hash=hash_key(KLUCZ)).count() == 0
     # Zaszyfrowany wynik idempotencji też zawierał PII; po anonimizacji nie wolno go odtworzyć.
     assert db.query(models.RezerwacjaIdempotencja).filter_by(termin_id=t1.id).count() == 0
     replay = reservation_service.begin_idempotency(
@@ -90,14 +103,57 @@ def test_anonimizuj_gosc(admin_client, db):
     assert KLUCZ not in access_audit.zasob
 
 
+def test_anonimizacja_usuwa_rezerwacyjny_fallback_profilu_crm(admin_client, db):
+    termin = _termin(
+        db,
+        data=date.today(),
+        nazwisko="Bez Kontaktu",
+        telefon=None,
+        notatka="Notatka rezerwacji",
+    )
+    db.add(models.ProfilGoscia(
+        klucz_hash=reservation_fallback_hash(termin.id),
+        nazwisko="Bez Kontaktu",
+        alergie="orzechy",
+        notatka="Poufna notatka profilu",
+        vip=True,
+        utworzono_at=datetime.now(),
+    ))
+    db.commit()
+
+    response = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": "bez kontaktu"},
+    )
+
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    assert db.query(models.ProfilGoscia).count() == 0
+    profile = admin_client.get(f"/api/crm/rezerwacje/{termin.id}/profil").json()
+    assert profile["profil"] is None
+    assert profile["nazwisko"] == "[anonimizacja RODO]"
+    assert "orzechy" not in str(profile)
+    assert "Poufna notatka profilu" not in str(profile)
+
+
 def test_retencja_anonimizuje_stare_zamkniete(admin_client, db):
     stary = _termin(db, data=date.today() - timedelta(days=800), status="odbyla")   # ~2,2 roku
     swiezy = _termin(db, data=date.today() - timedelta(days=30), status="odbyla")
+    db.add(models.ProfilGoscia(
+        klucz_hash=hash_key(KLUCZ),
+        nazwisko="Kowalski",
+        alergie="orzechy",
+        utworzono_at=datetime.now(),
+    ))
+    db.commit()
     r = admin_client.post("/api/rodo/retencja?miesiace=12")
     assert r.status_code == 200, r.text
     assert r.json()["zanonimizowano"] >= 1
     assert db.get(models.Termin, stary.id).nazwisko == "[anonimizacja RODO]"   # stary → anonim
     assert db.get(models.Termin, swiezy.id).nazwisko == "Kowalski"             # świeży → bez zmian
+    assert db.query(models.ProfilGoscia).filter_by(
+        klucz_hash=hash_key(KLUCZ),
+    ).one().alergie == "orzechy"
     audit = db.query(models.ReservationAudit).filter_by(termin_id=stary.id).one()
     assert audit.action == "edit" and audit.reason == "system_automation"
 

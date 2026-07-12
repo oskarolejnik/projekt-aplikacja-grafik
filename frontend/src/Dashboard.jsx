@@ -13,7 +13,7 @@ import {
   readReservationRoute,
   subscribeReservationRoute,
 } from './lib/reservationRoute'
-import { readReservationSession, reservationActorKey } from './lib/reservationSession'
+import { readReservationSession, reservationHistoryState } from './lib/reservationSession'
 
 const loadPulpit = () => import('./components/tabs/Pulpit')
 const loadPrognozaObsady = () => import('./components/tabs/PrognozaObsady')
@@ -113,7 +113,7 @@ const BUILD = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'dev'
 
 export default function Dashboard() {
   const { user, logout } = useAuth()
-  const reservationActor = reservationActorKey(user)
+  const reservationHistory = reservationHistoryState(user)
   const { nazwa_lokalu } = useBranding()
   const [active, setActive] = useState(() => readReservationRoute()
     ? 'rezerwacje'
@@ -247,7 +247,7 @@ export default function Dashboard() {
         navigateReservationRoute(readReservationSession(user)?.route || { view: 'today' }, {
           state: {
             lokaloDashboardTab: 'rezerwacje',
-            ...(reservationActor ? { lokaloReservationActor: reservationActor } : {}),
+            ...reservationHistory,
           },
         })
       }

@@ -7,7 +7,17 @@ import App from './App'
 
 const { apiMock, authState, surfaceState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
-  authState: { user: { rola: 'admin' }, loading: false },
+  authState: {
+    user: { rola: 'admin' },
+    loading: false,
+    workstationLocked: false,
+    workstationChecking: false,
+    retryWorkstation: vi.fn(),
+    authorizationRefreshing: false,
+    authorizationError: null,
+    retryAuthorization: vi.fn(),
+    logout: vi.fn(),
+  },
   surfaceState: { dashboardError: false },
 }))
 
@@ -43,6 +53,13 @@ describe('App — powierzchnie ładowane na żądanie', () => {
     apiMock.mockResolvedValue({ potrzebny: false })
     authState.user = { rola: 'admin' }
     authState.loading = false
+    authState.workstationLocked = false
+    authState.workstationChecking = false
+    authState.retryWorkstation.mockReset()
+    authState.authorizationRefreshing = false
+    authState.authorizationError = null
+    authState.retryAuthorization.mockReset()
+    authState.logout.mockReset()
     surfaceState.dashboardError = false
   })
 
@@ -69,6 +86,27 @@ describe('App — powierzchnie ładowane na żądanie', () => {
     render(<App />)
 
     expect(await screen.findByText(ekran)).toBeInTheDocument()
+  })
+
+  it('po blokadzie stanowiska nie montuje powierzchni roli ani danych operacyjnych', async () => {
+    authState.workstationLocked = true
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Stanowisko jest zablokowane' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sprawdź ponownie' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Wyloguj' })).toBeInTheDocument()
+    expect(screen.queryByText('Panel administratora')).not.toBeInTheDocument()
+  })
+
+  it('podczas zewnętrznej zmiany roli fail-closed ukrywa panel aż do świeżego snapshotu', async () => {
+    authState.authorizationRefreshing = true
+    authState.authorizationError = 'Nie udało się odświeżyć uprawnień.'
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Nie udało się potwierdzić dostępu' })).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Nie udało się odświeżyć uprawnień.')
+    expect(screen.getByRole('button', { name: 'Spróbuj ponownie' })).toBeInTheDocument()
+    expect(screen.queryByText('Panel administratora')).not.toBeInTheDocument()
   })
 
   it('ładuje publiczny produkt bez uruchamiania paneli ról', async () => {

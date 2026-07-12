@@ -5,6 +5,7 @@ import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
+import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../ui/Toast'
 import { warsawDateISO } from '../../lib/date'
@@ -45,10 +46,38 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
   const [actions, setActions] = useState({})
   const [rowFeedback, setRowFeedback] = useState({})
   const requestId = useRef(0)
+  const loadControllerRef = useRef(null)
   const hasDataRef = useRef(false)
+  const mutationGenerationRef = useRef(0)
+  const mutationControllersRef = useRef(new Set())
+
+  const cancelReadRequests = useCallback(() => {
+    requestId.current += 1
+    loadControllerRef.current?.abort()
+    loadControllerRef.current = null
+  }, [])
+
+  const cancelMutationContinuations = useCallback(() => {
+    mutationGenerationRef.current += 1
+    mutationControllersRef.current.forEach((controller) => controller.abort())
+    mutationControllersRef.current.clear()
+  }, [])
+
+  const startMutation = () => {
+    const controller = new AbortController()
+    mutationControllersRef.current.add(controller)
+    return { controller, generation: mutationGenerationRef.current }
+  }
+  const mutationIsCurrent = ({ controller, generation }) => (
+    !controller.signal.aborted && generation === mutationGenerationRef.current
+  )
+  const finishMutation = ({ controller }) => mutationControllersRef.current.delete(controller)
 
   const load = useCallback(async ({ quiet = false, day = data } = {}) => {
     if (!active) return
+    loadControllerRef.current?.abort()
+    const controller = new AbortController()
+    loadControllerRef.current = controller
     const id = ++requestId.current
     if (quiet) {
       setRefreshing(true)
@@ -59,29 +88,45 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
       setLoadError(null)
     }
     try {
-      const [kk, ss] = await Promise.all([api(`/host/kolejka?data=${day}`), api('/stoliki')])
-      if (id !== requestId.current || day !== dataRef.current) return
+      const [kk, ss] = await Promise.all([
+        api(`/host/kolejka?data=${day}`, 'GET', null, { signal: controller.signal }),
+        api('/stoliki', 'GET', null, { signal: controller.signal }),
+      ])
+      if (controller.signal.aborted || id !== requestId.current || day !== dataRef.current) return
       hasDataRef.current = true
       setKolejka(kk)
       setStoliki(ss.stoliki || [])
       setLoadError(null)
       setRefreshError(null)
     } catch (e) {
-      if (id !== requestId.current || day !== dataRef.current) return
+      if (controller.signal.aborted || e?.name === 'AbortError' || id !== requestId.current || day !== dataRef.current) return
       const message = e.message || 'Nie udało się pobrać widoku hosta.'
       if (quiet && hasDataRef.current) setRefreshError(message)
       else setLoadError(message)
     } finally {
-      if (id !== requestId.current || day !== dataRef.current) return
+      if (controller.signal.aborted || id !== requestId.current || day !== dataRef.current) return
+      if (loadControllerRef.current === controller) loadControllerRef.current = null
       setRefreshing(false)
       setLoading(false)
     }
   }, [active, data, canViewContacts, canViewSensitive])
 
   useEffect(() => {
+    const cancelPrivacyWork = () => {
+      cancelReadRequests()
+      cancelMutationContinuations()
+    }
+    const unsubscribe = subscribeReservationPrivacyPurge(cancelPrivacyWork)
+    return () => {
+      unsubscribe()
+      cancelPrivacyWork()
+    }
+  }, [cancelMutationContinuations, cancelReadRequests])
+
+  useEffect(() => {
     if (!data || dataRef.current === data) return
     dataRef.current = data
-    requestId.current += 1
+    cancelReadRequests()
     hasDataRef.current = false
     setKolejka(null)
     setLoading(true)
@@ -90,16 +135,16 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     setRefreshing(false)
     setPick({})
     setRowFeedback({})
-  }, [data])
+  }, [cancelReadRequests, data])
 
   useEffect(() => {
     if (!active) {
-      requestId.current += 1
+      cancelReadRequests()
       setRefreshing(false)
       return
     }
     load()
-  }, [active, load])
+  }, [active, cancelReadRequests, load])
   // Cicha aktualizacja timerów obrotu co 30 s (bez migotania spinnera).
   useEffect(() => {
     if (!active) return undefined
@@ -112,7 +157,7 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     onDateChange?.(nextDay)
     if (dateControlled) return
     dataRef.current = nextDay
-    requestId.current += 1
+    cancelReadRequests()
     hasDataRef.current = false
     setKolejka(null)
     setLoading(true)
@@ -135,22 +180,27 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     const operationDay = data
     setActions((current) => ({ ...current, [r.id]: 'seat' }))
     setRowFeedback((current) => ({ ...current, [r.id]: null }))
+    const mutation = startMutation()
     try {
       const sid = pick[r.id]
       await api(`/host/rezerwacja/${r.id}/posadz`, 'POST', {
         stolik_id: sid ? Number(sid) : null,
-      })
-      toast('Posadzono.', 'success')
+      }, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
+      toast('Posadzono.', 'success', { scope: 'reservations' })
       if (dataRef.current === operationDay) {
         setPick((p) => ({ ...p, [r.id]: '' }))
         void load({ day: operationDay })
       }
     } catch (e) {
+      if (!mutationIsCurrent(mutation) || e?.name === 'AbortError') return
       if (dataRef.current === operationDay) {
         setRowFeedback((current) => ({ ...current, [r.id]: e.message || 'Nie udało się posadzić gości.' }))
       }
-      toast(e.message, 'error')
+      toast(e.message, 'error', { scope: 'reservations' })
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setActions((current) => {
         const next = { ...current }
         delete next[r.id]
@@ -163,16 +213,21 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     const operationDay = data
     setActions((current) => ({ ...current, [r.id]: f }))
     setRowFeedback((current) => ({ ...current, [r.id]: null }))
+    const mutation = startMutation()
     try {
-      await api(`/host/rezerwacja/${r.id}/faza`, 'POST', { faza: f })
+      await api(`/host/rezerwacja/${r.id}/faza`, 'POST', { faza: f }, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       if (dataRef.current === operationDay) void load({ day: operationDay })
     }
     catch (e) {
+      if (!mutationIsCurrent(mutation) || e?.name === 'AbortError') return
       if (dataRef.current === operationDay) {
         setRowFeedback((current) => ({ ...current, [r.id]: e.message || 'Nie udało się zmienić etapu.' }))
       }
-      toast(e.message, 'error')
+      toast(e.message, 'error', { scope: 'reservations' })
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setActions((current) => {
         const next = { ...current }
         delete next[r.id]

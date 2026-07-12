@@ -27,7 +27,9 @@ export async function sprawdzInstancje(bazowyUrl) {
   } catch { return false }
 }
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
+export const getPersistentToken = () => localStorage.getItem(TOKEN_KEY)
+export const clearSessionToken = () => sessionStorage.removeItem(TOKEN_KEY)
+export const getToken = () => getPersistentToken() || sessionStorage.getItem(TOKEN_KEY)
 // remember=true → sesja trwała (localStorage, przeżywa zamknięcie przeglądarki);
 // remember=false → tylko bieżąca sesja (sessionStorage, znika po zamknięciu karty/przeglądarki).
 export const setToken = (t, remember = true) => {
@@ -47,8 +49,38 @@ export const setToken = (t, remember = true) => {
 
 // AuthContext rejestruje tu reakcję na wygaśnięcie sesji (401).
 let onUnauthorized = null
+let onWorkstationLocked = null
 export const setUnauthorizedHandler = (fn) => {
   onUnauthorized = fn
+}
+export const setWorkstationLockedHandler = (fn) => {
+  onWorkstationLocked = fn
+}
+
+const responseCode = (data) => data?.code
+  || (data?.detail && typeof data.detail === 'object' ? data.detail.code : null)
+
+const responseMessage = (data, fallback) => {
+  if (typeof data?.detail === 'string') return data.detail
+  if (data?.detail && typeof data.detail === 'object') {
+    return data.detail.message || data.detail.detail || fallback
+  }
+  return fallback
+}
+
+const handleSessionResponse = (status, code, requestToken) => {
+  // A stale response from the previous operator must not clear or lock the
+  // credential that replaced the bearer used for this request.
+  // Publiczne żądania (np. błędne /auth/login) nie reprezentują żadnej sesji
+  // i nie mogą rozgłaszać wylogowania do innych kart.
+  if (!requestToken || getToken() !== requestToken) return
+  if (status === 401) {
+    setToken(null)
+    if (onUnauthorized) onUnauthorized()
+  }
+  if (status === 423 && code === 'WORKSTATION_LOCKED' && onWorkstationLocked) {
+    onWorkstationLocked()
+  }
 }
 
 export const nowyKluczIdempotencji = (scope = 'request') => {
@@ -73,16 +105,17 @@ export async function api(path, method = 'GET', body = null, options = {}) {
 
   if (res.status === 401) {
     // Token nieważny/wygasł — czyścimy sesję i powiadamiamy aplikację.
-    setToken(null)
-    if (onUnauthorized) onUnauthorized()
+    handleSessionResponse(res.status, null, token)
   }
   if (res.status === 204) return null
 
   const data = await res.json().catch(() => ({}))
+  const code = responseCode(data)
+  if (res.status === 423) handleSessionResponse(res.status, code, token)
   if (!res.ok) {
-    const error = new Error(data.detail || res.statusText)
+    const error = new Error(responseMessage(data, res.statusText))
     error.status = res.status
-    error.code = data.code || null
+    error.code = code
     error.availability = data.availability || null
     throw error
   }
@@ -94,10 +127,15 @@ export async function api(path, method = 'GET', body = null, options = {}) {
 export async function pobierzPlik(path, nazwaPliku) {
   const token = getToken()
   const res = await fetch(pelnyUrl(path), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-  if (res.status === 401) { setToken(null); if (onUnauthorized) onUnauthorized() }
+  if (res.status === 401) handleSessionResponse(res.status, null, token)
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
-    throw new Error(data.detail || res.statusText)
+    const code = responseCode(data)
+    if (res.status === 423) handleSessionResponse(res.status, code, token)
+    const error = new Error(responseMessage(data, res.statusText))
+    error.status = res.status
+    error.code = code
+    throw error
   }
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)

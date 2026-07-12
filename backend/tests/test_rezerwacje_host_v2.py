@@ -1,6 +1,6 @@
 """Slice v2 S7: widok hosta — oś czasu (stoły × godziny, paski zajętości z rozbiciem kombinacji)
-+ wzbogacenie kolejki o flagi gościa z ProfilGoscia (VIP/alergie/okazja/tagi), join po hashu klucza CRM.
-Gość bez telefonu/e-maila → klucz CRM = nazwisko.lower(). 2026-07-13 = poniedziałek."""
++ wzbogacenie kolejki o flagi gościa z ProfilGoscia (VIP/alergie/okazja/tagi), join po bezpiecznym
+identyfikatorze kontaktu albo dokładnej rezerwacji. 2026-07-13 = poniedziałek."""
 
 PON = "2026-07-13"
 
@@ -52,8 +52,8 @@ def test_os_czasu_pomija_odwolane(admin_client):
 
 def test_kolejka_wzbogaca_flagami_goscia(admin_client):
     _stolik(admin_client, "S1", 4)
-    r = _rez(admin_client, PON, "18:00", 2, nazwisko="Kowalski")    # bez telefonu → klucz CRM "kowalski"
-    admin_client.put("/api/crm/goscie/kowalski/profil",
+    r = _rez(admin_client, PON, "18:00", 2, nazwisko="Kowalski")
+    admin_client.put(f"/api/crm/rezerwacje/{r}/profil",
                      json={"vip": True, "tagi": ["VIP"], "alergie": "orzechy", "okazja_typ": "urodziny"})
     kol = admin_client.get(f"/api/host/kolejka?data={PON}").json()
     wpis = next(w for w in kol["nadchodzace"] if w["id"] == r)

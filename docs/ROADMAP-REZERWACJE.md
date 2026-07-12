@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a, R0b, R1a i rdzeń R1b wdrożone · następny checkpoint R1b.2 (bezpieczny handoff CRM i blokada stanowiska) · 12 lipca 2026
+> Status: kierunek zatwierdzony · R0a, R0b, R1a i R1b wdrożone · następny checkpoint R2 (sale i publikowany plan stołów) · 12 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -500,10 +500,31 @@ rekordu. Kontekst nie-PII i scroll są pamiętane osobno dla użytkownika/instan
 doładowaniu dłuższej treści. Wylogowanie, 401 i zmiana instancji czyszczą pamięć, trasę oraz szkice
 komponentów. Wszystkie operacyjne daty „Dzisiaj” używają `Europe/Warsaw`.
 
-R1b nie jest jeszcze formalnie zamknięte: obecny CRM pozostaje admin-only i używa potencjalnie
-surowego klucza gościa, dlatego nie dostał niebezpiecznego deep-linku. R1b.2 ma najpierw dodać
-opaque kontrakt `reservation_id → profil`, kontrolowany `returnTo` oraz czyszczenie po przyszłej
-blokadzie stanowiska. Dopiero wtedy pełne kryterium Done obejmie ścieżkę do karty gościa.
+**Stan wdrożenia R1b.2 — 12 lipca 2026:** checkpoint R1b jest zamknięty. Karta gościa otwiera się
+wyłącznie przez nieosobowy `reservation_id`; lista CRM zwraca `profil_ref`, a aktywny frontend nie
+wysyła telefonu, e-maila, nazwiska ani ich hasha w ścieżce API. Osoby bez telefonu i e-maila nie są
+już łączone po samym nazwisku — profil i historia pozostają wtedy ograniczone do jednej rezerwacji.
+Backend redaguje dane wrażliwe i notatki według granularnych praw, pozostawia zapis profilu
+administratorowi oraz oznacza przestrzenie odpowiedzi PII (także RODO i terminy) jako
+`private, no-store`. Profil ma pełny lifecycle: po dopisaniu, korekcie lub usunięciu kontaktu
+jest migrowany tylko wtedy, gdy stara tożsamość nie opisuje innych wizyt, oraz scalany bez utraty
+alergii/notatek i bez wskrzeszania zgody marketingowej,
+a usunięcie rekordu albo anonimizacja RODO usuwa fallback przed możliwym ponownym użyciem ID.
+Zmiana granularnych praw lub roli aktywnego konta aktualizuje snapshot autoryzacji między kartami,
+natychmiast redaguje otwartą kartę i dopiero potem pobiera jej bezpieczną wersję ponownie.
+
+Profil jest jednym routowanym dialogiem nad nadal zamontowanym workspace. `Back`, Escape i
+„Wróć do rezerwacji” odtwarzają dokładny dzień, zaznaczenie, filtry, scroll, fokus i bezpieczny
+szkic aktywnego operatora; parametr `gosc` zawiera wyłącznie ID rezerwacji. Historia przeglądarki
+ma teraz actor + losowy privacy epoch. Epoch rotuje po jawnym logowaniu, wylogowaniu, 401, zmianie
+instancji i `423 WORKSTATION_LOCKED`, więc stary wpis tego samego operatora jest odrzucany przed
+pobraniem PII. Jeden purge czyści URL, pamięć tras i sesji rezerwacji, wyniki, formularze, aktywne potwierdzenia
+i cache komponentów, abortuje odczyty oraz mutacje i propaguje się między kartami. Spóźnione 401/423
+starego bearer tokenu nie mogą wylogować ani zablokować nowego operatora. Blokada 423 ma lokalny
+one-shot latch: odmontowuje powierzchnie operacyjne i pozwala tylko jawnie sprawdzić sesję ponownie
+lub się wylogować, bez pętli requestów. Brudny profil chroni także Browser Back i odświeżenie.
+R1b.2 dostarcza ten kontrakt bezpieczeństwa, ale nie pozorny PIN: właściwa sesja operatora,
+revokacja, rate limit i audyt PIN-u pozostają osobnym etapem.
 
 ### R2 — Sale i publikowany plan stołów
 
@@ -849,7 +870,8 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a, R0b, R1a i rdzeń R1b są zamkniętymi checkpointami. Następny milestone to `R1b.2`: opaque
-handoff z rezerwacji do CRM, dokładny `returnTo` oraz kontrakt przyszłej blokady stanowiska. Po jego
-zamknięciu przechodzimy do R2. Nie rozszerzamy jeszcze konfiguratora sal ani pełnego ewaluatora
-R3/R4; korzystają one z gotowych granic uprawnień, audytu i atomowości dopiero w swoich etapach.
+R0a, R0b, R1a i R1b są zamkniętymi checkpointami. Następny milestone to `R2`: encja sali,
+wersjonowany plan stołów, bezpieczna publikacja oraz kanoniczne kombinacje. Nie rozszerzamy jeszcze
+pełnego ewaluatora R3/R4; korzysta on z gotowych granic uprawnień, audytu i atomowości dopiero w
+swoim etapie. Serwerowa blokada stanowiska z sesją operatora i PIN-em pozostaje oddzielnym zadaniem,
+którego nie wolno udawać samą zasłoną frontendu.

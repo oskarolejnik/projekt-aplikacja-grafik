@@ -1,12 +1,29 @@
 // @vitest-environment jsdom
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+
+const { privacyState, subscribePurgeMock } = vi.hoisted(() => ({
+  privacyState: { callback: null },
+  subscribePurgeMock: vi.fn((callback) => {
+    privacyState.callback = callback
+    return () => {
+      if (privacyState.callback === callback) privacyState.callback = null
+    }
+  }),
+}))
+
+vi.mock('../../lib/reservationPrivacy', () => ({
+  subscribeReservationPrivacyPurge: subscribePurgeMock,
+}))
+
 import { ToastProvider, useToast } from './Toast'
 
 afterEach(() => {
   cleanup()
   document.body.style.overflow = ''
+  privacyState.callback = null
+  vi.clearAllMocks()
   vi.restoreAllMocks()
 })
 
@@ -26,7 +43,12 @@ function Konsument() {
       <button onClick={() => toast('Nie zapisano zmian.', 'error', {
         action: { label: 'Ponów', onClick: cofnijMock },
       })}>pokaz-trwaly-toast-z-akcja</button>
+      <button onClick={() => toast('Rezerwacja Anny Kowalskiej.', 'success', {
+        scope: 'reservations',
+        action: { label: 'Cofnij rezerwację', onClick: cofnijMock },
+      })}>pokaz-toast-rezerwacji</button>
       <button onClick={async () => { wynikConfirm = await confirm('Na pewno usunąć?') }}>pokaz-confirm</button>
+      <button onClick={async () => { wynikConfirm = await confirm('Usunąć rezerwację Anny Kowalskiej?') }}>pokaz-confirm-rezerwacji</button>
     </div>
   )
 }
@@ -148,5 +170,28 @@ describe('ToastProvider / useToast', () => {
     await screen.findByRole('alertdialog')
     fireEvent.click(screen.getByRole('button', { name: 'Anuluj' }))
     await waitFor(() => expect(wynikConfirm).toBe(false))
+  })
+
+  it('purge anuluje aktywny confirm, nie przywraca fokusu do PII i usuwa tylko toasty rezerwacji', async () => {
+    wynikConfirm = undefined
+    render_()
+    fireEvent.click(screen.getByRole('button', { name: 'pokaz-toast' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pokaz-toast-rezerwacji' }))
+    const trigger = screen.getByRole('button', { name: 'pokaz-confirm-rezerwacji' })
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    await screen.findByRole('alertdialog')
+    expect(screen.getByText('Rezerwacja Anny Kowalskiej.')).toBeInTheDocument()
+
+    act(() => privacyState.callback?.({ reason: 'workstation-locked' }))
+
+    await waitFor(() => expect(wynikConfirm).toBe(false))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(screen.queryByText('Rezerwacja Anny Kowalskiej.')).not.toBeInTheDocument()
+    expect(screen.getByText('Zapisano zmiany!')).toBeInTheDocument()
+    expect(trigger).not.toHaveFocus()
+    expect(cofnijMock).not.toHaveBeenCalled()
+    expect(subscribePurgeMock).toHaveBeenCalled()
   })
 })

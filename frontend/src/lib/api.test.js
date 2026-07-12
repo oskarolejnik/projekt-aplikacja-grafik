@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { api, nowyKluczIdempotencji, setToken, setUnauthorizedHandler } from './api'
+import {
+  api,
+  nowyKluczIdempotencji,
+  pobierzPlik,
+  setToken,
+  setUnauthorizedHandler,
+  setWorkstationLockedHandler,
+} from './api'
 
 // Pomocnik: odpowiedź w stylu fetch Response (tylko pola używane przez api()).
 const odp = (status, data, ok) => ({
@@ -11,7 +18,11 @@ const odp = (status, data, ok) => ({
 const mockFetch = (resp) => vi.stubGlobal('fetch', vi.fn().mockResolvedValue(resp))
 
 beforeEach(() => { localStorage.clear(); sessionStorage.clear() })
-afterEach(() => { vi.unstubAllGlobals(); setUnauthorizedHandler(null) })
+afterEach(() => {
+  vi.unstubAllGlobals()
+  setUnauthorizedHandler(null)
+  setWorkstationLockedHandler(null)
+})
 
 describe('api()', () => {
   it('GET bez tokenu — prefiks /api, metoda GET, brak Authorization', async () => {
@@ -74,6 +85,84 @@ describe('api()', () => {
     await expect(api('/x')).rejects.toBeTruthy()   // 401 ma !ok → też rzuca
     expect(localStorage.getItem('grafik_token')).toBeNull()
     expect(onUnauth).toHaveBeenCalledTimes(1)
+  })
+
+  it('401 anonimowego żądania nie rozgłasza wylogowania aktywnych kart', async () => {
+    const onUnauth = vi.fn()
+    setUnauthorizedHandler(onUnauth)
+    mockFetch(odp(401, { detail: 'Nieprawidłowy login lub hasło.' }))
+
+    await expect(api('/auth/login', 'POST', { login: 'x', haslo: 'y' })).rejects.toBeTruthy()
+
+    expect(onUnauth).not.toHaveBeenCalled()
+    expect(localStorage.getItem('grafik_token')).toBeNull()
+  })
+
+  it('423 WORKSTATION_LOCKED zachowuje token i woła osobny handler prywatności', async () => {
+    setToken('aktywny-token')
+    const onLocked = vi.fn()
+    setWorkstationLockedHandler(onLocked)
+    mockFetch(odp(423, {
+      detail: { code: 'WORKSTATION_LOCKED', message: 'Stanowisko jest zablokowane.' },
+    }))
+
+    const error = await api('/rezerwacje-stolik').catch((caught) => caught)
+
+    expect(error.status).toBe(423)
+    expect(error.code).toBe('WORKSTATION_LOCKED')
+    expect(error.message).toBe('Stanowisko jest zablokowane.')
+    expect(localStorage.getItem('grafik_token')).toBe('aktywny-token')
+    expect(onLocked).toHaveBeenCalledOnce()
+  })
+
+  it('zwykłe 423 nie uruchamia blokady stanowiska', async () => {
+    const onLocked = vi.fn()
+    setWorkstationLockedHandler(onLocked)
+    mockFetch(odp(423, { detail: 'Zasób chwilowo zablokowany.', code: 'RESOURCE_LOCKED' }))
+
+    await expect(api('/x')).rejects.toBeTruthy()
+
+    expect(onLocked).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['api()', () => api('/stary-request')],
+    ['pobierzPlik()', () => pobierzPlik('/stary-plik', 'raport.xlsx')],
+  ])('%s ignoruje spóźnione 401 poprzedniego tokenu', async (_label, request) => {
+    setToken('token-operatora-a')
+    const onUnauth = vi.fn()
+    setUnauthorizedHandler(onUnauth)
+    let resolveFetch
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => { resolveFetch = resolve })))
+
+    const pending = request()
+    setToken('token-operatora-b')
+    resolveFetch(odp(401, { detail: 'Stara sesja wygasła.' }))
+
+    await expect(pending).rejects.toBeTruthy()
+    expect(localStorage.getItem('grafik_token')).toBe('token-operatora-b')
+    expect(onUnauth).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['api()', () => api('/stary-request')],
+    ['pobierzPlik()', () => pobierzPlik('/stary-plik', 'raport.xlsx')],
+  ])('%s ignoruje spóźnione 423 poprzedniego tokenu', async (_label, request) => {
+    setToken('token-operatora-a')
+    const onLocked = vi.fn()
+    setWorkstationLockedHandler(onLocked)
+    let resolveFetch
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => { resolveFetch = resolve })))
+
+    const pending = request()
+    setToken('token-operatora-b')
+    resolveFetch(odp(423, {
+      detail: { code: 'WORKSTATION_LOCKED', message: 'Stare stanowisko jest zablokowane.' },
+    }))
+
+    await expect(pending).rejects.toBeTruthy()
+    expect(localStorage.getItem('grafik_token')).toBe('token-operatora-b')
+    expect(onLocked).not.toHaveBeenCalled()
   })
 })
 

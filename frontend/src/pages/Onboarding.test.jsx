@@ -3,8 +3,9 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock, setTokenMock } = vi.hoisted(() => ({ apiMock: vi.fn(), setTokenMock: vi.fn() }))
-vi.mock('../lib/api', () => ({ api: apiMock, setToken: setTokenMock }))
+const { apiMock, establishSessionMock } = vi.hoisted(() => ({ apiMock: vi.fn(), establishSessionMock: vi.fn() }))
+vi.mock('../lib/api', () => ({ api: apiMock }))
+vi.mock('../lib/authTransition', () => ({ establishAuthenticatedSession: establishSessionMock }))
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }))
 
 import Onboarding from './Onboarding'
@@ -25,7 +26,7 @@ describe('Kreator lokalu (Onboarding)', () => {
     wypelnijKonto()
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/onboarding/bootstrap', 'POST', expect.objectContaining({ email: 'admin@testowa.pl', nazwa_lokalu: 'Testowa' })))
-    expect(setTokenMock).toHaveBeenCalledWith('tok')
+    expect(establishSessionMock).toHaveBeenCalledWith('tok')
     // Krok „typ": widać popularne typy + kartę „Inny".
     expect(await screen.findByText('Pizzeria')).toBeInTheDocument()
     expect(screen.getByText('Karczma / restauracja regionalna')).toBeInTheDocument()

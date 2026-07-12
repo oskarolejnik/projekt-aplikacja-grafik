@@ -3,10 +3,17 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock, confirmMock, authState } = vi.hoisted(() => ({
+const { apiMock, confirmMock, authState, privacyState, subscribePurgeMock } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   confirmMock: vi.fn(),
   authState: { isAdmin: true, permissions: [] },
+  privacyState: { callback: null },
+  subscribePurgeMock: vi.fn((callback) => {
+    privacyState.callback = callback
+    return () => {
+      if (privacyState.callback === callback) privacyState.callback = null
+    }
+  }),
 }))
 
 vi.mock('../../lib/api', () => ({
@@ -23,6 +30,9 @@ vi.mock('../../context/AuthContext', () => ({
   }),
 }))
 vi.mock('../../lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
+vi.mock('../../lib/reservationPrivacy', () => ({
+  subscribeReservationPrivacyPurge: subscribePurgeMock,
+}))
 
 import RezerwacjeStolik from './RezerwacjeStolik'
 
@@ -87,6 +97,7 @@ afterEach(() => {
   confirmMock.mockResolvedValue(true)
   authState.isAdmin = true
   authState.permissions = []
+  privacyState.callback = null
 })
 
 describe('Rezerwacje stolików', () => {
@@ -241,7 +252,7 @@ describe('Rezerwacje stolików', () => {
     let tableLoads = 0
     apiMock.mockImplementation((path, method, body) => {
       if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
-      if (path === '/stoliki' && !method) {
+      if (path === '/stoliki' && (!method || method === 'GET')) {
         tableLoads += 1
         return Promise.resolve({ stoliki: [TABLE] })
       }
@@ -275,7 +286,7 @@ describe('Rezerwacje stolików', () => {
   it('wyłącza nieużywany stolik bez usuwania go z konfiguracji', async () => {
     apiMock.mockImplementation((path, method, body) => {
       if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
-      if (path === '/stoliki' && !method) return Promise.resolve({ stoliki: [TABLE] })
+      if (path === '/stoliki' && (!method || method === 'GET')) return Promise.resolve({ stoliki: [TABLE] })
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
       if (path === '/rezerwacje/config') return Promise.resolve({ sale: ['Sala'] })
       if (path === `/stoliki/${TABLE.id}` && method === 'PUT') {
@@ -294,6 +305,7 @@ describe('Rezerwacje stolików', () => {
       `/stoliki/${TABLE.id}`,
       'PUT',
       expect.objectContaining({ aktywny: false, nazwa: TABLE.nazwa, pojemnosc: TABLE.pojemnosc }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
   })
 
@@ -579,6 +591,7 @@ describe('Rezerwacje stolików', () => {
         telefon: RESERVATION.telefon,
         email: RESERVATION.email,
       }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ))
     const updateBody = apiMock.mock.calls.find(([path, method]) => path === `/rezerwacje-stolik/${RESERVATION.id}` && method === 'PUT')[2]
     expect(updateBody).not.toHaveProperty('notatka')
@@ -648,6 +661,28 @@ describe('Rezerwacje stolików', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('przekazuje opaque id do karty gościa i zachowuje szkic podczas zawieszenia dialogu', async () => {
+    mockInitial({ reservations: [RESERVATION] })
+    const onGuestProfileOpen = vi.fn()
+    const props = {
+      date: TEST_DATE,
+      reservationId: RESERVATION.id,
+      onGuestProfileOpen,
+    }
+    const { rerender } = render(<RezerwacjeStolik {...props} />)
+
+    expect(await screen.findByRole('dialog', { name: 'Edytuj rezerwację' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Szkic przed profilem' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Karta gościa' }))
+
+    expect(onGuestProfileOpen).toHaveBeenCalledWith(RESERVATION.id)
+    rerender(<RezerwacjeStolik {...props} suspendReservationDialog />)
+    expect(screen.queryByRole('dialog', { name: 'Edytuj rezerwację' })).not.toBeInTheDocument()
+
+    rerender(<RezerwacjeStolik {...props} suspendReservationDialog={false} />)
+    expect(await screen.findByLabelText('Nazwisko / klient')).toHaveValue('Szkic przed profilem')
+  })
+
   it('nie zamyka niezapisanego formularza po wyczyszczeniu zewnętrznego selection', async () => {
     mockInitial({ reservations: [RESERVATION] })
     const onReservationClose = vi.fn()
@@ -687,5 +722,71 @@ describe('Rezerwacje stolików', () => {
     )
     await waitFor(() => expect(onReservationClose).toHaveBeenCalledTimes(1))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('purge abortuje odczyt dnia i ignoruje spóźniony snapshot PII', async () => {
+    let resolveReservations
+    let requestSignal
+    apiMock.mockImplementation((path, _method, _body, options) => {
+      if (path.startsWith('/rezerwacje-stolik?')) {
+        requestSignal = options.signal
+        return new Promise((resolve) => { resolveReservations = resolve })
+      }
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    await waitFor(() => expect(requestSignal).toBeInstanceOf(AbortSignal))
+
+    act(() => privacyState.callback?.({ reason: 'logout' }))
+    expect(requestSignal.aborted).toBe(true)
+
+    await act(async () => resolveReservations({ rezerwacje: [RESERVATION] }))
+    expect(screen.queryByText('Nowak')).not.toBeInTheDocument()
+  })
+
+  it('purge podczas pending 409 nie otwiera confirmu ani nie wysyła override', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.nadpisuj_limity',
+    ]
+    confirmMock.mockResolvedValue(true)
+    let rejectSeat
+    let mutationSignal
+    let mutationAttempts = 0
+    apiMock.mockImplementation((path, method, _body, options) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/zrealizuj` && method === 'POST') {
+        mutationAttempts += 1
+        mutationSignal = options.signal
+        return new Promise((_resolve, reject) => { rejectSeat = reject })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: /Oczekuj/ }))
+    fireEvent.change(screen.getByRole('combobox', { name: /Stolik dla Kowalska/ }), {
+      target: { value: String(TABLE.id) },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Posad/ }))
+    await waitFor(() => expect(rejectSeat).toEqual(expect.any(Function)))
+
+    act(() => privacyState.callback?.({ reason: 'workstation-locked' }))
+    expect(mutationSignal.aborted).toBe(true)
+    const conflict = new Error('Osiągnięto limit.')
+    conflict.code = 'PACING_RESERVATION_LIMIT'
+    await act(async () => rejectSeat(conflict))
+
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(mutationAttempts).toBe(1)
   })
 })

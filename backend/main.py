@@ -3,7 +3,6 @@ import io
 import re
 import os
 import math
-import hashlib
 import logging
 import secrets
 from datetime import date, time, timedelta, datetime, timezone
@@ -22,6 +21,12 @@ import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_impor
 import reservation_access
 import reservation_audit
 import reservation_service
+from crm_identity import (
+    hash_key as _hash_klucz_crm,
+    identity_hash as _identity_hash_crm,
+    identity_key as _identity_key_crm,
+    reservation_fallback_hash as _reservation_fallback_hash,
+)
 from database import get_db, init_db, SessionLocal
 from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 
@@ -207,6 +212,19 @@ READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/h
 # prefiksowej listy powyżej, żeby przyszła podtrasa zapisu nie odziedziczyła wyjątku.
 READ_ONLY_POST_ODCZYT = frozenset({"/api/rezerwacje-stolik/wyszukaj"})
 
+# Odpowiedzi tych przestrzeni mogą zawierać PII gościa. Segmentowe dopasowanie
+# zapobiega przypadkowemu objęciu podobnie nazwanej przyszłej trasy.
+PII_NO_STORE_PREFIXES = (
+    "/api/crm",
+    "/api/rezerwacje-stolik",
+    "/api/rezerwacje",
+    "/api/me/rezerwacje",
+    "/api/host",
+    "/api/lista-oczekujacych",
+    "/api/rodo",
+    "/api/terminy",
+)
+
 # Przestrzenie, w których rola nadzorcza ma PEŁNY dostęp (też zapisy). Każdy taki
 # endpoint sam pilnuje, że dotyczy wyłącznie swojej domeny (np. grafik kuchni).
 ROLA_PELNA_PRZESTRZEN = {"szef_kuchni": ("/api/szefkuchni",)}
@@ -311,6 +329,12 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if _sciezka_na_whitelist(request.url.path, PII_NO_STORE_PREFIXES):
+        response.headers["Cache-Control"] = "private, no-store"
+        vary = [part.strip() for part in response.headers.get("Vary", "").split(",") if part.strip()]
+        if not any(part.casefold() == "authorization" for part in vary):
+            vary.append("Authorization")
+        response.headers["Vary"] = ", ".join(vary)
     if not app_settings.IS_DEV:
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
@@ -1370,6 +1394,7 @@ def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(
     t = db.get(models.Termin, termin_id)
     if not t or t.rodzaj == "stolik":            # rezerwacji stolika nie edytuje się przez API imprez
         raise HTTPException(404, "Brak terminu.")
+    crm_identity_before = _identity_key_crm(t)
     stara_data = t.data
     t.data = dane.data; t.nazwisko = dane.nazwisko.strip(); t.typ = dane.typ
     t.liczba_osob = dane.liczba_osob; t.telefon = dane.telefon; t.sala = dane.sala
@@ -1381,6 +1406,8 @@ def edytuj_termin(termin_id: int, dane: schemas.TerminIn, db: Session = Depends(
         if imp is not None:
             imp.data = t.data; imp.klient = t.nazwisko
             imp.liczba_osob = (t.liczba_osob or 0); imp.sala = (t.sala or "Brak")
+    if t.rodzaj == "sala":
+        _migruj_osierocony_profil_po_zmianie_tozsamosci(db, t, crm_identity_before)
     db.commit(); db.refresh(t)
     if t.ical_uid:
         _odswiez_wymagania_imprez(db, min(stara_data, t.data), max(stara_data, t.data))
@@ -1396,6 +1423,7 @@ def usun_termin(termin_id: int, db: Session = Depends(get_db)):
         for z in db.query(models.KpZadatek).filter_by(termin_id=termin_id).all():
             z.termin_id = None       # odepnij zadatki (zostają w skrzynce)
         uid, data_t = t.ical_uid, t.data
+        _usun_profil_fallbacku_rezerwacji(db, t.id)
         db.delete(t)
         # Usuń też sparowaną Imprezę z iCloud (obsada) i odśwież wymagania na ten dzień.
         if uid:
@@ -2195,11 +2223,112 @@ def auto_przydziel_stolik(
 
 # ── Widok hosta: kolejka dnia + fazy operacyjne + przydział stołu ─────────────
 def _crm_hash(t) -> str:
-    """sha256 klucza CRM gościa (telefon→e-mail→nazwisko) — wzorzec z routers/crm.py: join do
-    ProfilGoscia bez plaintextu PII w bazie."""
-    klucz = (sms._normalizuj_numer(t.telefon or "") or (t.email or "").strip().lower()
-             or (t.nazwisko or "").strip().lower())
-    return hashlib.sha256(klucz.strip().encode("utf-8")).hexdigest()
+    """Wewnętrzny hash tożsamości CRM: kontakt albo dokładna rezerwacja."""
+    return _identity_hash_crm(t)
+
+
+_CRM_PROFILE_FILL_FIELDS = (
+    "nazwisko",
+    "preferowana_strefa",
+    "okazja_typ",
+    "okazja_data",
+)
+_CRM_PROFILE_MERGE_TEXT_FIELDS = ("alergie", "dieta", "notatka")
+_CRM_PROFILE_TEXT_SEPARATOR = "\n---\n"
+
+
+def _scal_tekst_profilu(primary, secondary):
+    """Zachowuje obie różne wartości w stabilnej kolejności bez duplikatów."""
+    values = []
+    seen = set()
+    for raw in (primary, secondary):
+        if not raw:
+            continue
+        for part in str(raw).split(_CRM_PROFILE_TEXT_SEPARATOR):
+            value = part.strip()
+            normalized = value.casefold()
+            if value and normalized not in seen:
+                seen.add(normalized)
+                values.append(value)
+    return _CRM_PROFILE_TEXT_SEPARATOR.join(values) or None
+
+
+def _scal_profile_gosci(target, source) -> None:
+    """Scala starszą tożsamość do bieżącego profilu bez utraty danych operacyjnych.
+
+    Istniejący profil docelowy ma pierwszeństwo dla pól pojedynczych, a teksty,
+    tagi i flagi łączymy zachowawczo.
+    """
+    for field in _CRM_PROFILE_FILL_FIELDS:
+        if not getattr(target, field, None) and getattr(source, field, None):
+            setattr(target, field, getattr(source, field))
+    for field in _CRM_PROFILE_MERGE_TEXT_FIELDS:
+        setattr(
+            target,
+            field,
+            _scal_tekst_profilu(getattr(target, field, None), getattr(source, field, None)),
+        )
+
+    tags = list(target.tagi or [])
+    for tag in source.tagi or []:
+        if tag not in tags:
+            tags.append(tag)
+    target.tagi = tags or None
+    target.vip = bool(target.vip or source.vip)
+    # Dwa scalane profile nie mają wersjonowanej proweniencji zgody. Kolizja
+    # zawsze wymaga ponownego, jawnego opt-in; nie wolno wskrzeszać wycofanej zgody.
+    target.marketing_zgoda = False
+    if source.utworzono_at and (
+        target.utworzono_at is None or source.utworzono_at < target.utworzono_at
+    ):
+        target.utworzono_at = source.utworzono_at
+    target.zaktualizowano_at = utcnow_naive()
+
+
+def _migruj_osierocony_profil_po_zmianie_tozsamosci(
+    db, termin, previous_key: str,
+) -> None:
+    """Przenosi profil tylko wtedy, gdy stary klucz nie opisuje innej wizyty.
+
+    Dzięki temu korekta lub usunięcie kontaktu nie zostawia niedostępnego profilu
+    z PII, ale zmiana jednej z wielu wizyt wspólnego gościa nie kradnie profilu
+    pozostałej historii.
+    """
+    current_key = _identity_key_crm(termin)
+    if not previous_key or not current_key or current_key == previous_key:
+        return
+
+    previous_hash = _hash_klucz_crm(previous_key)
+    current_hash = _hash_klucz_crm(current_key)
+    source = db.query(models.ProfilGoscia).filter_by(klucz_hash=previous_hash).first()
+    if source is None:
+        return
+
+    other_rows = db.query(models.Termin).filter(
+        models.Termin.rodzaj.in_(("stolik", "sala")),
+        models.Termin.id != termin.id,
+    ).all()
+    if any(_identity_key_crm(other) == previous_key for other in other_rows):
+        return
+
+    target = db.query(models.ProfilGoscia).filter_by(klucz_hash=current_hash).first()
+    if target is None:
+        source.klucz_hash = current_hash
+        source.zaktualizowano_at = utcnow_naive()
+        return
+
+    _scal_profile_gosci(target, source)
+    db.delete(source)
+
+
+def _usun_profil_fallbacku_rezerwacji(db, reservation_id: int) -> None:
+    """Usuwa profil zależny od ID przed zwolnieniem ID rezerwacji (SQLite reuse)."""
+    fallback_hash = _reservation_fallback_hash(reservation_id)
+    if not fallback_hash:
+        return
+    profile = db.query(models.ProfilGoscia).filter_by(klucz_hash=fallback_hash).first()
+    if profile is not None:
+        db.delete(profile)
 
 
 def _profile_dla_terminow(db, terminy):
@@ -2632,6 +2761,7 @@ def edytuj_rezerwacje_stolik(
         raise HTTPException(404, "Brak rezerwacji.")
     before = reservation_audit.reservation_snapshot(t)
     pii_before = _wartosci_pii_rezerwacji(t)
+    crm_identity_before = _identity_key_crm(t)
     zachowaj_przydzial = bool(
         dane.stolik_id is not None
         and dane.stolik_id == t.stolik_id
@@ -2662,6 +2792,7 @@ def edytuj_rezerwacje_stolik(
         t.stoliki_dodatkowe = None
         t.auto_przydzielony = False
     try:
+        _migruj_osierocony_profil_po_zmianie_tozsamosci(db, t, crm_identity_before)
         db.flush()
         override_details = (
             _szczegoly_przekroczenia_pacingu(db, t) if override_limitow else None
@@ -2866,6 +2997,7 @@ def usun_rezerwacje_stolik(
             {models.ReservationAudit.termin_id: None}, synchronize_session=False,
         )
         audit.termin_id = None
+        _usun_profil_fallbacku_rezerwacji(db, t.id)
         db.delete(t); _commit_zapis_rezerwacji(db, guards)
         if okno:
             _bezpiecznie_po_zwolnieniu_stolu(db, *okno)

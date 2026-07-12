@@ -42,6 +42,9 @@ _CONFIG_ITEM = re.compile(
 _HOST_RESERVATION_ITEM = re.compile(
     r"^/api/host/rezerwacja/[1-9]\d*/(?P<action>faza|przydziel-stolik|posadz)$"
 )
+_CRM_RESERVATION_PROFILE = re.compile(
+    r"^/api/crm/rezerwacje/[1-9]\d*/profil$"
+)
 
 _PROTECTED_PREFIXES = (
     "/api/rezerwacje-stolik",
@@ -56,6 +59,7 @@ _PROTECTED_PREFIXES = (
     "/api/plan-sali",
     "/api/analityka/rezerwacje",
     "/api/analityka/oblozenie",
+    "/api/crm/rezerwacje",
 )
 
 
@@ -77,6 +81,13 @@ def requirement_for(method: str, path: str) -> Requirement | None:
     if path == "/api/rezerwacje-stolik/wyszukaj":
         if method == "POST":
             return Requirement(all_of=(OPERATIONS, CONTACT))
+        return ADMIN_ONLY
+
+    if _CRM_RESERVATION_PROFILE.fullmatch(path):
+        if method == "GET":
+            return Requirement(all_of=(OPERATIONS, CONTACT))
+        # Zapis profilu pozostaje admin-only, dopóki produkt nie otrzyma osobnego,
+        # granularnego prawa edycji CRM.
         return ADMIN_ONLY
 
     match = _RESERVATION_ITEM.fullmatch(path)

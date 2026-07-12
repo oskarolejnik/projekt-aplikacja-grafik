@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
+import { DialogFrame } from '../ui/DialogFrame'
 import { Icon } from '../../lib/icons'
 import { api, nowyKluczIdempotencji } from '../../lib/api'
+import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../ui/Toast'
 import { warsawDateISO } from '../../lib/date'
@@ -86,89 +88,6 @@ const reservationSnapshot = (draft) => JSON.stringify([
   String(draft?.zadatek ?? 0),
 ])
 
-function DialogFrame({ title, closeLabel, onClose, maxWidth = 'max-w-md', initialFocusRef, restoreFocusRef, children }) {
-  const titleId = useId()
-  const panelRef = useRef(null)
-  const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
-
-  useLayoutEffect(() => {
-    const previousFocus = document.activeElement
-    const panel = panelRef.current
-    const focusableSelector = [
-      'button:not([disabled])',
-      'input:not([disabled])',
-      'select:not([disabled])',
-      'textarea:not([disabled])',
-      '[tabindex]:not([tabindex="-1"])',
-    ].join(',')
-    const initial = initialFocusRef?.current || panel?.querySelector(focusableSelector)
-    initial?.focus()
-
-    const onKeyDown = (event) => {
-      // Modal potwierdzenia ToastProvider ma pierwszeństwo przed formularzem pod spodem.
-      if (document.querySelector('[role="alertdialog"]')) return
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCloseRef.current?.()
-        return
-      }
-      if (event.key !== 'Tab' || !panel) return
-      const focusable = [...panel.querySelectorAll(focusableSelector)]
-        .filter((node) => node.getClientRects().length > 0)
-      if (!focusable.length) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-      requestAnimationFrame(() => {
-        const restoreTarget = restoreFocusRef?.current || previousFocus
-        if (restoreTarget?.isConnected) restoreTarget.focus()
-      })
-    }
-  }, [initialFocusRef, restoreFocusRef])
-
-  return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose?.()
-      }}
-    >
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className={`material max-h-[90dvh] w-full ${maxWidth} overflow-y-auto p-5 shadow-soft sm:p-6`}
-      >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <h3 id={titleId} className="font-display text-lg font-semibold text-ink">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="-m-2 grid min-h-11 min-w-11 shrink-0 place-items-center rounded-xl text-muted transition hover:bg-white/[0.06] hover:text-ink"
-            aria-label={closeLabel}
-          >
-            <Icon name="close" className="h-5 w-5" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  )
-}
-
 function ReservationSkeleton() {
   return (
     <div className="space-y-2" aria-label="Ładowanie rezerwacji" role="status">
@@ -207,6 +126,8 @@ export default function RezerwacjeStolik({
   reservationId,
   onReservationOpen,
   onReservationClose,
+  suspendReservationDialog = false,
+  onGuestProfileOpen,
 } = {}) {
   const { confirm } = useToast()
   const { can, isAdmin } = useAuth()
@@ -231,6 +152,9 @@ export default function RezerwacjeStolik({
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState(null)
   const requestId = useRef(0)
+  const loadControllerRef = useRef(null)
+  const mutationGenerationRef = useRef(0)
+  const mutationControllersRef = useRef(new Set())
   const piiVisibility = `${canViewContacts}:${canViewNotes}:${canViewFinances}`
   const piiVisibilityRef = useRef(piiVisibility)
 
@@ -263,7 +187,32 @@ export default function RezerwacjeStolik({
   const [waitFeedback, setWaitFeedback] = useState(null)
   const [waitRowFeedback, setWaitRowFeedback] = useState({})
 
+  const cancelReadRequests = useCallback(() => {
+    requestId.current += 1
+    loadControllerRef.current?.abort()
+    loadControllerRef.current = null
+  }, [])
+
+  const cancelMutationContinuations = useCallback(() => {
+    mutationGenerationRef.current += 1
+    mutationControllersRef.current.forEach((controller) => controller.abort())
+    mutationControllersRef.current.clear()
+  }, [])
+
+  const startMutation = () => {
+    const controller = new AbortController()
+    mutationControllersRef.current.add(controller)
+    return { controller, generation: mutationGenerationRef.current }
+  }
+  const mutationIsCurrent = ({ controller, generation }) => (
+    !controller.signal.aborted && generation === mutationGenerationRef.current
+  )
+  const finishMutation = ({ controller }) => mutationControllersRef.current.delete(controller)
+
   const load = useCallback(async ({ silent = false, day = data } = {}) => {
+    loadControllerRef.current?.abort()
+    const controller = new AbortController()
+    loadControllerRef.current = controller
     const id = ++requestId.current
     if (silent) {
       setRefreshing(true)
@@ -276,32 +225,45 @@ export default function RezerwacjeStolik({
     }
     try {
       const [rs, ss, lo] = await Promise.all([
-        api(`/rezerwacje-stolik?start=${day}&end=${day}`),
-        api('/stoliki'),
-        api(`/lista-oczekujacych?data=${day}`),
+        api(`/rezerwacje-stolik?start=${day}&end=${day}`, 'GET', null, { signal: controller.signal }),
+        api('/stoliki', 'GET', null, { signal: controller.signal }),
+        api(`/lista-oczekujacych?data=${day}`, 'GET', null, { signal: controller.signal }),
       ])
-      if (id !== requestId.current || day !== dataRef.current) return
+      if (controller.signal.aborted || id !== requestId.current || day !== dataRef.current) return
       loadedDayRef.current = day
       setRez(sortReservations(rs.rezerwacje || []))
       setStoliki(sortTables(ss.stoliki || []))
       setLista(sortWaitlist(lo.lista || []))
     } catch (error) {
-      if (id !== requestId.current || day !== dataRef.current) return
+      if (controller.signal.aborted || error?.name === 'AbortError' || id !== requestId.current || day !== dataRef.current) return
       const message = error.message || 'Nie udało się pobrać rezerwacji.'
       if (silent) setRefreshError(message)
       else setLoadError(message)
     } finally {
-      if (id !== requestId.current || day !== dataRef.current) return
+      if (controller.signal.aborted || id !== requestId.current || day !== dataRef.current) return
+      if (loadControllerRef.current === controller) loadControllerRef.current = null
       setRefreshing(false)
       setLoading(false)
     }
   }, [data, canViewContacts, canViewNotes, canViewFinances])
 
   useEffect(() => {
+    const cancelPrivacyWork = () => {
+      cancelReadRequests()
+      cancelMutationContinuations()
+    }
+    const unsubscribe = subscribeReservationPrivacyPurge(cancelPrivacyWork)
+    return () => {
+      unsubscribe()
+      cancelPrivacyWork()
+    }
+  }, [cancelMutationContinuations, cancelReadRequests])
+
+  useEffect(() => {
     if (!data || dataRef.current === data) return
     dataRef.current = data
     loadedDayRef.current = null
-    requestId.current += 1
+    cancelReadRequests()
     setLoading(true)
     setRefreshing(false)
     setLoadError(null)
@@ -309,13 +271,14 @@ export default function RezerwacjeStolik({
     setPageFeedback(null)
     setRowFeedback({})
     setPosadzStolik({})
-  }, [data])
+  }, [cancelReadRequests, data])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
     const visibilityChanged = piiVisibilityRef.current !== piiVisibility
     piiVisibilityRef.current = piiVisibility
     if (!visibilityChanged) return
+    cancelMutationContinuations()
     // Otwarty formularz może zawierać zredagowane wartości. Po zmianie praw zamykamy go,
     // a równoległy efekt ``load`` pobiera rekord ponownie przed kolejną edycją.
     modalInitial.current = null
@@ -323,7 +286,7 @@ export default function RezerwacjeStolik({
     setModalFeedback(null)
     setModal(null)
     if (modal || (selectionControlled && reservationId != null)) onReservationClose?.()
-  }, [piiVisibility])
+  }, [cancelMutationContinuations, piiVisibility])
   useEffect(() => {
     if (!canManageFloor) {
       setSaleLokalu([])
@@ -462,7 +425,7 @@ export default function RezerwacjeStolik({
     if (dateControlled) return
     dataRef.current = nextDay
     loadedDayRef.current = null
-    requestId.current += 1
+    cancelReadRequests()
     setLoading(true)
     setRefreshing(false)
     setLoadError(null)
@@ -492,6 +455,7 @@ export default function RezerwacjeStolik({
     }
     setModalAction('save')
     setModalFeedback(null)
+    const mutation = startMutation()
     try {
       const body = {
         data: modal.data,
@@ -515,10 +479,12 @@ export default function RezerwacjeStolik({
         }
       }
       const saved = modal.id
-        ? await api(`/rezerwacje-stolik/${modal.id}`, 'PUT', body)
+        ? await api(`/rezerwacje-stolik/${modal.id}`, 'PUT', body, { signal: mutation.controller.signal })
         : await api('/rezerwacje-stolik', 'POST', body, {
           headers: { 'Idempotency-Key': probaZapisuRef.current.key },
+          signal: mutation.controller.signal,
         })
+      if (!mutationIsCurrent(mutation)) return
       setRez((current) => saved.data === data
         ? replaceById(current, saved, sortReservations)
         : current.filter((row) => row.id !== saved.id))
@@ -531,6 +497,7 @@ export default function RezerwacjeStolik({
       setModal(null)
       onReservationClose?.()
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       if (error.code === 'IDEMPOTENCY_KEY_REUSED') probaZapisuRef.current = null
       const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
       setModalFeedback({
@@ -539,22 +506,26 @@ export default function RezerwacjeStolik({
         canOverride: pacingConflict && canOverrideLimits,
       })
     } finally {
-      setModalAction(null)
+      finishMutation(mutation)
+      if (mutationIsCurrent(mutation)) setModalAction(null)
     }
   }
 
   const usun = async () => {
     if (!isAdmin || !modal?.id || modalAction) return
+    const confirmGeneration = mutationGenerationRef.current
     const approved = await confirm(`Usunąć rezerwację dla „${modal.nazwisko}”? Tej operacji nie można cofnąć.`, {
       title: 'Usuń rezerwację',
       confirmText: 'Usuń rezerwację',
       cancelText: 'Zostaw',
     })
-    if (!approved) return
+    if (!approved || confirmGeneration !== mutationGenerationRef.current) return
     setModalAction('delete')
     setModalFeedback(null)
+    const mutation = startMutation()
     try {
-      await api(`/rezerwacje-stolik/${modal.id}`, 'DELETE')
+      await api(`/rezerwacje-stolik/${modal.id}`, 'DELETE', null, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       const deletedId = modal.id
       const deletedName = modal.nazwisko
       setRez((current) => current.filter((row) => row.id !== deletedId))
@@ -564,9 +535,11 @@ export default function RezerwacjeStolik({
       onReservationClose?.()
       void load({ silent: true })
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setModalFeedback({ type: 'error', message: error.message || 'Nie udało się usunąć rezerwacji.' })
     } finally {
-      setModalAction(null)
+      finishMutation(mutation)
+      if (mutationIsCurrent(mutation)) setModalAction(null)
     }
   }
 
@@ -575,8 +548,10 @@ export default function RezerwacjeStolik({
     const operationDay = data
     setRowActions((current) => ({ ...current, [reservation.id]: action.status }))
     setRowFeedback((current) => ({ ...current, [reservation.id]: null }))
+    const mutation = startMutation()
     try {
-      const saved = await api(`/rezerwacje-stolik/${reservation.id}/status`, 'POST', { status: action.status })
+      const saved = await api(`/rezerwacje-stolik/${reservation.id}/status`, 'POST', { status: action.status }, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       if (dataRef.current === operationDay) {
         setRez((current) => replaceById(current, saved, sortReservations))
         setRowFeedback((current) => ({
@@ -588,6 +563,7 @@ export default function RezerwacjeStolik({
         void load({ silent: true, day: operationDay })
       }
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       if (dataRef.current === operationDay) {
         setRowFeedback((current) => ({
           ...current,
@@ -595,6 +571,8 @@ export default function RezerwacjeStolik({
         }))
       }
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setRowActions((current) => {
         const next = { ...current }
         delete next[reservation.id]
@@ -607,16 +585,20 @@ export default function RezerwacjeStolik({
     if (!canViewContacts || !modal?.id || modalAction) return
     setModalAction('email')
     setModalFeedback(null)
+    const mutation = startMutation()
     try {
-      const result = await api(`/rezerwacje-stolik/${modal.id}/wyslij-potwierdzenie`, 'POST')
+      const result = await api(`/rezerwacje-stolik/${modal.id}/wyslij-potwierdzenie`, 'POST', null, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       setModalFeedback({
         type: result.wyslano ? 'success' : 'error',
         message: result.wyslano ? 'Wysłano e-mail z potwierdzeniem.' : (result.powod || 'Nie udało się wysłać e-maila.'),
       })
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setModalFeedback({ type: 'error', message: error.message || 'Nie udało się wysłać e-maila.' })
     } finally {
-      setModalAction(null)
+      finishMutation(mutation)
+      if (mutationIsCurrent(mutation)) setModalAction(null)
     }
   }
 
@@ -628,44 +610,54 @@ export default function RezerwacjeStolik({
     }
     setTableAdding(true)
     setTableFeedback(null)
+    const mutation = startMutation()
     try {
       const created = await api('/stoliki', 'POST', {
         nazwa: nowyStolik.nazwa.trim(),
         strefa: nowyStolik.strefa.trim() || null,
         pojemnosc: Number(nowyStolik.pojemnosc) || 2,
         rewir_nr: nowyStolik.rewir_nr ? Number(nowyStolik.rewir_nr) : null,
-      })
+      }, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       setStoliki((current) => replaceById(current, created, sortTables))
       setNowyStolik(emptyTable())
       setTableFeedback({ type: 'success', message: `Dodano stolik: ${created.nazwa}.` })
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setTableFeedback({ type: 'error', message: error.message || 'Nie udało się dodać stolika.' })
     } finally {
-      setTableAdding(false)
+      finishMutation(mutation)
+      if (mutationIsCurrent(mutation)) setTableAdding(false)
     }
   }
 
   const usunStolik = async (table) => {
     if (!canManageFloor || tableActions[table.id]) return
+    const confirmGeneration = mutationGenerationRef.current
     const approved = await confirm(`Usunąć stolik „${table.nazwa}”? Można usunąć tylko stolik bez historii rezerwacji i bez powiązanej kombinacji. Tej operacji nie można cofnąć.`, {
       title: 'Usuń stolik',
       confirmText: 'Usuń stolik',
       cancelText: 'Zachowaj stolik',
     })
-    if (!approved) return
+    if (!approved || confirmGeneration !== mutationGenerationRef.current) return
     setTableActions((current) => ({ ...current, [table.id]: 'delete' }))
     setTableRowFeedback((current) => ({ ...current, [table.id]: null }))
+    const mutation = startMutation()
     try {
-      await api(`/stoliki/${table.id}`, 'DELETE')
+      await api(`/stoliki/${table.id}`, 'DELETE', null, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       setStoliki((current) => current.filter((item) => item.id !== table.id))
       setTableFeedback({ type: 'success', message: `Usunięto stolik: ${table.nazwa}.` })
       void load({ silent: true })
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setTableRowFeedback((current) => ({
         ...current,
         [table.id]: { type: 'error', message: error.message || 'Nie udało się usunąć stolika.' },
       }))
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setTableActions((current) => {
         const next = { ...current }
         delete next[table.id]
@@ -678,6 +670,7 @@ export default function RezerwacjeStolik({
     if (!canManageFloor || tableActions[table.id]) return
     setTableActions((current) => ({ ...current, [table.id]: 'toggle' }))
     setTableRowFeedback((current) => ({ ...current, [table.id]: null }))
+    const mutation = startMutation()
     try {
       const updated = await api(`/stoliki/${table.id}`, 'PUT', {
         nazwa: table.nazwa,
@@ -692,7 +685,8 @@ export default function RezerwacjeStolik({
         cechy: table.cechy || null,
         priorytet: table.priorytet ?? null,
         sekcja: table.sekcja || null,
-      })
+      }, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       setStoliki((current) => replaceById(current, updated, sortTables))
       setTableRowFeedback((current) => ({
         ...current,
@@ -702,11 +696,14 @@ export default function RezerwacjeStolik({
         },
       }))
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setTableRowFeedback((current) => ({
         ...current,
         [table.id]: { type: 'error', message: error.message || 'Nie udało się zmienić dostępności stolika.' },
       }))
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setTableActions((current) => {
         const next = { ...current }
         delete next[table.id]
@@ -723,6 +720,7 @@ export default function RezerwacjeStolik({
     }
     setWaitAdding(true)
     setWaitFeedback(null)
+    const mutation = startMutation()
     try {
       const created = await api('/lista-oczekujacych', 'POST', {
         data,
@@ -730,37 +728,46 @@ export default function RezerwacjeStolik({
         liczba_osob: num(nowyOcz.liczba_osob),
         nazwisko: nowyOcz.nazwisko.trim(),
         ...(canViewContacts ? { telefon: nowyOcz.telefon.trim() || null } : {}),
-      })
+      }, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       setLista((current) => replaceById(current, created, sortWaitlist))
       setNowyOcz(emptyWaitlist())
       setWaitFeedback({ type: 'success', message: `Dodano do oczekujących: ${canViewContacts ? created.nazwisko : 'Gość'}.` })
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setWaitFeedback({ type: 'error', message: error.message || 'Nie udało się dodać wpisu.' })
     } finally {
-      setWaitAdding(false)
+      finishMutation(mutation)
+      if (mutationIsCurrent(mutation)) setWaitAdding(false)
     }
   }
 
   const usunOczekujacego = async (entry) => {
     if (!isAdmin || waitActions[entry.id]) return
+    const confirmGeneration = mutationGenerationRef.current
     const approved = await confirm(`Usunąć „${entry.nazwisko}” z listy oczekujących?`, {
       title: 'Usuń wpis',
       confirmText: 'Usuń wpis',
       cancelText: 'Zostaw',
     })
-    if (!approved) return
+    if (!approved || confirmGeneration !== mutationGenerationRef.current) return
     setWaitActions((current) => ({ ...current, [entry.id]: 'delete' }))
     setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
+    const mutation = startMutation()
     try {
-      await api(`/lista-oczekujacych/${entry.id}`, 'DELETE')
+      await api(`/lista-oczekujacych/${entry.id}`, 'DELETE', null, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       setLista((current) => current.filter((item) => item.id !== entry.id))
       setWaitFeedback({ type: 'success', message: `Usunięto wpis: ${entry.nazwisko}.` })
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setWaitRowFeedback((current) => ({
         ...current,
         [entry.id]: { type: 'error', message: error.message || 'Nie udało się usunąć wpisu.' },
       }))
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setWaitActions((current) => {
         const next = { ...current }
         delete next[entry.id]
@@ -771,27 +778,33 @@ export default function RezerwacjeStolik({
 
   const odwolajOczekujacego = async (entry) => {
     if (waitActions[entry.id]) return
+    const confirmGeneration = mutationGenerationRef.current
     const approved = await confirm(`Odwołać oczekiwanie dla „${entry.nazwisko}”?`, {
       title: 'Odwołaj oczekiwanie',
       confirmText: 'Odwołaj',
       cancelText: 'Zostaw',
     })
-    if (!approved) return
+    if (!approved || confirmGeneration !== mutationGenerationRef.current) return
     setWaitActions((current) => ({ ...current, [entry.id]: 'cancel' }))
     setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
+    const mutation = startMutation()
     try {
-      const saved = await api(`/lista-oczekujacych/${entry.id}/odwolaj`, 'POST')
+      const saved = await api(`/lista-oczekujacych/${entry.id}/odwolaj`, 'POST', null, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
       setLista((current) => replaceById(current, saved, sortWaitlist))
       setWaitRowFeedback((current) => ({
         ...current,
         [entry.id]: { type: 'success', message: 'Odwołano oczekiwanie.' },
       }))
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setWaitRowFeedback((current) => ({
         ...current,
         [entry.id]: { type: 'error', message: error.message || 'Nie udało się odwołać wpisu.' },
       }))
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setWaitActions((current) => {
         const next = { ...current }
         delete next[entry.id]
@@ -812,12 +825,14 @@ export default function RezerwacjeStolik({
     }
     setWaitActions((current) => ({ ...current, [entry.id]: 'seat' }))
     setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
+    const mutation = startMutation()
     try {
       const payload = { stolik_id: Number(tableId) }
       let result
       try {
-        result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', payload)
+        result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', payload, { signal: mutation.controller.signal })
       } catch (error) {
+        if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
         const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
         if (!pacingConflict || !canOverrideLimits) throw error
         const approved = await confirm(`${error.message}\n\nPosadzić gości mimo ustawionego limitu?`, {
@@ -825,12 +840,14 @@ export default function RezerwacjeStolik({
           confirmText: 'Posadź mimo limitu',
           cancelText: 'Wróć',
         })
+        if (!mutationIsCurrent(mutation)) return
         if (!approved) throw error
         result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', {
           ...payload,
           przekrocz_limity: true,
-        })
+        }, { signal: mutation.controller.signal })
       }
+      if (!mutationIsCurrent(mutation)) return
       setLista((current) => replaceById(current, result.wpis, sortWaitlist))
       setRez((current) => result.rezerwacja.data === data
         ? replaceById(current, result.rezerwacja, sortReservations)
@@ -842,11 +859,14 @@ export default function RezerwacjeStolik({
       }))
       setPageFeedback({ type: 'success', message: `Posadzono: ${canViewContacts ? entry.nazwisko : 'Gość'}.` })
     } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setWaitRowFeedback((current) => ({
         ...current,
         [entry.id]: { type: 'error', message: error.message || 'Nie udało się posadzić gości.' },
       }))
     } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
       setWaitActions((current) => {
         const next = { ...current }
         delete next[entry.id]
@@ -1028,7 +1048,7 @@ export default function RezerwacjeStolik({
         </div>
       )}
 
-      {canViewContacts && modal ? (
+      {canViewContacts && modal && !suspendReservationDialog ? (
         <DialogFrame
           title={modal.id ? 'Edytuj rezerwację' : 'Nowa rezerwacja'}
           closeLabel="Zamknij edycję rezerwacji"
@@ -1102,6 +1122,17 @@ export default function RezerwacjeStolik({
             />
 
             <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-line pt-4">
+              {modal.id && onGuestProfileOpen ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onGuestProfileOpen(modal.id)}
+                  disabled={!!modalAction}
+                >
+                  <Icon name="users" className="h-4 w-4" />
+                  Karta gościa
+                </Button>
+              ) : null}
               {isAdmin && modal.id ? (
                 <Button
                   variant="ghost"

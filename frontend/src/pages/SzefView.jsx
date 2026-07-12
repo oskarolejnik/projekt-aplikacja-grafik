@@ -18,7 +18,7 @@ import {
   readReservationRoute,
   subscribeReservationRoute,
 } from '../lib/reservationRoute'
-import { readReservationSession, reservationActorKey } from '../lib/reservationSession'
+import { readReservationSession, reservationHistoryState } from '../lib/reservationSession'
 
 const TABY = [
   { value: 'grafik', label: 'Grafik', permission: 'grafik.podglad', Comp: SzefGrafik },
@@ -41,7 +41,7 @@ const TABY = [
 // opublikowany grafik, kalendarz imprez. Bez żadnej edycji.
 export default function SzefView() {
   const { user, logout, can, uprawnieniaReady = true } = useAuth()
-  const reservationActor = reservationActorKey(user)
+  const reservationHistory = reservationHistoryState(user)
   const { nazwa_lokalu } = useBranding()
   const [widok, setWidok] = useState(() => readReservationRoute()
     ? 'rezerwacje'
@@ -94,7 +94,7 @@ export default function SzefView() {
           {
             state: {
               lokaloManagerTab: 'rezerwacje',
-              ...(reservationActor ? { lokaloReservationActor: reservationActor } : {}),
+              ...reservationHistory,
             },
           },
         )

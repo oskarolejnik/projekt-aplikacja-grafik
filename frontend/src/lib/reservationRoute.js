@@ -70,6 +70,7 @@ export function normalizeReservationRoute(value = {}, fallbackDate = localDateIs
   const date = isValidDateIso(value.date) ? value.date : fallbackDate
   const from = isValidDateIso(value.from) ? value.from : shiftDateIso(date, -30)
   const to = isValidDateIso(value.to) ? value.to : shiftDateIso(date, 180)
+  const profileReservationId = positiveId(value.profileReservationId)
   return {
     view: allowed(value.view, RESERVATION_VIEWS, 'today'),
     date,
@@ -79,7 +80,10 @@ export function normalizeReservationRoute(value = {}, fallbackDate = localDateIs
     to: from <= to ? to : from,
     sort: allowed(value.sort, RESERVATION_SORTS, 'data_desc'),
     offset: Math.max(0, Number.parseInt(value.offset, 10) || 0),
-    reservationId: positiveId(value.reservationId),
+    // Profil gościa jest zawsze rozwiązywany przez opaque ID rezerwacji. Utrzymanie
+    // tego samego ID zaznaczenia zapobiega rozjazdowi profilu i karty pod spodem.
+    reservationId: profileReservationId || positiveId(value.reservationId),
+    profileReservationId,
   }
 }
 
@@ -99,6 +103,7 @@ export function readReservationRoute(hash = globalThis.location?.hash || '') {
     sort: params.get('sort'),
     offset: params.get('offset'),
     reservationId: params.get('rezerwacja'),
+    profileReservationId: params.get('gosc'),
   })
 }
 
@@ -118,6 +123,7 @@ export function buildReservationHash(value) {
     if (route.view === 'calendar' && route.status) params.set('status', route.status)
   }
   if (route.reservationId) params.set('rezerwacja', String(route.reservationId))
+  if (route.profileReservationId) params.set('gosc', String(route.profileReservationId))
 
   const query = params.toString()
   return `#/rezerwacje/${VIEW_TO_PATH[route.view]}${query ? `?${query}` : ''}`
@@ -131,6 +137,9 @@ function writeUrl(hash, { replace = false, state = {}, clearReservationState = f
   if (clearReservationState) {
     delete currentState.lokaloReservationActor
     delete currentState.lokaloReservationOverlay
+    delete currentState.lokaloReservationGuestOverlay
+    delete currentState.lokaloReservationReturnTo
+    delete currentState.lokaloReservationPrivacyEpoch
   }
   const nextState = { ...currentState, ...state }
   window.history[replace ? 'replaceState' : 'pushState'](nextState, '', url)
@@ -145,9 +154,19 @@ export function clearReservationRoute(options = {}) {
   if (typeof window === 'undefined') return
   if (!isReservationHash(window.location.hash)) {
     const currentState = { ...(window.history.state || {}) }
-    if (!('lokaloReservationActor' in currentState) && !('lokaloReservationOverlay' in currentState)) return
+    const reservationStateKeys = [
+      'lokaloReservationActor',
+      'lokaloReservationOverlay',
+      'lokaloReservationGuestOverlay',
+      'lokaloReservationReturnTo',
+      'lokaloReservationPrivacyEpoch',
+    ]
+    if (!reservationStateKeys.some((key) => key in currentState)) return
     delete currentState.lokaloReservationActor
     delete currentState.lokaloReservationOverlay
+    delete currentState.lokaloReservationGuestOverlay
+    delete currentState.lokaloReservationReturnTo
+    delete currentState.lokaloReservationPrivacyEpoch
     window.history.replaceState({ ...currentState, ...(options.state || {}) }, '', window.location.href)
     return
   }
@@ -156,7 +175,7 @@ export function clearReservationRoute(options = {}) {
 
 export function subscribeReservationRoute(callback) {
   if (typeof window === 'undefined') return () => {}
-  const listener = () => callback(readReservationRoute())
+  const listener = (event) => callback(readReservationRoute(), event)
   window.addEventListener('popstate', listener)
   window.addEventListener('hashchange', listener)
   window.addEventListener('lokalo:reservation-route', listener)

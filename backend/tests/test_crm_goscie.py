@@ -3,6 +3,7 @@
 import datetime as dt
 
 import models
+from routers import crm
 
 
 def _rez(db, data, telefon="600100200", nazwisko="Jan Kowalski", status="odbyla"):
@@ -29,6 +30,9 @@ def test_agregacja_i_scoring_no_show(admin_client, db):
     assert g["vip"] is False                 # odbyte 2 < 5
     assert g["nazwisko"] == "Jan Kowalski"
     assert g["ostatnia_data"] == "2026-07-03"
+    assert g["profil_ref"]
+    assert g["identity"] == {"source": "telefon", "confident": True}
+    assert "klucz" not in g and "klucz_hash" not in g
 
 
 def test_no_show_liczony_tylko_po_zamknietych_wizytach(admin_client, db):
@@ -69,7 +73,23 @@ def test_grupowanie_po_emailu_gdy_brak_telefonu(admin_client, db):
     # bez telefonu grupuje po e-mailu — ustaw e-mail ręcznie
     t = db.query(models.Termin).first(); t.email = "anna@example.com"; db.commit()
     b = admin_client.get("/api/crm/goscie").json()
-    assert len(b) == 1 and b[0]["klucz"] == "anna@example.com"
+    assert len(b) == 1 and b[0]["profil_ref"] == t.id
+    assert b[0]["identity"] == {"source": "email", "confident": True}
+    assert "klucz" not in b[0]
+
+
+def test_brak_kontaktu_nie_grupuje_obcych_gosci_po_nazwisku(admin_client, db):
+    first = _rez(db, dt.date(2026, 7, 1), telefon=None, nazwisko="Nowak")
+    second = _rez(db, dt.date(2026, 7, 2), telefon=None, nazwisko="Nowak")
+
+    body = admin_client.get("/api/crm/goscie").json()
+
+    assert {row["profil_ref"] for row in body} == {first.id, second.id}
+    assert all(row["wizyt"] == 1 for row in body)
+    assert all(row["identity"] == {"source": "reservation", "confident": False} for row in body)
+    assert all("klucz" not in row and "klucz_hash" not in row for row in body)
+    assert crm._klucz_crm(first) == f"reservation:{first.id}"
+    assert crm._klucz_crm(second) == f"reservation:{second.id}"
 
 
 def test_crm_tylko_admin(client):

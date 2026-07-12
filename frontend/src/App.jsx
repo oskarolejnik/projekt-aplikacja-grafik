@@ -41,16 +41,92 @@ const zaproszenieToken = _params.get('zaproszenie')   // ?zaproszenie=TOKEN → 
 //   admin            → pełny panel zarządzania
 //   employee         → samoobsługa dyspozycyjności
 function Routed() {
-  const { user, loading } = useAuth()
+  const {
+    user,
+    loading,
+    workstationLocked,
+    workstationChecking,
+    retryWorkstation,
+    authorizationRefreshing,
+    authorizationError,
+    retryAuthorization,
+    logout,
+  } = useAuth()
+  const [lockError, setLockError] = useState('')
   // Dla niezalogowanego sprawdź, czy instancja jest świeża (0 użytkowników) → kreator zamiast logowania.
   const [onboarding, setOnboarding] = useState(null)   // null = sprawdzam, true/false
   useEffect(() => {
-    if (loading || user) return
+    if (loading || user || workstationLocked || authorizationRefreshing) return
     api('/onboarding/status').then((s) => setOnboarding(!!s.potrzebny)).catch(() => setOnboarding(false))
-  }, [loading, user])
+  }, [authorizationRefreshing, loading, user, workstationLocked])
 
   const loadingShell = <LazyFallback label="Sprawdzanie sesji" />
   if (loading) return loadingShell
+  if (workstationLocked) {
+    const checkAgain = async () => {
+      setLockError('')
+      try {
+        const unlocked = await retryWorkstation()
+        if (!unlocked) setLockError('Stanowisko nadal jest zablokowane.')
+      } catch {
+        setLockError('Nie udało się sprawdzić stanowiska. Sprawdź połączenie i spróbuj ponownie.')
+      }
+    }
+    return (
+      <main className="grid min-h-dvh place-items-center bg-bg px-5 py-10 text-ink">
+        <section className="w-full max-w-md rounded-3xl border border-line bg-surface p-7 shadow-2xl shadow-black/20 sm:p-9" aria-labelledby="workstation-lock-title">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-white/[0.04] text-mint" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+              <rect x="5" y="10" width="14" height="10" rx="3" />
+              <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+            </svg>
+          </div>
+          <p className="mt-6 text-xs font-semibold uppercase tracking-[0.16em] text-muted">Bezpieczna przerwa</p>
+          <h1 id="workstation-lock-title" className="mt-2 font-display text-2xl font-semibold tracking-tight">Stanowisko jest zablokowane</h1>
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            Dane gości zostały usunięte z ekranu. Gdy stanowisko zostanie odblokowane, sprawdź sesję ponownie.
+          </p>
+          {lockError ? <p className="mt-4 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger" role="alert">{lockError}</p> : null}
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
+            <button type="button" onClick={checkAgain} disabled={workstationChecking} className="min-h-12 rounded-xl bg-mint px-4 text-sm font-semibold text-bg transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60">
+              {workstationChecking ? 'Sprawdzam…' : 'Sprawdź ponownie'}
+            </button>
+            <button type="button" onClick={logout} className="min-h-12 rounded-xl border border-line bg-white/[0.025] px-4 text-sm font-semibold text-ink transition hover:bg-white/[0.06]">
+              Wyloguj
+            </button>
+          </div>
+        </section>
+      </main>
+    )
+  }
+  if (authorizationRefreshing) {
+    return (
+      <main className="grid min-h-dvh place-items-center bg-bg px-5 py-10 text-ink">
+        <section className="w-full max-w-md rounded-3xl border border-line bg-surface p-7 shadow-2xl shadow-black/20 sm:p-9" aria-labelledby="authorization-refresh-title">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-white/[0.04] text-mint" aria-hidden="true">
+            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
+          </div>
+          <p className="mt-6 text-xs font-semibold uppercase tracking-[0.16em] text-muted">Bezpieczna aktualizacja</p>
+          <h1 id="authorization-refresh-title" className="mt-2 font-display text-2xl font-semibold tracking-tight">
+            {authorizationError ? 'Nie udało się potwierdzić dostępu' : 'Aktualizuję dostęp'}
+          </h1>
+          <p className="mt-3 text-sm leading-relaxed text-muted" role={authorizationError ? 'alert' : 'status'}>
+            {authorizationError || 'Sprawdzam aktualną rolę i uprawnienia. Dane operacyjne pozostają ukryte.'}
+          </p>
+          {authorizationError ? (
+            <div className="mt-7 grid gap-3 sm:grid-cols-2">
+              <button type="button" onClick={() => retryAuthorization()} className="min-h-12 rounded-xl bg-mint px-4 text-sm font-semibold text-bg transition hover:brightness-105">
+                Spróbuj ponownie
+              </button>
+              <button type="button" onClick={logout} className="min-h-12 rounded-xl border border-line bg-white/[0.025] px-4 text-sm font-semibold text-ink transition hover:bg-white/[0.06]">
+                Wyloguj
+              </button>
+            </div>
+          ) : null}
+        </section>
+      </main>
+    )
+  }
   if (!user) {
     // Nie blokujemy publicznej strony sprzedażowej spinnerem na czas /onboarding/status —
     // domyślnie (status jeszcze null) renderujemy landing OD RAZU. Kreator pokazujemy dopiero,

@@ -86,6 +86,23 @@ describe('SzefView permissions', () => {
     expect(screen.queryByRole('button', { name: 'Grafik' })).not.toBeInTheDocument()
   })
 
+  it('wiąże wejście managera do rezerwacji z aktorem i privacy epoch', async () => {
+    authState.permissions = [
+      'grafik.podglad',
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+    ]
+    render(<SzefView />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rezerwacje' }))
+
+    await waitFor(() => expect(window.location.hash).toContain('#/rezerwacje/dzisiaj'))
+    expect(window.history.state).toMatchObject({
+      lokaloReservationActor: expect.any(String),
+      lokaloReservationPrivacyEpoch: expect.any(String),
+    })
+  })
+
   it('zachowuje stary, bezpieczny podgląd dla managera bez praw operacyjnych', async () => {
     authState.permissions = ['rezerwacje.podglad']
 

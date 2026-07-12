@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 import models
 import reservation_audit
 from auth import SECRET_KEY, require_admin
+from crm_identity import hash_key as _profile_hash_key
+from crm_identity import identity_key as _profile_identity_key
 from database import get_db
 from deps import utcnow_naive
 from sms import _normalizuj_numer
@@ -72,6 +74,28 @@ def _anonimizuj(db, terminy, *, actor, reason: str) -> int:
         db.query(models.RezerwacjaIdempotencja).filter(
             models.RezerwacjaIdempotencja.termin_id.in_(termin_ids)
         ).delete(synchronize_session=False)
+
+    # Profil CRM przechowuje osobne PII (m.in. alergie i notatkę). Usuwamy profile
+    # należące wyłącznie do anonimizowanych rekordów, zanim wyczyścimy klucz
+    # kontaktowy. Profil kontaktu zostaje przy retencji starej wizyty, jeśli ten sam
+    # gość ma nowszą, nieanonimizowaną rezerwację.
+    selected_ids = set(termin_ids)
+
+    def profile_hashes(termin):
+        keys = {_profile_identity_key(termin), _klucz(termin)}
+        return {_profile_hash_key(key) for key in keys if key}
+
+    candidate_hashes = set().union(*(profile_hashes(t) for t in terminy)) if terminy else set()
+    if candidate_hashes:
+        remaining_hashes = set()
+        for other in db.query(models.Termin).all():
+            if other.id not in selected_ids:
+                remaining_hashes.update(profile_hashes(other))
+        delete_hashes = candidate_hashes - remaining_hashes
+        if delete_hashes:
+            db.query(models.ProfilGoscia).filter(
+                models.ProfilGoscia.klucz_hash.in_(delete_hashes)
+            ).delete(synchronize_session=False)
     n = 0
     for t in terminy:
         audit_before = (

@@ -1,41 +1,94 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
+import { Banner } from '../ui/Banner'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
-import { useToast } from '../ui/Toast'
+import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
+import GuestProfileDialog from './GuestProfileDialog'
 
 // CRM gości — historia rezerwacji, scoring no-show, VIP + trwały profil 360 (tagi/alergie/preferencje).
-// Backend: /api/crm/goscie (lista), /api/crm/goscie/{klucz} (profil), PUT .../profil (upsert).
+// Lista zwraca nieosobowy `profil_ref`; karta gościa rozwiązuje profil wyłącznie po rezerwacji.
 const RYZYKO = {
   wysokie: 'bg-danger/15 text-danger',
   srednie: 'bg-lemon/15 text-lemon',
   niskie: 'bg-white/10 text-muted',
 }
-const fld = 'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-mint'
-
 export default function CrmGoscie() {
-  const { toast } = useToast()
   const [goscie, setGoscie] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [modal, setModal] = useState(null)        // { klucz } — otwarty profil
+  const [refreshing, setRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState(null)
+  const [modal, setModal] = useState(null)
+  const profileTriggerRef = useRef(null)
+  const loadControllerRef = useRef(null)
+  const loadGenerationRef = useRef(0)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try { setGoscie(await api('/crm/goscie')) }
-    catch (e) { toast(e.message, 'error') } finally { setLoading(false) }
-  }, [toast])
-  useEffect(() => { load() }, [load])
+  const load = useCallback(async ({ background = false } = {}) => {
+    loadControllerRef.current?.abort()
+    const controller = new AbortController()
+    const generation = loadGenerationRef.current + 1
+    loadControllerRef.current = controller
+    loadGenerationRef.current = generation
+    if (background) setRefreshing(true)
+    else setLoading(true)
+    setLoadError(null)
+    try {
+      const nextGuests = await api('/crm/goscie', 'GET', null, { signal: controller.signal })
+      if (controller.signal.aborted || loadGenerationRef.current !== generation) return
+      setGoscie(nextGuests)
+    } catch (error) {
+      if (controller.signal.aborted || loadGenerationRef.current !== generation || error?.name === 'AbortError') return
+      setLoadError(error.message || 'Nie udało się wczytać bazy gości.')
+    } finally {
+      if (loadGenerationRef.current !== generation) return
+      loadControllerRef.current = null
+      if (background) setRefreshing(false)
+      else setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    load()
+    return () => {
+      loadGenerationRef.current += 1
+      loadControllerRef.current?.abort()
+      loadControllerRef.current = null
+    }
+  }, [load])
 
-  if (loading) {
-    return <Card className="p-8"><div className="grid place-items-center py-16"><Spinner className="h-6 w-6 text-muted" /></div></Card>
-  }
+  useEffect(() => subscribeReservationPrivacyPurge(() => {
+    loadGenerationRef.current += 1
+    loadControllerRef.current?.abort()
+    loadControllerRef.current = null
+    setGoscie(null)
+    setModal(null)
+    setLoading(false)
+    setRefreshing(false)
+    setLoadError(null)
+    profileTriggerRef.current = null
+  }), [])
 
   return (
     <Card className="p-6 sm:p-8">
-      <SectionHeader title="Goście (CRM)" subtitle="Historia rezerwacji, ryzyko no-show, VIP i profil 360 — kliknij gościa, by edytować." />
-      {!goscie || goscie.length === 0 ? (
+      <SectionHeader title="Goście (CRM)" subtitle="Historia rezerwacji, ryzyko no-show, VIP i profil 360 — otwórz kartę wybranego gościa.">
+        <span className="inline-flex min-h-5 items-center gap-2 text-xs text-muted" role="status" aria-live="polite">
+          {refreshing ? <><Spinner className="h-3.5 w-3.5 motion-reduce:animate-none" /> Aktualizuję…</> : null}
+        </span>
+      </SectionHeader>
+
+      {loadError ? (
+        <div role="alert" className="mb-4">
+          <Banner variant="danger">
+            <div className="flex flex-wrap items-center gap-3">
+              <span>{loadError}</span>
+              <Button variant="ghost" size="sm" onClick={() => load({ background: Boolean(goscie) })}>Ponów</Button>
+            </div>
+          </Banner>
+        </div>
+      ) : null}
+
+      {loading && !goscie ? <CrmSkeleton /> : loadError && !goscie ? null : !goscie || goscie.length === 0 ? (
         <div className="mt-6 rounded-xl border border-line bg-surface-2 p-8 text-center text-sm text-muted">
           Brak danych gości — pojawią się po pierwszych rezerwacjach stolików.
         </div>
@@ -54,9 +107,17 @@ export default function CrmGoscie() {
             </thead>
             <tbody>
               {goscie.map((g) => (
-                <tr key={g.klucz} className="border-b border-line/60 transition hover:bg-white/[0.02]">
+                <tr key={g.profil_ref} className="border-b border-line/60 transition hover:bg-white/[0.02]">
                   <td className="py-2.5 pr-3">
-                    <button onClick={() => setModal({ klucz: g.klucz })} className="text-left font-semibold text-ink hover:text-mint">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        profileTriggerRef.current = event.currentTarget
+                        setModal({ reservationId: g.profil_ref })
+                      }}
+                      className="-my-2 inline-flex min-h-11 items-center rounded-lg py-2 text-left font-semibold text-ink transition hover:text-mint"
+                      aria-label={`Otwórz kartę gościa: ${g.nazwisko || 'bez nazwiska'}`}
+                    >
                       {g.nazwisko || '—'}
                     </button>
                     <div className="mt-1 flex flex-wrap gap-1">
@@ -81,7 +142,14 @@ export default function CrmGoscie() {
         </div>
       )}
 
-      {modal && <ProfilModal klucz={modal.klucz} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} />}
+      {modal ? (
+        <GuestProfileDialog
+          reservationId={modal.reservationId}
+          onClose={() => setModal(null)}
+          onSaved={() => load({ background: true })}
+          restoreFocusRef={profileTriggerRef}
+        />
+      ) : null}
     </Card>
   )
 }
@@ -90,114 +158,17 @@ function Pill({ children, kol }) {
   return <span className={`rounded-full py-0.5 text-[10px] font-semibold ${kol.includes('px-') ? kol : `px-1.5 ${kol}`}`}>{children}</span>
 }
 
-function ProfilModal({ klucz, onClose, onSaved }) {
-  const { toast } = useToast()
-  const [dane, setDane] = useState(null)
-  const [form, setForm] = useState(null)
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const d = await api(`/crm/goscie/${encodeURIComponent(klucz)}`)
-        setDane(d)
-        const p = d.profil || {}
-        setForm({
-          nazwisko: p.nazwisko || d.nazwisko || '', tagi: (p.tagi || []).join(', '), vip: !!p.vip,
-          alergie: p.alergie || '', dieta: p.dieta || '', preferowana_strefa: p.preferowana_strefa || '',
-          notatka: p.notatka || '', okazja_typ: p.okazja_typ || '', okazja_data: p.okazja_data || '',
-          marketing_zgoda: !!p.marketing_zgoda,
-        })
-      } catch (e) { toast(e.message, 'error'); onClose() }
-    })()
-  }, [klucz, toast, onClose])
-
-  const zapisz = async () => {
-    setBusy(true)
-    try {
-      await api(`/crm/goscie/${encodeURIComponent(klucz)}/profil`, 'PUT', {
-        nazwisko: form.nazwisko.trim() || null,
-        tagi: form.tagi.split(',').map((s) => s.trim()).filter(Boolean),
-        vip: form.vip, alergie: form.alergie.trim() || null, dieta: form.dieta.trim() || null,
-        preferowana_strefa: form.preferowana_strefa.trim() || null, notatka: form.notatka.trim() || null,
-        okazja_typ: form.okazja_typ || null, okazja_data: form.okazja_data.trim() || null,
-        marketing_zgoda: form.marketing_zgoda,
-      })
-      toast('Zapisano profil gościa.', 'success'); onSaved()
-    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
-  }
-
-  const st = dane?.statystyki || {}
+function CrmSkeleton() {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="material max-h-[90dvh] w-full max-w-lg overflow-y-auto p-5 shadow-soft" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-3 flex items-start justify-between">
-          <div className="font-display text-lg font-bold text-ink">Profil gościa</div>
-          <button onClick={onClose} className="text-muted hover:text-ink"><Icon name="close" className="h-5 w-5" /></button>
+    <div className="space-y-2" role="status" aria-label="Ładowanie bazy gości">
+      {[0, 1, 2, 3].map((row) => (
+        <div key={row} className="flex min-h-14 animate-pulse items-center gap-4 border-b border-line/60 py-2 motion-reduce:animate-none">
+          <span className="h-4 w-36 rounded bg-white/[0.07]" />
+          <span className="h-4 w-28 rounded bg-white/[0.05]" />
+          <span className="ml-auto h-4 w-20 rounded bg-white/[0.05]" />
         </div>
-
-        {!form ? <div className="grid place-items-center py-10"><Spinner className="h-5 w-5 text-muted" /></div> : (
-          <>
-            <div className="mb-4 flex flex-wrap gap-2 text-xs">
-              <Metryka l="Wizyt" v={st.wizyt ?? 0} />
-              <Metryka l="Odbyte" v={st.odbyte ?? 0} />
-              <Metryka l="No-show" v={`${st.no_show ?? 0}${st.no_show_proc ? ` (${st.no_show_proc}%)` : ''}`} />
-              {st.vip_auto && <span className="self-center rounded-full bg-mint/15 px-2 py-1 font-semibold text-mint">VIP (≥5 wizyt)</span>}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="col-span-2 text-xs font-semibold text-muted">Nazwisko / nazwa
-                <input value={form.nazwisko} onChange={(e) => setForm((s) => ({ ...s, nazwisko: e.target.value }))} className={fld} /></label>
-              <label className="col-span-2 text-xs font-semibold text-muted">Tagi (po przecinku)
-                <input value={form.tagi} onChange={(e) => setForm((s) => ({ ...s, tagi: e.target.value }))} className={fld} placeholder="stały, loża, firmowy" /></label>
-              <label className="col-span-2 text-xs font-semibold text-danger">Alergie / dieta specjalna · dane wrażliwe (szyfrowane)
-                <input value={form.alergie} onChange={(e) => setForm((s) => ({ ...s, alergie: e.target.value }))} className={fld} placeholder="np. orzechy, gluten" /></label>
-              <label className="col-span-1 text-xs font-semibold text-muted">Dieta
-                <input value={form.dieta} onChange={(e) => setForm((s) => ({ ...s, dieta: e.target.value }))} className={fld} placeholder="wege / bezglutenowa" /></label>
-              <label className="col-span-1 text-xs font-semibold text-muted">Preferowana strefa
-                <input value={form.preferowana_strefa} onChange={(e) => setForm((s) => ({ ...s, preferowana_strefa: e.target.value }))} className={fld} placeholder="ogród / loża" /></label>
-              <label className="col-span-1 text-xs font-semibold text-muted">Okazja
-                <select value={form.okazja_typ} onChange={(e) => setForm((s) => ({ ...s, okazja_typ: e.target.value }))} className={fld}>
-                  <option value="">—</option><option value="urodziny">Urodziny</option><option value="rocznica">Rocznica</option>
-                </select></label>
-              <label className="col-span-1 text-xs font-semibold text-muted">Data okazji (MM-DD)
-                <input value={form.okazja_data} onChange={(e) => setForm((s) => ({ ...s, okazja_data: e.target.value }))} className={fld} placeholder="05-12" /></label>
-              <label className="col-span-2 text-xs font-semibold text-muted">Notatka (szyfrowana)
-                <textarea rows={2} value={form.notatka} onChange={(e) => setForm((s) => ({ ...s, notatka: e.target.value }))} className={fld} /></label>
-              <label className="col-span-1 flex items-center gap-2 text-xs font-semibold text-muted">
-                <input type="checkbox" checked={form.vip} onChange={(e) => setForm((s) => ({ ...s, vip: e.target.checked }))} className="accent-mint" /> VIP (ręcznie)</label>
-              <label className="col-span-1 flex items-center gap-2 text-xs font-semibold text-muted">
-                <input type="checkbox" checked={form.marketing_zgoda} onChange={(e) => setForm((s) => ({ ...s, marketing_zgoda: e.target.checked }))} className="accent-mint" /> Zgoda marketingowa</label>
-            </div>
-
-            {(dane?.historia || []).length > 0 && (
-              <div className="mt-4 border-t border-line pt-3">
-                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">Historia wizyt</div>
-                <div className="max-h-32 space-y-1 overflow-y-auto">
-                  {dane.historia.slice(0, 20).map((h, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs text-muted">
-                      <span>{h.data}{h.godz_od ? ` · ${h.godz_od}` : ''}{h.liczba_osob ? ` · ${h.liczba_osob} os.` : ''}</span>
-                      <span className="text-ink/70">{h.status}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 flex justify-end">
-              <Button onClick={zapisz} disabled={busy}><Icon name="check" className="h-4 w-4" /> Zapisz profil</Button>
-            </div>
-          </>
-        )}
-      </div>
+      ))}
+      <span className="sr-only">Ładowanie gości…</span>
     </div>
-  )
-}
-
-function Metryka({ l, v }) {
-  return (
-    <span className="rounded-lg border border-line bg-surface-2 px-2.5 py-1">
-      <span className="font-display font-bold tabular-nums text-ink">{v}</span> <span className="text-muted">{l}</span>
-    </span>
   )
 }

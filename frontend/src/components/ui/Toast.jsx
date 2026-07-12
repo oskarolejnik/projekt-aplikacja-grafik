@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useCallback, useRef, useEffect, us
 import { Icon } from '../../lib/icons'
 import { motion, AnimatePresence } from 'framer-motion'
 import { SPRING } from '../../lib/motion'
+import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
 
 // Powiadomienia (toasty) + modal potwierdzenia. Zastępują natywne alert()/confirm()
 // spójnym, dostępnym UI w ciemnym motywie.
@@ -26,6 +27,7 @@ export function ToastProvider({ children }) {
   const confirmTitleId = useId()
   const confirmMessageId = useId()
   const toastTimers = useRef(new Map())
+  const reservationToastIds = useRef(new Set())
 
   const clearToastTimer = useCallback((id) => {
     const timer = toastTimers.current.get(id)
@@ -37,6 +39,7 @@ export function ToastProvider({ children }) {
 
   const dismiss = useCallback((id) => {
     clearToastTimer(id)
+    reservationToastIds.current.delete(id)
     setToasts((t) => t.filter((x) => x.id !== id))
   }, [clearToastTimer])
 
@@ -47,7 +50,9 @@ export function ToastProvider({ children }) {
       const duration = Number.isFinite(options?.duration)
         ? Math.max(0, options.duration)
         : action ? 0 : DEFAULT_TOAST_DURATION
-      setToasts((t) => [...t, { id, message, type, action }])
+      const scope = options?.scope === 'reservations' ? 'reservations' : null
+      if (scope === 'reservations') reservationToastIds.current.add(id)
+      setToasts((t) => [...t, { id, message, type, action, scope }])
       if (duration > 0) {
         const timer = setTimeout(() => dismiss(id), duration)
         toastTimers.current.set(id, timer)
@@ -89,6 +94,20 @@ export function ToastProvider({ children }) {
       resolver.current = null
     }
   }, [])
+
+  useEffect(() => subscribeReservationPrivacyPurge(() => {
+    // Potwierdzenie może przechowywać w tekście i zawieszonej funkcji pełny szkic
+    // rezerwacji. Purge zawsze anuluje je synchronicznie i nie oddaje fokusu do
+    // kontrolki zawierającej PII, która właśnie znika z drzewa.
+    returnFocusRef.current = null
+    confirmBtnRef.current = null
+    cancelBtnRef.current = null
+    closeConfirm(false)
+
+    reservationToastIds.current.forEach((id) => clearToastTimer(id))
+    reservationToastIds.current.clear()
+    setToasts((current) => current.filter((item) => item.scope !== 'reservations'))
+  }), [clearToastTimer, closeConfirm])
 
   // Esc zamyka modal; destrukcyjne potwierdzenie zaczyna od bezpiecznej akcji.
   useEffect(() => {

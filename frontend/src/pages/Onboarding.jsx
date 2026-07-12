@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api, setToken } from '../lib/api'
+import { api } from '../lib/api'
+import { establishAuthenticatedSession } from '../lib/authTransition'
 import { useToast } from '../components/ui/Toast'
 import { Logo } from '../components/Logo'
 import { Icon } from '../lib/icons'
@@ -87,7 +88,7 @@ export default function Onboarding({ demo = false }) {
       const r = await api('/onboarding/bootstrap', 'POST', {
         email: form.email.trim(), haslo: form.haslo, nazwa_lokalu: form.nazwa_lokalu.trim(),
       })
-      setToken(r.access_token)
+      establishAuthenticatedSession(r.access_token)
       // Pakiet z cennika → tier subskrypcji (best-effort; operator może zmienić w Ustawieniach).
       if (PLAN_Z_URL) {
         try { await api('/subskrypcja', 'PUT', { tier: PLAN_NA_TIER[PLAN_Z_URL] }) } catch { /* nie blokuj kreatora */ }
