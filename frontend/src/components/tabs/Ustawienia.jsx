@@ -66,7 +66,6 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
   const [salaNiedziela, setSalaNiedziela] = useState('')
   const [mapaSalText, setMapaSalText] = useState('')
   const [zeszytKolText, setZeszytKolText] = useState('')
-  const [excelMapa, setExcelMapa] = useState({ godzina: 'J1', osoby: 'H8', sala: 'J2' })
 
   const loadSubskrypcja = useCallback(async () => {
     try {
@@ -92,7 +91,6 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
       setSalaNiedziela(c.sprzatanie_sala_niedziela ?? 'Zielona')   // NULL = legacy „Zielona"
       setMapaSalText(Object.entries(c.imprezy_mapa_sal || {}).map(([k, v]) => `${k}=${v}`).join(', '))
       setZeszytKolText((c.zeszyt_kolumny || []).join(', '))
-      setExcelMapa({ godzina: 'J1', osoby: 'H8', sala: 'J2', ...(c.imprezy_excel_mapa || {}) })
       const [integracjeResult] = await Promise.allSettled([
         api('/integracje/status'),
         loadSubskrypcja(),
@@ -232,7 +230,6 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
           .map((p) => p.split('=').map((t) => t.trim()))
           .filter((p) => p.length === 2 && p[0] && p[1])),
         zeszyt_kolumny: zeszytKolText.split(',').map((t) => t.trim()).filter(Boolean),
-        imprezy_excel_mapa: excelMapa,
         faktura_nip: cfg.faktura_nip || null, faktura_nazwa: cfg.faktura_nazwa || null,
         faktura_adres_l1: cfg.faktura_adres_l1 || null, faktura_adres_l2: cfg.faktura_adres_l2 || null,
       })
@@ -348,7 +345,7 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
       </Card>
 
       <Card hidden={widok !== 'goscie'} className="p-6 sm:p-8">
-        <SectionHeader title="Parametry obsady imprez" subtitle="Reguły automatycznego przeliczania obsady imprez na wymagania grafiku (moduł imprez). Komórki Excel dotyczą importu imprez z plików (moduł „Baza imprez”) — każdy lokal ma własny szablon." />
+        <SectionHeader title="Parametry obsady imprez" subtitle="Reguły automatycznego przeliczania obsady imprez na wymagania grafiku (moduł imprez)." />
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs font-semibold text-muted">Gości na 1 pracownika obsługi
             <input type="number" min="1" value={cfg.impreza_osoby_na_obsluge ?? 15} onChange={(e) => set('impreza_osoby_na_obsluge', e.target.value)} className={fld} /></label>
@@ -358,14 +355,6 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
             <input value={cfg.impreza_najwczesniej ?? '10:00'} onChange={(e) => set('impreza_najwczesniej', e.target.value)} placeholder="10:00" className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Sale z minimum 2 obsady (po przecinku)
             <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="R2Piw,R2G" className={fld} /></label>
-        </div>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="text-xs font-semibold text-muted">Komórka Excel: godzina
-            <input value={excelMapa.godzina} onChange={(e) => setExcelMapa((s) => ({ ...s, godzina: e.target.value.toUpperCase() }))} className={fld} /></label>
-          <label className="text-xs font-semibold text-muted">Komórka Excel: liczba osób
-            <input value={excelMapa.osoby} onChange={(e) => setExcelMapa((s) => ({ ...s, osoby: e.target.value.toUpperCase() }))} className={fld} /></label>
-          <label className="text-xs font-semibold text-muted">Komórka Excel: sala
-            <input value={excelMapa.sala} onChange={(e) => setExcelMapa((s) => ({ ...s, sala: e.target.value.toUpperCase() }))} className={fld} /></label>
         </div>
       </Card>
 

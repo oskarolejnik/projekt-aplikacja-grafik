@@ -50,7 +50,6 @@ const CONFIG = {
   sprzatanie_sala_niedziela: '',
   imprezy_mapa_sal: {},
   zeszyt_kolumny: [],
-  imprezy_excel_mapa: {},
   faktura_nip: '',
   faktura_nazwa: '',
   faktura_adres_l1: '',

@@ -62,7 +62,6 @@ Oba robią to samo i mówią do tego samego endpointu na VPS — wybierz jeden.
 W `.env` aplikacji na VPS:
 ```
 RCP_INGEST_TOKEN=ten-sam-dlugi-sekret-co-w-agencie
-IMPREZY_PATH=/var/www/grafik/imprezy              # katalog z plikami imprez (jeśli używasz)
 VAPID_*                                            # już skonfigurowane (push działa)
 ```
 Po `git pull` + restart backendu VPS sam utworzy tabelę `odbicia_rcp` (nic nie kasuje).

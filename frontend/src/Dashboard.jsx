@@ -21,7 +21,6 @@ const loadPrognozaObsady = () => import('./components/tabs/PrognozaObsady')
 const loadPracownicy = () => import('./components/tabs/Pracownicy')
 const loadStanowiska = () => import('./components/tabs/Stanowiska')
 const loadKonta = () => import('./components/tabs/Konta')
-const loadImprezy = () => import('./components/tabs/Imprezy')
 const loadGrafikWorkspace = () => import('./components/tabs/GrafikWorkspace')
 const loadSprzatanie = () => import('./components/tabs/Sprzatanie')
 const loadZamowienia = () => import('./components/tabs/Zamowienia')
@@ -90,7 +89,6 @@ const TABS = [
   // Imprezy — eventy i zapytania. Rozliczenia wydarzeń pozostają w kalendarzu imprez.
   { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', kat: 'imprezy', title: 'Kalendarz imprez', load: loadKalendarzImprez, modul: 'modul_imprezy' },
   { id: 'zapytania-imprez', label: 'Zapytania o imprezy', icon: 'sparkles', kat: 'imprezy', title: 'Zapytania o imprezy', load: loadZapytaniaImprez, modul: 'modul_imprezy' },
-  { id: 'imprezy', label: 'Baza imprez (NAS)', icon: 'server', kat: 'imprezy', title: 'Baza imprez — serwer NAS', load: loadImprezy, modul: 'modul_imprezy' },
   // Operator (instancja-matka) — panel floty; widoczny tylko gdy /api/flota → enabled.
   { id: 'flota', label: 'Flota lokali', icon: 'server', kat: 'operator', title: 'Flota lokali — operator', load: loadFlota, operator: true },
   // Ustawienia — poza kategoriami (przycisk przy profilu / wpis pod akordeonami).

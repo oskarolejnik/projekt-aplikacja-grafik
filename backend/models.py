@@ -589,7 +589,6 @@ class LokalConfig(Base):
     # NULL = legacy "Zielona"; pusty string = reguła niedzieli WYŁĄCZONA
     sprzatanie_sala_niedziela  = Column(String(32), nullable=True)
     imprezy_mapa_sal           = Column(JSON, nullable=True)   # kod z pliku imprezy → sala; NULL = mapa legacy
-    imprezy_excel_mapa         = Column(JSON, nullable=True)   # NULL = {"godzina":"J1","osoby":"H8","sala":"J2"}
     zeszyt_kolumny             = Column(JSON, nullable=True)   # NULL = ["towar","koszty","wyplaty","inne"]
     pos_mapa_rewirow           = Column(JSON, nullable=True)   # NULL = stałe STOLY_* (main.py); patrz docs/POS-INTEGRACJA.md
 

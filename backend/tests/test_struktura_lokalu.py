@@ -81,7 +81,6 @@ def test_config_roundtrip_struktury(admin_client):
         "sale": [" Główna ", "Ogródek", ""],
         "sprzatanie_sala_niedziela": "",
         "imprezy_mapa_sal": {" kod ": " Sala X ", "": "pomin"},
-        "imprezy_excel_mapa": {"godzina": "B1", "osoby": "C2", "sala": "D3"},
         "zeszyt_kolumny": ["towar", "media"],
     })
     assert w.status_code == 200
@@ -89,7 +88,6 @@ def test_config_roundtrip_struktury(admin_client):
     assert r["sale"] == ["Główna", "Ogródek"]
     assert r["sprzatanie_sala_niedziela"] == ""
     assert r["imprezy_mapa_sal"] == {"kod": "Sala X"}
-    assert r["imprezy_excel_mapa"] == {"godzina": "B1", "osoby": "C2", "sala": "D3"}
     assert r["zeszyt_kolumny"] == ["towar", "media"]
 
     # pusta lista = powrót do NULL (legacy)

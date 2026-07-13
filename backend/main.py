@@ -4601,10 +4601,6 @@ def eksport_wyplaty(request: Request, rok: int = Query(..., ge=2000, le=2100),
 # IMPREZY Z SERWERA NAS (ZINTEGROWANE Z AUTOMATYKĄ WYMAGAŃ)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Ścieżka do plików imprez. Ustaw IMPREZY_PATH na katalog, do którego lokalny agent wgrywa
-# kopie plików (VPS tylko je odczytuje). Puste = funkcja importu plików imprez wyłączona.
-NAS_BASE_PATH = os.environ.get("IMPREZY_PATH", "")
-
 @app.get("/api/imprezy", response_model=List[schemas.ImprezaOut], dependencies=[Depends(_wymagaj_modul_imprezy)])
 def get_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
     return db.query(models.Impreza).filter(models.Impreza.data >= start, models.Impreza.data <= end).order_by(models.Impreza.data.asc()).all()
@@ -4669,126 +4665,6 @@ def _odswiez_wymagania_imprez(db, start, end):
     for w in nowe:
         db.add(models.WymaganiaDnia(**w, stanowisko_id=stan.id))
     db.commit()
-
-
-@app.post("/api/imprezy/sync", dependencies=[Depends(_wymagaj_modul_imprezy)])
-def sync_imprezy(start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
-    if not os.path.exists(NAS_BASE_PATH):
-        raise HTTPException(status_code=404, detail="Brak połączenia z serwerem NAS.")
-
-    file_pattern = re.compile(r"(\d{4}\.\d{2}\.\d{2})\s*-\s*(.+)\.xlsx$")
-    dodano = zaktualizowano = bledy = 0
-
-    for root, dirs, files in os.walk(NAS_BASE_PATH):
-        for file in [f for f in files if not f.startswith('.')]:
-            match = file_pattern.match(file)
-            if not match: continue
-
-            # Regex dopuszcza \d{2} miesiąc/dzień → data poprawna formatowo, lecz nieistniejąca
-            # (np. „2026.13.45") rzuca ValueError. Liczymy jako błąd i pomijamy, żeby jeden zły
-            # plik nie wywalał całej synchronizacji (500).
-            try:
-                event_date = datetime.strptime(match.group(1), "%Y.%m.%d").date()
-            except ValueError:
-                bledy += 1; continue
-            if not (start <= event_date <= end): continue
-
-            file_path = os.path.join(root, file)
-            existing = db.query(models.Impreza).filter(models.Impreza.sciezka_pliku == file_path).first()
-
-            try:
-                wb = openpyxl.load_workbook(file_path, data_only=True)
-                ws = wb.active
-                # Komórki szablonu Excel z konfiguracji lokalu (inne lokale mają inny layout);
-                # NULL = historyczne J1/H8/J2.
-                mapa_xl = get_lokal_config(db).imprezy_excel_mapa or {"godzina": "J1", "osoby": "H8", "sala": "J2"}
-                k_godz, k_osob, k_sala = mapa_xl.get("godzina", "J1"), mapa_xl.get("osoby", "H8"), mapa_xl.get("sala", "J2")
-                godz = str(ws[k_godz].value).strip() if ws[k_godz].value else "Brak"
-                osob = int(ws[k_osob].value) if isinstance(ws[k_osob].value, (int, float)) else 0
-                sala = str(ws[k_sala].value).strip() if ws[k_sala].value else "Brak"
-                wb.close()
-            except: bledy += 1; continue
-
-            if existing:
-                if existing.liczba_osob != osob or existing.godzina != godz or existing.sala != sala:
-                    existing.liczba_osob, existing.godzina, existing.sala = osob, godz, sala
-                    zaktualizowano += 1
-            else:
-                db.add(models.Impreza(data=event_date, klient=match.group(2).strip(), liczba_osob=osob, godzina=godz, sala=sala, sciezka_pliku=file_path))
-                dodano += 1
-    db.commit()
-
-    # Auto-wymagania pod imprezy (świeże z aktualnej tabeli imprez; bez fallbacku na Bar).
-    _odswiez_wymagania_imprez(db, start, end)
-
-    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy,
-            "ostrzezenie": _imprezy_wymagania_warning(db)}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# IMPREZY — INGEST Z LAPTOPA (admin wysyła już sparsowane pola, nie całe pliki)
-#   Laptop ma NAS w Finderze, czyta pliki .xlsx LOKALNIE, wyciąga (data, klient, godzina,
-#   sala, liczba_osob) i wysyła maleńki JSON. VPS nie parsuje Excela i nie czyta NAS-a.
-# ═══════════════════════════════════════════════════════════════════════════
-def _normalizuj_godzine(g) -> str:
-    """Godzina może przyjść jako ułamek doby z Excela (np. '0.6041666' = 14:30),
-    jako 'HH:MM' lub 'HH:MM:SS'. Sprowadzamy do 'HH:MM' (albo 'Brak')."""
-    if g is None:
-        return "Brak"
-    s = str(g).strip()
-    if not s or s.lower() in ("none", "brak"):
-        return "Brak"
-    try:
-        f = float(s.replace(",", "."))
-        if 0 <= f < 1:  # ułamek doby
-            total = round(f * 1440) % 1440
-            return f"{total // 60:02d}:{total % 60:02d}"
-    except ValueError:
-        pass
-    return s  # już tekst typu '14:30' lub '14:30:00' (backend przeliczy oba)
-
-
-@app.post("/api/imprezy/ingest")
-def imprezy_ingest(payload: dict, start: date = Query(...), end: date = Query(...), db: Session = Depends(get_db)):
-    """Przyjmuje listę sparsowanych imprez, upsertuje (klucz = nazwa pliku lub data|klient),
-    a na końcu przelicza automatyczne wymagania dla [start, end] — jak skan NAS."""
-    lista = payload.get("imprezy", []) if isinstance(payload, dict) else []
-    dodano = zaktualizowano = bledy = 0
-    for it in lista:
-        try:
-            data_imp = date.fromisoformat(str(it["data"])[:10])
-            klient = (it.get("klient") or "").strip()
-            godz = _normalizuj_godzine(it.get("godzina"))
-            sala = str(it["sala"]).strip() if it.get("sala") not in (None, "") else "Brak"
-            osob = int(it.get("liczba_osob") or 0)
-            klucz = (it.get("nazwa_pliku") or f"{data_imp}|{klient}").strip()
-        except (KeyError, ValueError, TypeError):
-            bledy += 1
-            continue
-
-        existing = db.query(models.Impreza).filter(models.Impreza.sciezka_pliku == klucz).first()
-        if existing:
-            zmiana = (
-                existing.liczba_osob != osob or existing.godzina != godz or existing.sala != sala
-                or existing.klient != klient or existing.data != data_imp
-            )
-            if zmiana:
-                existing.liczba_osob, existing.godzina, existing.sala = osob, godz, sala
-                existing.klient, existing.data = klient, data_imp
-                zaktualizowano += 1
-        else:
-            db.add(models.Impreza(
-                data=data_imp, klient=klient, liczba_osob=osob,
-                godzina=godz, sala=sala, sciezka_pliku=klucz,
-            ))
-            dodano += 1
-    db.commit()
-
-    # Auto-wymagania pod imprezy (świeże z aktualnej tabeli imprez).
-    _odswiez_wymagania_imprez(db, start, end)
-
-    return {"dodano": dodano, "zaktualizowano": zaktualizowano, "bledy": bledy,
-            "ostrzezenie": _imprezy_wymagania_warning(db)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

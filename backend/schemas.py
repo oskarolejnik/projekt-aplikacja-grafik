@@ -421,7 +421,6 @@ class LokalConfigOut(LokalBrandingOut):
     sprzatanie_sale_codziennie: Optional[List[str]] = None
     sprzatanie_sala_niedziela: Optional[str] = None
     imprezy_mapa_sal: Optional[dict] = None
-    imprezy_excel_mapa: Optional[dict] = None
     zeszyt_kolumny: Optional[List[str]] = None
     faktura_nip: Optional[str] = None
     faktura_nazwa: Optional[str] = None
@@ -473,7 +472,6 @@ class LokalConfigIn(BaseModel):
     # pusty string = reguła niedzieli wyłączona (None = bez zmiany pola)
     sprzatanie_sala_niedziela: Optional[str] = None
     imprezy_mapa_sal: Optional[dict] = None
-    imprezy_excel_mapa: Optional[dict] = None
     zeszyt_kolumny: Optional[List[str]] = None
     faktura_nip: Optional[str] = None
     faktura_nazwa: Optional[str] = None
@@ -505,7 +503,7 @@ class LokalConfigIn(BaseModel):
             raise ValueError("Maksymalnie 20 etykiet.")
         return czyste or None   # pusta lista = wróć do wartości domyślnych
 
-    @field_validator("imprezy_mapa_sal", "imprezy_excel_mapa")
+    @field_validator("imprezy_mapa_sal")
     @classmethod
     def _mapy(cls, v):
         if v is None:
