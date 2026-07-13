@@ -13,7 +13,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0055_usun_imprezy_excel_mapa"
+HEAD = "0056_impreza_sale_min2_neutralny"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [

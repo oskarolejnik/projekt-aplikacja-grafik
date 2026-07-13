@@ -245,8 +245,9 @@ def test_impreza_liczba_pracownikow_1_na_15(osoby, oczek):
 
 
 def test_impreza_sala_specjalna_minimum_2():
-    out = przelicz_imprezy_na_wymagania([_impreza(osoby=5, sala="R2Piw")])
-    assert out[0]["liczba_osob"] == 2  # mimo 5 os. minimum 2 dla R2Piw/R2G
+    # sala oznaczona jako „min. 2 obsady" (parametr per lokal — domyślnie brak takich sal)
+    out = przelicz_imprezy_na_wymagania([_impreza(osoby=5, sala="R2Piw")], {"sale_min2": ["R2Piw"]})
+    assert out[0]["liczba_osob"] == 2  # mimo 5 os. minimum 2 dla sali specjalnej
 
 
 def test_impreza_oznaczona_jako_impreza_i_ma_rewir():

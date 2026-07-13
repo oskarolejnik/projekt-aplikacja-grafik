@@ -52,7 +52,7 @@ export default function Sprzatanie() {
       </div>
       <SectionHeader
         title="Grafik sprzątania sal"
-        subtitle="Generowany automatycznie: Parter i Góra codziennie, Zielona w niedziele, pozostałe sale dzień po imprezie. Przesunięcie = usuń pozycję i dodaj ją na innym dniu."
+        subtitle="Generowany automatycznie z reguł sprzątania Twojego lokalu (sale codzienne, sala niedzielna, pozostałe dzień po imprezie — ustawisz je w Ustawieniach). Przesunięcie = usuń pozycję i dodaj ją na innym dniu."
       />
       {loading ? (
         <div className="grid place-items-center py-12">

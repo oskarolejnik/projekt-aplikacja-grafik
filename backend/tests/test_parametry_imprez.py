@@ -51,7 +51,7 @@ def test_config_domyslne_pola(admin_client):
     assert cfg["impreza_osoby_na_obsluge"] == 15
     assert cfg["impreza_wyprzedzenie_min"] == 120
     assert cfg["impreza_najwczesniej"] == "10:00"
-    assert cfg["impreza_sale_min2"] == "R2Piw,R2G"
+    assert cfg["impreza_sale_min2"] == ""   # domyślnie brak sal specjalnych (ustawiane per lokal)
 
 
 def test_config_edycja_pol(admin_client):

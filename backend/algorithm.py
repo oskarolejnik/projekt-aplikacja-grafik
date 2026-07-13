@@ -200,7 +200,7 @@ IMPREZA_PARAMS_DOMYSLNE = {
     "osoby_na_obsluge": 15,          # 1 pracownik obsługi na tylu gości
     "wyprzedzenie_min": 120,         # obsługa zaczyna tyle minut przed startem imprezy
     "najwczesniej": "10:00",         # ale nie wcześniej niż ta godzina
-    "sale_min2": ("R2Piw", "R2G"),   # sale wymagające minimum 2 osób obsady
+    "sale_min2": (),                 # sale wymagające min. 2 os. obsady (domyślnie brak; ustawiane per lokal)
 }
 
 

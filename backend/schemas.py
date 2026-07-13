@@ -406,7 +406,7 @@ class LokalConfigOut(LokalBrandingOut):
     impreza_osoby_na_obsluge: int = 15
     impreza_wyprzedzenie_min: int = 120
     impreza_najwczesniej: str = "10:00"
-    impreza_sale_min2: str = "R2Piw,R2G"
+    impreza_sale_min2: str = ""
     obsada_rachunki_na_osobe: int = 20
     obsada_min: int = 1
     praca_min_odpoczynek_h: int = 11

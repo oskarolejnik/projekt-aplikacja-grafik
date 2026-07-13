@@ -354,7 +354,7 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
           <label className="text-xs font-semibold text-muted">Najwcześniejsza godzina startu
             <input value={cfg.impreza_najwczesniej ?? '10:00'} onChange={(e) => set('impreza_najwczesniej', e.target.value)} placeholder="10:00" className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Sale z minimum 2 obsady (po przecinku)
-            <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="R2Piw,R2G" className={fld} /></label>
+            <input value={cfg.impreza_sale_min2 ?? ''} onChange={(e) => set('impreza_sale_min2', e.target.value)} placeholder="np. Bankietowa, Sala A" className={fld} /></label>
         </div>
       </Card>
 
@@ -393,7 +393,7 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
           <label className="text-xs font-semibold text-muted">Sala sprzątana w niedzielę (puste = bez reguły)
             <input value={salaNiedziela} onChange={(e) => setSalaNiedziela(e.target.value)} className={fld} /></label>
           <label className="text-xs font-semibold text-muted sm:col-span-2">Mapa sal z plików imprez (kod=Sala, po przecinku)
-            <input value={mapaSalText} onChange={(e) => setMapaSalText(e.target.value)} placeholder="np. r2p=Zielona, r2piw=Lustrzana" className={fld} /></label>
+            <input value={mapaSalText} onChange={(e) => setMapaSalText(e.target.value)} placeholder="np. kod1=Sala A, kod2=Sala B" className={fld} /></label>
           <label className="text-xs font-semibold text-muted sm:col-span-2">Kolumny rozchodu w zeszycie (po przecinku; puste = Towar, Koszty, Wypłaty, Inne)
             <input value={zeszytKolText} onChange={(e) => setZeszytKolText(e.target.value)} placeholder="np. towar, koszty, media, wypłaty" className={fld} /></label>
         </div>
