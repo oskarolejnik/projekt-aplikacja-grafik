@@ -47,9 +47,13 @@ MODUL_MIN_TIER = {
     "modul_rozliczenia": "basic",     # Basic+: rozliczenia kasowe dnia
     "modul_rezerwacje":  "pro",       # Pro+: rezerwacje stolików + CRM gości
     "rezerwacje_online": "pro",       # Pro+: publiczny widget rezerwacji
-    "modul_pos":         "pro",       # Pro+: integracja POS / stoły live / antyfraud
+    "modul_pos":         "pro",       # Pro+: integracja POS / stoły live / utarg
     "modul_imprezy":     "premium",   # Premium+: imprezy, wesela, zadatki
     "modul_sprzatanie":  "premium",   # Premium+: grafik sprzątania
+    # „Wirtualny" moduł tier-only (bez flagi w LokalConfig): antyfraud POS wymaga włączonego
+    # modul_pos (dane storn z agenta) ORAZ pakietu Premium. Bramkowany po dostepne_moduly, nie
+    # przez getattr(cfg, …) — dlatego NIE dodawaj kolumny modul_antyfraud do LokalConfig.
+    "modul_antyfraud":   "premium",   # Premium+: analiza storn/rabatów per kelner
 }
 WSZYSTKIE_MODULY = tuple(MODUL_MIN_TIER)
 

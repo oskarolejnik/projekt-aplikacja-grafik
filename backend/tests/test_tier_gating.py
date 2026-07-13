@@ -31,6 +31,14 @@ def test_free_blokuje_platne_moduly_wyzsze_odblokowuja(admin_client):
     assert admin_client.get("/api/imprezy?start=2026-01-01&end=2026-12-31").status_code == 200
 
 
+def test_antyfraud_wymaga_premium(admin_client):
+    # Antyfraud POS = wirtualny moduł Premium (na modul_pos). Pro nie ma, Premium odblokowuje.
+    admin_client.put("/api/subskrypcja", json={"tier": "pro"})
+    assert admin_client.get("/api/antyfraud/podsumowanie").status_code == 403
+    admin_client.put("/api/subskrypcja", json={"tier": "premium"})
+    assert admin_client.get("/api/antyfraud/podsumowanie").status_code == 200
+
+
 def test_subskrypcja_wystawia_dostepne_moduly(admin_client):
     admin_client.put("/api/subskrypcja", json={"tier": "pro"})
     s = admin_client.get("/api/subskrypcja").json()

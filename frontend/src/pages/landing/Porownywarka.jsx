@@ -37,7 +37,7 @@ const GRUPY = [
     ['Rozliczenie dnia + zeszyt kasowy', [0, 0, 1, 1, 1]],
     ['Alerty anomalii kasowych', [0, 0, 1, 1, 1]],
     ['Zgodność: badania sanepid + terminy lokalu', [0, 0, 1, 1, 1]],
-    ['Antyfraud POS: storna per kelner', [0, 0, 0, 0, 1]],
+    ['Antyfraud POS: storna per kelner', [0, 0, 0, 1, 1]],
   ]],
   ['Goście i rezerwacje', [
     ['Rezerwacje stolików + plan sali', [0, 0, 1, 1, 1]],

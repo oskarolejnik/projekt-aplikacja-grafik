@@ -21,10 +21,17 @@ import ai
 import models
 from auth import require_admin
 from database import get_db
-from deps import utcnow_naive, token_agenta_ok
+from deps import utcnow_naive, token_agenta_ok, dostepne_moduly
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _wymagaj_antyfraud(db: Session = Depends(get_db)):
+    """Antyfraud POS to funkcja Premium (tier-gating przez wirtualny modul_antyfraud w cenniku).
+    Egzekwujemy na backendzie — samo chowanie zakładki we froncie nie chroni endpointu."""
+    if "modul_antyfraud" not in dostepne_moduly(db):
+        raise HTTPException(403, "Antyfraud POS jest dostępny w pakiecie Premium — odblokujesz go, podnosząc plan.")
 
 TYPY = ("storno", "rabat", "anulacja")
 MIN_ZDARZEN_DO_FLAGI = 5      # poniżej tego progu nie flagujemy (szum małych liczb)
@@ -176,7 +183,7 @@ def _podsumowanie_ai(wynik: dict) -> str:
         max_tokens=500)
 
 
-@router.get("/api/antyfraud/podsumowanie")
+@router.get("/api/antyfraud/podsumowanie", dependencies=[Depends(_wymagaj_antyfraud)])
 def antyfraud_podsumowanie(start: date = Query(None), end: date = Query(None),
                            z_ai: int = Query(0, alias="ai"),
                            _admin: models.User = Depends(require_admin),

@@ -42,6 +42,7 @@ const CENNIK = [
     { t: 'Skrzynka zapytań o imprezy (AI)', nowe: true },
     { t: 'Portal Pary Młodej: goście, menu, wpłaty', nowe: true },
     'Rezerwacje online bez prowizji', 'Napiwki: uczciwy podział puli',
+    'Antyfraud POS: storna i rabaty per kelner',
     'White-label — Twoja marka i logo'],
     szczegoly: [
       ['Dla kogo', 'Dom weselny, lokal eventowy, restauracja z salami — imprezy to istotny przychód.'],
@@ -52,7 +53,7 @@ const CENNIK = [
     ] },
   { nazwa: 'Enterprise', mies: null, rok: null, opis: 'Sieci i franczyzy', cechy: [
     'Multi-lokal i konsolidacja raportów', 'SSO + panel super-admina',
-    'Antyfraud POS: storna per kelner', 'SLA + umowa powierzenia (DPA)',
+    'SLA + umowa powierzenia (DPA)',
     'Dedykowany onboarding i migracja'] },
 ]
 

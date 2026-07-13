@@ -80,7 +80,7 @@ const TABS = [
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', kat: 'kasa', title: 'Rozliczenia kelnerów — podgląd', load: loadRozliczeniaPodglad, modul: 'modul_rozliczenia' },
   { id: 'napiwki', label: 'Napiwki', icon: 'sparkles', kat: 'kasa', title: 'Napiwki — podział między obsługę', load: loadNapiwki },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', kat: 'kasa', title: 'Zajętość stołów na żywo', load: loadStolyLive, modul: 'modul_pos' },
-  { id: 'antyfraud', label: 'Antyfraud POS', icon: 'warning', kat: 'kasa', title: 'Antyfraud POS — storna i rabaty', load: loadAntyfraudPos, modul: 'modul_pos' },
+  { id: 'antyfraud', label: 'Antyfraud POS', icon: 'warning', kat: 'kasa', title: 'Antyfraud POS — storna i rabaty', load: loadAntyfraudPos, modul: 'modul_pos', tierModul: 'modul_antyfraud' },
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', kat: 'kasa', title: 'Eksport danych', load: loadEksport },
   // Goście — rezerwacje i relacje.
   { id: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar', kat: 'goscie', title: 'Rezerwacje', load: loadReservationsWorkspace, modul: 'modul_rezerwacje' },
@@ -145,7 +145,9 @@ export default function Dashboard() {
   // Dopóki subskrypcja się nie wczyta (dostepne=undefined) nie chowamy — unikamy migotania.
   const dostepne = sub?.dostepne_moduly
   const modulOk = (m) => cfg[m] && (!dostepne || dostepne.includes(m))
-  const visibleTabs = TABS.filter((t) => (!t.modul || modulOk(t.modul)) && (!t.operator || flotaEnabled))
+  // tierModul = wirtualny moduł tier-only (bez flagi w cfg), np. antyfraud = Premium na modul_pos
+  const tierOk = (m) => !m || !dostepne || dostepne.includes(m)
+  const visibleTabs = TABS.filter((t) => (!t.modul || modulOk(t.modul)) && tierOk(t.tierModul) && (!t.operator || flotaEnabled))
   const kategorie = KATEGORIE.filter((k) => visibleTabs.some((t) => t.kat === k.id))
   const requested = TABS.find((t) => t.id === active) || TAB_BY_ID.get('pulpit')
   const requestedVisible = visibleTabs.some((tab) => tab.id === requested.id)
