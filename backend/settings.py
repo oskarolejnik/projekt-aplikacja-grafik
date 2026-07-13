@@ -63,52 +63,6 @@ NATIVE_ORIGINS = [
     "ionic://localhost",
 ]
 
-REZERWACJE_READ_MODES = frozenset({"legacy", "shadow", "canonical"})
-
-
-def _dzis_warszawa() -> date:
-    try:
-        return datetime.now(ZoneInfo("Europe/Warsaw")).date()
-    except Exception:
-        return date.today()
-
-
-def rezerwacje_read_mode() -> str:
-    """Tryb odczytu podczas kontrolowanego przejścia na kanoniczne rezerwacje."""
-    mode = os.environ.get("REZERWACJE_READ_MODE", "legacy").strip().lower() or "legacy"
-    if mode not in REZERWACJE_READ_MODES:
-        allowed = ", ".join(sorted(REZERWACJE_READ_MODES))
-        raise ValueError(
-            f"REZERWACJE_READ_MODE='{mode}' jest nieprawidłowe; dozwolone: {allowed}."
-        )
-    return mode
-
-
-def rezerwacje_cutover_date() -> Optional[date]:
-    """Data cutoveru YYYY-MM-DD; wymagana dla trybów shadow i canonical."""
-    mode = rezerwacje_read_mode()
-    raw = os.environ.get("REZERWACJE_CUTOVER_DATE", "").strip()
-    if not raw:
-        if mode in {"shadow", "canonical"}:
-            raise ValueError(
-                f"REZERWACJE_CUTOVER_DATE jest wymagane dla REZERWACJE_READ_MODE={mode}."
-            )
-        return None
-    try:
-        parsed = date.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValueError(
-            "REZERWACJE_CUTOVER_DATE musi być poprawną datą ISO w formacie YYYY-MM-DD."
-        ) from exc
-    if parsed.isoformat() != raw:
-        raise ValueError(
-            "REZERWACJE_CUTOVER_DATE musi być poprawną datą ISO w formacie YYYY-MM-DD."
-        )
-    if mode == "canonical" and parsed > _dzis_warszawa():
-        raise ValueError(
-            "REZERWACJE_CUTOVER_DATE nie może być datą przyszłą w trybie canonical."
-        )
-    return parsed
 
 
 def cors_origins() -> list[str]:
@@ -191,13 +145,6 @@ def _problems() -> tuple[list[str], list[str]]:
 def validate_critical_secrets() -> None:
     """Sprawdza sekrety przy starcie. W produkcji RZUCA RuntimeError na błędach
     krytycznych (fail-fast → aplikacja nie wstaje). W dev tylko ostrzega."""
-    try:
-        rezerwacje_cutover_date()
-    except ValueError as exc:
-        # Błędny tryb odczytu może skierować ruch do niewłaściwego źródła danych,
-        # dlatego blokuje start również lokalnie — nie jest ostrzeżeniem o sekrecie.
-        raise RuntimeError(f"BŁĄD KONFIGURACJI REZERWACJI — {exc}") from exc
-
     errors, warnings = _problems()
 
     for w in warnings:

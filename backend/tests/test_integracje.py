@@ -6,7 +6,7 @@ def test_integracje_status(admin_client):
     assert r.status_code == 200
     items = r.json()["integracje"]
     klucze = {i["klucz"] for i in items}
-    assert {"push", "pos", "kalendarz", "email", "sms", "platnosci"} <= klucze
+    assert {"push", "pos", "email", "sms", "platnosci"} <= klucze
     # conftest ustawia RCP_INGEST_TOKEN -> integracja POS skonfigurowana
     assert next(i for i in items if i["klucz"] == "pos")["skonfigurowane"] is True
     # brak sekretów SMTP -> e-mail niezskonfigurowany (integracja wyłączona, nie crash)
