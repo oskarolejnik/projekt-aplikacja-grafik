@@ -164,8 +164,9 @@ function KuchniaGodziny() {
   )
 }
 
-// Panel „Szef kuchni" — oversight tylko do odczytu: godziny kuchni (bez wypłat),
-// podgląd stołów na żywo, rezerwacje. Bez grafiku i bez żadnej edycji.
+// Panel „Szef kuchni": edytowalny grafik kuchni jako zakładka domyślna (korekty na żywo,
+// każda z powiadomieniem dla kucharza) + podgląd godzin kuchni (bez wypłat), stołów na żywo
+// i rezerwacji. Dane wrażliwe (wypłaty) niedostępne dla tej roli.
 export default function SzefKuchniView() {
   const { user, logout } = useAuth()
   const { nazwa_lokalu } = useBranding()

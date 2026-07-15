@@ -76,7 +76,7 @@ const TABS = [
   { id: 'zamowienia', label: 'Zamówienia', icon: 'clipboard', kat: 'grafik', title: 'Zamówienia sprzątaczki', load: loadZamowienia },
   // Kasa i POS — pieniądze i sygnały z kasy.
   { id: 'utarg-pos', label: 'Utarg (POS)', icon: 'upload', kat: 'kasa', title: 'Utarg dnia — źródła POS', load: loadUtargPos },
-  { id: 'zeszyt', label: 'Zeszyt', icon: 'clipboard', kat: 'kasa', title: 'Zeszyt kasowy', load: loadZeszytPanel, modul: 'modul_rozliczenia' },
+  { id: 'zeszyt', label: 'Kasa dnia', icon: 'clipboard', kat: 'kasa', title: 'Kasa dnia — zeszyt i rozliczenie', load: loadZeszytPanel, modul: 'modul_rozliczenia' },
   { id: 'rozliczenia', label: 'Rozliczenia kelnerów', icon: 'clipboard', kat: 'kasa', title: 'Rozliczenia kelnerów — podgląd', load: loadRozliczeniaPodglad, modul: 'modul_rozliczenia' },
   { id: 'napiwki', label: 'Napiwki', icon: 'sparkles', kat: 'kasa', title: 'Napiwki — podział między obsługę', load: loadNapiwki },
   { id: 'stoly', label: 'Stoły (live)', icon: 'pin', kat: 'kasa', title: 'Zajętość stołów na żywo', load: loadStolyLive, modul: 'modul_pos' },
