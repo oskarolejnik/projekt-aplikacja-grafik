@@ -396,6 +396,9 @@ def test_migracja_backfilluje_wszystkie_aktywne_rezerwacje_i_hold(tmp_path):
             "SELECT count(*), min(minute), max(minute) "
             "FROM rezerwacje_stoliki_claims WHERE waitlist_id=1"
         ).fetchone()
+        legacy_waitlist_hold = con.execute(
+            "SELECT hold_stolik_id, hold_do FROM lista_oczekujacych WHERE id=1"
+        ).fetchone()
     finally:
         con.close()
 
@@ -403,7 +406,11 @@ def test_migracja_backfilluje_wszystkie_aktywne_rezerwacje_i_hold(tmp_path):
     assert pacing == [(1, "2020-01-02", 18 * 60, 4, 0)]
     assert reservation_claims == 2 * 120
     assert terminal_claims == 0
-    assert (hold_claims, first_minute, last_minute) == (1440, 0, 1439)
+    # 0051 potrafi odbudować historyczny hold, ale 0061 celowo go zwalnia:
+    # przed R5a expiry było lokalnym czasem naiwnym, którego nie da się bezpiecznie
+    # odróżnić od nowego kontraktu naive UTC.
+    assert (hold_claims, first_minute, last_minute) == (0, None, None)
+    assert legacy_waitlist_hold == (None, None)
 
 
 def test_migracja_odrzuca_brak_konca_bez_wycieku_pii(tmp_path):

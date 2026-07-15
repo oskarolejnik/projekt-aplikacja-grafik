@@ -14,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0060_r4_allocator_core"
+HEAD = "0061_r5a_public_security"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -27,6 +27,8 @@ _TABELE = [
     "kombinacje_stolow_planu", "skladniki_kombinacji_planu",
     "reguly_dostepnosci_rezerwacji", "rezerwacje_oblozenie_ledger",
     "reservation_override_context",
+    "rezerwacje_publiczne_holdy", "rezerwacje_tokeny_zarzadzania",
+    "rezerwacje_zgody_publiczne", "rezerwacje_publiczne_kwoty",
 ]
 
 
@@ -108,6 +110,91 @@ def _alembic(env, *args):
     )
 
 
+def _sql_closing_parenthesis(sql, opening_index):
+    depth = 0
+    in_literal = False
+    index = opening_index
+    while index < len(sql):
+        char = sql[index]
+        if char == "'":
+            if in_literal and index + 1 < len(sql) and sql[index + 1] == "'":
+                index += 2
+                continue
+            in_literal = not in_literal
+        elif not in_literal and char == "(":
+            depth += 1
+        elif not in_literal and char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    raise AssertionError("Nie znaleziono konca klauzuli SQL w fixture R5a")
+
+
+def _replace_named_check(table_sql, constraint_name, replacement):
+    marker = f"CONSTRAINT {constraint_name} CHECK "
+    marker_index = table_sql.index(marker)
+    opening_index = table_sql.index("(", marker_index + len(marker))
+    closing_index = _sql_closing_parenthesis(table_sql, opening_index)
+    return (
+        table_sql[:opening_index + 1]
+        + replacement
+        + table_sql[closing_index:]
+    )
+
+
+def _remove_named_unique(table_sql, constraint_name):
+    marker = f"CONSTRAINT {constraint_name} UNIQUE "
+    marker_index = table_sql.index(marker)
+    opening_index = table_sql.index("(", marker_index + len(marker))
+    closing_index = _sql_closing_parenthesis(table_sql, opening_index)
+    comma_index = table_sql.rfind(",", 0, marker_index)
+    assert comma_index >= 0
+    return table_sql[:comma_index] + table_sql[closing_index + 1:]
+
+
+def _replace_sql_fragment(table_sql, old, new):
+    assert old in table_sql
+    return table_sql.replace(old, new, 1)
+
+
+def _rewrite_sqlite_table(db_file, table_name, transform):
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("PRAGMA foreign_keys=OFF")
+        table_sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()[0]
+        index_sql = [
+            row[0] for row in con.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                (table_name,),
+            )
+        ]
+        columns = [
+            row[1] for row in con.execute(f'PRAGMA table_info("{table_name}")')
+        ]
+        drift_name = f"{table_name}__drift"
+        opening_index = table_sql.index("(")
+        create_sql = f'CREATE TABLE "{drift_name}" ' + table_sql[opening_index:]
+        create_sql = transform(create_sql)
+        quoted_columns = ", ".join(f'"{name}"' for name in columns)
+        con.execute(create_sql)
+        con.execute(
+            f'INSERT INTO "{drift_name}" ({quoted_columns}) '
+            f'SELECT {quoted_columns} FROM "{table_name}"'
+        )
+        con.execute(f'DROP TABLE "{table_name}"')
+        con.execute(f'ALTER TABLE "{drift_name}" RENAME TO "{table_name}"')
+        for statement in index_sql:
+            con.execute(statement)
+        con.commit()
+    finally:
+        con.close()
+
+
 @pytest.mark.parametrize(
     ("actual", "expected", "matches"),
     [
@@ -173,19 +260,23 @@ def _prepare_r2_0052(db_file):
     finally:
         con.close()
 
-    config = subprocess.run(
-        [
-            sys.executable,
-            "-c",
+    # Fixture reprezentuje historyczny schemat 0050. Nie używamy tu bieżącego
+    # modelu ORM LokalConfig, bo zawiera on także kolumny dodane dopiero w 0061.
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO lokal_config "
+            "(nazwa_lokalu, poczatek_tygodnia, modul_rozliczenia, "
+            "modul_imprezy, modul_pos, modul_sprzatanie, sale) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                "import database, models; db=database.SessionLocal(); "
-                "db.add(models.LokalConfig(sale=['Ogród','Sala bankietowa'])); "
-                "db.commit(); db.close()"
+                "Lokalo", 2, 1, 1, 1, 1,
+                '["Ogród", "Sala bankietowa"]',
             ),
-        ],
-        cwd=str(BACKEND), env=env, capture_output=True, text=True,
-    )
-    assert config.returncode == 0, config.stderr
+        )
+        con.commit()
+    finally:
+        con.close()
 
     upgraded = _alembic(env, "upgrade", "0052_reservation_audit")
     assert upgraded.returncode == 0, upgraded.stderr
@@ -962,12 +1053,13 @@ def test_adopcja_pelnej_niewersjonowanej_bazy_0058_wykonuje_upgrade_r3(tmp_path)
     finally:
         con.close()
     assert version == HEAD
-    assert _TABELE[-3:] == [
+    r3_tables = {
         "reguly_dostepnosci_rezerwacji",
         "rezerwacje_oblozenie_ledger",
         "reservation_override_context",
-    ]
-    assert set(_TABELE[-3:]) <= tables
+    }
+    assert r3_tables <= set(_TABELE)
+    assert r3_tables <= tables
 
 
 def test_migracja_0057_downgrade_zachowuje_topologie_niewersjonowanej_sali(tmp_path):
@@ -1609,20 +1701,19 @@ def test_recovery_0050_z_ledgerem_konczy_head_w_pierwszym_starcie(tmp_path):
         cwd=str(BACKEND), env=env, capture_output=True, text=True,
     )
     assert upgraded.returncode == 0, upgraded.stderr
-    create_ledger = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import database; "
-                "names=('rezerwacje_idempotencja','rezerwacje_dni_ledger',"
-                "'rezerwacje_stoliki_claims','rezerwacje_pacing_ledger'); "
-                "[database.Base.metadata.tables[name].create(database.engine) for name in names]"
-            ),
-        ],
-        cwd=str(BACKEND), env=env, capture_output=True, text=True,
-    )
+    # Odtwarzamy historyczny crash 0051: DDL ledgera jest już zapisane, ale
+    # alembic_version nie zdążyło przejść z 0050. Użycie bieżącego metadata
+    # stworzyłoby tu przyszłą kolumnę public_hold_id i fałszowało scenariusz.
+    create_ledger = _alembic(env, "upgrade", "0051_rezerwacje_atomic_ledger")
     assert create_ledger.returncode == 0, create_ledger.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "UPDATE alembic_version SET version_num='0050_rezerwacje_source_identity'"
+        )
+        con.commit()
+    finally:
+        con.close()
 
     recovery = subprocess.run(
         [sys.executable, "-c", "import database; database.init_db()"],
@@ -1933,3 +2024,278 @@ def test_migracja_0060_wznawia_sie_po_czesciowym_dodaniu_kolumn(tmp_path):
         "hold_godz_do", "hold_bufor_min",
     } <= columns
     assert revision == HEAD
+
+
+def test_migracja_0061_uniewaznia_legacy_tokeny_i_ma_bezpieczny_round_trip(
+    tmp_path,
+):
+    db_file = tmp_path / "_r5a_public_security.db"
+    env = _env(db_file, "r5a-public-security")
+    upgraded = _alembic(env, "upgrade", "0060_r4_allocator_core")
+    assert upgraded.returncode == 0, upgraded.stderr
+    _insert_waitlist_hold(db_file, r4=True)
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO terminy "
+            "(id,data,nazwisko,status,zadatek,kanal,rodzaj,token_potwierdzenia) "
+            "VALUES (1,'2035-07-16','Legacy','rezerwacja',0,'online','stolik',?)",
+            ("plaintext-confirm-token",),
+        )
+        con.execute(
+            "UPDATE lista_oczekujacych SET token=? WHERE id=1",
+            ("plaintext-waitlist-token",),
+        )
+        con.execute(
+            "INSERT INTO rezerwacje_stoliki_claims "
+            "(id,waitlist_id,stolik_id,data,minute,expires_at,created_at) "
+            "VALUES (1,1,1,'2035-07-16',1080,"
+            "'2090-07-16 12:30:00','2026-07-15 12:00:00')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        config_info = {
+            row[1]: row for row in con.execute("PRAGMA table_info(lokal_config)")
+        }
+        config_columns = set(config_info)
+        claim_columns = {
+            row[1] for row in con.execute(
+                "PRAGMA table_info(rezerwacje_stoliki_claims)"
+            )
+        }
+        tokens = (
+            con.execute(
+                "SELECT token_potwierdzenia FROM terminy WHERE id=1"
+            ).fetchone()[0],
+            con.execute(
+                "SELECT token FROM lista_oczekujacych WHERE id=1"
+            ).fetchone()[0],
+        )
+        legacy_waitlist_hold = con.execute(
+            "SELECT hold_stolik_id, hold_stoliki_dodatkowe, hold_godz_od, "
+            "hold_godz_do, hold_bufor_min, hold_do "
+            "FROM lista_oczekujacych WHERE id=1"
+        ).fetchone()
+        legacy_waitlist_claims = con.execute(
+            "SELECT count(*) FROM rezerwacje_stoliki_claims WHERE waitlist_id=1"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert {
+        "rezerwacje_publiczne_holdy", "rezerwacje_tokeny_zarzadzania",
+        "rezerwacje_zgody_publiczne", "rezerwacje_publiczne_kwoty",
+    } <= tables
+    assert {
+        "rezerwacje_widget_v2", "rezerwacje_retencja_dni",
+        "rezerwacje_rodo_kontakt", "rezerwacje_rodo_adres",
+    } <= config_columns
+    assert "public_hold_id" in claim_columns
+    assert tokens == (None, None)
+    assert legacy_waitlist_hold == (None, None, None, None, None, None)
+    assert legacy_waitlist_claims == 0
+    assert str(config_info["rezerwacje_widget_v2"][4]).strip("'()\"").lower() in {
+        "0", "false",
+    }
+    assert str(config_info["rezerwacje_retencja_dni"][4]).strip("'()\"") == "365"
+
+    downgraded = _alembic(env, "downgrade", "0060_r4_allocator_core")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        config_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(lokal_config)")
+        }
+        claim_columns = {
+            row[1] for row in con.execute(
+                "PRAGMA table_info(rezerwacje_stoliki_claims)"
+            )
+        }
+        tokens = (
+            con.execute(
+                "SELECT token_potwierdzenia FROM terminy WHERE id=1"
+            ).fetchone()[0],
+            con.execute(
+                "SELECT token FROM lista_oczekujacych WHERE id=1"
+            ).fetchone()[0],
+        )
+    finally:
+        con.close()
+    assert not {
+        "rezerwacje_publiczne_holdy", "rezerwacje_tokeny_zarzadzania",
+        "rezerwacje_zgody_publiczne", "rezerwacje_publiczne_kwoty",
+    } & tables
+    assert "rezerwacje_widget_v2" not in config_columns
+    assert "public_hold_id" not in claim_columns
+    # Downgrade nigdy nie przywraca nieodwracalnie uniewaznionych sekretow.
+    assert tokens == (None, None)
+
+    upgraded_again = _alembic(env, "upgrade", HEAD)
+    assert upgraded_again.returncode == 0, upgraded_again.stderr
+
+
+def test_adopcja_r5a_fail_closed_waliduje_typy_defaulty_i_ograniczenia(
+    tmp_path,
+):
+    base_file = tmp_path / "_r5a_adoption_contract_base.db"
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=_env(base_file, "r5a-adoption-base"),
+        capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+
+    valid_file = tmp_path / "_r5a_adoption_contract_valid.db"
+    shutil.copy2(base_file, valid_file)
+    valid = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=_env(valid_file, "r5a-adoption-valid"),
+        capture_output=True, text=True,
+    )
+    assert valid.returncode == 0, valid.stderr
+
+    cases = (
+        (
+            "hold-token-unique",
+            "rezerwacje_publiczne_holdy",
+            lambda sql: _remove_named_unique(
+                sql, "uq_rezerwacje_publiczne_holdy_token_hash",
+            ),
+            None,
+            "uq_rezerwacje_publiczne_holdy_token_hash",
+        ),
+        (
+            "management-token-unique",
+            "rezerwacje_tokeny_zarzadzania",
+            lambda sql: _remove_named_unique(
+                sql, "uq_rezerwacje_tokeny_zarzadzania_token_hash",
+            ),
+            None,
+            "uq_rezerwacje_tokeny_zarzadzania_token_hash",
+        ),
+        (
+            "quota-conflict-target",
+            "rezerwacje_publiczne_kwoty",
+            lambda sql: _replace_sql_fragment(
+                sql,
+                "CONSTRAINT uq_rezerwacje_publiczne_kwoty_scope_client_window "
+                "UNIQUE (scope, client_hash, window_start)",
+                "CONSTRAINT uq_rezerwacje_publiczne_kwoty_scope_client_window "
+                "UNIQUE (scope, client_hash, expires_at)",
+            ),
+            None,
+            "uq_rezerwacje_publiczne_kwoty_scope_client_window",
+        ),
+        (
+            "hold-lifecycle-check",
+            "rezerwacje_publiczne_holdy",
+            lambda sql: _replace_named_check(
+                sql, "ck_rezerwacje_publiczne_holdy_lifecycle", "1",
+            ),
+            None,
+            "ck_rezerwacje_publiczne_holdy_lifecycle",
+        ),
+        (
+            "consent-owner-check",
+            "rezerwacje_zgody_publiczne",
+            lambda sql: _replace_named_check(
+                sql, "ck_rezerwacje_zgody_publiczne_owner", "1",
+            ),
+            None,
+            "ck_rezerwacje_zgody_publiczne_owner",
+        ),
+        (
+            "legacy-r4-claim-owner-check",
+            "rezerwacje_stoliki_claims",
+            lambda sql: _replace_named_check(
+                sql,
+                "ck_rezerwacje_stolik_claim_owner",
+                "(termin_id IS NOT NULL AND waitlist_id IS NULL "
+                "AND expires_at IS NULL) OR "
+                "(termin_id IS NULL AND waitlist_id IS NOT NULL "
+                "AND expires_at IS NOT NULL)",
+            ),
+            None,
+            "ck_rezerwacje_stolik_claim_owner",
+        ),
+        (
+            "hold-token-type",
+            "rezerwacje_publiczne_holdy",
+            lambda sql: _replace_sql_fragment(
+                sql, "token_hash VARCHAR(64)", "token_hash VARCHAR(32)",
+            ),
+            None,
+            "rezerwacje_publiczne_holdy.token_hash",
+        ),
+        (
+            "hold-state-default",
+            "rezerwacje_publiczne_holdy",
+            lambda sql: _replace_sql_fragment(
+                sql, "state VARCHAR(16) DEFAULT 'active'",
+                "state VARCHAR(16) DEFAULT 'released'",
+            ),
+            None,
+            "rezerwacje_publiczne_holdy.state",
+        ),
+        (
+            "management-rotation-fk",
+            "rezerwacje_tokeny_zarzadzania",
+            lambda sql: _replace_sql_fragment(
+                sql,
+                "FOREIGN KEY(rotated_to_id) REFERENCES "
+                "rezerwacje_tokeny_zarzadzania (id) ON DELETE SET NULL",
+                "FOREIGN KEY(rotated_to_id) REFERENCES "
+                "rezerwacje_tokeny_zarzadzania (id) ON DELETE CASCADE",
+            ),
+            None,
+            "wymaganych FK R5a",
+        ),
+        (
+            "hold-session-index",
+            None,
+            None,
+            "DROP INDEX ix_rezerwacje_publiczne_holdy_session_state",
+            "ix_rezerwacje_publiczne_holdy_session_state",
+        ),
+    )
+    for name, table_name, transform, statement, expected_error in cases:
+        db_file = tmp_path / f"_r5a_adoption_contract_{name}.db"
+        shutil.copy2(base_file, db_file)
+        if statement is not None:
+            con = sqlite3.connect(str(db_file))
+            try:
+                con.execute(statement)
+                con.commit()
+            finally:
+                con.close()
+        else:
+            _rewrite_sqlite_table(db_file, table_name, transform)
+
+        adoption = subprocess.run(
+            [sys.executable, "-c", "import database; database.init_db()"],
+            cwd=str(BACKEND), env=_env(db_file, f"r5a-adoption-{name}"),
+            capture_output=True, text=True,
+        )
+        output = adoption.stdout + adoption.stderr
+        assert adoption.returncode != 0, name
+        assert expected_error in output, (name, output)

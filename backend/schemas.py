@@ -522,7 +522,11 @@ class LokalConfigOut(LokalBrandingOut):
     modul_sprzatanie: bool = True
     modul_rezerwacje: bool = True
     rezerwacje_online: bool = False
+    rezerwacje_widget_v2: bool = False
     rezerwacje_auto_potwierdzenie: bool = False
+    rezerwacje_retencja_dni: int = 365
+    rezerwacje_rodo_kontakt: Optional[str] = None
+    rezerwacje_rodo_adres: Optional[str] = None
     rez_okno_wyprzedzenia_dni: int = 0
     rez_cutoff_min: int = 0
     rez_min_grupa_online: int = 1
@@ -572,7 +576,11 @@ class LokalConfigIn(BaseModel):
     modul_sprzatanie: Optional[bool] = None
     modul_rezerwacje: Optional[bool] = None
     rezerwacje_online: Optional[bool] = None
+    rezerwacje_widget_v2: Optional[bool] = None
     rezerwacje_auto_potwierdzenie: Optional[bool] = None
+    rezerwacje_retencja_dni: Optional[int] = Field(default=None, ge=30, le=3650)
+    rezerwacje_rodo_kontakt: Optional[str] = Field(default=None, max_length=254)
+    rezerwacje_rodo_adres: Optional[str] = Field(default=None, max_length=256)
     rez_okno_wyprzedzenia_dni: Optional[int] = None
     rez_cutoff_min: Optional[int] = None
     rez_min_grupa_online: Optional[int] = None
@@ -989,14 +997,43 @@ class ProfilGosciaIn(BaseModel):
     okazja_data: Optional[str] = None          # „MM-DD"
     marketing_zgoda: bool = False
 
-class ListaOczekujacychIn(BaseModel):
+class PublicznaPrywatnoscIn(BaseModel):
+    """Dowodliwy, rozdzielony kontrakt prywatności publicznego widgetu.
+
+    Potwierdzenie informacji o przetwarzaniu nie jest zgodą marketingową. Marketing
+    pozostaje dobrowolny, a dane szczególnej kategorii mają osobne pole i opt-in.
+    """
+    privacy_notice_acknowledged: bool = False
+    privacy_notice_version: Optional[str] = Field(default=None, max_length=32)
+    marketing_consent: bool = False
+    marketing_consent_version: Optional[str] = Field(default=None, max_length=32)
+    sensitive_data: Optional[str] = Field(default=None, max_length=1000)
+    sensitive_data_consent: bool = False
+    sensitive_data_consent_version: Optional[str] = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def _oddziel_dane_wrazliwe_od_zwyklych_uwag(self):
+        if self.sensitive_data is not None:
+            self.sensitive_data = self.sensitive_data.strip() or None
+        if self.sensitive_data and not self.sensitive_data_consent:
+            raise ValueError(
+                "Podanie informacji o alergiach lub potrzebach wymaga osobnej zgody."
+            )
+        if self.sensitive_data and not self.sensitive_data_consent_version:
+            raise ValueError("Brak wersji zgody dotyczącej danych wrażliwych.")
+        if self.marketing_consent and not self.marketing_consent_version:
+            raise ValueError("Brak wersji dobrowolnej zgody marketingowej.")
+        return self
+
+
+class ListaOczekujacychIn(PublicznaPrywatnoscIn):
     data: date
     godz_od: Optional[time] = None
-    liczba_osob: Optional[int] = None
-    nazwisko: str
-    telefon: Optional[str] = None
-    email: Optional[str] = None
-    notatka: Optional[str] = None
+    liczba_osob: Optional[int] = Field(default=None, ge=1, le=500)
+    nazwisko: str = Field(min_length=1, max_length=128)
+    telefon: Optional[str] = Field(default=None, max_length=64)
+    email: Optional[str] = Field(default=None, max_length=254)
+    notatka: Optional[str] = Field(default=None, max_length=1000)
 
 class ZrealizujIn(BaseModel):
     """Realizacja wpisu z listy oczekujących → utworzenie rezerwacji stolika."""
@@ -1014,15 +1051,27 @@ class HoldIn(BaseModel):
     godz_od: Optional[time] = None
     minuty: int = Field(default=15, ge=1, le=120)  # jak długo trzymać zestaw
 
-class OnlineRezerwacjaIn(BaseModel):
+class PublicznyHoldIn(BaseModel):
+    """Krótki hold zasobu po wyborze terminu w nowym widgecie."""
+    data: date
+    godz_od: time
+    liczba_osob: int = Field(default=2, ge=1, le=500)
+
+
+class OnlineRezerwacjaIn(PublicznaPrywatnoscIn):
     """Publiczna rezerwacja online (gość, bez logowania) — system sam dobiera wolny stolik."""
     data: date
     godz_od: time
-    liczba_osob: int = 2
-    nazwisko: str
-    telefon: Optional[str] = None
-    email: Optional[str] = None
-    notatka: Optional[str] = None
+    liczba_osob: int = Field(default=2, ge=1, le=500)
+    nazwisko: str = Field(min_length=1, max_length=128)
+    telefon: Optional[str] = Field(default=None, max_length=64)
+    email: Optional[str] = Field(default=None, max_length=254)
+    notatka: Optional[str] = Field(default=None, max_length=1000)
+
+
+class PubliczneUsuniecieDanychIn(BaseModel):
+    """Jawne potwierdzenie self-service anonimizacji danych rezerwacji."""
+    potwierdz: Literal[True]
 
 class OnlineEdytujIn(BaseModel):
     """Zmiana rezerwacji online z magic-linka (token). Puste pola = bez zmiany."""

@@ -36,7 +36,8 @@ def test_okno_wyprzedzenia(admin_client, client):
     _enable(admin_client); _setup_dzis(admin_client)
     admin_client.put("/api/lokal/config", json={"rez_okno_wyprzedzenia_dni": 7})
     assert _rez(client, DZIS + dt.timedelta(days=14)).status_code == 400   # za daleko
-    assert _rez(client, DZIS + dt.timedelta(days=7)).status_code == 201    # dokładnie w oknie
+    granica = _rez(client, DZIS + dt.timedelta(days=7))
+    assert granica.status_code == 201, granica.text                       # dokładnie w oknie
     poza = client.get(f"/api/online/dostepnosc?data={DZIS + dt.timedelta(days=20)}&osoby=2").json()
     assert poza["sloty"] == []
 

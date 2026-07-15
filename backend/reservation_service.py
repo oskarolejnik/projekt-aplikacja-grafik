@@ -8,14 +8,16 @@ co najwyżej jeden commit obejmujący ``Termin`` i jego ledger.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
+import secrets
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from sqlalchemy import delete, func, insert, or_, select, update
+from sqlalchemy import delete, func, insert, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import models
@@ -24,10 +26,33 @@ import models
 ACTIVE_STATUSES = frozenset({"rezerwacja", "potwierdzona"})
 LIVE_HOST_PHASES = frozenset({"posadzony", "rachunek", "oplacony"})
 IDEMPOTENCY_TTL_DAYS = 30
+PUBLIC_HOLD_SESSION_LIMIT = 2
+PUBLIC_HOLD_IP_LIMIT = 10
+PUBLIC_MANAGEMENT_TOKEN_TTL_DAYS = 30
 
 
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def lifecycle_now_utc() -> datetime:
+    """Current lifecycle instant in the repository's naive-UTC DB convention."""
+    return _utcnow_naive()
+
+
+def _lifecycle_utc_naive(value: datetime, *, field_name: str) -> datetime:
+    """Normalise lifecycle instants to the database convention: naive UTC.
+
+    Reservation dates and ``time`` values are local business wall time. Expiries are
+    instants, however, and must never be compared as Europe/Warsaw wall time. Aware
+    inputs are therefore converted to UTC; naive inputs are accepted as already UTC
+    for compatibility with SQLite and the existing ``DateTime(timezone=False)`` schema.
+    """
+    if not isinstance(value, datetime):
+        raise TypeError(f"{field_name} must be a datetime")
+    if value.tzinfo is not None and value.utcoffset() is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -114,6 +139,20 @@ class IdempotencyDecision:
     replayed: bool = False
     response: dict[str, Any] | None = None
     http_status: int | None = None
+
+
+@dataclass(frozen=True)
+class IssuedManagementToken:
+    record: models.RezerwacjaTokenZarzadzania
+    raw_token: str
+    replayed: bool = False
+
+
+@dataclass(frozen=True)
+class IssuedPublicHold:
+    record: models.RezerwacjaPublicznyHold
+    raw_token: str
+    replayed: bool = False
 
 
 def _json_default(value: Any) -> str:
@@ -245,6 +284,470 @@ def complete_idempotency(
     record.response_enc = canonical_json(dict(response))
     record.termin_id = termin_id
     record.completed_at = now
+
+
+def _public_value(value: str, *, field_name: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip() or len(value) > 512:
+        raise ReservationError(
+            400,
+            "INVALID_PUBLIC_CREDENTIAL",
+            f"{field_name} ma niepoprawny format.",
+            rule="public_security",
+        )
+    return value
+
+
+def hash_public_value(
+    raw_value: str,
+    *,
+    secret: str,
+    purpose: str,
+    field_name: str = "Identyfikator",
+) -> str:
+    """Domain-separated HMAC for public tokens, sessions and client identifiers."""
+    value = _public_value(raw_value, field_name=field_name)
+    if not isinstance(secret, str) or not secret:
+        raise ValueError("public credential hashing requires a non-empty secret")
+    purpose = (purpose or "").strip()
+    if not purpose or len(purpose) > 96:
+        raise ValueError("public credential purpose must have 1-96 characters")
+    message = f"lokalo:r5a:{purpose}\0{value}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def hash_management_token(raw_token: str, *, secret: str) -> str:
+    return hash_public_value(
+        raw_token,
+        secret=secret,
+        purpose="management-token",
+        field_name="Token zarzadzania",
+    )
+
+
+def hash_public_hold_token(raw_token: str, *, secret: str) -> str:
+    return hash_public_value(
+        raw_token,
+        secret=secret,
+        purpose="public-hold-token",
+        field_name="Token holdu",
+    )
+
+
+def hash_public_client(raw_client: str, *, secret: str, purpose: str) -> str:
+    return hash_public_value(
+        raw_client,
+        secret=secret,
+        purpose=purpose,
+        field_name="Identyfikator klienta",
+    )
+
+
+def _normalise_scopes(scopes: Iterable[str]) -> tuple[str, ...]:
+    values = []
+    for raw_scope in scopes:
+        scope = str(raw_scope or "").strip()
+        if not scope or len(scope) > 64:
+            raise ReservationError(
+                400,
+                "INVALID_MANAGEMENT_SCOPE",
+                "Zakres tokenu zarzadzania ma niepoprawny format.",
+                rule="management_token",
+            )
+        if scope not in values:
+            values.append(scope)
+    if not values:
+        raise ReservationError(
+            400,
+            "INVALID_MANAGEMENT_SCOPE",
+            "Token zarzadzania wymaga co najmniej jednego zakresu.",
+            rule="management_token",
+        )
+    return tuple(sorted(values))
+
+
+def _token_scopes(record: models.RezerwacjaTokenZarzadzania) -> tuple[str, ...]:
+    raw = record.scopes
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = [raw]
+    return tuple(str(value) for value in (raw or ()))
+
+
+def create_management_token(
+    db,
+    *,
+    termin_id: int,
+    scopes: Iterable[str],
+    secret: str,
+    now: datetime,
+    expires_at: datetime | None = None,
+    ttl_days: int = PUBLIC_MANAGEMENT_TOKEN_TTL_DAYS,
+    idempotency_key: str | None = None,
+    operation: str = "reservation.create.online:v2",
+) -> IssuedManagementToken:
+    """Issues a raw token once while persisting only its HMAC."""
+    if db.get(models.Termin, int(termin_id)) is None:
+        raise ReservationError(
+            404,
+            "RESERVATION_NOT_FOUND",
+            "Nie znaleziono rezerwacji.",
+            rule="management_token",
+        )
+    normalised_scopes = _normalise_scopes(scopes)
+    ttl_days = int(ttl_days)
+    if ttl_days < 1 or ttl_days > 3650:
+        raise ValueError("management token ttl_days must be between 1 and 3650")
+    expiry = expires_at or (now + timedelta(days=ttl_days))
+    if expiry <= now:
+        raise ValueError("management token expiry must be in the future")
+    key = _normalise_idempotency_key(idempotency_key)
+    operation = (operation or "").strip()
+    if not operation or len(operation) > 64:
+        raise ValueError("management token operation must have 1-64 characters")
+    if key is None:
+        raw_token = secrets.token_urlsafe(32)
+    else:
+        initial_payload = (
+            "lokalo:r5a:management-initial\0"
+            f"{operation}\0{key}\0{int(termin_id)}\0{','.join(normalised_scopes)}"
+        ).encode("utf-8")
+        digest = hmac.new(
+            secret.encode("utf-8"), initial_payload, hashlib.sha256,
+        ).digest()
+        raw_token = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    token_hash = hash_management_token(raw_token, secret=secret)
+    existing = db.execute(
+        select(models.RezerwacjaTokenZarzadzania).where(
+            models.RezerwacjaTokenZarzadzania.token_hash == token_hash,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if (
+            existing.termin_id != int(termin_id)
+            or tuple(sorted(_token_scopes(existing))) != normalised_scopes
+        ):
+            raise ReservationError(
+                409,
+                "IDEMPOTENCY_KEY_REUSED",
+                "Klucz idempotencji zostal uzyty z innymi parametrami tokenu.",
+                rule="idempotency",
+            )
+        if existing.revoked_at is not None or existing.expires_at <= now:
+            raise ReservationError(
+                410,
+                "MANAGEMENT_TOKEN_EXPIRED",
+                "Pierwotny link zarzadzania nie jest juz aktywny.",
+                rule="management_token",
+            )
+        if existing.used_at is not None:
+            raise ReservationError(
+                409,
+                "MANAGEMENT_TOKEN_ALREADY_ADVANCED",
+                "Pierwotny link zostal juz zastapiony nowszym.",
+                rule="management_token",
+            )
+        return IssuedManagementToken(
+            record=existing, raw_token=raw_token, replayed=True,
+        )
+    record = models.RezerwacjaTokenZarzadzania(
+        termin_id=int(termin_id),
+        token_hash=token_hash,
+        scopes=list(normalised_scopes),
+        expires_at=expiry,
+        created_at=now,
+    )
+    db.add(record)
+    db.flush()
+    return IssuedManagementToken(record=record, raw_token=raw_token)
+
+
+def lookup_management_token(
+    db, raw_token: str, *, secret: str,
+) -> models.RezerwacjaTokenZarzadzania | None:
+    if not isinstance(raw_token, str) or not raw_token or raw_token != raw_token.strip():
+        return None
+    token_hash = hash_management_token(raw_token, secret=secret)
+    return db.execute(
+        select(models.RezerwacjaTokenZarzadzania).where(
+            models.RezerwacjaTokenZarzadzania.token_hash == token_hash,
+        )
+    ).scalar_one_or_none()
+
+
+def validate_management_token(
+    db,
+    raw_token: str,
+    *,
+    scope: str,
+    secret: str,
+    now: datetime,
+) -> models.RezerwacjaTokenZarzadzania:
+    record = lookup_management_token(db, raw_token, secret=secret)
+    if record is None:
+        raise ReservationError(
+            404,
+            "MANAGEMENT_TOKEN_INVALID",
+            "Link zarzadzania jest nieprawidlowy lub nieaktualny.",
+            rule="management_token",
+        )
+    if record.revoked_at is not None:
+        raise ReservationError(
+            410,
+            "MANAGEMENT_TOKEN_REVOKED",
+            "Link zarzadzania zostal uniewazniony.",
+            rule="management_token",
+        )
+    if record.expires_at <= now:
+        raise ReservationError(
+            410,
+            "MANAGEMENT_TOKEN_EXPIRED",
+            "Link zarzadzania wygasl.",
+            rule="management_token",
+        )
+    if record.used_at is not None:
+        raise ReservationError(
+            409,
+            "MANAGEMENT_TOKEN_USED",
+            "Ten link zarzadzania zostal juz uzyty.",
+            rule="management_token",
+        )
+    scopes = _token_scopes(record)
+    if scope not in scopes and "*" not in scopes:
+        raise ReservationError(
+            403,
+            "MANAGEMENT_TOKEN_SCOPE_DENIED",
+            "Ten link nie pozwala wykonac tej operacji.",
+            rule="management_token",
+        )
+    return record
+
+
+def _rotated_management_raw_token(
+    *,
+    raw_token: str,
+    idempotency_key: str,
+    operation: str,
+    request_fingerprint_value: str,
+    secret: str,
+) -> str:
+    payload = (
+        "lokalo:r5a:management-rotation\0"
+        f"{operation}\0{idempotency_key}\0{request_fingerprint_value}\0{raw_token}"
+    ).encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def consume_and_rotate_management_token(
+    db,
+    raw_token: str,
+    *,
+    operation: str,
+    idempotency_key: str | None,
+    payload: Any,
+    secret: str,
+    now: datetime,
+    allow_revoked_successor_replay: bool = False,
+) -> IssuedManagementToken:
+    """Consumes once and derives a replayable successor without storing plaintext.
+
+    The same old token, Idempotency-Key and payload deterministically derive the same
+    successor. A retry therefore does not need a raw secret in ``response_enc``.
+    """
+    operation = (operation or "").strip()
+    if not operation or len(operation) > 64:
+        raise ReservationError(
+            400,
+            "INVALID_MANAGEMENT_OPERATION",
+            "Operacja tokenu zarzadzania ma niepoprawny format.",
+            rule="management_token",
+        )
+    key = _normalise_idempotency_key(idempotency_key)
+    if key is None:
+        raise ReservationError(
+            400,
+            "IDEMPOTENCY_KEY_REQUIRED",
+            "Ta operacja wymaga naglowka Idempotency-Key.",
+            rule="idempotency",
+        )
+    token_hash = hash_management_token(raw_token, secret=secret)
+    statement = select(models.RezerwacjaTokenZarzadzania).where(
+        models.RezerwacjaTokenZarzadzania.token_hash == token_hash,
+    ).with_for_update()
+    record = db.execute(statement).scalar_one_or_none()
+    if record is None:
+        raise ReservationError(
+            404,
+            "MANAGEMENT_TOKEN_INVALID",
+            "Link zarzadzania jest nieprawidlowy lub nieaktualny.",
+            rule="management_token",
+        )
+    fingerprint = request_fingerprint(
+        f"reservation.management.{operation}",
+        {"idempotency_key": key, "payload": payload},
+        secret,
+    )
+    next_raw = _rotated_management_raw_token(
+        raw_token=raw_token,
+        idempotency_key=key,
+        operation=operation,
+        request_fingerprint_value=fingerprint,
+        secret=secret,
+    )
+    next_hash = hash_management_token(next_raw, secret=secret)
+
+    if record.used_at is not None:
+        successor = db.get(models.RezerwacjaTokenZarzadzania, record.rotated_to_id)
+        if (
+            record.used_operation != operation
+            or not record.used_request_fingerprint
+            or not hmac.compare_digest(record.used_request_fingerprint, fingerprint)
+            or successor is None
+            or not hmac.compare_digest(successor.token_hash, next_hash)
+        ):
+            raise ReservationError(
+                409,
+                "MANAGEMENT_TOKEN_USED",
+                "Ten link zostal juz uzyty do innej operacji.",
+                rule="management_token",
+            )
+        if successor.expires_at <= now:
+            raise ReservationError(
+                410,
+                "MANAGEMENT_TOKEN_EXPIRED",
+                "Nastepny link zarzadzania jest juz nieaktywny.",
+                rule="management_token",
+            )
+        if successor.revoked_at is not None and not allow_revoked_successor_replay:
+            raise ReservationError(
+                410,
+                "MANAGEMENT_TOKEN_REVOKED",
+                "Nastepny link zarzadzania zostal uniewazniony.",
+                rule="management_token",
+            )
+        if successor.used_at is not None:
+            raise ReservationError(
+                409,
+                "MANAGEMENT_TOKEN_SUCCESSOR_USED",
+                "Nastepny link zarzadzania zostal juz uzyty.",
+                rule="management_token",
+            )
+        return IssuedManagementToken(
+            record=successor, raw_token=next_raw, replayed=True,
+        )
+
+    validate_management_token(db, raw_token, scope=operation, secret=secret, now=now)
+    successor = models.RezerwacjaTokenZarzadzania(
+        termin_id=record.termin_id,
+        token_hash=next_hash,
+        scopes=list(_token_scopes(record)),
+        expires_at=record.expires_at,
+        created_at=now,
+    )
+    db.add(successor)
+    db.flush()
+    record.used_at = now
+    record.used_operation = operation
+    record.used_request_fingerprint = fingerprint
+    record.rotated_to_id = successor.id
+    db.flush()
+    return IssuedManagementToken(record=successor, raw_token=next_raw)
+
+
+def cleanup_expired_public_quotas(db, now: datetime) -> int:
+    result = db.execute(
+        delete(models.RezerwacjaPublicznaKwota).where(
+            models.RezerwacjaPublicznaKwota.expires_at <= now,
+        )
+    )
+    return int(result.rowcount or 0)
+
+
+def consume_public_quota(
+    db,
+    *,
+    scope: str,
+    raw_client: str,
+    secret: str,
+    now: datetime,
+    limit: int,
+    window_seconds: int,
+) -> int:
+    """Atomically consumes a fixed-window quota shared by SQLite/Postgres workers."""
+    scope = (scope or "").strip()
+    limit = int(limit)
+    window_seconds = int(window_seconds)
+    if not scope or len(scope) > 64:
+        raise ValueError("public quota scope must have 1-64 characters")
+    if limit < 1 or window_seconds < 1:
+        raise ValueError("public quota limit and window_seconds must be positive")
+    epoch = datetime(1970, 1, 1)
+    elapsed = int((now - epoch).total_seconds())
+    window_start = epoch + timedelta(
+        seconds=(elapsed // window_seconds) * window_seconds,
+    )
+    window_end = window_start + timedelta(seconds=window_seconds)
+    client_hash = hash_public_client(
+        raw_client,
+        secret=secret,
+        purpose=f"public-quota:{scope}",
+    )
+    cleanup_expired_public_quotas(db, now)
+    table = models.RezerwacjaPublicznaKwota.__table__
+    values = {
+        "scope": scope,
+        "client_hash": client_hash,
+        "window_start": window_start,
+        "expires_at": window_end,
+        "count": 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    dialect = db.get_bind().dialect.name
+    if dialect in {"sqlite", "postgresql"}:
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as dialect_insert
+        else:
+            from sqlalchemy.dialects.postgresql import insert as dialect_insert
+        statement = dialect_insert(table).values(**values).on_conflict_do_update(
+            index_elements=[table.c.scope, table.c.client_hash, table.c.window_start],
+            set_={
+                "count": table.c.count + 1,
+                "expires_at": window_end,
+                "updated_at": now,
+            },
+            where=table.c.count < limit,
+        ).returning(table.c.count)
+        consumed = db.execute(statement).scalar_one_or_none()
+    else:
+        row = db.execute(
+            select(models.RezerwacjaPublicznaKwota).where(
+                models.RezerwacjaPublicznaKwota.scope == scope,
+                models.RezerwacjaPublicznaKwota.client_hash == client_hash,
+                models.RezerwacjaPublicznaKwota.window_start == window_start,
+            ).with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            row = models.RezerwacjaPublicznaKwota(**values)
+            db.add(row)
+            db.flush()
+            consumed = row.count
+        elif row.count < limit:
+            row.count += 1
+            row.updated_at = now
+            consumed = row.count
+        else:
+            consumed = None
+    if consumed is None:
+        raise ReservationError(
+            429,
+            "PUBLIC_RATE_LIMITED",
+            "Przekroczono limit prob. Sprobuj ponownie pozniej.",
+            rule="public_rate_limit",
+        )
+    return int(consumed)
 
 
 def _dialect_name(db) -> str:
@@ -442,26 +945,642 @@ def _configured_post_buffer_min(db, *, include_r3: bool = True) -> int:
     return max(0, *(int(value or 0) for value in values))
 
 
-def cleanup_expired_holds(db, now: datetime) -> int:
+def _public_hold_table_ids(
+    primary: Any, additional: Any,
+) -> tuple[int, ...]:
+    ids = _projected_table_ids(primary, additional)
+    if not ids:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_RESOURCE",
+            "Hold wymaga co najmniej jednego stolika.",
+            rule="public_hold",
+        )
+    return tuple(sorted(ids))
+
+
+def normalise_public_hold_allocation_snapshot(
+    table_ids: Iterable[int],
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    try:
+        ids = tuple(sorted({
+            int(value) for value in table_ids
+            if value is not None and not isinstance(value, bool) and int(value) > 0
+        }))
+    except (TypeError, ValueError) as exc:
+        raise ReservationError(
+            400,
+            "INVALID_ALLOCATION_SNAPSHOT",
+            "Snapshot przydzialu ma niepoprawna liste stolikow.",
+            rule="public_hold",
+        ) from exc
+    if not ids:
+        raise ReservationError(
+            400,
+            "INVALID_ALLOCATION_SNAPSHOT",
+            "Snapshot przydzialu wymaga co najmniej jednego stolika.",
+            rule="public_hold",
+        )
+    raw = dict(snapshot or {})
+    snapshot_ids = raw.get("stoliki", raw.get("table_ids"))
+    if snapshot_ids is not None:
+        try:
+            supplied_ids = tuple(sorted({int(value) for value in snapshot_ids}))
+        except (TypeError, ValueError) as exc:
+            raise ReservationError(
+                400,
+                "INVALID_ALLOCATION_SNAPSHOT",
+                "Snapshot przydzialu ma niepoprawna liste stolikow.",
+                rule="public_hold",
+            ) from exc
+        if supplied_ids != ids:
+            raise ReservationError(
+                409,
+                "ALLOCATION_SNAPSHOT_MISMATCH",
+                "Snapshot przydzialu nie odpowiada zasobom holdu.",
+                rule="public_hold",
+            )
+    combination_id = raw.get(
+        "combination_id",
+        raw.get("plan_combination_id", raw.get(
+            "kombinacja_planu_id", raw.get("przydzial_kombinacja_planu_id"),
+        )),
+    )
+    plan_version_id = raw.get(
+        "plan_version_id",
+        raw.get("wersja_planu_id", raw.get("przydzial_wersja_planu_id")),
+    )
+    room_id = raw.get("room_id", raw.get("sala_id"))
+    room_name = raw.get("room_name", raw.get("sala_nazwa", raw.get("sala")))
+    reason = raw.get("reason", raw.get("powod", raw.get("reasons")))
+    normalised = {
+        "type": raw.get("type", raw.get(
+            "kind", "combination" if len(ids) > 1 else "single_table",
+        )),
+        "stoliki": list(ids),
+        "combination_id": combination_id,
+        "room": {"id": room_id, "name": room_name},
+        "plan_version_id": plan_version_id,
+        "reason": reason,
+        # Compatibility aliases consumed by the existing Termin provenance adapter.
+        "kombinacja_planu_id": combination_id,
+        "wersja_planu_id": plan_version_id,
+    }
+    try:
+        return json.loads(canonical_json(normalised))
+    except (TypeError, ValueError) as exc:
+        raise ReservationError(
+            400,
+            "INVALID_ALLOCATION_SNAPSHOT",
+            "Snapshot przydzialu zawiera nieobslugiwane dane.",
+            rule="public_hold",
+        ) from exc
+
+
+def lookup_public_hold(
+    db, raw_token: str, *, secret: str,
+) -> models.RezerwacjaPublicznyHold | None:
+    if not isinstance(raw_token, str) or not raw_token or raw_token != raw_token.strip():
+        return None
+    token_hash = hash_public_hold_token(raw_token, secret=secret)
+    return db.execute(
+        select(models.RezerwacjaPublicznyHold).where(
+            models.RezerwacjaPublicznyHold.token_hash == token_hash,
+        )
+    ).scalar_one_or_none()
+
+
+def expire_public_holds(db, now: datetime) -> int:
+    now = _lifecycle_utc_naive(now, field_name="now")
+    statement = select(models.RezerwacjaPublicznyHold).where(
+        models.RezerwacjaPublicznyHold.state == "active",
+        models.RezerwacjaPublicznyHold.expires_at <= now,
+    ).with_for_update()
+    holds = tuple(db.execute(statement).scalars().all())
+    if not holds:
+        return 0
+    hold_ids = tuple(hold.id for hold in holds)
     db.execute(
-        update(models.ListaOczekujacych)
-        .where(models.ListaOczekujacych.hold_do <= now)
-        .values(
-            hold_stolik_id=None,
-            hold_stoliki_dodatkowe=None,
-            hold_godz_od=None,
-            hold_godz_do=None,
-            hold_bufor_min=None,
-            hold_do=None,
+        delete(models.RezerwacjaStolikClaim).where(
+            models.RezerwacjaStolikClaim.public_hold_id.in_(hold_ids),
         )
     )
+    for hold in holds:
+        hold.state = "expired"
+        hold.released_at = now
+    db.flush()
+    return len(holds)
+
+
+def _public_hold_advisory_key(subject_hash: str) -> int:
+    """Mapuje HMAC na deterministyczny signed bigint dla blokady PostgreSQL."""
+    unsigned = int(subject_hash[:16], 16)
+    return unsigned - (1 << 64) if unsigned >= (1 << 63) else unsigned
+
+
+def _lock_public_hold_subjects(db, *subject_hashes: str) -> None:
+    """Serializuje globalne limity sesji/IP także między różnymi datami.
+
+    SQLite jest już serializowany przez ``BEGIN IMMEDIATE`` w day locku. PostgreSQL
+    potrzebuje blokady niezależnej od dnia, inaczej dwa równoległe żądania na różne
+    daty mogą jednocześnie przejść przez count-then-insert.
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    for key in sorted({_public_hold_advisory_key(value) for value in subject_hashes}):
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+
+def create_public_hold(
+    db,
+    *,
+    data: date,
+    start: time,
+    end: time,
+    table_ids: Iterable[int],
+    party_size: int,
+    buffer_min: int,
+    expires_at: datetime,
+    raw_session: str,
+    raw_ip: str,
+    secret: str,
+    now: datetime,
+    allocation_snapshot: Mapping[str, Any] | None = None,
+    session_limit: int = PUBLIC_HOLD_SESSION_LIMIT,
+    ip_limit: int = PUBLIC_HOLD_IP_LIMIT,
+    idempotency_key: str | None = None,
+    operation: str = "reservation.hold.create:v1",
+) -> IssuedPublicHold:
+    """Create an all-table hold; ``now``/``expires_at`` are lifecycle UTC instants."""
+    now = _lifecycle_utc_naive(now, field_name="now")
+    expires_at = _lifecycle_utc_naive(expires_at, field_name="expires_at")
+    if expires_at <= now:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_EXPIRY",
+            "Czas wygasniecia holdu musi byc w przyszlosci.",
+            rule="public_hold",
+        )
+    party_size = int(party_size)
+    buffer_min = int(buffer_min or 0)
+    if party_size < 1 or buffer_min < 0:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_PARAMETERS",
+            "Parametry holdu sa niepoprawne.",
+            rule="public_hold",
+        )
+    session_limit = int(session_limit)
+    ip_limit = int(ip_limit)
+    if session_limit < 1 or ip_limit < 1:
+        raise ValueError("public hold limits must be positive")
+    try:
+        ids = tuple(sorted({
+            int(value) for value in table_ids
+            if value is not None and not isinstance(value, bool) and int(value) > 0
+        }))
+    except (TypeError, ValueError) as exc:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_RESOURCE",
+            "Lista stolikow holdu ma niepoprawny format.",
+            rule="public_hold",
+        ) from exc
+    if not ids:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_RESOURCE",
+            "Hold wymaga co najmniej jednego stolika.",
+            rule="public_hold",
+        )
+    normalised_snapshot = normalise_public_hold_allocation_snapshot(
+        ids, allocation_snapshot,
+    )
+    existing_ids = set(db.execute(
+        select(models.Stolik.id).where(models.Stolik.id.in_(ids))
+    ).scalars().all())
+    if existing_ids != set(ids):
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_RESOURCE",
+            "Co najmniej jeden stolik holdu nie istnieje.",
+            rule="public_hold",
+        )
+    start_minute, end_minute = _interval(start, end)
+    blocked_end = min(1440, end_minute + buffer_min)
+    # An expired waitlist claim is ignored by availability reads, but still occupies
+    # the unique (table, date, minute) key. Remove both kinds of stale hold before the
+    # new public claim is inserted, otherwise a harmless expiry becomes a 409/500.
+    cleanup_expired_holds(db, now)
+    session_hash = hash_public_client(
+        raw_session, secret=secret, purpose="public-hold-session",
+    )
+    ip_hash = hash_public_client(
+        raw_ip, secret=secret, purpose="public-hold-ip",
+    )
+    key = _normalise_idempotency_key(idempotency_key)
+    operation = (operation or "").strip()
+    if not operation or len(operation) > 64:
+        raise ValueError("public hold operation must have 1-64 characters")
+    if key is None:
+        raw_token = secrets.token_urlsafe(32)
+    else:
+        initial_payload = (
+            "lokalo:r5a:public-hold-initial\0"
+            f"{operation}\0{session_hash}\0{key}"
+        ).encode("utf-8")
+        digest = hmac.new(
+            secret.encode("utf-8"), initial_payload, hashlib.sha256,
+        ).digest()
+        raw_token = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    token_hash = hash_public_hold_token(raw_token, secret=secret)
+    existing = db.execute(
+        select(models.RezerwacjaPublicznyHold).where(
+            models.RezerwacjaPublicznyHold.token_hash == token_hash,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        same_request = (
+            existing.data == data
+            and existing.godz_od == start
+            and existing.godz_do == end
+            and int(existing.liczba_osob) == party_size
+            and int(existing.bufor_min or 0) == buffer_min
+            and _projected_table_ids(
+                existing.stolik_id, existing.stoliki_dodatkowe,
+            ) == set(ids)
+            and canonical_json(existing.allocation_snapshot) == canonical_json(
+                normalised_snapshot,
+            )
+            and hmac.compare_digest(existing.session_hash, session_hash)
+            and hmac.compare_digest(existing.ip_hash, ip_hash)
+        )
+        if not same_request:
+            raise ReservationError(
+                409,
+                "IDEMPOTENCY_KEY_REUSED",
+                "Klucz idempotencji zostal uzyty z innymi parametrami holdu.",
+                rule="idempotency",
+            )
+        if existing.state == "active" and existing.expires_at > now:
+            return IssuedPublicHold(
+                record=existing, raw_token=raw_token, replayed=True,
+            )
+        if existing.state in {"released", "expired"}:
+            raise ReservationError(
+                410,
+                "PUBLIC_HOLD_INACTIVE",
+                "Hold tego zadania wygasl albo zostal zwolniony.",
+                rule="public_hold",
+            )
+        raise ReservationError(
+            409,
+            "PUBLIC_HOLD_CONSUMED",
+            "Hold tego zadania zostal juz zamieniony w rezerwacje.",
+            rule="public_hold",
+        )
+    _lock_public_hold_subjects(db, session_hash, ip_hash)
+    active_filter = (
+        models.RezerwacjaPublicznyHold.state == "active",
+        models.RezerwacjaPublicznyHold.expires_at > now,
+    )
+    session_count = db.execute(
+        select(func.count(models.RezerwacjaPublicznyHold.id)).where(
+            *active_filter,
+            models.RezerwacjaPublicznyHold.session_hash == session_hash,
+        )
+    ).scalar_one()
+    if int(session_count or 0) >= session_limit:
+        raise ReservationError(
+            429,
+            "PUBLIC_HOLD_SESSION_LIMIT",
+            "Ta sesja ma juz maksymalna liczbe aktywnych holdow.",
+            rule="public_hold_limit",
+        )
+    ip_count = db.execute(
+        select(func.count(models.RezerwacjaPublicznyHold.id)).where(
+            *active_filter,
+            models.RezerwacjaPublicznyHold.ip_hash == ip_hash,
+        )
+    ).scalar_one()
+    if int(ip_count or 0) >= ip_limit:
+        raise ReservationError(
+            429,
+            "PUBLIC_HOLD_IP_LIMIT",
+            "Ten klient ma juz maksymalna liczbe aktywnych holdow.",
+            rule="public_hold_limit",
+        )
+    occupied = occupied_table_ids(
+        db,
+        data=data,
+        start=start,
+        end=end,
+        buffer_min=buffer_min,
+        now=now,
+    )
+    if set(ids) & occupied:
+        raise ReservationError(
+            409,
+            "TABLE_CONFLICT",
+            "Co najmniej jeden stolik zostal wlasnie zajety.",
+            rule="public_hold",
+        )
+    record = models.RezerwacjaPublicznyHold(
+        token_hash=token_hash,
+        session_hash=session_hash,
+        ip_hash=ip_hash,
+        state="active",
+        data=data,
+        godz_od=start,
+        godz_do=end,
+        liczba_osob=party_size,
+        stolik_id=ids[0],
+        stoliki_dodatkowe=list(ids[1:]) or None,
+        allocation_snapshot=normalised_snapshot,
+        bufor_min=buffer_min,
+        expires_at=expires_at,
+        created_at=now,
+    )
+    db.add(record)
+    db.flush()
+    rows = [
+        {
+            "termin_id": None,
+            "waitlist_id": None,
+            "public_hold_id": record.id,
+            "stolik_id": table_id,
+            "data": data,
+            "minute": minute,
+            "expires_at": expires_at,
+            "created_at": now,
+        }
+        for table_id in ids
+        for minute in range(start_minute, blocked_end)
+    ]
+    db.execute(insert(models.RezerwacjaStolikClaim), rows)
+    return IssuedPublicHold(record=record, raw_token=raw_token)
+
+
+def validate_public_hold(
+    db,
+    raw_token: str,
+    *,
+    raw_session: str,
+    secret: str,
+    now: datetime,
+) -> models.RezerwacjaPublicznyHold:
+    now = _lifecycle_utc_naive(now, field_name="now")
+    record = lookup_public_hold(db, raw_token, secret=secret)
+    expected_session = hash_public_client(
+        raw_session, secret=secret, purpose="public-hold-session",
+    )
+    if record is None or not hmac.compare_digest(record.session_hash, expected_session):
+        raise ReservationError(
+            404,
+            "PUBLIC_HOLD_NOT_FOUND",
+            "Nie znaleziono aktywnego holdu tej sesji.",
+            rule="public_hold",
+        )
+    if record.state == "active" and record.expires_at <= now:
+        db.execute(
+            delete(models.RezerwacjaStolikClaim).where(
+                models.RezerwacjaStolikClaim.public_hold_id == record.id,
+            )
+        )
+        record.state = "expired"
+        record.released_at = now
+        db.flush()
+    if record.state in {"expired", "released"}:
+        raise ReservationError(
+            410,
+            "PUBLIC_HOLD_INACTIVE",
+            "Hold wygasl albo zostal zwolniony.",
+            rule="public_hold",
+        )
+    if record.state == "consumed":
+        raise ReservationError(
+            409,
+            "PUBLIC_HOLD_CONSUMED",
+            "Hold zostal juz zamieniony w rezerwacje.",
+            rule="public_hold",
+        )
+    return record
+
+
+def release_public_hold(
+    db,
+    raw_token: str,
+    *,
+    raw_session: str,
+    secret: str,
+    now: datetime,
+) -> models.RezerwacjaPublicznyHold:
+    now = _lifecycle_utc_naive(now, field_name="now")
+    record = lookup_public_hold(db, raw_token, secret=secret)
+    expected_session = hash_public_client(
+        raw_session, secret=secret, purpose="public-hold-session",
+    )
+    if record is None or not hmac.compare_digest(record.session_hash, expected_session):
+        raise ReservationError(
+            404,
+            "PUBLIC_HOLD_NOT_FOUND",
+            "Nie znaleziono holdu tej sesji.",
+            rule="public_hold",
+        )
+    if record.state == "consumed":
+        raise ReservationError(
+            409,
+            "PUBLIC_HOLD_CONSUMED",
+            "Zrealizowanego holdu nie mozna zwolnic.",
+            rule="public_hold",
+        )
+    if record.state in {"released", "expired"}:
+        return record
+    db.execute(
+        delete(models.RezerwacjaStolikClaim).where(
+            models.RezerwacjaStolikClaim.public_hold_id == record.id,
+        )
+    )
+    record.state = "expired" if record.expires_at <= now else "released"
+    record.released_at = now
+    db.flush()
+    return record
+
+
+def replace_public_hold_claims(
+    db,
+    *,
+    public_hold_id: int,
+    table_ids: Iterable[int],
+    data: date,
+    start: time,
+    end: time,
+    buffer_min: int,
+    expires_at: datetime,
+    now: datetime,
+    cleanup_holds: bool = True,
+) -> None:
+    """Rebuild helper for an existing public hold; never creates a second owner."""
+    now = _lifecycle_utc_naive(now, field_name="now")
+    expires_at = _lifecycle_utc_naive(expires_at, field_name="expires_at")
+    if cleanup_holds:
+        cleanup_expired_holds(db, now)
+    db.execute(
+        delete(models.RezerwacjaStolikClaim).where(
+            models.RezerwacjaStolikClaim.public_hold_id == int(public_hold_id),
+        )
+    )
+    if expires_at <= now:
+        return
+    ids = tuple(sorted({int(value) for value in table_ids}))
+    if not ids:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_RESOURCE",
+            "Hold wymaga co najmniej jednego stolika.",
+            rule="public_hold",
+        )
+    start_minute, end_minute = _interval(start, end)
+    blocked_end = min(1440, end_minute + max(0, int(buffer_min or 0)))
+    occupied = occupied_table_ids(
+        db,
+        data=data,
+        start=start,
+        end=end,
+        buffer_min=buffer_min,
+        now=now,
+    )
+    if set(ids) & occupied:
+        raise ReservationError(
+            409,
+            "TABLE_CONFLICT",
+            "Nie mozna odbudowac holdu z powodu kolizji zasobu.",
+            rule="public_hold",
+        )
+    rows = [
+        {
+            "termin_id": None,
+            "waitlist_id": None,
+            "public_hold_id": int(public_hold_id),
+            "stolik_id": table_id,
+            "data": data,
+            "minute": minute,
+            "expires_at": expires_at,
+            "created_at": now,
+        }
+        for table_id in ids
+        for minute in range(start_minute, blocked_end)
+    ]
+    db.execute(insert(models.RezerwacjaStolikClaim), rows)
+
+
+def consume_public_hold(
+    db,
+    raw_token: str,
+    *,
+    raw_session: str,
+    termin_id: int,
+    secret: str,
+    now: datetime,
+) -> models.RezerwacjaPublicznyHold:
+    """Transfers every minute claim from a hold to Termin in the same transaction."""
+    now = _lifecycle_utc_naive(now, field_name="now")
+    record = validate_public_hold(
+        db, raw_token, raw_session=raw_session, secret=secret, now=now,
+    )
+    termin = db.get(models.Termin, int(termin_id))
+    if termin is None:
+        raise ReservationError(
+            404,
+            "RESERVATION_NOT_FOUND",
+            "Nie znaleziono rezerwacji docelowej.",
+            rule="public_hold",
+        )
+    held_ids = _public_hold_table_ids(record.stolik_id, record.stoliki_dodatkowe)
+    termin_ids = _projected_table_ids(termin.stolik_id, termin.stoliki_dodatkowe)
+    if (
+        termin.data != record.data
+        or termin.godz_od != record.godz_od
+        or termin.godz_do != record.godz_do
+        or termin_ids != set(held_ids)
+    ):
+        raise ReservationError(
+            409,
+            "PUBLIC_HOLD_RESERVATION_MISMATCH",
+            "Rezerwacja docelowa nie odpowiada parametrom holdu.",
+            rule="public_hold",
+        )
+    start_minute, end_minute = _interval(record.godz_od, record.godz_do)
+    expected_claims = len(held_ids) * (
+        min(1440, end_minute + int(record.bufor_min or 0)) - start_minute
+    )
+    actual_claims = db.execute(
+        select(func.count(models.RezerwacjaStolikClaim.id)).where(
+            models.RezerwacjaStolikClaim.public_hold_id == record.id,
+        )
+    ).scalar_one()
+    if int(actual_claims or 0) != expected_claims:
+        raise ReservationError(
+            409,
+            "PUBLIC_HOLD_CLAIMS_INCOMPLETE",
+            "Hold nie ma kompletnego atomowego zajecia zasobow.",
+            rule="public_hold",
+        )
+    db.execute(
+        update(models.RezerwacjaStolikClaim)
+        .where(models.RezerwacjaStolikClaim.public_hold_id == record.id)
+        .values(
+            termin_id=termin.id,
+            waitlist_id=None,
+            public_hold_id=None,
+            expires_at=None,
+        )
+    )
+    record.state = "consumed"
+    record.consumed_at = now
+    record.termin_id = termin.id
+    db.flush()
+    return record
+
+
+def cleanup_expired_holds(db, now: datetime) -> int:
+    """Release public and waitlist inventory using one naive-UTC clock."""
+    now = _lifecycle_utc_naive(now, field_name="now")
+    expired_public = expire_public_holds(db, now)
+    expired_waitlist_ids = tuple(db.execute(
+        select(models.ListaOczekujacych.id)
+        .where(models.ListaOczekujacych.hold_do <= now)
+        .with_for_update()
+    ).scalars().all())
+    if expired_waitlist_ids:
+        db.execute(
+            update(models.ListaOczekujacych)
+            .where(models.ListaOczekujacych.id.in_(expired_waitlist_ids))
+            .values(
+                hold_stolik_id=None,
+                hold_stoliki_dodatkowe=None,
+                hold_godz_od=None,
+                hold_godz_do=None,
+                hold_bufor_min=None,
+                hold_do=None,
+            )
+        )
+    stale_claim_filter = models.RezerwacjaStolikClaim.expires_at <= now
+    if expired_waitlist_ids:
+        # The owner expiry is authoritative. Delete all claims of that owner even
+        # when legacy/corrupt data carries a later per-claim timestamp.
+        stale_claim_filter = or_(
+            stale_claim_filter,
+            models.RezerwacjaStolikClaim.waitlist_id.in_(expired_waitlist_ids),
+        )
     result = db.execute(
         delete(models.RezerwacjaStolikClaim).where(
             models.RezerwacjaStolikClaim.waitlist_id.isnot(None),
-            models.RezerwacjaStolikClaim.expires_at <= now,
+            stale_claim_filter,
         )
     )
-    return int(result.rowcount or 0)
+    return expired_public + int(result.rowcount or 0)
 
 
 def occupied_table_ids(
@@ -485,6 +1604,10 @@ def occupied_table_ids(
     Aktywny obrót hosta jest konserwatywną blokadą live: dopóki gość nie wyjdzie,
     jego wszystkie stoły pozostają zajęte także po planowanym ``godz_do``.
     """
+    lifecycle_now = _lifecycle_utc_naive(
+        now if now is not None else _utcnow_naive(),
+        field_name="now",
+    )
     start_minute, end_minute = _interval(start, end)
     buffer_min = max(0, int(buffer_min or 0))
     query_start = start_minute
@@ -494,7 +1617,7 @@ def occupied_table_ids(
         claim.data == data,
         claim.minute >= query_start,
         claim.minute < query_end,
-        _active_hold_filter(now or datetime.now()),
+        _active_hold_filter(lifecycle_now),
     )
     if exclude_termin_id is not None:
         statement = statement.where(
@@ -655,7 +1778,10 @@ def replace_termin_allocation(
     przywraca stary przydział razem z jego claimami.
     """
 
-    effective_now = now or datetime.now()
+    effective_now = _lifecycle_utc_naive(
+        now if now is not None else _utcnow_naive(),
+        field_name="now",
+    )
     if cleanup_holds:
         cleanup_expired_holds(db, effective_now)
     release_termin_allocation(
@@ -813,6 +1939,15 @@ def replace_waitlist_hold(
     Nowe holdy zajmują wyłącznie okno wizyty wraz z buforem. Brak czasu jest
     zachowany jako kompatybilny, konserwatywny hold całego dnia.
     """
+    now = _lifecycle_utc_naive(now, field_name="now")
+    expires_at = _lifecycle_utc_naive(expires_at, field_name="expires_at")
+    if expires_at <= now:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_EXPIRY",
+            "Czas wygasniecia holdu musi byc w przyszlosci.",
+            rule="table_hold",
+        )
     if cleanup_holds:
         cleanup_expired_holds(db, now)
     release_waitlist_hold(db, waitlist_id)
@@ -868,6 +2003,20 @@ def replace_waitlist_hold(
             "Co najmniej jeden stolik zestawu jest już zajęty lub trzymany w tym czasie.",
             rule="table_hold",
         )
+    owner_update = db.execute(
+        update(models.ListaOczekujacych)
+        .where(models.ListaOczekujacych.id == int(waitlist_id))
+        .values(hold_do=expires_at)
+    )
+    if not int(owner_update.rowcount or 0):
+        raise ReservationError(
+            404,
+            "WAITLIST_NOT_FOUND",
+            "Nie znaleziono wpisu listy oczekujacych.",
+            rule="table_hold",
+        )
+    # Keep the owner row and its minute claims on the same lifecycle clock. Callers
+    # may fill the remaining projection fields, but must not store a local-wall expiry.
     created_at = _utcnow_naive()
     rows = [
         {

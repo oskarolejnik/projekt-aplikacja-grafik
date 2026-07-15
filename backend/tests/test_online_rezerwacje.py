@@ -51,17 +51,38 @@ def test_online_rezerwacja_flow(admin_client, client):
     body = r.json()
     token = body["token"]
     assert token and body["rezerwacja"]["status"] == "rezerwacja"   # auto-potwierdzenie off
+    assert "token" not in body["rezerwacja"]
     assert body["rezerwacja"]["stolik"] is None
     assert body["rezerwacja"]["godz_do"] == "20:00"
-    # podgląd po tokenie
-    g = client.get(f"/api/online/rezerwacja/{token}").json()
+    # Token jest capability wyłącznie w nagłówku — nigdy w URL/logach.
+    g = client.get(
+        "/api/online/zarzadzanie/rezerwacja",
+        headers={"X-Reservation-Token": token},
+    ).json()
     assert g["nazwisko"] == "Gość Online"
     # potwierdzenie po tokenie
-    assert client.post(f"/api/online/rezerwacja/{token}/potwierdz").json()["status"] == "potwierdzona"
+    confirmed = client.post(
+        "/api/online/zarzadzanie/potwierdz",
+        headers={
+            "X-Reservation-Token": token,
+            "Idempotency-Key": "online-confirm-flow-0001",
+        },
+    ).json()
+    assert confirmed["status"] == "potwierdzona"
+    token = confirmed["management_token"]
     # odwołanie po tokenie
-    assert client.post(f"/api/online/rezerwacja/{token}/odwolaj").json()["status"] == "odwolana"
+    assert client.post(
+        "/api/online/zarzadzanie/odwolaj",
+        headers={
+            "X-Reservation-Token": token,
+            "Idempotency-Key": "online-cancel-flow-0001",
+        },
+    ).json()["status"] == "odwolana"
     # zły token → 404
-    assert client.get("/api/online/rezerwacja/zly-token").status_code == 404
+    assert client.get(
+        "/api/online/zarzadzanie/rezerwacja",
+        headers={"X-Reservation-Token": "zly-token-zly-token"},
+    ).status_code == 404
 
 
 def test_online_auto_potwierdzenie(admin_client, client):

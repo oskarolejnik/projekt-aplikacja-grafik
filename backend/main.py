@@ -6,6 +6,7 @@ import math
 import logging
 import secrets
 from datetime import date, time, timedelta, datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional, List
 from collections import defaultdict
 
@@ -23,6 +24,7 @@ import reservation_allocator
 import reservation_audit
 import reservation_rules
 import reservation_service
+import maintenance
 from crm_identity import (
     hash_key as _hash_klucz_crm,
     identity_hash as _identity_hash_crm,
@@ -67,7 +69,11 @@ from routers.kadry import router as kadry_router
 from routers.zaproszenia import router as zaproszenia_router
 from routers.flota import router as flota_router
 from routers.pos import router as pos_router
-from routers.rodo import router as rodo_router
+from routers.rodo import (
+    router as rodo_router,
+    usun_powiazane_pii_rezerwacji,
+    usun_powiazane_publiczne_sekrety,
+)
 from routers.reguly_rezerwacji import (
     router as reguly_rezerwacji_router,
     _waliduj_serwis as _waliduj_serwis_r3,
@@ -216,14 +222,67 @@ def _sciezka_na_whitelist(path: str, prefiksy) -> bool:
 # Ścieżki, które dotąd jechały na tekstowym prefiksie (stoly → stoly-historia!),
 # są wypisane JAWNIE — tabela jest jednocześnie dokumentacją allowlisty.
 
-# Trasy publiczne — bez JWT. None = każda metoda, inaczej krotka metod.
-# Ingest agenta POS autoryzuje się stałym tokenem (X-RCP-Token) w endpointach.
+# Publiczna przestrzeń ``/api/online`` jest fail-closed: każdy handler musi mieć
+# osobną parę metoda + pełny template. Parametr w nawiasach klamrowych zajmuje
+# dokładnie jeden niepusty segment. Dodanie przyszłego handlera bez dopisania go
+# tutaj pozostawi go za JWT zamiast przypadkiem otworzyć cały prefiks.
+ONLINE_PUBLIC_ROUTE_TEMPLATES = (
+    ("GET", "/api/online/widget-config"),
+    ("POST", "/api/online/hold"),
+    ("DELETE", "/api/online/hold"),
+    ("GET", "/api/online/dostepnosc"),
+    ("GET", "/api/online/alternatywy"),
+    ("GET", "/api/online/najblizszy-termin"),
+    ("POST", "/api/online/rezerwacja"),
+    ("GET", "/api/online/zarzadzanie/rezerwacja"),
+    ("POST", "/api/online/zarzadzanie/potwierdz"),
+    ("POST", "/api/online/zarzadzanie/odwolaj"),
+    ("POST", "/api/online/zarzadzanie/edytuj"),
+    ("GET", "/api/online/zarzadzanie/dane"),
+    ("POST", "/api/online/zarzadzanie/dane/usun"),
+    ("POST", "/api/online/lista-oczekujacych"),
+    ("GET", "/api/online/nowy-lokal/status"),
+    ("POST", "/api/online/nowy-lokal"),
+    ("POST", "/api/online/rejestracja"),
+    ("POST", "/api/online/rejestracja/{external_id}/oplac"),
+    ("GET", "/api/online/rejestracja/{external_id}"),
+    ("GET", "/api/online/zaproszenie/{token}"),
+    ("POST", "/api/online/zaproszenie/{token}/rejestracja"),
+    ("GET", "/api/online/imprezy/{token}"),
+    ("PUT", "/api/online/imprezy/{token}/goscie"),
+    ("POST", "/api/online/imprezy/{token}/wiadomosci"),
+    ("POST", "/api/online/imprezy/{token}/menu"),
+)
+
+_PUBLIC_ROUTE_PARAMETER = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$")
+
+
+def _compile_public_route_template(template: str) -> re.Pattern:
+    segments = []
+    for segment in template.split("/"):
+        if _PUBLIC_ROUTE_PARAMETER.fullmatch(segment):
+            segments.append(r"[^/]+")
+        else:
+            if "{" in segment or "}" in segment:
+                raise ValueError(f"Niepoprawny template trasy publicznej: {template}")
+            segments.append(re.escape(segment))
+    return re.compile(r"\A" + "/".join(segments) + r"\Z")
+
+
+_ONLINE_PUBLIC_ROUTE_PATTERNS = tuple(
+    (method, _compile_public_route_template(template))
+    for method, template in ONLINE_PUBLIC_ROUTE_TEMPLATES
+)
+
+
+# Pozostałe historyczne przestrzenie publiczne — bez JWT. None = każda metoda,
+# inaczej krotka metod. Ingest agenta POS autoryzuje się stałym tokenem
+# (X-RCP-Token) już wewnątrz endpointów.
 TRASY_PUBLICZNE = (
     ("/api/auth", None),
     ("/api/onboarding", None),                   # status + jednorazowy bootstrap (guard 409 w środku)
     ("/api/health", None),
     ("/api/lokal/branding", None),               # white-label dla ekranu logowania
-    ("/api/online", None),                       # publiczny widget gościa (rezerwacje, portal imprez)
     ("/api/rcp/ingest", None),
     ("/api/gastro/stoly", ("POST",)),            # agent: stan stołów na żywo
     ("/api/gastro/stoly-historia", ("POST",)),   # agent: historia stolików
@@ -237,17 +296,25 @@ TRASY_PUBLICZNE = (
 
 # Wyjątki od degradacji READ_ONLY — zapis dozwolony mimo nieaktywnej subskrypcji:
 # logowanie, kreator pierwszej konfiguracji, przedłużenie subskrypcji, health.
-READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health", "/api/rodo")
+READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health")
 # Odczytowe komendy POST mają dokładne dopasowanie metoda+trasa. Nie dodajemy ich do
 # prefiksowej listy powyżej, żeby przyszła podtrasa zapisu nie odziedziczyła wyjątku.
 READ_ONLY_POST_ODCZYT = frozenset({
     "/api/rezerwacje-stolik/wyszukaj",
     "/api/rezerwacje/reguly/symuluj",
+    "/api/rodo/eksport-gosc",
+})
+# Prawa osoby i obowiązek retencji muszą działać również po wygaśnięciu
+# subskrypcji, ale przyszła podtrasa /api/rodo nie dziedziczy tego automatycznie.
+READ_ONLY_DOKLADNE_WYJATKI = frozenset({
+    "/api/rodo/anonimizuj-gosc",
+    "/api/rodo/retencja",
 })
 
 # Odpowiedzi tych przestrzeni mogą zawierać PII gościa. Segmentowe dopasowanie
 # zapobiega przypadkowemu objęciu podobnie nazwanej przyszłej trasy.
 PII_NO_STORE_PREFIXES = (
+    "/api/online",
     "/api/crm",
     "/api/plan-sali",
     "/api/sale-rezerwacyjne",
@@ -266,6 +333,11 @@ ROLA_PELNA_PRZESTRZEN = {"szef_kuchni": ("/api/szefkuchni",)}
 
 
 def _trasa_publiczna(path: str, metoda: str) -> bool:
+    if any(
+        metoda == dozwolona_metoda and pattern.fullmatch(path)
+        for dozwolona_metoda, pattern in _ONLINE_PUBLIC_ROUTE_PATTERNS
+    ):
+        return True
     for prefiks, metody in TRASY_PUBLICZNE:
         if _sciezka_na_whitelist(path, (prefiks,)) and (metody is None or metoda in metody):
             return True
@@ -286,6 +358,7 @@ async def role_guard(request: Request, call_next):
     if (
         metoda in ("POST", "PUT", "DELETE", "PATCH")
         and not (metoda == "POST" and path in READ_ONLY_POST_ODCZYT)
+        and path not in READ_ONLY_DOKLADNE_WYJATKI
         and not _sciezka_na_whitelist(path, READ_ONLY_WYJATKI)
     ):
         _db = SessionLocal()
@@ -460,6 +533,7 @@ def startup():
     # Fail-fast: w produkcji odmawiamy startu przy niebezpiecznych sekretach domyślnych.
     app_settings.validate_critical_secrets()
     init_db()
+    maintenance.start_maintenance()
     # Instancja-matka z włączoną samoobsługą: podnieś instancje floty, których proces
     # nie przeżył restartu hosta (best-effort; provisioning.py, feedback: zero ręcznej pracy).
     if provisioning.wlaczony():
@@ -471,6 +545,11 @@ def startup():
     # żeby nie zaśmiecać bazy/testów dodatkowym stanowiskiem, gdy grafik kuchni nie jest używany.
     # Uwaga: konto administratora NIE jest już tworzone z pliku konfiguracyjnego (.env).
     # Admina zakłada się wyłącznie w bazie skryptem: python create_admin.py
+
+
+@app.on_event("shutdown")
+def shutdown():
+    maintenance.stop_maintenance()
 
 
 @app.get("/api/health")
@@ -1596,7 +1675,7 @@ def _waliduj_przydzial_rezerwacji(
         # (serwis/sala/wyjatek, lacznie z jawnym zerem) egzekwuje atomowo ledger.
         buffer_min=0,
         exclude_termin_id=pomin_id,
-        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+        now=utcnow_naive(),
     )
     if ids & zajete:
         raise reservation_service.ReservationError(
@@ -1690,7 +1769,9 @@ def _ocen_reguly_slotu(
             intent=intent,
             preserve_existing_room_access=preserve_existing_room_access,
         ),
-        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+        # Reguły biznesowe (okno wyprzedzenia/cutoff/DST) operują w czasie
+        # lokalu. Lifecycle holdów i claimów pozostaje osobno w naive UTC.
+        now=_teraz_lokalnie() or datetime.now(timezone.utc),
     )
 
 
@@ -1789,7 +1870,7 @@ def _zastap_ledger_terminu(
         override=bool(override),
         room_id=room_id,
         channel=reservation_service.normalise_reservation_channel(t.kanal),
-        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+        now=utcnow_naive(),
         candidates=candidates,
         alternatives=alternatives,
         **pacing,
@@ -1823,15 +1904,26 @@ def _zablokuj_termin(db, rid, dodatkowe_dni=()):
 
 
 def _zablokuj_rezerwacje_online(db, token, dodatkowe_dni=()):
-    """Wariant blokady dla publicznego tokenu magic-link."""
-    t = _rez_po_tokenie(db, token)
-    if t is None:
+    """Blokuje rezerwację po rekordzie hash-only, także przy idempotentnym replayu."""
+    token_record = reservation_service.lookup_management_token(
+        db, token, secret=SECRET_KEY,
+    )
+    if token_record is None:
+        return None, ()
+    t = db.get(models.Termin, token_record.termin_id)
+    if t is None or t.kanal != "online":
         return None, ()
     dni = {t.data, *(d for d in dodatkowe_dni if d is not None)}
     while True:
         guards = reservation_service.begin_locked_write(db, dni)
-        t = _rez_po_tokenie(db, token)
-        if t is None:
+        token_record = reservation_service.lookup_management_token(
+            db, token, secret=SECRET_KEY,
+        )
+        if token_record is None:
+            db.rollback()
+            return None, ()
+        t = db.get(models.Termin, token_record.termin_id)
+        if t is None or t.kanal != "online":
             db.rollback()
             return None, ()
         if t.data in dni:
@@ -2334,7 +2426,7 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
             )
         reservation_service.cleanup_expired_holds(
             db,
-            _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+            utcnow_naive(),
         )
         if db.query(models.RezerwacjaStolikClaim.id).filter_by(stolik_id=sid).first():
             raise HTTPException(
@@ -2365,7 +2457,7 @@ def usun_stolik(sid: int, db: Session = Depends(get_db)):
             raise HTTPException(409, "Stolik należy do kombinacji. Najpierw usuń lub zmień tę kombinację.")
         reservation_service.cleanup_expired_holds(
             db,
-            _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+            utcnow_naive(),
         )
         if db.query(models.RezerwacjaStolikClaim.id).filter_by(stolik_id=sid).first():
             raise HTTPException(
@@ -3636,7 +3728,7 @@ def host_auto_no_show(
     if prog <= 0:
         return {"oznaczone": []}
     guards = reservation_service.begin_locked_write(db, [data])
-    teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    teraz = utcnow_naive()
     oznaczone = []
     for t in (db.query(models.Termin).filter(
             models.Termin.rodzaj == "stolik", models.Termin.data == data,
@@ -3720,6 +3812,7 @@ def usun_rezerwacje_stolik(
         )
         audit.termin_id = None
         _usun_profil_fallbacku_rezerwacji(db, t.id)
+        usun_powiazane_publiczne_sekrety(db, [t.id])
         db.delete(t); _commit_zapis_rezerwacji(db, guards)
         if okno:
             _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
@@ -4097,7 +4190,7 @@ def hold_lista_oczekujacych(
     godz = dane.godz_od or w.godz_od
     if godz is None:
         raise HTTPException(400, "Ustaw godzinę, aby utworzyć czasowy hold.")
-    teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    teraz = utcnow_naive()
     reservation_service.cleanup_expired_holds(db, teraz)
     reservation_service.release_waitlist_hold(db, w.id)
     db.flush()
@@ -4190,11 +4283,150 @@ def zwolnij_hold_lista_oczekujacych(
 
 ONLINE_LIMIT_DZIENNY = 5   # anty-spam: maks. aktywnych rezerwacji online/dzień po telefonie/e-mailu
 ONLINE_LIMIT_IP_DZIENNY = 15   # anty-DoS: maks. rezerwacji online/dzień z jednego IP (niezależnie od kontaktu)
+PUBLIC_HOLD_TTL_SECONDS = 8 * 60
+PUBLIC_PRIVACY_NOTICE_VERSION = "reservation-privacy-2026-07-v1"
+PUBLIC_MARKETING_CONSENT_VERSION = "reservation-marketing-2026-07-v1"
+PUBLIC_SENSITIVE_CONSENT_VERSION = "reservation-sensitive-2026-07-v1"
+
+
+def _public_client_ip(request: Request) -> str:
+    # Nie ufamy X-Forwarded-For bez jawnej konfiguracji trusted proxy po stronie
+    # serwera. W bazie i tak zapisujemy wyłącznie domenowo rozdzielony HMAC.
+    return request.client.host if request.client else "unknown-client"
+
+
+def _wymagaj_publiczny_naglowek(value: Optional[str], *, nazwa: str) -> str:
+    raw = (value or "").strip()
+    if len(raw) < 16 or len(raw) > 128 or any(ord(char) < 33 or ord(char) > 126 for char in raw):
+        raise HTTPException(400, f"Brak lub niepoprawny nagłówek {nazwa}.")
+    return raw
+
+
+def _limit_publiczny(scope: str, limit: int, window_seconds: int):
+    """Zwraca zależność zużywającą współdzieloną, bazodanową kwotę publiczną."""
+    def consume(request: Request, db: Session = Depends(get_db)):
+        try:
+            reservation_service.consume_public_quota(
+                db,
+                scope=scope,
+                raw_client=_public_client_ip(request),
+                secret=SECRET_KEY,
+                now=utcnow_naive(),
+                limit=limit,
+                window_seconds=window_seconds,
+            )
+            # Kwota ma przetrwać także walidacyjny błąd późniejszego handlera;
+            # inaczej nieudane próby zgadywania tokenów byłyby darmowe.
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    return consume
+
+
+_limit_widget_config = _limit_publiczny("widget-config", 60, 60)
+_limit_dostepnosc = _limit_publiczny("availability", 60, 60)
+_limit_alternatywy = _limit_publiczny("alternatives", 30, 60)
+_limit_hold = _limit_publiczny("hold", 12, 600)
+_limit_create_online = _limit_publiczny("reservation-create", 20, 600)
+_limit_waitlist_online = _limit_publiczny("waitlist-create", 15, 600)
+_limit_management = _limit_publiczny("reservation-management", 30, 600)
 
 
 def _wymagaj_rezerwacje_online(db: Session = Depends(get_db)):
     if not (modul_aktywny(db, "modul_rezerwacje") and modul_aktywny(db, "rezerwacje_online")):
         raise HTTPException(404, "Rezerwacje online są niedostępne.")
+
+
+def _widget_v2_gotowy(cfg) -> bool:
+    return bool(
+        getattr(cfg, "rezerwacje_widget_v2", False)
+        and (getattr(cfg, "rezerwacje_rodo_kontakt", None) or "").strip()
+        and (getattr(cfg, "rezerwacje_rodo_adres", None) or "").strip()
+    )
+
+
+def _wymagaj_widget_v2(db: Session = Depends(get_db)):
+    _wymagaj_rezerwacje_online(db)
+    cfg = get_lokal_config(db)
+    if not _widget_v2_gotowy(cfg):
+        raise HTTPException(
+            404,
+            "Nowy widget nie jest jeszcze skonfigurowany dla tego lokalu.",
+        )
+
+
+def _waliduj_prywatnosc_widgetu(dane, cfg) -> None:
+    if not dane.privacy_notice_acknowledged:
+        raise HTTPException(400, "Potwierdź zapoznanie się z informacją o przetwarzaniu danych.")
+    if dane.privacy_notice_version != PUBLIC_PRIVACY_NOTICE_VERSION:
+        raise HTTPException(409, "Informacja o prywatności została zaktualizowana. Przeczytaj ją ponownie.")
+    if dane.marketing_consent and dane.marketing_consent_version != PUBLIC_MARKETING_CONSENT_VERSION:
+        raise HTTPException(409, "Treść zgody marketingowej została zaktualizowana.")
+    if dane.sensitive_data and (
+        not dane.sensitive_data_consent
+        or dane.sensitive_data_consent_version != PUBLIC_SENSITIVE_CONSENT_VERSION
+    ):
+        raise HTTPException(400, "Informacje o alergiach lub potrzebach wymagają osobnej, aktualnej zgody.")
+    if not ((dane.telefon or "").strip() or (dane.email or "").strip()):
+        raise HTTPException(400, "Podaj telefon lub e-mail do kontaktu w sprawie rezerwacji.")
+
+
+def _zapisz_publiczna_prywatnosc(
+    db,
+    *,
+    dane,
+    cfg,
+    request: Request,
+    now: datetime,
+    termin_id: Optional[int] = None,
+    waitlist_id: Optional[int] = None,
+):
+    retention_days = max(30, min(int(cfg.rezerwacje_retencja_dni or 365), 3650))
+    owner = (
+        db.get(models.Termin, termin_id)
+        if termin_id is not None
+        else db.get(models.ListaOczekujacych, waitlist_id)
+    )
+    # Termin jest datą biznesową lokalu. Dowód przechowuje niezmienny deadline
+    # liczony od końca dnia wizyty (lub co najmniej od zebrania zgody), zapisany
+    # w repozytoryjnej konwencji naive UTC. Późniejsza zmiana konfiguracji nie
+    # może tego terminu wydłużyć.
+    retention_until = now + timedelta(days=retention_days)
+    if owner is not None and owner.data is not None:
+        local_deadline = datetime.combine(
+            owner.data + timedelta(days=retention_days + 1),
+            time.min,
+            tzinfo=ZoneInfo("Europe/Warsaw"),
+        )
+        retention_until = max(
+            retention_until,
+            local_deadline.astimezone(timezone.utc).replace(tzinfo=None),
+        )
+    consent = models.RezerwacjaZgodaPubliczna(
+        termin_id=termin_id,
+        waitlist_id=waitlist_id,
+        notice_version=PUBLIC_PRIVACY_NOTICE_VERSION,
+        notice_ack_at=now,
+        marketing=bool(dane.marketing_consent),
+        # Wersja jest zapisywana również dla odmowy, aby dowieść, jaki wybór pokazano.
+        marketing_version=PUBLIC_MARKETING_CONSENT_VERSION,
+        marketing_at=now,
+        sensitive=bool(dane.sensitive_data),
+        sensitive_version=(PUBLIC_SENSITIVE_CONSENT_VERSION if dane.sensitive_data else None),
+        sensitive_at=(now if dane.sensitive_data else None),
+        sensitive_data=(dane.sensitive_data if dane.sensitive_data else None),
+        retention_until=retention_until,
+        ip_hash=reservation_service.hash_public_client(
+            _public_client_ip(request),
+            secret=SECRET_KEY,
+            purpose="reservation-consent-ip",
+        ),
+        created_at=now,
+    )
+    db.add(consent)
+    return consent
 
 
 def _sloty_dnia(db, data: date):
@@ -4238,7 +4470,7 @@ def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
         end=godz_do,
         buffer_min=get_lokal_config(db).rez_bufor_min or 0,
         exclude_termin_id=pomin_id,
-        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+        now=utcnow_naive(),
     )
 
 
@@ -4795,7 +5027,8 @@ def _ocen_przydzial_rezerwacji(
     Zajetosc liczymy osobno dla kazdej sali, bo R3 pozwala jej miec wlasny
     bufor. Krotszy bufor jednej sali nie oslabia wiec ochrony drugiej.
     """
-    now = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    lifecycle_now = utcnow_naive()
+    rule_now = _teraz_lokalnie() or datetime.now(timezone.utc)
     tables = _stoly_do_seating(db)
     combinations = _kombinacje_do_seating(
         db,
@@ -4840,7 +5073,7 @@ def _ocen_przydzial_rezerwacji(
                 end=evaluation.godz_do,
                 buffer_min=evaluation.buffer_min,
                 exclude_termin_id=pomin_id,
-                now=now,
+                now=lifecycle_now,
             )
     section_end = base.godz_do if base is not None else godz_do
     section_load = (
@@ -4867,7 +5100,7 @@ def _ocen_przydzial_rezerwacji(
         occupied_table_ids=occupied,
         adjacency=_sasiedztwo_do_seating(db),
         section_load=section_load,
-        now=now,
+        now=rule_now,
         alternative_limit=alternative_limit,
     )
     _porownaj_allocator_shadow(
@@ -5011,14 +5244,194 @@ def _online_rez_out(t: models.Termin, stolik=None) -> dict:
             "liczba_osob": t.liczba_osob, "nazwisko": t.nazwisko, "status": t.status,
             # Dokładny zasób jest informacją operacyjną. Gość dostaje potwierdzenie
             # miejsca, ale nie układ sali ani nazwę stołu używaną przez obsługę.
-            "stolik": None, "token": t.token_potwierdzenia}
+            "stolik": None}
 
 
-def _rez_po_tokenie(db, token: str):
-    return db.query(models.Termin).filter_by(token_potwierdzenia=token, kanal="online").first()
+def _rez_po_tokenie(db, token: str, *, scope: str = "view"):
+    record = reservation_service.validate_management_token(
+        db,
+        token,
+        scope=scope,
+        secret=SECRET_KEY,
+        now=utcnow_naive(),
+    )
+    termin = db.get(models.Termin, record.termin_id)
+    return termin if termin is not None and termin.kanal == "online" else None
 
 
-@app.get("/api/online/dostepnosc", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+def _odpowiedz_z_obroconym_tokenem(t, raw_token: str, stolik=None) -> dict:
+    return {
+        **_online_rez_out(t, stolik),
+        "management_token": raw_token,
+    }
+
+
+@app.get(
+    "/api/online/widget-config",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_widget_config)],
+)
+def online_widget_config(db: Session = Depends(get_db)):
+    """Publiczny, zredagowany kontrakt rollout'u i informacji dla gościa."""
+    cfg = get_lokal_config(db)
+    v2_enabled = bool(getattr(cfg, "rezerwacje_widget_v2", False))
+    ready = _widget_v2_gotowy(cfg)
+    retention_days = max(30, min(int(getattr(cfg, "rezerwacje_retencja_dni", 365) or 365), 3650))
+    controller = cfg.nazwa_lokalu or "Lokal"
+    address = (getattr(cfg, "rezerwacje_rodo_adres", None) or "").strip() or None
+    contact = (getattr(cfg, "rezerwacje_rodo_kontakt", None) or "").strip() or None
+    notice_text = None
+    if address and contact:
+        notice_text = (
+            f"Administratorem danych jest {controller}, {address}; kontakt: {contact}. "
+            "Dane wykorzystamy do obsługi rezerwacji i kontaktu w jej sprawie. "
+            "Przechowujemy je do realizacji wizyty, a następnie przez maksymalnie "
+            f"{retention_days} dni, z zastrzeżeniem "
+            "obowiązków prawnych. Masz prawo dostępu, sprostowania, usunięcia, "
+            "ograniczenia, przenoszenia, sprzeciwu i skargi do PUODO."
+        )
+    return {
+        "version": 2 if v2_enabled else 1,
+        "ready": ready if v2_enabled else True,
+        "hold_ttl_seconds": PUBLIC_HOLD_TTL_SECONDS,
+        "privacy": {
+            "notice_version": PUBLIC_PRIVACY_NOTICE_VERSION,
+            "notice_label": "Zapoznałem/am się z informacją o przetwarzaniu danych.",
+            "notice_text": notice_text,
+            "controller": controller,
+            "address": address,
+            "contact": contact,
+            "retention_days": retention_days,
+        },
+        "marketing": {
+            "version": PUBLIC_MARKETING_CONSENT_VERSION,
+            "label": "Chcę otrzymywać informacje i oferty tego lokalu.",
+            "optional": True,
+        },
+        "sensitive": {
+            "version": PUBLIC_SENSITIVE_CONSENT_VERSION,
+            "label": (
+                "Zgadzam się na wykorzystanie podanych informacji o alergiach, "
+                "diecie lub potrzebach dostępności wyłącznie do obsługi tej wizyty."
+            ),
+            "optional": True,
+        },
+    }
+
+
+@app.post(
+    "/api/online/hold",
+    status_code=201,
+    dependencies=[Depends(_wymagaj_widget_v2), Depends(_limit_hold)],
+)
+def online_utworz_hold(
+    dane: schemas.PublicznyHoldIn,
+    request: Request,
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    """Atomowo trzyma cały zestaw stołów wybrany przez wspólny allocator."""
+    raw_session = _wymagaj_publiczny_naglowek(
+        reservation_session, nazwa="X-Reservation-Session",
+    )
+    raw_idempotency = _wymagaj_publiczny_naglowek(
+        idempotency_key, nazwa="Idempotency-Key",
+    )
+    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    if dane.data < teraz_lok.date():
+        raise HTTPException(400, "Nie można rezerwować wstecz.")
+    # Singleton konfiguracji może wykonać commit, więc pobieramy go przed blokadą dnia.
+    get_lokal_config(db)
+    guards = reservation_service.begin_locked_write(db, [dane.data])
+    now = utcnow_naive()
+    try:
+        przydzial, evaluation = _przydzial_zgodny_z_regulami(
+            db,
+            data=dane.data,
+            godz_od=dane.godz_od,
+            osoby=dane.liczba_osob,
+            kanal="online",
+            intent="create",
+            enforce=True,
+        )
+        if not przydzial or evaluation is None or evaluation.godz_do is None:
+            raise reservation_service.ReservationError(
+                409,
+                "NO_TABLE_CANDIDATE",
+                "Wybrany termin nie jest już dostępny.",
+                rule="table",
+            )
+        issued = reservation_service.create_public_hold(
+            db,
+            data=dane.data,
+            start=dane.godz_od,
+            end=evaluation.godz_do,
+            table_ids=przydzial["stoliki"],
+            allocation_snapshot=przydzial,
+            party_size=dane.liczba_osob,
+            buffer_min=evaluation.buffer_min,
+            expires_at=now + timedelta(seconds=PUBLIC_HOLD_TTL_SECONDS),
+            raw_session=raw_session,
+            raw_ip=_public_client_ip(request),
+            secret=SECRET_KEY,
+            now=now,
+            idempotency_key=raw_idempotency,
+        )
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(issued.record)
+    return {
+        "hold_token": issued.raw_token,
+        "expires_at": issued.record.expires_at.isoformat(),
+        "replayed": issued.replayed,
+        "rezerwacja": {
+            "data": str(issued.record.data),
+            "godz_od": _hm(issued.record.godz_od),
+            "godz_do": _hm(issued.record.godz_do),
+            "liczba_osob": issued.record.liczba_osob,
+        },
+    }
+
+
+@app.delete(
+    "/api/online/hold",
+    dependencies=[Depends(_wymagaj_widget_v2), Depends(_limit_hold)],
+)
+def online_zwolnij_hold(
+    public_hold_token: Optional[str] = Header(None, alias="X-Reservation-Hold"),
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    """Jawnie zwalnia inventory przy powrocie, zmianie slotu lub zamknięciu flow."""
+    hold_token = _wymagaj_publiczny_naglowek(
+        public_hold_token, nazwa="X-Reservation-Hold",
+    )
+    raw_session = _wymagaj_publiczny_naglowek(
+        reservation_session, nazwa="X-Reservation-Session",
+    )
+    _wymagaj_publiczny_naglowek(idempotency_key, nazwa="Idempotency-Key")
+    current = reservation_service.lookup_public_hold(db, hold_token, secret=SECRET_KEY)
+    if current is None:
+        raise HTTPException(404, "Nie znaleziono holdu tej sesji.")
+    guards = reservation_service.begin_locked_write(db, [current.data])
+    released = reservation_service.release_public_hold(
+        db,
+        hold_token,
+        raw_session=raw_session,
+        secret=SECRET_KEY,
+        now=utcnow_naive(),
+    )
+    _commit_zapis_rezerwacji(db, guards)
+    return {"status": released.state}
+
+
+@app.get(
+    "/api/online/dostepnosc",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_dostepnosc)],
+)
 def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Depends(get_db)):
     """Publicznie: dostępność slotów bez ujawniania zapasu ani układu sali."""
     osoby = max(1, osoby)
@@ -5053,7 +5466,48 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
     return {"data": str(data), "osoby": osoby, "sloty": out}
 
 
-@app.get("/api/online/najblizszy-termin", dependencies=[Depends(_wymagaj_rezerwacje_online)])
+@app.get(
+    "/api/online/alternatywy",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_alternatywy)],
+)
+def online_alternatywy(
+    data: date = Query(...),
+    osoby: int = 2,
+    limit: int = Query(3, ge=1, le=6),
+    db: Session = Depends(get_db),
+):
+    """Najbliższe bezpieczne propozycje bez ujawniania układu ani zapasu sali."""
+    osoby = max(1, min(int(osoby or 2), 500))
+    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    start = max(data, teraz_lok.date())
+    alternatives = []
+    for offset in range(0, 31):
+        current = start + timedelta(days=offset)
+        for godz_od, serwis in _sloty_dnia(db, current):
+            przydzial, evaluation = _przydzial_zgodny_z_regulami(
+                db,
+                data=current,
+                godz_od=godz_od,
+                osoby=osoby,
+                kanal="online",
+                intent="quote",
+                enforce=False,
+            )
+            if przydzial and evaluation and evaluation.decision == "allow":
+                alternatives.append({
+                    "data": str(current),
+                    "godz_od": _hm(godz_od),
+                    "serwis": serwis.nazwa if serwis and serwis.nazwa else None,
+                })
+                if len(alternatives) >= limit:
+                    return {"osoby": osoby, "alternatywy": alternatives}
+    return {"osoby": osoby, "alternatywy": alternatives}
+
+
+@app.get(
+    "/api/online/najblizszy-termin",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_alternatywy)],
+)
 def online_najblizszy_termin(osoby: int = 2, od: Optional[date] = None, dni: int = 14,
                              db: Session = Depends(get_db)):
     """Publicznie: pierwszy dzień (od 'od', domyślnie dziś) z wolnym stołem dla 'osoby'. Skanuje do
@@ -5073,14 +5527,20 @@ def online_najblizszy_termin(osoby: int = 2, od: Optional[date] = None, dni: int
     return {"data": None, "osoby": osoby, "slot": None}
 
 
-@app.post("/api/online/rezerwacja", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
+@app.post(
+    "/api/online/rezerwacja",
+    status_code=201,
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_create_online)],
+)
 def online_rezerwacja(
     dane: schemas.OnlineRezerwacjaIn,
     request: Request,
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
+    reservation_hold: Optional[str] = Header(None, alias="X-Reservation-Hold"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
-    """Publicznie tworzy rezerwację, płatność i ledger w jednej transakcji."""
+    """Publicznie tworzy rezerwację, token hash-only i ledger w jednej transakcji."""
     if not dane.nazwisko or not dane.nazwisko.strip():
         raise HTTPException(400, "Podaj imię/nazwisko.")
     if (dane.liczba_osob or 0) < 1:
@@ -5091,13 +5551,28 @@ def online_rezerwacja(
         raise HTTPException(400, "Nie można rezerwować wstecz.")
 
     # Singleton może zostać utworzony leniwie i wykonać commit; robimy to przed blokadą dnia.
-    get_lokal_config(db)
+    cfg = get_lokal_config(db)
+    v2 = bool(getattr(cfg, "rezerwacje_widget_v2", False))
+    raw_session = None
+    raw_hold = None
+    if v2:
+        if not _widget_v2_gotowy(cfg):
+            raise HTTPException(404, "Nowy widget nie jest jeszcze skonfigurowany dla tego lokalu.")
+        raw_session = _wymagaj_publiczny_naglowek(
+            reservation_session, nazwa="X-Reservation-Session",
+        )
+        raw_hold = _wymagaj_publiczny_naglowek(
+            reservation_hold, nazwa="X-Reservation-Hold",
+        )
+        _wymagaj_publiczny_naglowek(idempotency_key, nazwa="Idempotency-Key")
+        _waliduj_prywatnosc_widgetu(dane, cfg)
     guards = reservation_service.begin_locked_write(db, [dane.data])
     teraz = utcnow_naive()
+    operation = "reservation.create.online:v2" if v2 else "reservation.create.online:v1"
     try:
         idem = reservation_service.begin_idempotency(
             db,
-            operation="reservation.create.online:v1",
+            operation=operation,
             raw_key=idempotency_key,
             payload=dane.model_dump(mode="json"),
             secret=SECRET_KEY,
@@ -5106,8 +5581,23 @@ def online_rezerwacja(
         if idem.replayed:
             replayed = _termin_z_replay_idempotencji(db, idem)
             replay_table = db.get(models.Stolik, replayed.stolik_id) if replayed.stolik_id else None
+            issued = reservation_service.create_management_token(
+                db,
+                termin_id=replayed.id,
+                scopes=("view", "confirm", "edit", "cancel", "data:export", "data:delete"),
+                secret=SECRET_KEY,
+                now=teraz,
+                expires_at=max(
+                    teraz + timedelta(days=30),
+                    datetime.combine(replayed.data + timedelta(days=30), time.min),
+                ),
+                idempotency_key=idempotency_key,
+                operation=operation,
+            )
             response = {
-                "token": replayed.token_potwierdzenia,
+                "management_token": issued.raw_token,
+                # Alias przejściowy dla starszych klientów; token nie trafia do kolumny Termin.
+                "token": issued.raw_token,
                 "rezerwacja": _online_rez_out(replayed, replay_table),
             }
             payment = (
@@ -5122,9 +5612,9 @@ def online_rezerwacja(
                     "link": payment.link,
                     "status": payment.status,
                 }
+            db.rollback()
             return response
 
-        cfg = get_lokal_config(db)
         ip = request.client.host if request.client else "?"
         if not ratelimit.zuzyj_kwote(
             f"online-rez:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY,
@@ -5144,24 +5634,62 @@ def online_rezerwacja(
             if ile >= ONLINE_LIMIT_DZIENNY:
                 raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online.")
 
-        przydzial, evaluation = _przydzial_zgodny_z_regulami(
-            db,
-            data=dane.data,
-            godz_od=dane.godz_od,
-            osoby=dane.liczba_osob,
-            kanal="online",
-            intent="create",
-            enforce=True,
-        )
-        if not przydzial:
-            raise reservation_service.ReservationError(
-                409,
-                "NO_TABLE_CANDIDATE",
-                "Brak wolnego stołu w wybranym czasie.",
-                rule="table",
+        hold = None
+        if v2:
+            hold = reservation_service.validate_public_hold(
+                db,
+                raw_hold,
+                raw_session=raw_session,
+                secret=SECRET_KEY,
+                now=teraz,
             )
-        godz_do = evaluation.godz_do
-        stoliki = przydzial["stoliki"]
+            if (
+                hold.data != dane.data
+                or hold.godz_od != dane.godz_od
+                or int(hold.liczba_osob) != int(dane.liczba_osob)
+            ):
+                raise reservation_service.ReservationError(
+                    409,
+                    "PUBLIC_HOLD_REQUEST_MISMATCH",
+                    "Dane rezerwacji nie odpowiadają trzymanemu terminowi.",
+                    rule="public_hold",
+                )
+            stoliki = [hold.stolik_id, *(hold.stoliki_dodatkowe or [])]
+            godz_do = hold.godz_do
+            evaluation = _ocen_reguly_slotu(
+                db,
+                data=dane.data,
+                godz_od=dane.godz_od,
+                godz_do=godz_do,
+                liczba_osob=dane.liczba_osob,
+                kanal="online",
+                sala_id=_sala_dla_stolikow(db, set(stoliki)),
+                intent="create",
+            )
+            reservation_rules.enforce_rule_evaluation(evaluation)
+            przydzial = getattr(hold, "allocation_snapshot", None) or {
+                "stoliki": stoliki,
+                "typ": "kombinacja" if len(stoliki) > 1 else "stolik",
+            }
+        else:
+            przydzial, evaluation = _przydzial_zgodny_z_regulami(
+                db,
+                data=dane.data,
+                godz_od=dane.godz_od,
+                osoby=dane.liczba_osob,
+                kanal="online",
+                intent="create",
+                enforce=True,
+            )
+            if not przydzial:
+                raise reservation_service.ReservationError(
+                    409,
+                    "NO_TABLE_CANDIDATE",
+                    "Brak wolnego stołu w wybranym czasie.",
+                    rule="table",
+                )
+            godz_do = evaluation.godz_do
+            stoliki = przydzial["stoliki"]
         stolik = db.get(models.Stolik, stoliki[0])
         status = "potwierdzona" if cfg.rezerwacje_auto_potwierdzenie else "rezerwacja"
         t = models.Termin(
@@ -5181,11 +5709,20 @@ def online_rezerwacja(
             auto_przydzielony=True,
             rodzaj="stolik",
             kanal="online",
-            token_potwierdzenia=secrets.token_urlsafe(24),
+            token_potwierdzenia=None,
             potwierdzono_at=(teraz if status == "potwierdzona" else None),
         )
         _ustaw_proweniencje_przydzialu(t, przydzial)
         db.add(t); db.flush()
+        if hold is not None:
+            reservation_service.consume_public_hold(
+                db,
+                raw_hold,
+                raw_session=raw_session,
+                termin_id=t.id,
+                secret=SECRET_KEY,
+                now=teraz,
+            )
         _zastap_ledger_terminu(
             db,
             t,
@@ -5202,14 +5739,45 @@ def online_rezerwacja(
             after=t,
             pii_changed=_utworzone_pii(t),
         )
-        odp = {"token": t.token_potwierdzenia, "rezerwacja": _online_rez_out(t, stolik)}
+        if v2:
+            _zapisz_publiczna_prywatnosc(
+                db,
+                dane=dane,
+                cfg=cfg,
+                request=request,
+                now=teraz,
+                termin_id=t.id,
+            )
+        issued = reservation_service.create_management_token(
+            db,
+            termin_id=t.id,
+            scopes=("view", "confirm", "edit", "cancel", "data:export", "data:delete"),
+            secret=SECRET_KEY,
+            now=teraz,
+            expires_at=max(
+                teraz + timedelta(days=30),
+                datetime.combine(t.data + timedelta(days=30), time.min),
+            ),
+            idempotency_key=idempotency_key,
+            operation=operation,
+        )
+        odp = {
+            "management_token": issued.raw_token,
+            "token": issued.raw_token,
+            "rezerwacja": _online_rez_out(t, stolik),
+        }
         if cfg.zadatek_wymagany and dane.liczba_osob >= (cfg.zadatek_prog_osob or 0):
             kwota = round((cfg.zadatek_kwota_os or 0) * dane.liczba_osob, 2)
             if kwota > 0:
                 p = platnosci.utworz_platnosc(db, t.id, kwota, commit=False)
                 odp["platnosc"] = {"kwota": p.kwota, "link": p.link, "status": p.status}
         reservation_service.complete_idempotency(
-            idem.record, response=odp, http_status=201, termin_id=t.id, now=teraz,
+            idem.record,
+            # Raw management token nigdy nie trafia nawet do szyfrowanego replay cache.
+            response={key: value for key, value in odp.items() if key not in {"token", "management_token"}},
+            http_status=201,
+            termin_id=t.id,
+            now=teraz,
         )
         _commit_zapis_rezerwacji(db, guards)
     except IntegrityError as exc:
@@ -5236,7 +5804,11 @@ def _nalicz_no_show_fee(db, t, *, commit=True):
     return None
 
 
-@app.post("/api/online/lista-oczekujacych", status_code=201, dependencies=[Depends(_wymagaj_rezerwacje_online)])
+@app.post(
+    "/api/online/lista-oczekujacych",
+    status_code=201,
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_waitlist_online)],
+)
 def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Request, db: Session = Depends(get_db)):
     """Publicznie: gość zapisuje się na listę oczekujących (gdy brak wolnych stolików). Anty-spam
     (limit IP + limit po telefonie/e-mailu) skopiowany z rezerwacji online."""
@@ -5246,6 +5818,12 @@ def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Reques
     dzis_lokalnie = teraz_lok.date()
     if dane.data < dzis_lokalnie:
         raise HTTPException(400, "Nie można zapisać się wstecz.")
+    cfg = get_lokal_config(db)
+    v2 = bool(getattr(cfg, "rezerwacje_widget_v2", False))
+    if v2:
+        if not _widget_v2_gotowy(cfg):
+            raise HTTPException(404, "Nowy widget nie jest jeszcze skonfigurowany dla tego lokalu.")
+        _waliduj_prywatnosc_widgetu(dane, cfg)
     ip = request.client.host if request.client else "?"
     if not ratelimit.zuzyj_kwote(f"online-wait:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY):
         raise HTTPException(429, "Przekroczono dzienny limit zapisów z tego adresu.")
@@ -5260,70 +5838,179 @@ def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Reques
     w = models.ListaOczekujacych(
         data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
         nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email, notatka=dane.notatka,
-        status="oczekuje", kanal="online", token=secrets.token_urlsafe(24), utworzono_at=utcnow_naive())
-    db.add(w); db.commit(); db.refresh(w)
+        status="oczekuje", kanal="online", token=None, utworzono_at=utcnow_naive())
+    db.add(w); db.flush()
+    if v2:
+        _zapisz_publiczna_prywatnosc(
+            db,
+            dane=dane,
+            cfg=cfg,
+            request=request,
+            now=utcnow_naive(),
+            waitlist_id=w.id,
+        )
+    db.commit(); db.refresh(w)
     wyslij_push_do_adminow(db, "Nowy wpis na liście oczekujących",
                            f"{w.nazwisko} — {w.data} {_hm(w.godz_od) or ''}".strip(), url="/")
-    return {"token": w.token, "wpis": {"data": str(w.data), "godz_od": _hm(w.godz_od),
+    return {"wpis": {"data": str(w.data), "godz_od": _hm(w.godz_od),
             "liczba_osob": w.liczba_osob, "nazwisko": w.nazwisko, "status": w.status}}
 
 
-@app.get("/api/online/rezerwacja/{token}", dependencies=[Depends(_wymagaj_rezerwacje_online)])
-def online_rezerwacja_get(token: str, db: Session = Depends(get_db)):
+def _online_rezerwacja_get_core(token: str, db: Session):
     t = _rez_po_tokenie(db, token)
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
     return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
 
 
-@app.post("/api/online/rezerwacja/{token}/potwierdz", dependencies=[Depends(_wymagaj_rezerwacje_online)])
-def online_rezerwacja_potwierdz(token: str, db: Session = Depends(get_db)):
+@app.get(
+    "/api/online/zarzadzanie/rezerwacja",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
+)
+def online_zarzadzanie_rezerwacja_get(
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    db: Session = Depends(get_db),
+):
+    token = _wymagaj_publiczny_naglowek(
+        reservation_token, nazwa="X-Reservation-Token",
+    )
+    return _online_rezerwacja_get_core(token, db)
+
+
+def _online_rezerwacja_potwierdz_core(
+    token: str,
+    idempotency_key: Optional[str],
+    db: Session,
+):
     t, guards = _zablokuj_rezerwacje_online(db, token)
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    now = utcnow_naive()
+    issued = reservation_service.consume_and_rotate_management_token(
+        db,
+        token,
+        operation="confirm",
+        idempotency_key=idempotency_key,
+        payload={},
+        secret=SECRET_KEY,
+        now=now,
+    )
+    if issued.replayed:
+        db.rollback()
+        return _odpowiedz_z_obroconym_tokenem(
+            t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+        )
     if t.status == "rezerwacja":
         before = reservation_audit.reservation_snapshot(t)
-        t.status = "potwierdzona"; t.potwierdzono_at = utcnow_naive()
+        t.status = "potwierdzona"; t.potwierdzono_at = now
         reservation_audit.add_reservation_audit(
             db, termin=t, action="status", actor_kind="guest", before=before, after=t,
         )
-        _commit_zapis_rezerwacji(db, guards); db.refresh(t)
-    else:
-        db.rollback()
-    return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
+    _commit_zapis_rezerwacji(db, guards); db.refresh(t)
+    return _odpowiedz_z_obroconym_tokenem(
+        t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+    )
 
 
-@app.post("/api/online/rezerwacja/{token}/odwolaj", dependencies=[Depends(_wymagaj_rezerwacje_online)])
-def online_rezerwacja_odwolaj(token: str, db: Session = Depends(get_db)):
+@app.post(
+    "/api/online/zarzadzanie/potwierdz",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
+)
+def online_zarzadzanie_potwierdz(
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    token = _wymagaj_publiczny_naglowek(
+        reservation_token, nazwa="X-Reservation-Token",
+    )
+    return _online_rezerwacja_potwierdz_core(token, idempotency_key, db)
+
+
+def _online_rezerwacja_odwolaj_core(
+    token: str,
+    idempotency_key: Optional[str],
+    db: Session,
+):
     t, guards = _zablokuj_rezerwacje_online(db, token)
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    now = utcnow_naive()
+    issued = reservation_service.consume_and_rotate_management_token(
+        db,
+        token,
+        operation="cancel",
+        idempotency_key=idempotency_key,
+        payload={},
+        secret=SECRET_KEY,
+        now=now,
+    )
+    if issued.replayed:
+        db.rollback()
+        return _odpowiedz_z_obroconym_tokenem(
+            t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+        )
+    stolik_wolny = set()
+    okno = None
     if t.status in REZ_AKTYWNE:
         before = reservation_audit.reservation_snapshot(t)
         teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
-        _sprawdz_okno_anulacji(get_lokal_config(db), t, teraz_lok)   # egzekwuj rez_anulacja_do_h
+        _sprawdz_okno_anulacji(get_lokal_config(db), t, teraz_lok)
         stolik_wolny = _stoly_terminu(t)
         okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
-        t.status = "odwolana"; t.odwolano_at = utcnow_naive()
+        t.status = "odwolana"; t.odwolano_at = now
         reservation_service.release_termin_allocation(db, t.id)
         reservation_audit.add_reservation_audit(
             db, termin=t, action="cancel", actor_kind="guest", before=before, after=t,
         )
-        _commit_zapis_rezerwacji(db, guards); db.refresh(t)
-        if stolik_wolny and t.godz_od:                               # zwolniony stół → re-optymalizacja
-            _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
-    else:
-        db.rollback()
-    return _online_rez_out(t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None)
+    _commit_zapis_rezerwacji(db, guards); db.refresh(t)
+    if stolik_wolny and okno:
+        _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
+    return _odpowiedz_z_obroconym_tokenem(
+        t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+    )
 
 
-@app.post("/api/online/rezerwacja/{token}/edytuj", dependencies=[Depends(_wymagaj_rezerwacje_online)])
-def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Session = Depends(get_db)):
-    """Publicznie (magic-link): zmiana terminu/liczby osób. Egzekwuje politykę (okno anulacji, okno
-    wyprzedzenia, cutoff, min/max grupa, blackout) i re-alokuje stół. 409 gdy brak miejsca."""
+@app.post(
+    "/api/online/zarzadzanie/odwolaj",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
+)
+def online_zarzadzanie_odwolaj(
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    token = _wymagaj_publiczny_naglowek(
+        reservation_token, nazwa="X-Reservation-Token",
+    )
+    return _online_rezerwacja_odwolaj_core(token, idempotency_key, db)
+
+
+def _online_rezerwacja_edytuj_core(
+    token: str,
+    dane: schemas.OnlineEdytujIn,
+    idempotency_key: Optional[str],
+    db: Session,
+):
+    """Idempotentna zmiana terminu/liczby osób z rotacją capability tokenu."""
     t, guards = _zablokuj_rezerwacje_online(db, token, [dane.data])
     if not t:
         raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    now = utcnow_naive()
+    issued = reservation_service.consume_and_rotate_management_token(
+        db,
+        token,
+        operation="edit",
+        idempotency_key=idempotency_key,
+        payload=dane.model_dump(mode="json"),
+        secret=SECRET_KEY,
+        now=now,
+    )
+    if issued.replayed:
+        db.rollback()
+        return _odpowiedz_z_obroconym_tokenem(
+            t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+        )
     before = reservation_audit.reservation_snapshot(t)
     if t.status not in REZ_AKTYWNE:
         raise HTTPException(409, "Tej rezerwacji nie można już zmienić.")
@@ -5388,7 +6075,153 @@ def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Sessi
         or stare_stoliki != set(stoliki)
     ):
         _bezpiecznie_po_zwolnieniu_stolu(db, *stary_okno)            # stary termin zwolniony → re-optymalizacja
-    return _online_rez_out(t, stolik)
+    return _odpowiedz_z_obroconym_tokenem(t, issued.raw_token, stolik)
+
+
+@app.post(
+    "/api/online/zarzadzanie/edytuj",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
+)
+def online_zarzadzanie_edytuj(
+    dane: schemas.OnlineEdytujIn,
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    token = _wymagaj_publiczny_naglowek(
+        reservation_token, nazwa="X-Reservation-Token",
+    )
+    return _online_rezerwacja_edytuj_core(token, dane, idempotency_key, db)
+
+
+@app.get(
+    "/api/online/zarzadzanie/dane",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
+)
+def online_zarzadzanie_dane(
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    db: Session = Depends(get_db),
+):
+    """Self-service eksportuje wyłącznie dane powiązane z jedną capability rezerwacji."""
+    token = _wymagaj_publiczny_naglowek(
+        reservation_token, nazwa="X-Reservation-Token",
+    )
+    record = reservation_service.validate_management_token(
+        db,
+        token,
+        scope="data:export",
+        secret=SECRET_KEY,
+        now=utcnow_naive(),
+    )
+    t = db.get(models.Termin, record.termin_id)
+    if t is None or t.kanal != "online":
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    consents = (
+        db.query(models.RezerwacjaZgodaPubliczna)
+        .filter_by(termin_id=t.id)
+        .order_by(models.RezerwacjaZgodaPubliczna.created_at)
+        .all()
+    )
+    return {
+        "rezerwacja": {
+            **_online_rez_out(t),
+            "telefon": t.telefon,
+            "email": t.email,
+            "notatka": t.notatka,
+        },
+        "prywatnosc": [
+            {
+                "notice_version": consent.notice_version,
+                "notice_ack_at": consent.notice_ack_at.isoformat(),
+                "marketing": bool(consent.marketing),
+                "marketing_version": consent.marketing_version,
+                "marketing_at": consent.marketing_at.isoformat(),
+                "sensitive": bool(consent.sensitive),
+                "sensitive_data": consent.sensitive_data if consent.sensitive else None,
+                "sensitive_at": consent.sensitive_at.isoformat() if consent.sensitive_at else None,
+                "retention_until": consent.retention_until.isoformat(),
+            }
+            for consent in consents
+        ],
+    }
+
+
+@app.post(
+    "/api/online/zarzadzanie/dane/usun",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
+)
+def online_zarzadzanie_usun_dane(
+    dane: schemas.PubliczneUsuniecieDanychIn,
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    """Anuluje aktywną wizytę i usuwa PII/szczególne dane w jednej transakcji."""
+    token = _wymagaj_publiczny_naglowek(
+        reservation_token, nazwa="X-Reservation-Token",
+    )
+    t, guards = _zablokuj_rezerwacje_online(db, token)
+    if not t:
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    now = utcnow_naive()
+    issued = reservation_service.consume_and_rotate_management_token(
+        db,
+        token,
+        operation="data:delete",
+        idempotency_key=idempotency_key,
+        payload=dane.model_dump(mode="json"),
+        secret=SECRET_KEY,
+        now=now,
+        # Usunięcie danych jest operacją terminalną. Retry ma zwrócić bezpieczny
+        # receipt, mimo że następca został od razu unieważniony.
+        allow_revoked_successor_replay=True,
+    )
+    if issued.replayed:
+        db.rollback()
+        return {"status": "usuniete"}
+    before = reservation_audit.reservation_snapshot(t)
+    old_window = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
+    had_tables = bool(_stoly_terminu(t))
+    if t.status in REZ_AKTYWNE:
+        t.status = "odwolana"
+        t.odwolano_at = now
+        reservation_service.release_termin_allocation(db, t.id)
+    source_token = reservation_service.lookup_management_token(
+        db, token, secret=SECRET_KEY,
+    )
+    keep_token_ids = {issued.record.id}
+    if source_token is not None:
+        keep_token_ids.add(source_token.id)
+    # Wspólny cleanup z pełną ścieżką RODO usuwa także profil CRM, dane
+    # szczególne, wątek ustaleń i wolny tekst zadatku, zanim wyczyścimy klucz.
+    usun_powiazane_pii_rezerwacji(db, [t])
+    t.nazwisko = "[anonimizacja RODO]"
+    t.telefon = None
+    t.email = None
+    t.notatka = None
+    t.token_potwierdzenia = None
+    usun_powiazane_publiczne_sekrety(
+        db,
+        [t.id],
+        preserve_management_token_ids=keep_token_ids,
+    )
+    db.query(models.RezerwacjaTokenZarzadzania).filter(
+        models.RezerwacjaTokenZarzadzania.id.in_(keep_token_ids),
+    ).update({"revoked_at": now}, synchronize_session=False)
+    reservation_audit.add_reservation_audit(
+        db,
+        termin=t,
+        action="edit",
+        actor_kind="guest",
+        reason="guest_request",
+        before=before,
+        after=t,
+        pii_changed={"nazwisko", "telefon", "email", "notatka"},
+    )
+    _commit_zapis_rezerwacji(db, guards)
+    if had_tables and old_window:
+        _bezpiecznie_po_zwolnieniu_stolu(db, *old_window)
+    return {"status": "usuniete"}
 
 
 # --- PUBLIKACJA GRAFIKU (admin — chronione middleware) ---

@@ -22,7 +22,7 @@ import hashlib
 import os
 
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy.types import String, TypeDecorator
+from sqlalchemy.types import String, Text, TypeDecorator
 
 _PREFIX = "enc:v1:"
 _cache: dict = {}          # raw klucz -> instancja Fernet (memoizacja)
@@ -85,3 +85,10 @@ class EncryptedString(TypeDecorator):
 
     def process_result_value(self, value, dialect):
         return odszyfruj(value)
+
+
+class EncryptedText(EncryptedString):
+    """Nielimitowany tekst szyfrowany dla danych rozszerzanych przez Fernet."""
+
+    impl = Text
+    cache_ok = True

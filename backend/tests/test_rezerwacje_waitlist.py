@@ -243,7 +243,8 @@ def test_online_zapis_na_liste_oczekujacych(admin_client, client):
     r = client.post("/api/online/lista-oczekujacych",
                     json={"data": DZIEN, "godz_od": "18:00", "liczba_osob": 2, "nazwisko": "Online Gość"})
     assert r.status_code == 201, r.text
-    assert r.json()["token"] and r.json()["wpis"]["status"] == "oczekuje"
+    assert "token" not in r.json()
+    assert r.json()["wpis"]["status"] == "oczekuje"
     lista = admin_client.get(f"/api/lista-oczekujacych?data={DZIEN}").json()["lista"]
     assert any(w["kanal"] == "online" for w in lista)
 

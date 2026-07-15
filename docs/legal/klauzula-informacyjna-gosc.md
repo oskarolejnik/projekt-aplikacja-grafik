@@ -38,18 +38,30 @@ dobrowolne, ale niezbędne do dokonania rezerwacji.
 3. **[OPCJONALNE — osobny opt-in] Marketing:**
    > „Wyrażam zgodę na otrzymywanie informacji handlowych od `[NAZWA LOKALU]` drogą `[e-mail/SMS]`.
    > Zgodę mogę wycofać w każdej chwili."
-   *(Nie może być domyślnie zaznaczona ani wymagana do rezerwacji. Mapuje się na pole `ProfilGoscia.marketing_zgoda`.)*
+   *(Nie może być domyślnie zaznaczona ani wymagana do rezerwacji. Dowód zapisuje
+   `RezerwacjaZgodaPubliczna`; ewentualna synchronizacja preferencji CRM jest osobną polityką.)*
 
-## C. Wymagania mechaniki (do wdrożenia razem ze zgodami)
+## C. Stan mechaniki w aplikacji
 
 Aby zgoda była **dowodliwa** (RODO wymaga wykazania zgody), przy zapisie należy utrwalić: **treść/wersję**
-zgody, **datę** i (dla zgód online) **adres IP/znacznik**. Dziś widget rezerwacji **nie zbiera żadnej zgody
-ani nie pokazuje klauzuli** — to najważniejsza luka do domknięcia po akceptacji tekstów przez prawnika.
+zgody, **datę** i (dla zgód online) **adres IP/znacznik**. Widget R5a realizuje ten kontrakt przez
+`RezerwacjaZgodaPubliczna`: zapisuje wersje i daty potwierdzenia informacji, marketingu i danych
+szczególnych oraz pseudonimizowany HMAC adresu IP — nigdy surowy adres IP w rekordzie zgody.
 
-Sugerowane pola do dodania (gdy ruszymy z mechaniką):
-- `Termin.zgoda_info_wersja`, `Termin.zgoda_info_at` — potwierdzenie klauzuli (pkt B.1);
-- zgoda na alergie — warunkowa, gdy pole alergii niepuste (pkt B.2);
-- `ProfilGoscia.marketing_zgoda` — już istnieje (pkt B.3), ale bez UI, w którym gość sam ją nadaje.
+Mechanika jest rozdzielona zgodnie z celem przetwarzania:
+
+- potwierdzenie informacji (pkt B.1) jest wymagane do wysłania formularza;
+- marketing (pkt B.3) jest osobnym, domyślnie wyłączonym opt-inem i jego odmowa nie blokuje rezerwacji;
+- pole alergii/diety/potrzeb dostępności wymaga osobnej zgody (pkt B.2), a treść jest szyfrowana at-rest;
+- okres po realizacji wizyty jest konfigurowany per lokal; deadline zapisuje się przy zebraniu
+  informacji i późniejsza zmiana konfiguracji nie może go retroaktywnie wydłużyć;
+- audytowana retencja działa automatycznie w tle i usuwa także wygasłe zaszyfrowane odpowiedzi
+  idempotencyjne, tokeny oraz techniczne rekordy publicznego przepływu;
+- eksport i usunięcie danych są dostępne w torze administracyjnym i samoobsługowym gościa.
+
+Treści, podstawy prawne, okresy oraz dane administratora nadal wymagają uzupełnienia przez lokal i
+akceptacji prawnika przed komercyjną publikacją. Mechanizm wersjonuje tekst zwrócony przez konfigurację
+widgetu; zmiana zaakceptowanej treści powinna otrzymać nową wersję.
 
 ## D. Rola Lokalo
 

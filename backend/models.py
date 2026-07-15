@@ -6,7 +6,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship, declarative_base
 
-from szyfrowanie import EncryptedString   # pola kontaktowe gości szyfrowane at-rest (RODO)
+from szyfrowanie import EncryptedString, EncryptedText  # PII szyfrowane at-rest (RODO)
 
 Base = declarative_base()
 
@@ -542,6 +542,12 @@ class LokalConfig(Base):
     przez get_lokal_config(). Fundament produktyzacji: nowy klient konfiguruje to zamiast
     przerabiać kod."""
     __tablename__ = "lokal_config"
+    __table_args__ = (
+        CheckConstraint(
+            "rezerwacje_retencja_dni >= 30 AND rezerwacje_retencja_dni <= 3650",
+            name="ck_lokal_config_rezerwacje_retencja_dni",
+        ),
+    )
     id                = Column(Integer, primary_key=True)
     # --- Branding (white-label) ---
     nazwa_lokalu      = Column(String(128), nullable=False, default="Lokalo")
@@ -560,6 +566,14 @@ class LokalConfig(Base):
     # --- Rezerwacje online (publiczny widget) ---
     rezerwacje_online             = Column(Boolean, nullable=False, default=False)  # gość rezerwuje bez logowania
     rezerwacje_auto_potwierdzenie = Column(Boolean, nullable=False, default=False)  # online od razu 'potwierdzona'
+    rezerwacje_widget_v2 = Column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
+    rezerwacje_retencja_dni = Column(
+        Integer, nullable=False, default=365, server_default="365",
+    )
+    rezerwacje_rodo_kontakt = Column(String(254), nullable=True)
+    rezerwacje_rodo_adres = Column(String(256), nullable=True)
     # --- Polityka rezerwacji (v2). Defaulty = polityka wyłączona (zachowanie historyczne). ---
     rez_okno_wyprzedzenia_dni = Column(Integer, nullable=False, default=0)   # max dni w przód (0 = bez limitu)
     rez_cutoff_min            = Column(Integer, nullable=False, default=0)   # min. minut przed slotem (0 = wyłączone)
@@ -1307,6 +1321,222 @@ class RezerwacjaIdempotencja(Base):
     expires_at          = Column(DateTime, nullable=False)
 
 
+class RezerwacjaPublicznyHold(Base):
+    """Hash-only, session-owned inventory hold for the public R5a widget."""
+    __tablename__ = "rezerwacje_publiczne_holdy"
+    __table_args__ = (
+        UniqueConstraint(
+            "token_hash", name="uq_rezerwacje_publiczne_holdy_token_hash",
+        ),
+        CheckConstraint(
+            "length(token_hash) = 64",
+            name="ck_rezerwacje_publiczne_holdy_token_hash",
+        ),
+        CheckConstraint(
+            "length(session_hash) = 64",
+            name="ck_rezerwacje_publiczne_holdy_session_hash",
+        ),
+        CheckConstraint(
+            "length(ip_hash) = 64",
+            name="ck_rezerwacje_publiczne_holdy_ip_hash",
+        ),
+        CheckConstraint(
+            "state IN ('active', 'consumed', 'released', 'expired')",
+            name="ck_rezerwacje_publiczne_holdy_state",
+        ),
+        CheckConstraint(
+            "liczba_osob > 0",
+            name="ck_rezerwacje_publiczne_holdy_liczba_osob",
+        ),
+        CheckConstraint(
+            "bufor_min >= 0",
+            name="ck_rezerwacje_publiczne_holdy_bufor_min",
+        ),
+        CheckConstraint(
+            "godz_do > godz_od",
+            name="ck_rezerwacje_publiczne_holdy_interval",
+        ),
+        CheckConstraint(
+            "(state = 'active' AND released_at IS NULL AND consumed_at IS NULL "
+            "AND termin_id IS NULL) OR "
+            "(state IN ('released', 'expired') AND released_at IS NOT NULL "
+            "AND consumed_at IS NULL AND termin_id IS NULL) OR "
+            "(state = 'consumed' AND released_at IS NULL AND consumed_at IS NOT NULL)",
+            name="ck_rezerwacje_publiczne_holdy_lifecycle",
+        ),
+        Index(
+            "ix_rezerwacje_publiczne_holdy_session_state",
+            "session_hash", "state", "expires_at",
+        ),
+        Index(
+            "ix_rezerwacje_publiczne_holdy_ip_state",
+            "ip_hash", "state", "expires_at",
+        ),
+        Index(
+            "ix_rezerwacje_publiczne_holdy_data_interval",
+            "data", "godz_od", "godz_do",
+        ),
+        Index("ix_rezerwacje_publiczne_holdy_expires_at", "expires_at"),
+        Index("ix_rezerwacje_publiczne_holdy_termin_id", "termin_id"),
+    )
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), nullable=False)
+    session_hash = Column(String(64), nullable=False)
+    ip_hash = Column(String(64), nullable=False)
+    state = Column(String(16), nullable=False, default="active", server_default="active")
+    data = Column(Date, nullable=False)
+    godz_od = Column(Time, nullable=False)
+    godz_do = Column(Time, nullable=False)
+    liczba_osob = Column(Integer, nullable=False)
+    stolik_id = Column(
+        Integer, ForeignKey("stoliki.id", ondelete="RESTRICT"), nullable=False,
+    )
+    stoliki_dodatkowe = Column(JSON, nullable=True)
+    allocation_snapshot = Column(JSON, nullable=False)
+    bufor_min = Column(Integer, nullable=False, default=0, server_default="0")
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    released_at = Column(DateTime, nullable=True)
+    consumed_at = Column(DateTime, nullable=True)
+    termin_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True,
+    )
+
+
+class RezerwacjaTokenZarzadzania(Base):
+    """One-time reservation management token stored only as a keyed hash."""
+    __tablename__ = "rezerwacje_tokeny_zarzadzania"
+    __table_args__ = (
+        UniqueConstraint(
+            "token_hash", name="uq_rezerwacje_tokeny_zarzadzania_token_hash",
+        ),
+        CheckConstraint(
+            "length(token_hash) = 64",
+            name="ck_rezerwacje_tokeny_zarzadzania_token_hash",
+        ),
+        CheckConstraint(
+            "used_request_fingerprint IS NULL OR length(used_request_fingerprint) = 64",
+            name="ck_rezerwacje_tokeny_zarzadzania_fingerprint",
+        ),
+        CheckConstraint(
+            "(used_at IS NULL AND used_operation IS NULL "
+            "AND used_request_fingerprint IS NULL AND rotated_to_id IS NULL) OR "
+            "(used_at IS NOT NULL AND used_operation IS NOT NULL "
+            "AND used_request_fingerprint IS NOT NULL AND rotated_to_id IS NOT NULL)",
+            name="ck_rezerwacje_tokeny_zarzadzania_usage",
+        ),
+        Index("ix_rezerwacje_tokeny_zarzadzania_termin_id", "termin_id"),
+        Index("ix_rezerwacje_tokeny_zarzadzania_expires_at", "expires_at"),
+        Index("ix_rezerwacje_tokeny_zarzadzania_rotated_to_id", "rotated_to_id"),
+    )
+    id = Column(Integer, primary_key=True)
+    termin_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=False,
+    )
+    token_hash = Column(String(64), nullable=False)
+    scopes = Column(JSON, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    rotated_to_id = Column(
+        Integer,
+        ForeignKey("rezerwacje_tokeny_zarzadzania.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    used_operation = Column(String(64), nullable=True)
+    used_request_fingerprint = Column(String(64), nullable=True)
+
+
+class RezerwacjaZgodaPubliczna(Base):
+    """Versioned proof of notice and separate public reservation consents."""
+    __tablename__ = "rezerwacje_zgody_publiczne"
+    __table_args__ = (
+        CheckConstraint(
+            "(termin_id IS NOT NULL AND waitlist_id IS NULL) OR "
+            "(termin_id IS NULL AND waitlist_id IS NOT NULL)",
+            name="ck_rezerwacje_zgody_publiczne_owner",
+        ),
+        CheckConstraint(
+            "length(trim(notice_version)) > 0",
+            name="ck_rezerwacje_zgody_publiczne_notice_version",
+        ),
+        CheckConstraint(
+            "length(trim(marketing_version)) > 0",
+            name="ck_rezerwacje_zgody_publiczne_marketing_version",
+        ),
+        CheckConstraint(
+            "(NOT sensitive AND sensitive_version IS NULL AND sensitive_at IS NULL "
+            "AND sensitive_data IS NULL) OR "
+            "(sensitive AND sensitive_version IS NOT NULL AND sensitive_at IS NOT NULL "
+            "AND sensitive_data IS NOT NULL)",
+            name="ck_rezerwacje_zgody_publiczne_sensitive",
+        ),
+        CheckConstraint(
+            "length(ip_hash) = 64",
+            name="ck_rezerwacje_zgody_publiczne_ip_hash",
+        ),
+        Index("ix_rezerwacje_zgody_publiczne_termin_id", "termin_id"),
+        Index("ix_rezerwacje_zgody_publiczne_waitlist_id", "waitlist_id"),
+        Index("ix_rezerwacje_zgody_publiczne_retention_until", "retention_until"),
+    )
+    id = Column(Integer, primary_key=True)
+    termin_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=True,
+    )
+    waitlist_id = Column(
+        Integer, ForeignKey("lista_oczekujacych.id", ondelete="CASCADE"), nullable=True,
+    )
+    notice_version = Column(String(64), nullable=False)
+    notice_ack_at = Column(DateTime, nullable=False)
+    marketing = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    marketing_version = Column(String(64), nullable=False)
+    marketing_at = Column(DateTime, nullable=False)
+    sensitive = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    sensitive_version = Column(String(64), nullable=True)
+    sensitive_at = Column(DateTime, nullable=True)
+    sensitive_data = Column(EncryptedText(), nullable=True)
+    retention_until = Column(DateTime, nullable=False)
+    ip_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class RezerwacjaPublicznaKwota(Base):
+    """Database-backed fixed-window quota shared by all application workers."""
+    __tablename__ = "rezerwacje_publiczne_kwoty"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope", "client_hash", "window_start",
+            name="uq_rezerwacje_publiczne_kwoty_scope_client_window",
+        ),
+        CheckConstraint(
+            "length(trim(scope)) > 0",
+            name="ck_rezerwacje_publiczne_kwoty_scope",
+        ),
+        CheckConstraint(
+            "length(client_hash) = 64",
+            name="ck_rezerwacje_publiczne_kwoty_client_hash",
+        ),
+        CheckConstraint(
+            "count >= 0",
+            name="ck_rezerwacje_publiczne_kwoty_count",
+        ),
+        CheckConstraint(
+            "expires_at > window_start",
+            name="ck_rezerwacje_publiczne_kwoty_window",
+        ),
+        Index("ix_rezerwacje_publiczne_kwoty_expires_at", "expires_at"),
+    )
+    id = Column(Integer, primary_key=True)
+    scope = Column(String(64), nullable=False)
+    client_hash = Column(String(64), nullable=False)
+    window_start = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    count = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+
 class RezerwacjaDzienLedger(Base):
     """Trwały anchor transakcyjny dla zapisów dostępności jednego dnia."""
     __tablename__ = "rezerwacje_dni_ledger"
@@ -1334,23 +1564,37 @@ class RezerwacjaStolikClaim(Base):
             "waitlist_id", "stolik_id", "data", "minute",
             name="uq_rezerwacje_stolik_claim_waitlist_owner",
         ),
+        UniqueConstraint(
+            "public_hold_id", "stolik_id", "data", "minute",
+            name="uq_rezerwacje_stolik_claim_public_hold_owner",
+        ),
         CheckConstraint(
             "minute >= 0 AND minute < 1440",
             name="ck_rezerwacje_stolik_claim_minute",
         ),
         CheckConstraint(
-            "(termin_id IS NOT NULL AND waitlist_id IS NULL AND expires_at IS NULL) OR "
-            "(termin_id IS NULL AND waitlist_id IS NOT NULL AND expires_at IS NOT NULL)",
+            "(termin_id IS NOT NULL AND waitlist_id IS NULL "
+            "AND public_hold_id IS NULL AND expires_at IS NULL) OR "
+            "(termin_id IS NULL AND waitlist_id IS NOT NULL "
+            "AND public_hold_id IS NULL AND expires_at IS NOT NULL) OR "
+            "(termin_id IS NULL AND waitlist_id IS NULL "
+            "AND public_hold_id IS NOT NULL AND expires_at IS NOT NULL)",
             name="ck_rezerwacje_stolik_claim_owner",
         ),
         Index("ix_rezerwacje_stolik_claim_termin_id", "termin_id"),
         Index("ix_rezerwacje_stolik_claim_waitlist_id", "waitlist_id"),
+        Index("ix_rezerwacje_stolik_claim_public_hold_id", "public_hold_id"),
         Index("ix_rezerwacje_stolik_claim_expires_at", "expires_at"),
     )
     id          = Column(Integer, primary_key=True)
     termin_id   = Column(Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=True)
     waitlist_id = Column(
         Integer, ForeignKey("lista_oczekujacych.id", ondelete="CASCADE"), nullable=True,
+    )
+    public_hold_id = Column(
+        Integer,
+        ForeignKey("rezerwacje_publiczne_holdy.id", ondelete="CASCADE"),
+        nullable=True,
     )
     stolik_id   = Column(Integer, ForeignKey("stoliki.id", ondelete="RESTRICT"), nullable=False)
     data        = Column(Date, nullable=False)

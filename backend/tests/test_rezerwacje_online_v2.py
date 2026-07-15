@@ -72,12 +72,17 @@ def test_edytuj_zmienia_termin_i_realokuje(admin_client, client, db):
     _stolik(admin_client)
     _serwis(admin_client, _poniedzialek.weekday())
     token = _online_rez(client, PON, "18:00", 2)
-    r = client.post(f"/api/online/rezerwacja/{token}/edytuj", json={"godz_od": "19:00", "liczba_osob": 3})
+    r = client.post(
+        "/api/online/zarzadzanie/edytuj",
+        json={"godz_od": "19:00", "liczba_osob": 3},
+        headers={"X-Reservation-Token": token, "Idempotency-Key": "online-edit-time-0001"},
+    )
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["godz_od"] == "19:00" and out["liczba_osob"] == 3
     assert out["stolik"] is None  # publiczny kontrakt nie ujawnia układu sali
-    saved = db.query(models.Termin).filter_by(token_potwierdzenia=token).one()
+    saved = db.query(models.Termin).filter_by(kanal="online").one()
+    assert saved.token_potwierdzenia is None
     assert saved.stolik_id is not None
 
 
@@ -88,7 +93,11 @@ def test_edytuj_blackout_odrzucony(admin_client, client):
     _serwis(admin_client, (_poniedzialek + timedelta(days=1)).weekday())
     token = _online_rez(client, PON, "18:00", 2)
     admin_client.post("/api/wyjatki-kalendarza", json={"data": WTOREK, "typ": "blackout"})
-    r = client.post(f"/api/online/rezerwacja/{token}/edytuj", json={"data": WTOREK})
+    r = client.post(
+        "/api/online/zarzadzanie/edytuj",
+        json={"data": WTOREK},
+        headers={"X-Reservation-Token": token, "Idempotency-Key": "online-edit-blackout-0001"},
+    )
     assert r.status_code == 409
 
 
@@ -98,7 +107,11 @@ def test_edytuj_respektuje_okno_anulacji(admin_client, client):
     blisko = date.today() + timedelta(days=1)    # jutro — wewnątrz okna 48 h
     _serwis(admin_client, blisko.weekday())
     token = _online_rez(client, str(blisko), "18:00", 2)
-    r = client.post(f"/api/online/rezerwacja/{token}/edytuj", json={"liczba_osob": 3})
+    r = client.post(
+        "/api/online/zarzadzanie/edytuj",
+        json={"liczba_osob": 3},
+        headers={"X-Reservation-Token": token, "Idempotency-Key": "online-edit-window-0001"},
+    )
     assert r.status_code == 400
 
 
@@ -110,7 +123,10 @@ def test_odwolaj_respektuje_okno_anulacji(admin_client, client):
     blisko = date.today() + timedelta(days=1)
     _serwis(admin_client, blisko.weekday())
     token = _online_rez(client, str(blisko), "18:00", 2)
-    assert client.post(f"/api/online/rezerwacja/{token}/odwolaj").status_code == 400
+    assert client.post(
+        "/api/online/zarzadzanie/odwolaj",
+        headers={"X-Reservation-Token": token, "Idempotency-Key": "online-cancel-window-0001"},
+    ).status_code == 400
 
 
 def test_odwolaj_dozwolone_bez_polityki(admin_client, client):
@@ -118,5 +134,8 @@ def test_odwolaj_dozwolone_bez_polityki(admin_client, client):
     _stolik(admin_client)
     _serwis(admin_client, _poniedzialek.weekday())
     token = _online_rez(client, PON, "18:00", 2)
-    r = client.post(f"/api/online/rezerwacja/{token}/odwolaj")
+    r = client.post(
+        "/api/online/zarzadzanie/odwolaj",
+        headers={"X-Reservation-Token": token, "Idempotency-Key": "online-cancel-allowed-0001"},
+    )
     assert r.status_code == 200 and r.json()["status"] == "odwolana"

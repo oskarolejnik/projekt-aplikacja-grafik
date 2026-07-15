@@ -10,7 +10,15 @@ import os
 import re
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, event
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKeyConstraint,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
+from sqlalchemy.sql import sqltypes
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import sessionmaker
 from models import Base
 
@@ -197,6 +205,111 @@ _R1A_AUDIT_TABLE = "reservation_audit"
 _R1A_REVISION = "0052_reservation_audit"
 _R2_REVISION = "0058_r22b_strategia_proweniencja"
 _R3_REVISION = "0059_r3_reguly_dostepnosci"
+_R5A_REVISION = "0061_r5a_public_security"
+_R5A_TABLES = {
+    "rezerwacje_publiczne_holdy",
+    "rezerwacje_tokeny_zarzadzania",
+    "rezerwacje_zgody_publiczne",
+    "rezerwacje_publiczne_kwoty",
+}
+_R5A_BASE_COLUMNS = {
+    "lokal_config": {
+        "rezerwacje_widget_v2", "rezerwacje_retencja_dni",
+        "rezerwacje_rodo_kontakt", "rezerwacje_rodo_adres",
+    },
+    "rezerwacje_stoliki_claims": {"public_hold_id"},
+}
+_R5A_BASE_MODEL_TABLES = {
+    table_name: Base.metadata.tables[table_name]
+    for table_name in _R5A_BASE_COLUMNS
+}
+_R5A_BASE_INDEXES = {
+    "rezerwacje_stoliki_claims": {
+        index.name: (
+            tuple(column.name for column in index.columns),
+            bool(index.unique),
+        )
+        for index in Base.metadata.tables["rezerwacje_stoliki_claims"].indexes
+        if index.name == "ix_rezerwacje_stolik_claim_public_hold_id"
+    },
+}
+_R5A_BASE_UNIQUES = {
+    "rezerwacje_stoliki_claims": {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in Base.metadata.tables[
+            "rezerwacje_stoliki_claims"
+        ].constraints
+        if (
+            isinstance(constraint, UniqueConstraint)
+            and constraint.name == "uq_rezerwacje_stolik_claim_public_hold_owner"
+        )
+    },
+}
+_R5A_BASE_CHECK_NAMES = {
+    "lokal_config": {"ck_lokal_config_rezerwacje_retencja_dni"},
+    "rezerwacje_stoliki_claims": {"ck_rezerwacje_stolik_claim_owner"},
+}
+_R5A_BASE_CHECKS = {
+    table_name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in _R5A_BASE_MODEL_TABLES[table_name].constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name in constraint_names
+        )
+    }
+    for table_name, constraint_names in _R5A_BASE_CHECK_NAMES.items()
+}
+_R5A_COLUMNS = {
+    table_name: {
+        column.name for column in Base.metadata.tables[table_name].columns
+    }
+    for table_name in _R5A_TABLES
+}
+_R5A_MODEL_TABLES = {
+    table_name: Base.metadata.tables[table_name]
+    for table_name in _R5A_TABLES
+}
+_R5A_INDEXES = {
+    table_name: {
+        index.name: (
+            tuple(column.name for column in index.columns),
+            bool(index.unique),
+        )
+        for index in model_table.indexes
+        if index.name
+    }
+    for table_name, model_table in _R5A_MODEL_TABLES.items()
+}
+_R5A_UNIQUES = {
+    table_name: {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in model_table.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name
+    }
+    for table_name, model_table in _R5A_MODEL_TABLES.items()
+}
+_R5A_CHECKS = {
+    table_name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in model_table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    for table_name, model_table in _R5A_MODEL_TABLES.items()
+}
+_R5A_FOREIGN_KEYS = {
+    table_name: {
+        (
+            tuple(element.parent.name for element in constraint.elements),
+            constraint.elements[0].column.table.name,
+            tuple(element.column.name for element in constraint.elements),
+            str(constraint.ondelete or "").upper(),
+        )
+        for constraint in model_table.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    for table_name, model_table in _R5A_MODEL_TABLES.items()
+}
 _R2_TABLES = {
     "sale_rezerwacyjne",
     "plany_sali",
@@ -365,9 +478,6 @@ def _rebuild_rezerwacje_ledger():
     instalacje bez Alembica oraz niewersjonowane bazy utworzone wcześniej przez ``create_all``.
     Nie kopiuje PII do błędów i wykonuje całość w jednej transakcji startowej.
     """
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
     from sqlalchemy import inspect
 
     import models
@@ -386,6 +496,14 @@ def _rebuild_rezerwacje_ledger():
         "hold_stoliki_dodatkowe", "hold_godz_od", "hold_godz_do", "hold_bufor_min",
     }
     has_r4_holds = r4_hold_columns.issubset(waitlist_columns)
+    public_hold_columns = (
+        {column["name"] for column in schema.get_columns("rezerwacje_publiczne_holdy")}
+        if "rezerwacje_publiczne_holdy" in table_names else set()
+    )
+    has_r5_public_holds = {
+        "id", "state", "data", "godz_od", "godz_do", "stolik_id",
+        "stoliki_dodatkowe", "bufor_min", "expires_at",
+    }.issubset(public_hold_columns)
     if not {
         "data", "rodzaj", "status", "godz_od", "godz_do", "stolik_id",
         "stoliki_dodatkowe", "liczba_osob",
@@ -398,7 +516,9 @@ def _rebuild_rezerwacje_ledger():
 
     db = SessionLocal()
     try:
-        now = datetime.now(ZoneInfo("Europe/Warsaw")).replace(tzinfo=None)
+        # Reservation slots remain local business wall time. Hold lifecycles are
+        # instants stored as naive UTC, so startup must use the runtime UTC clock.
+        now = reservation_service.lifecycle_now_utc()
         active = tuple(reservation_service.ACTIVE_STATUSES)
         dates = {
             value for (value,) in db.query(models.Termin.data).filter(
@@ -413,7 +533,33 @@ def _rebuild_rezerwacje_ledger():
                 models.ListaOczekujacych.hold_do > now,
             ).all()
         )
+        if has_r5_public_holds:
+            dates.update(
+                value for (value,) in db.query(models.RezerwacjaPublicznyHold.data).filter(
+                    models.RezerwacjaPublicznyHold.state == "active",
+                    models.RezerwacjaPublicznyHold.expires_at > now,
+                ).all()
+            )
         guards = reservation_service.begin_locked_write(db, dates) if dates else ()
+
+        if has_r5_public_holds:
+            # Remove stale owner rows before rebuilding. An expired claim no longer
+            # counts as occupied, but still owns the unique table/date/minute key.
+            reservation_service.cleanup_expired_holds(db, now)
+        else:
+            # A pre-R5 repair cannot query the absent public-hold table. It can still
+            # clear the expired waitlist projection using only columns present here.
+            expired_values = {"hold_stolik_id": None, "hold_do": None}
+            if has_r4_holds:
+                expired_values.update({
+                    "hold_stoliki_dodatkowe": None,
+                    "hold_godz_od": None,
+                    "hold_godz_do": None,
+                    "hold_bufor_min": None,
+                })
+            db.query(models.ListaOczekujacych).filter(
+                models.ListaOczekujacych.hold_do <= now,
+            ).update(expired_values, synchronize_session=False)
 
         # Rebuild jest idempotentny; rollback przy błędzie przywraca poprzedni kompletny ledger.
         db.query(models.RezerwacjaStolikClaim).delete(synchronize_session=False)
@@ -557,6 +703,35 @@ def _rebuild_rezerwacje_ledger():
                 buffer_min=(hold.hold_bufor_min or 0) if has_r4_holds else 0,
                 cleanup_holds=False,
             )
+
+        if has_r5_public_holds:
+            public_holds = db.query(
+                models.RezerwacjaPublicznyHold.id,
+                models.RezerwacjaPublicznyHold.data,
+                models.RezerwacjaPublicznyHold.godz_od,
+                models.RezerwacjaPublicznyHold.godz_do,
+                models.RezerwacjaPublicznyHold.stolik_id,
+                models.RezerwacjaPublicznyHold.stoliki_dodatkowe,
+                models.RezerwacjaPublicznyHold.bufor_min,
+                models.RezerwacjaPublicznyHold.expires_at,
+            ).filter(
+                models.RezerwacjaPublicznyHold.state == "active",
+                models.RezerwacjaPublicznyHold.expires_at > now,
+            ).order_by(models.RezerwacjaPublicznyHold.id).all()
+            for public_hold in public_holds:
+                ids = table_ids(public_hold)
+                reservation_service.replace_public_hold_claims(
+                    db,
+                    public_hold_id=public_hold.id,
+                    table_ids=ids,
+                    data=public_hold.data,
+                    start=public_hold.godz_od,
+                    end=public_hold.godz_do,
+                    buffer_min=public_hold.bufor_min or 0,
+                    expires_at=public_hold.expires_at,
+                    now=now,
+                    cleanup_holds=False,
+                )
 
         reservation_service.touch_days(guards)
         db.commit()
@@ -795,6 +970,138 @@ def _normalise_check_sql(value) -> str:
     return re.sub(r"\s+", "", value)
 
 
+def _r5a_type_signature(column_type):
+    """Portable contract for the concrete SQL types used by the R5a schema."""
+    while isinstance(column_type, TypeDecorator):
+        implementation = column_type.impl
+        if isinstance(implementation, type):
+            implementation = implementation()
+        if implementation is column_type:
+            break
+        column_type = implementation
+
+    if isinstance(column_type, sqltypes.Text):
+        return ("text",)
+    if isinstance(column_type, sqltypes.String):
+        return ("string", getattr(column_type, "length", None))
+    if isinstance(column_type, sqltypes.JSON):
+        return ("json",)
+    if isinstance(column_type, sqltypes.Boolean):
+        return ("boolean",)
+    if isinstance(column_type, sqltypes.SmallInteger):
+        return ("smallint",)
+    if isinstance(column_type, sqltypes.BigInteger):
+        return ("bigint",)
+    if isinstance(column_type, sqltypes.Integer):
+        return ("integer",)
+    if isinstance(column_type, sqltypes.DateTime):
+        return ("datetime", bool(getattr(column_type, "timezone", False)))
+    if isinstance(column_type, sqltypes.Date):
+        return ("date",)
+    if isinstance(column_type, sqltypes.Time):
+        return ("time", bool(getattr(column_type, "timezone", False)))
+    return (
+        "unsupported",
+        type(column_type).__module__,
+        type(column_type).__name__,
+        str(column_type).casefold(),
+    )
+
+
+def _r5a_default_signature(value, type_signature):
+    """Normalizes only static defaults used by R5a across SQLite/PostgreSQL."""
+    if value is None:
+        return None
+    value = getattr(value, "arg", value)
+    raw = str(value).strip().casefold()
+    raw = _strip_r2_outer_parentheses(raw)
+    raw = re.sub(
+        r"::\s*[a-z_][a-z0-9_\s]*(?:\(\s*\d+\s*\))?(?:\[\])?$",
+        "",
+        raw,
+    ).strip()
+    raw = _strip_r2_outer_parentheses(raw)
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        raw = raw[1:-1].replace("''", "'")
+
+    family = type_signature[0]
+    if family == "boolean":
+        if raw in {"0", "false", "f"}:
+            return ("boolean", False)
+        if raw in {"1", "true", "t"}:
+            return ("boolean", True)
+    elif family in {"integer", "smallint", "bigint"}:
+        try:
+            return ("integer", int(raw))
+        except ValueError:
+            pass
+    elif family in {"string", "text"}:
+        return ("string", raw)
+    return ("raw", re.sub(r"\s+", "", raw))
+
+
+def _validate_r5a_column_contract(
+    inspector, table_name: str, column_names, *, exact: bool,
+) -> None:
+    model_table = Base.metadata.tables[table_name]
+    actual = {
+        column["name"]: column
+        for column in inspector.get_columns(table_name)
+    }
+    expected_names = set(column_names)
+    if (
+        (exact and set(actual) != expected_names)
+        or (not exact and not expected_names.issubset(actual))
+    ):
+        raise RuntimeError(f"Tabela {table_name} jest niekompletna dla R5a.")
+
+    for column_name in expected_names:
+        model_column = model_table.columns[column_name]
+        reflected = actual[column_name]
+        if bool(reflected.get("nullable")) != bool(model_column.nullable):
+            raise RuntimeError(
+                f"Kolumna {table_name}.{column_name} ma nieprawidlowa "
+                "nullowalnosc R5a."
+            )
+        expected_type = _r5a_type_signature(model_column.type)
+        if _r5a_type_signature(reflected["type"]) != expected_type:
+            raise RuntimeError(
+                f"Kolumna {table_name}.{column_name} ma nieprawidlowy typ R5a."
+            )
+        # PostgreSQL can expose the sequence behind an integer primary key as a
+        # default. It is an implementation detail of SERIAL/IDENTITY, not drift.
+        if model_column.primary_key:
+            continue
+        model_default = (
+            model_column.server_default.arg
+            if model_column.server_default is not None else None
+        )
+        if (
+            _r5a_default_signature(reflected.get("default"), expected_type)
+            != _r5a_default_signature(model_default, expected_type)
+        ):
+            raise RuntimeError(
+                f"Kolumna {table_name}.{column_name} ma nieprawidlowy default R5a."
+            )
+
+
+def _r5a_check_signature(value, dialect_name: str) -> str:
+    """Keeps SQLite grouping exact and tolerates PostgreSQL deparser casts/ANY."""
+    if dialect_name == "sqlite":
+        return _strip_r2_outer_parentheses(_normalise_check_sql(value))
+
+    sql = str(value or "").casefold().replace('"', "").replace("`", "")
+    sql = re.sub(r"\s+", "", sql)
+    sql = re.sub(
+        r"::[a-z_][a-z0-9_]*(?:\(\d+\))?(?:\[\])?",
+        "",
+        sql,
+    )
+    # pg_get_constraintdef deparses VARCHAR IN (...) as = ANY (ARRAY[...]).
+    sql = sql.replace("=any", "in").replace("array[", "(").replace("]", ")")
+    return sql.replace("(", "").replace(")", "")
+
+
 def _assert_r1a_constraints_enforced() -> None:
     """Behawioralnie sprawdza CHECK-i w rollbackowanych savepointach.
 
@@ -954,12 +1261,15 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     """
     if not (
         model_tables - {_R1A_AUDIT_TABLE} - _R2_TABLES - _R3_TABLES
+        - _R5A_TABLES
     ).issubset(tables):
         return False
     for table_name in _R0B_LEDGER_TABLES:
         expected = {
             column.name for column in Base.metadata.tables[table_name].columns
         }
+        if table_name == "rezerwacje_stoliki_claims":
+            expected.discard("public_hold_id")
         actual = {
             column["name"] for column in inspector.get_columns(table_name)
         }
@@ -1854,6 +2164,198 @@ def _validate_r3_adoption_schema(inspector=None, *, validate_data: bool = True) 
     return True
 
 
+def _validate_r5a_adoption_schema(inspector=None) -> bool:
+    """Fail-closed validation before adopting an unversioned create_all R5a schema."""
+    from sqlalchemy import inspect
+
+    inspector = inspector or inspect(engine)
+    bind = getattr(inspector, "bind", None)
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    dialect_name = dialect_name or engine.dialect.name
+    tables = set(inspector.get_table_names())
+    if not _R5A_TABLES.issubset(tables):
+        raise RuntimeError(
+            "Schemat R5a jest niekompletny; nie mozna oznaczyc migracji 0061."
+        )
+    for table_name, expected_columns in _R5A_COLUMNS.items():
+        _validate_r5a_column_contract(
+            inspector, table_name, expected_columns, exact=True,
+        )
+
+        expected_pk = tuple(
+            column.name for column in _R5A_MODEL_TABLES[table_name].primary_key.columns
+        )
+        actual_pk = tuple(
+            inspector.get_pk_constraint(table_name).get("constrained_columns") or ()
+        )
+        if actual_pk != expected_pk:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowy PRIMARY KEY R5a."
+            )
+
+        reflected_indexes = {
+            item.get("name"): (
+                tuple(item.get("column_names") or ()),
+                bool(item.get("unique")),
+            )
+            for item in inspector.get_indexes(table_name)
+            if item.get("name")
+        }
+        for name, expected_shape in _R5A_INDEXES[table_name].items():
+            if reflected_indexes.get(name) != expected_shape:
+                raise RuntimeError(
+                    f"Indeks {name} ma nieprawidlowa definicje R5a."
+                )
+
+        reflected_uniques = {
+            item.get("name"): tuple(item.get("column_names") or ())
+            for item in inspector.get_unique_constraints(table_name)
+            if item.get("name")
+        }
+        # Some PostgreSQL/driver combinations additionally expose a UNIQUE
+        # constraint as an index. Accept that representation, but still require
+        # the canonical name and conflict-target column order.
+        for name, (columns, unique) in reflected_indexes.items():
+            if unique:
+                reflected_uniques.setdefault(name, columns)
+        for name, expected_columns in _R5A_UNIQUES[table_name].items():
+            if reflected_uniques.get(name) != expected_columns:
+                raise RuntimeError(
+                    f"Ograniczenie {name} ma nieprawidlowa definicje UNIQUE R5a."
+                )
+
+        reflected_fks = {
+            (
+                tuple(item.get("constrained_columns") or ()),
+                item.get("referred_table"),
+                tuple(item.get("referred_columns") or ()),
+                str((item.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for item in inspector.get_foreign_keys(table_name)
+        }
+        if not _R5A_FOREIGN_KEYS[table_name].issubset(reflected_fks):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma wymaganych FK R5a."
+            )
+
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in inspector.get_check_constraints(table_name)
+            if item.get("name")
+        }
+        for name, expected_sql in _R5A_CHECKS[table_name].items():
+            actual_sql = reflected_checks.get(name)
+            if (
+                actual_sql is None
+                or _r5a_check_signature(actual_sql, dialect_name)
+                != _r5a_check_signature(expected_sql, dialect_name)
+            ):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje R5a."
+                )
+
+    for table_name, expected in _R5A_BASE_COLUMNS.items():
+        if table_name not in tables:
+            raise RuntimeError(f"Brak tabeli bazowej R5a: {table_name}.")
+        _validate_r5a_column_contract(
+            inspector, table_name, expected, exact=False,
+        )
+
+    claim_fks = {
+        (
+            tuple(fk.get("constrained_columns") or ()),
+            fk.get("referred_table"),
+            tuple(fk.get("referred_columns") or ()),
+            str((fk.get("options") or {}).get("ondelete") or "").upper(),
+        )
+        for fk in inspector.get_foreign_keys("rezerwacje_stoliki_claims")
+    }
+    if (
+        ("public_hold_id",), "rezerwacje_publiczne_holdy", ("id",), "CASCADE",
+    ) not in claim_fks:
+        raise RuntimeError(
+            "Tabela rezerwacje_stoliki_claims nie ma wymaganego FK R5a."
+        )
+    claim_indexes = {
+        item.get("name"): (
+            tuple(item.get("column_names") or ()),
+            bool(item.get("unique")),
+        )
+        for item in inspector.get_indexes("rezerwacje_stoliki_claims")
+        if item.get("name")
+    }
+    for name, expected_shape in _R5A_BASE_INDEXES[
+        "rezerwacje_stoliki_claims"
+    ].items():
+        if claim_indexes.get(name) != expected_shape:
+            raise RuntimeError(
+                f"Indeks {name} ma nieprawidlowa definicje R5a."
+            )
+
+    claim_uniques = {
+        item.get("name"): tuple(item.get("column_names") or ())
+        for item in inspector.get_unique_constraints("rezerwacje_stoliki_claims")
+        if item.get("name")
+    }
+    # PostgreSQL can expose a named UNIQUE constraint as a unique index.
+    for name, (columns, unique) in claim_indexes.items():
+        if unique:
+            claim_uniques.setdefault(name, columns)
+    for name, expected_columns in _R5A_BASE_UNIQUES[
+        "rezerwacje_stoliki_claims"
+    ].items():
+        if claim_uniques.get(name) != expected_columns:
+            raise RuntimeError(
+                f"Ograniczenie {name} ma nieprawidlowa definicje UNIQUE R5a."
+            )
+
+    for table_name, expected_checks in _R5A_BASE_CHECKS.items():
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in inspector.get_check_constraints(table_name)
+            if item.get("name")
+        }
+        for name, expected_sql in expected_checks.items():
+            actual_sql = reflected_checks.get(name)
+            if (
+                actual_sql is None
+                or _r5a_check_signature(actual_sql, dialect_name)
+                != _r5a_check_signature(expected_sql, dialect_name)
+            ):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje R5a."
+                )
+    return True
+
+
+def _invalidate_legacy_public_tokens() -> int:
+    """Clears reversible plaintext public tokens on the stamp-only adoption path."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    statements = []
+    if "terminy" in tables and "token_potwierdzenia" in {
+        column["name"] for column in inspector.get_columns("terminy")
+    }:
+        statements.append(
+            "UPDATE terminy SET token_potwierdzenia=NULL "
+            "WHERE token_potwierdzenia IS NOT NULL"
+        )
+    if "lista_oczekujacych" in tables and "token" in {
+        column["name"] for column in inspector.get_columns("lista_oczekujacych")
+    }:
+        statements.append(
+            "UPDATE lista_oczekujacych SET token=NULL WHERE token IS NOT NULL"
+        )
+    changed = 0
+    with engine.begin() as conn:
+        for statement in statements:
+            result = conn.execute(text(statement))
+            changed += int(result.rowcount or 0)
+    return changed
+
+
 def init_db():
     """Przygotowanie schematu, świadome Alembica (idempotentne).
 
@@ -1904,20 +2406,31 @@ def init_db():
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
         complete_current = model_tables.issubset(tables)
+        r5a_tables_present = _R5A_TABLES & tables
+        if r5a_tables_present and r5a_tables_present != _R5A_TABLES:
+            raise RuntimeError(
+                "Schemat R5a jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
+            )
         r3_tables_present = _R3_TABLES & tables
         if r3_tables_present and r3_tables_present != _R3_TABLES:
             raise RuntimeError(
                 "Schemat R3 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
             )
+        complete_r3 = (
+            (model_tables - _R5A_TABLES).issubset(tables)
+            and _R3_TABLES.issubset(tables)
+            and not r5a_tables_present
+        )
         complete_r2 = (
-            (model_tables - _R3_TABLES).issubset(tables)
+            (model_tables - _R3_TABLES - _R5A_TABLES).issubset(tables)
             and _R2_TABLES.issubset(tables)
             and not r3_tables_present
+            and not r5a_tables_present
         )
         complete_r0b = _is_complete_r0b_schema(insp, tables, model_tables)
         pre_r0b_tables = (
             model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE}
-            - _R2_TABLES - _R3_TABLES
+            - _R2_TABLES - _R3_TABLES - _R5A_TABLES
         )
         termin_columns = (
             {column["name"] for column in insp.get_columns("terminy")}
@@ -1933,12 +2446,26 @@ def init_db():
             # utworzonego schematu. PostgreSQL kończy się tu kontrolowanym wymogiem stampu.
             _validate_r3_adoption_schema(insp, validate_data=False)
             _validate_r2_adoption_schema(insp)
+            _validate_r5a_adoption_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
             _rebuild_rezerwacje_oblozenie_ledger()
             _sanitize_legacy_rodo_audit_resources()
+            _invalidate_legacy_public_tokens()
             refreshed = inspect(engine)
             _validate_r3_adoption_schema(refreshed)
+            _validate_r5a_adoption_schema(refreshed)
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, _R5A_REVISION)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            return
+        if complete_r3:
+            # Pełny niewersjonowany schemat 0060: pozwól migracji 0061 wykonać
+            # unieważnienie historycznych tokenów oraz dodać atomowe zasoby publiczne.
+            _validate_r1a_audit_schema(insp)
+            _validate_r2_adoption_schema(insp)
+            _validate_r3_adoption_schema(insp)
             _require_alembic_run(
                 lambda command, cfg: command.stamp(cfg, _R3_REVISION)
             )

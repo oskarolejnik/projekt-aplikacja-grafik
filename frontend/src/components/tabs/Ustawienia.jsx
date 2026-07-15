@@ -210,7 +210,12 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
         grafik_cykl: cfg.grafik_cykl || 'tydzien',
         modul_rezerwacje: cfg.modul_rezerwacje, modul_imprezy: cfg.modul_imprezy,
         modul_rozliczenia: cfg.modul_rozliczenia, modul_pos: cfg.modul_pos, modul_sprzatanie: cfg.modul_sprzatanie,
-        rezerwacje_online: cfg.rezerwacje_online, rezerwacje_auto_potwierdzenie: cfg.rezerwacje_auto_potwierdzenie,
+        rezerwacje_online: cfg.rezerwacje_online,
+        rezerwacje_widget_v2: cfg.rezerwacje_widget_v2,
+        rezerwacje_auto_potwierdzenie: cfg.rezerwacje_auto_potwierdzenie,
+        rezerwacje_retencja_dni: Number(cfg.rezerwacje_retencja_dni || 365),
+        rezerwacje_rodo_kontakt: cfg.rezerwacje_rodo_kontakt?.trim() || null,
+        rezerwacje_rodo_adres: cfg.rezerwacje_rodo_adres?.trim() || null,
         impreza_osoby_na_obsluge: Number(cfg.impreza_osoby_na_obsluge),
         impreza_wyprzedzenie_min: Number(cfg.impreza_wyprzedzenie_min),
         impreza_najwczesniej: cfg.impreza_najwczesniej, impreza_sale_min2: cfg.impreza_sale_min2,
@@ -462,6 +467,65 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
           <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
             <span className="text-sm text-ink">Automatyczne potwierdzanie (bez akceptacji admina)</span>
             <Toggle label="Automatyczne potwierdzanie rezerwacji" on={!!cfg.rezerwacje_auto_potwierdzenie} onChange={(v) => set('rezerwacje_auto_potwierdzenie', v)} />
+          </div>
+          <div className="rounded-xl border border-line bg-surface-2 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-ink">Nowy, bezpieczny widget</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted">
+                  Trzyma wybrany termin przez kilka minut, proponuje alternatywy i zapisuje wersjonowane informacje prywatności.
+                </p>
+              </div>
+              <Toggle
+                label="Włącz nowy widget rezerwacji"
+                on={!!cfg.rezerwacje_widget_v2}
+                disabled={!cfg.rezerwacje_online}
+                onChange={(v) => set('rezerwacje_widget_v2', v)}
+              />
+            </div>
+            {cfg.rezerwacje_widget_v2 && (!cfg.rezerwacje_rodo_kontakt?.trim() || !cfg.rezerwacje_rodo_adres?.trim()) && (
+              <Banner variant="warn" className="mt-3">
+                Uzupełnij adres i kontakt administratora danych. Do tego czasu nowy widget nie przyjmie rezerwacji.
+              </Banner>
+            )}
+          </div>
+          <div className="grid grid-cols-1 gap-3 rounded-xl border border-line bg-surface-2 p-4 sm:grid-cols-2">
+            <label className="text-xs font-semibold text-muted">Kontakt w sprawach danych
+              <input
+                value={cfg.rezerwacje_rodo_kontakt || ''}
+                onChange={(e) => set('rezerwacje_rodo_kontakt', e.target.value)}
+                placeholder="rezerwacje@lokal.pl lub telefon"
+                className={fld}
+              />
+            </label>
+            <label className="text-xs font-semibold text-muted">Adres administratora danych
+              <input
+                value={cfg.rezerwacje_rodo_adres || ''}
+                onChange={(e) => set('rezerwacje_rodo_adres', e.target.value)}
+                placeholder="ul. Przykładowa 1, 00-001 Warszawa"
+                className={fld}
+              />
+            </label>
+            <label className="text-xs font-semibold text-muted sm:max-w-xs">Retencja po wizycie (dni)
+              <input
+                type="number"
+                min="30"
+                max="3650"
+                value={cfg.rezerwacje_retencja_dni ?? 365}
+                onChange={(e) => set('rezerwacje_retencja_dni', e.target.value)}
+                className={fld}
+              />
+            </label>
+            <div className="flex items-end sm:justify-end">
+              <a
+                href="/?rezerwuj"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold text-mint transition hover:bg-white/[0.04]"
+              >
+                Otwórz podgląd widgetu
+              </a>
+            </div>
           </div>
         </div>
       </Card>

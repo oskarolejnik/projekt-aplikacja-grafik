@@ -56,8 +56,11 @@ Szablony opisują to, co aplikacja **naprawdę robi** — zweryfikuj z zespołem
 - `[WŁAŚCIWY SĄD / PRAWO WŁAŚCIWE]`
 - `[CENNIK / OKRES TRIAL / ZASADY PŁATNOŚCI — spójne z cennik.py]`
 
-## Uwaga o mechanice (osobny temat)
+## Uwaga o mechanice
 
-Ten katalog to **treść**. Samo *zbieranie i dowodzenie zgód* (checkbox akceptacji przy rejestracji, zgoda gościa
-w widgecie rezerwacji, model `ZgodaAkceptacja` z wersją/datą/IP, strony `/polityka` i `/regulamin`) to warstwa
-**mechaniki w aplikacji** — do zbudowania osobno, gdy dokumenty będą zaakceptowane przez prawnika.
+Ten katalog to nadal **treść wymagająca akceptacji prawnej**. Mechanika gościa w widgecie rezerwacji
+jest wdrożona w R5a: `RezerwacjaZgodaPubliczna` przechowuje wersję, datę, osobny marketing/dane
+szczególne, pseudonimizowany znacznik IP i termin retencji; dane szczególne są szyfrowane, a retencja,
+eksport i usunięcie są operacyjne. Administrator musi jednak uzupełnić dane lokalu i opublikować
+zaakceptowane wersje tekstów. Akceptacje dokumentów konta lokalu (`ZgodaAkceptacja`, rejestracja,
+`/polityka`, `/regulamin`) pozostają odrębnym przepływem i nie należy utożsamiać ich z dowodem zgody gościa.

@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R4 wdrożone · następny checkpoint R5a (widget, hold, tokeny i RODO) · 15 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R5a wdrożone · następny checkpoint R5b (komunikacja i outbox) · 15 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -87,8 +87,8 @@ Projekt ma więcej gotowych fundamentów, niż pokazuje obecny interfejs.
 
 ### Luki krytyczne przed rozbudową UI
 
-1. Publiczny widget korzysta z prostszego wyboru pojedynczego stołu, a nie ze wspólnego silnika
-   kombinacji i priorytetów.
+1. **Zamknięte w R4/R5a:** publiczny widget korzysta ze wspólnego silnika kombinacji i priorytetów
+   oraz trzyma atomowo cały przydzielony zestaw stołów.
 2. Pacing dotyczy startów online; nie opisuje jeszcze całej jednoczesnej pojemności operacyjnej.
 3. **Częściowo zamknięte w R2.1:** sala jest encją z własnym planem i kolejnością; strategia
    zapełniania oraz limity pozostają w R2.2/R3.
@@ -101,7 +101,8 @@ Projekt ma więcej gotowych fundamentów, niż pokazuje obecny interfejs.
 9. **Zamknięte w R1a:** manager/Recepcja wykonują operacje według granularnych praw zamiast roli admina.
 10. `/api/rezerwacje` i `/api/me/rezerwacje` nadal mogą opierać się na legacy Google Calendar,
     zamiast na kanonicznej bazie `Termin`.
-11. Ustawienia zaawansowane istnieją w API, lecz praktycznie nie istnieją w panelu.
+11. **Zamknięte w R3/R5a:** ustawienia reguł, kanałów i bezpiecznego widgetu są dostępne w panelu,
+    z prostym domyślnym widokiem i konfiguracją RODO per lokal.
 
 ## 4. Docelowa architektura informacji
 
@@ -746,6 +747,22 @@ Testy:
 **Done R5a:** publiczna dostępność respektuje reguły kanału, a rezerwacja nie może zablokować zasobu
 na zawsze ani ujawnić tokenu w bazie.
 
+**Wdrożono 15 lipca 2026:** migracja `0061` dodaje sesyjne holdy całych konfiguracji stołów,
+hash-only rotowane tokeny zarządzania, wersjonowane dowody prywatności oraz trwałe kwoty ochrony
+przed nadużyciem. Capability tokeny są przekazywane wyłącznie w nagłówkach, publiczny prefiks działa
+na dokładnej allowliście `metoda + ścieżka`, a historyczne tokeny plaintext i lokalne holdy waitlisty
+są unieważniane podczas migracji. Lifecycle holdów, claimów i tokenów używa naive UTC; zapis nadal
+korzysta z blokad wspólnego allocatora, a PostgreSQL serializuje także limity aktywnych holdów.
+
+Nowy, dostępny widget prowadzi przez termin, alternatywy/waitlistę, czasowy hold, dane gościa,
+oddzielne zgody i wynik bez logowania. Administrator konfiguruje kontakt/adres administratora danych
+i retencję, a flaga per lokal nie pozwala uruchomić niegotowego wariantu. Dane szczególne są
+szyfrowane, marketing pozostaje opcjonalny, eksport/usunięcie działa samoobsługowo i administracyjnie,
+a proces maintenance wykonuje audytowaną retencję w tle bez blokowania startu aplikacji. Termin retencji
+jest utrwalany per zgoda od daty wizyty i nie może zostać później wydłużony zmianą konfiguracji;
+maintenance usuwa też wygasły cache idempotencji. Self-delete czyści profil CRM, dane KP i wątki,
+a zwykłe usunięcie rezerwacji nie pozostawia osieroconych holdów ani zaszyfrowanych odpowiedzi.
+
 #### R5b — Komunikacja i outbox
 
 - Transakcyjny outbox wiadomości oraz scheduler niezależny od żądania HTTP.
@@ -941,7 +958,7 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a–R4 są zamkniętymi checkpointami. Następny milestone to `R5a`: bezpieczny publiczny widget z
-sesyjnym holdem wszystkich stołów konfiguracji, rotowanymi tokenami zarządzania, ochroną przed
-nadużyciem oraz kontraktem zgód i retencji RODO. Serwerowa blokada stanowiska z sesją operatora i
-PIN-em pozostaje oddzielnym zadaniem R6a, którego nie wolno udawać samą zasłoną frontendu.
+R0a–R5a są zamkniętymi checkpointami. Następny milestone to `R5b`: transakcyjny outbox komunikacji,
+odtwarzalny stan dostarczenia, kontrolowane retry/reconciliation oraz operacyjne szablony wiadomości.
+Serwerowa blokada stanowiska z sesją operatora i PIN-em pozostaje oddzielnym zadaniem R6a, którego
+nie wolno udawać samą zasłoną frontendu.

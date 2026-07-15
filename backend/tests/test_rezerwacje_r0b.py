@@ -253,8 +253,9 @@ def test_public_idempotency_replays_reservation_and_payment_once(admin_client, c
     assert replay.json()["platnosc"]["kwota"] == 40.0
     _fresh(db)
     termin = db.query(models.Termin).filter_by(
-        token_potwierdzenia=first.json()["token"],
+        kanal="online", nazwisko="Idempotentny zadatek",
     ).one()
+    assert termin.token_potwierdzenia is None
     assert db.query(models.Termin).filter_by(
         rodzaj="stolik", data=BOOKING_DATE,
     ).count() == 1
@@ -288,8 +289,9 @@ def test_public_availability_and_create_use_three_table_combination(admin_client
     assert created.status_code == 201, created.text
     _fresh(db)
     termin = db.query(models.Termin).filter_by(
-        token_potwierdzenia=created.json()["token"],
+        kanal="online", nazwisko="Bankiet osiemnaście",
     ).one()
+    assert termin.token_potwierdzenia is None
     assert {termin.stolik_id, *(termin.stoliki_dodatkowe or [])} == set(table_ids)
     assert _ledger_counts(db, termin.id) == (360, 1)
 
@@ -307,12 +309,16 @@ def test_public_party_size_only_edit_rechecks_cover_pacing(admin_client, client,
 
     token = first.json()["token"]
     edit = client.post(
-        f"/api/online/rezerwacja/{token}/edytuj",
+        "/api/online/zarzadzanie/edytuj",
         json={"liczba_osob": 3},
+        headers={"X-Reservation-Token": token, "Idempotency-Key": "r0b-edit-pacing-0001"},
     )
     _assert_conflict(edit, "PACING_COVERS_LIMIT", "pacing_covers")
 
-    unchanged = client.get(f"/api/online/rezerwacja/{token}")
+    unchanged = client.get(
+        "/api/online/zarzadzanie/rezerwacja",
+        headers={"X-Reservation-Token": token},
+    )
     assert unchanged.status_code == 200
     assert unchanged.json()["liczba_osob"] == 2
 
@@ -354,12 +360,18 @@ def test_public_cancellation_releases_ledger(admin_client, client, db):
     token = created.json()["token"]
 
     _fresh(db)
-    termin = db.query(models.Termin).filter_by(token_potwierdzenia=token).one()
+    termin = db.query(models.Termin).filter_by(
+        kanal="online", nazwisko="Anulowana online",
+    ).one()
+    assert termin.token_potwierdzenia is None
     termin_id = termin.id
     assert termin.stolik_id == table_id
     assert _ledger_counts(db, termin_id) == (120, 1)
 
-    cancelled = client.post(f"/api/online/rezerwacja/{token}/odwolaj")
+    cancelled = client.post(
+        "/api/online/zarzadzanie/odwolaj",
+        headers={"X-Reservation-Token": token, "Idempotency-Key": "r0b-cancel-ledger-0001"},
+    )
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["status"] == "odwolana"
     assert _ledger_counts(db, termin_id) == (0, 0)
