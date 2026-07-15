@@ -8,11 +8,24 @@ import { BOUNCE } from '../../lib/motion'
 //   activeBg   – tło aktywnego segmentu (domyślnie uniesiona powierzchnia). Solid kolory
 //                (np. bg-success/bg-danger) ładnie się przenikają przy zmianie stanu.
 //   activeText – kolor tekstu na aktywnym segmencie (domyślnie text-ink)
-export function PillSwitch({ options, value, onChange, label = 'Wybór opcji', className = '', disabled = false }) {
+export function PillSwitch({
+  options,
+  value,
+  onChange,
+  label = 'Wybór opcji',
+  className = '',
+  disabled = false,
+  'aria-describedby': ariaDescribedBy,
+}) {
   const activeIndex = Math.max(0, options.findIndex((o) => o.value === value))
   const active = options[activeIndex] || options[0]
   return (
-    <div role="group" aria-label={label} className={`relative flex rounded-2xl border border-line bg-white/[0.03] p-1.5 ${className}`}>
+    <div
+      role="group"
+      aria-label={label}
+      aria-describedby={ariaDescribedBy}
+      className={`relative flex rounded-2xl border border-line bg-white/[0.03] p-1.5 ${className}`}
+    >
       {/* Wskaźnik — sam transform/opacity (GPU), bez JS. Spokojny glide, zero overshootu. */}
       <span
         aria-hidden

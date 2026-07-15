@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R3 wdrożone · następny checkpoint R4 (wspólny silnik alokacji 2.0 i atomowość) · 15 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R4 wdrożone · następny checkpoint R5a (widget, hold, tokeny i RODO) · 15 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -696,6 +696,20 @@ Scenariusze odbiorowe:
 ale zwracają dostępność właściwą dla reguł swojego kanału. Widget nie ujawnia zapasu
 zarezerwowanego dla telefonu, walk-in lub obsługi wewnętrznej.
 
+**Wdrożono 15 lipca 2026:** `reservation_allocator.py` jest wspólnym źródłem decyzji dla
+symulatora, recepcji, hosta, walk-in, waitlisty i publicznego widgetu. Obsługuje pojedyncze stoły,
+zatwierdzone konfiguracje wielostołowe (w tym 18 osób na trzech stołach), priorytety sal, powody
+wyboru i alternatywy, bez wystawiania surowych wag rankingu. Ręczny przydział pozostaje zablokowany
+przed automatycznym przeniesieniem, a remis rankingu nie powoduje zbędnej reoptymalizacji.
+
+Migracja `0060` i rozszerzony ledger materializują wielostołowe claimy, bufory po wizycie, live
+occupancy, walk-in oraz czasowe holdy waitlisty w tej samej atomowej transakcji. Limity jednoczesnych
+rezerwacji i osób działają również po planowanym końcu wizyty, dopóki host nie oznaczy wyjścia.
+Manager i Recepcja/Host mogą przekroczyć dozwolony limit dopiero po ostrzeżeniu, podaniu powodu i
+zapisaniu audytu. Publiczne odpowiedzi są zredukowane do samej dostępności; nie ujawniają stołów,
+liczby wolnych zasobów ani wewnętrznego bufora. Flaga `RESERVATION_ALLOCATOR_SHADOW_COMPARE=1`
+pozostawia bezpieczny, bezstanowy pomiar różnic ze starą ścieżką na czas rolloutu.
+
 ### R5 — Publiczny widget, komunikacja, zadatki i RODO
 
 **Cel:** gość może bezpiecznie zakończyć pełny proces bez telefonu do lokalu.
@@ -927,7 +941,7 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a–R3 są zamkniętymi checkpointami. Następny milestone to `R4`: wspólny, atomowy silnik alokacji
-dla widgetu, recepcji i hosta, z pełną symulacją przydziału stołów, alternatywami, buforem zasobowym
-i strategiami sal. Serwerowa blokada stanowiska z sesją operatora i PIN-em
-pozostaje oddzielnym zadaniem, którego nie wolno udawać samą zasłoną frontendu.
+R0a–R4 są zamkniętymi checkpointami. Następny milestone to `R5a`: bezpieczny publiczny widget z
+sesyjnym holdem wszystkich stołów konfiguracji, rotowanymi tokenami zarządzania, ochroną przed
+nadużyciem oraz kontraktem zgód i retencji RODO. Serwerowa blokada stanowiska z sesją operatora i
+PIN-em pozostaje oddzielnym zadaniem R6a, którego nie wolno udawać samą zasłoną frontendu.

@@ -922,6 +922,8 @@ class RezerwacjaIn(BaseModel):
     email: Optional[str] = None
     notatka: Optional[str] = None
     zadatek: float = 0.0
+    kanal: Optional[Literal["reczna", "walk_in"]] = None
+    auto_przydziel: bool = False
     przekrocz_limity: bool = False   # jawne ponowienie po 409; wymaga osobnego uprawnienia
     nadpisanie_limitow: Optional["NadpisanieLimitowIn"] = None
 
@@ -959,10 +961,18 @@ class RezerwacjaStatusIn(BaseModel):
 class HostFazaIn(BaseModel):
     faza: str                      # przybyl | posadzony | rachunek | oplacony | wyszedl
 
-class HostStolikIn(BaseModel):
+class HostOverrideIn(BaseModel):
+    """Jawne potwierdzenie operatora dla operacji hosta wymagajacej override."""
+    przekrocz_limity: bool = False
+    nadpisanie_limitow: Optional["NadpisanieLimitowIn"] = None
+
+class AutoPrzydzialIn(HostOverrideIn):
+    pass
+
+class HostStolikIn(HostOverrideIn):
     stolik_id: int                 # ręczny przydział/przeniesienie na konkretny stół
 
-class HostPosadzIn(BaseModel):
+class HostPosadzIn(HostOverrideIn):
     """Atomowe posadzenie; brak stolik_id uruchamia best-fit, gdy rezerwacja nie ma stołu."""
     stolik_id: Optional[int] = None
 
@@ -990,15 +1000,19 @@ class ListaOczekujacychIn(BaseModel):
 
 class ZrealizujIn(BaseModel):
     """Realizacja wpisu z listy oczekujących → utworzenie rezerwacji stolika."""
-    stolik_id: int
+    stolik_id: Optional[int] = None
+    stoliki: Optional[List[int]] = None
     godz_od: Optional[time] = None   # opcjonalne nadpisanie godziny z wpisu
+    tryb: Literal["rezerwacja", "walk_in"] = "rezerwacja"
     przekrocz_limity: bool = False
     nadpisanie_limitow: Optional["NadpisanieLimitowIn"] = None
 
 class HoldIn(BaseModel):
     """Tymczasowy HOLD stołu dla wpisu z listy oczekujących (waitlist v2)."""
-    stolik_id: int
-    minuty: int = 15                 # jak długo trzymać stół
+    stolik_id: Optional[int] = None
+    stoliki: Optional[List[int]] = None
+    godz_od: Optional[time] = None
+    minuty: int = Field(default=15, ge=1, le=120)  # jak długo trzymać zestaw
 
 class OnlineRezerwacjaIn(BaseModel):
     """Publiczna rezerwacja online (gość, bez logowania) — system sam dobiera wolny stolik."""

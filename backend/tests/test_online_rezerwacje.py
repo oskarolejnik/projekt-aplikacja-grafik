@@ -51,7 +51,8 @@ def test_online_rezerwacja_flow(admin_client, client):
     body = r.json()
     token = body["token"]
     assert token and body["rezerwacja"]["status"] == "rezerwacja"   # auto-potwierdzenie off
-    assert body["rezerwacja"]["stolik"] == "S1" and body["rezerwacja"]["godz_do"] == "20:00"
+    assert body["rezerwacja"]["stolik"] is None
+    assert body["rezerwacja"]["godz_do"] == "20:00"
     # podgląd po tokenie
     g = client.get(f"/api/online/rezerwacja/{token}").json()
     assert g["nazwisko"] == "Gość Online"
@@ -81,6 +82,7 @@ def test_online_brak_stolika_409(admin_client, client):
     r = client.post("/api/online/rezerwacja", json={"data": fut.isoformat(), "godz_od": "18:00",
                     "liczba_osob": 5, "nazwisko": "ZaDuzo"})
     assert r.status_code == 409
+    assert "buffer_min" not in r.json()["availability"]
 
 
 def test_online_wstecz_400(admin_client, client):

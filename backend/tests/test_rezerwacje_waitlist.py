@@ -3,6 +3,8 @@ publiczny zapis online. HOLD blokuje AUTOMATYCZNY dobór (auto-przydział / onli
 
 from datetime import date, timedelta
 
+import models
+
 DZIEN = (date.today() + timedelta(days=30)).isoformat()
 
 
@@ -67,6 +69,167 @@ def test_realizacja_konczy_wlasny_hold(admin_client):
     assert wpis["status"] == "zrealizowany" and wpis["hold_stolik_id"] is None
 
 
+def test_wielostolowy_hold_jest_czasowy_i_realizuje_walk_in(admin_client, db):
+    tables = [_stolik(admin_client, f"R4-{index}", 6) for index in range(1, 4)]
+    combination = admin_client.post("/api/kombinacje", json={
+        "nazwa": "R4 6+6+6",
+        "stoliki": tables,
+        "pojemnosc_min": 18,
+        "pojemnosc_max": 18,
+    })
+    assert combination.status_code == 201, combination.text
+    waitlist_id = _wait(admin_client, DZIEN, "18:00", 18)
+
+    held = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/hold",
+        json={"stoliki": tables, "minuty": 30},
+    )
+    assert held.status_code == 200, held.text
+    assert held.json()["hold_stolik_id"] == tables[0]
+    assert held.json()["hold_stoliki_dodatkowe"] == tables[1:]
+    assert held.json()["hold_godz_od"] == "18:00"
+    assert held.json()["hold_godz_do"] == "20:00"
+    assert db.query(models.RezerwacjaStolikClaim).filter_by(
+        waitlist_id=waitlist_id,
+    ).count() == 3 * 120
+
+    later_id = _rez(admin_client, DZIEN, "21:00", 18)
+    later = admin_client.post(f"/api/rezerwacje-stolik/{later_id}/auto-przydziel")
+    assert later.status_code == 200, later.text
+    assert set(later.json()["przydzial"]["stoliki"]) == set(tables)
+
+    realised = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/zrealizuj",
+        json={"tryb": "walk_in"},
+    )
+    assert realised.status_code == 200, realised.text
+    reservation = realised.json()["rezerwacja"]
+    assert reservation["kanal"] == "walk_in"
+    assert reservation["faza_hosta"] == "posadzony"
+    assert {reservation["stolik_id"], *reservation["stoliki_dodatkowe"]} == set(tables)
+    assert realised.json()["wpis"]["hold_stolik_id"] is None
+
+
+def test_override_required_przy_realizacji_zachowuje_pelny_wielostolowy_hold(
+    admin_client, db,
+):
+    booking_date = date.fromisoformat(DZIEN)
+    service = admin_client.post("/api/godziny-otwarcia", json={
+        "nazwa": "Kolacja R4 rollback",
+        "dzien_tygodnia": booking_date.weekday(),
+        "godz_od": "12:00",
+        "godz_do": "22:00",
+        "ostatni_zasiadek": "21:00",
+        "krok_slotu_min": 15,
+        "domyslny_turn_time_min": 90,
+        "max_jednoczesnych_rez": 1,
+    })
+    assert service.status_code == 201, service.text
+    policy = admin_client.post("/api/nadpisania-regul-rezerwacji", json={
+        "serwis_id": service.json()["id"],
+        "kanal": "oba",
+        "bufor_min": 15,
+    })
+    assert policy.status_code == 201, policy.text
+
+    held_tables = [_stolik(admin_client, f"R4-RB-{index}", 4) for index in range(1, 3)]
+    blocker_table = _stolik(admin_client, "R4-RB-bloker", 4)
+    combination = admin_client.post("/api/kombinacje", json={
+        "nazwa": "R4 rollback 4+4",
+        "stoliki": held_tables,
+        "pojemnosc_min": 8,
+        "pojemnosc_max": 8,
+    })
+    assert combination.status_code == 201, combination.text
+
+    waitlist_id = _wait(admin_client, DZIEN, "18:00", 8, nazwisko="Rollback hold")
+    held = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/hold",
+        json={"stoliki": held_tables, "minuty": 30},
+    )
+    assert held.status_code == 200, held.text
+
+    blocker = admin_client.post("/api/rezerwacje-stolik", json={
+        "data": DZIEN,
+        "godz_od": "18:00",
+        "stolik_id": blocker_table,
+        "liczba_osob": 2,
+        "nazwisko": "Zajmuje limit R4",
+    })
+    assert blocker.status_code == 201, blocker.text
+
+    db.expire_all()
+    waitlist = db.get(models.ListaOczekujacych, waitlist_id)
+    projection_before = (
+        waitlist.status,
+        waitlist.termin_id,
+        waitlist.hold_stolik_id,
+        tuple(waitlist.hold_stoliki_dodatkowe or ()),
+        waitlist.hold_godz_od,
+        waitlist.hold_godz_do,
+        waitlist.hold_bufor_min,
+        waitlist.hold_do,
+    )
+    claims_before = [
+        (
+            claim.id,
+            claim.stolik_id,
+            claim.data,
+            claim.minute,
+            claim.expires_at,
+            claim.created_at,
+        )
+        for claim in db.query(models.RezerwacjaStolikClaim).filter_by(
+            waitlist_id=waitlist_id,
+        ).order_by(models.RezerwacjaStolikClaim.id).all()
+    ]
+    assert projection_before[2] == held_tables[0]
+    assert projection_before[3] == tuple(held_tables[1:])
+    assert projection_before[6] == 15
+    assert len(claims_before) == len(held_tables) * (90 + 15)
+    assert {
+        minute
+        for _, _, _, minute, _, _ in claims_before
+    } == set(range(18 * 60, 19 * 60 + 45))
+    db.rollback()
+
+    warning = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/zrealizuj",
+        json={"tryb": "walk_in"},
+    )
+    assert warning.status_code == 409, warning.text
+    assert warning.json()["code"] == "CONCURRENT_RESERVATION_LIMIT"
+    assert warning.json()["availability"]["decision"] == "override_required"
+
+    db.expire_all()
+    waitlist = db.get(models.ListaOczekujacych, waitlist_id)
+    projection_after = (
+        waitlist.status,
+        waitlist.termin_id,
+        waitlist.hold_stolik_id,
+        tuple(waitlist.hold_stoliki_dodatkowe or ()),
+        waitlist.hold_godz_od,
+        waitlist.hold_godz_do,
+        waitlist.hold_bufor_min,
+        waitlist.hold_do,
+    )
+    claims_after = [
+        (
+            claim.id,
+            claim.stolik_id,
+            claim.data,
+            claim.minute,
+            claim.expires_at,
+            claim.created_at,
+        )
+        for claim in db.query(models.RezerwacjaStolikClaim).filter_by(
+            waitlist_id=waitlist_id,
+        ).order_by(models.RezerwacjaStolikClaim.id).all()
+    ]
+    assert projection_after == projection_before
+    assert claims_after == claims_before
+
+
 def test_powiadom_stempluje_i_nie_dubluje(admin_client):
     e = _wait(admin_client, DZIEN, "18:00", 2, email="g@x.pl")
     r1 = admin_client.post(f"/api/lista-oczekujacych/{e}/powiadom")
@@ -90,3 +253,41 @@ def test_online_zapis_wymaga_wlaczonego_online(admin_client, client):
     r = client.post("/api/online/lista-oczekujacych",
                     json={"data": DZIEN, "godz_od": "18:00", "liczba_osob": 2, "nazwisko": "X"})
     assert r.status_code == 404          # moduł online wyłączony
+
+
+def test_realizacja_online_waitlisty_zachowuje_kanal_i_nie_sadza(admin_client, client):
+    admin_client.put("/api/lokal/config", json={"rezerwacje_online": True})
+    table_id = _stolik(admin_client, "Online-W", 4)
+    created = client.post("/api/online/lista-oczekujacych", json={
+        "data": DZIEN,
+        "godz_od": "18:00",
+        "liczba_osob": 2,
+        "nazwisko": "Online oczekujący",
+    })
+    assert created.status_code == 201, created.text
+    waitlist = admin_client.get(
+        f"/api/lista-oczekujacych?data={DZIEN}"
+    ).json()["lista"]
+    waitlist_id = next(item["id"] for item in waitlist if item["kanal"] == "online")
+
+    realised = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/zrealizuj",
+        json={"stolik_id": table_id},
+    )
+    assert realised.status_code == 409
+    assert realised.json()["code"] == "DATE_CLOSED"
+    realised = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/zrealizuj",
+        json={
+            "stolik_id": table_id,
+            "przekrocz_limity": True,
+            "nadpisanie_limitow": {
+                "powod": "operational_decision",
+                "notatka": "Potwierdzono realizację wpisu online",
+                "potwierdzone": True,
+            },
+        },
+    )
+    assert realised.status_code == 200, realised.text
+    assert realised.json()["rezerwacja"]["kanal"] == "online"
+    assert realised.json()["rezerwacja"]["faza_hosta"] is None

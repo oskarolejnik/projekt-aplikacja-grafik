@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import models
-import reservation_rules
 import schemas
 from database import get_db
 from deps import get_lokal_config, modul_aktywny
 
 
 router = APIRouter()
-WARSAW = ZoneInfo("Europe/Warsaw")
 
 
 def _wymagaj_modul_rezerwacje(db: Session = Depends(get_db)):
@@ -255,33 +249,3 @@ def usun_nadpisanie_regul(
         db.delete(row)
         db.commit()
     return Response(status_code=204)
-
-
-@router.post(
-    "/api/rezerwacje/reguly/symuluj",
-    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
-)
-def symuluj_reguly_rezerwacji(
-    dane: schemas.SymulacjaRegulRezerwacjiIn,
-    db: Session = Depends(get_db),
-):
-    if dane.sala_id is not None and db.get(models.SalaRezerwacyjna, dane.sala_id) is None:
-        raise HTTPException(404, "Brak sali.")
-    request = reservation_rules.RuleRequest(
-        data=dane.data,
-        godz_od=dane.godz_od,
-        liczba_osob=dane.liczba_osob,
-        kanal=dane.kanal,
-        sala_id=dane.sala_id,
-        intent="simulate",
-    )
-    result = reservation_rules.evaluate_reservation_rules(
-        db,
-        request,
-        now=datetime.now(WARSAW),
-    )
-    if hasattr(result, "to_dict"):
-        return result.to_dict()
-    if is_dataclass(result):
-        return asdict(result)
-    return result

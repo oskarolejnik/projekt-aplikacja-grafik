@@ -53,6 +53,28 @@ def test_odwolanie_realokuje_auto_na_lepszy_stol(admin_client):
     assert g["stolik_id"] == s3 and g["stoliki_dodatkowe"] == []
 
 
+def test_reopt_nie_przenosi_przy_remisie_kosztu(admin_client):
+    zwalniany = _stolik(admin_client, "A", 4)
+    obecny = _stolik(admin_client, "B", 4)
+    blokada = _rez(
+        admin_client, DZIEN, "18:00", 4,
+        stolik_id=zwalniany, nazwisko="Blokada",
+    )
+    grupa = _rez(admin_client, DZIEN, "18:00", 4, nazwisko="Remis")
+    auto = admin_client.post(f"/api/rezerwacje-stolik/{grupa}/auto-przydziel")
+    assert auto.status_code == 200, auto.text
+    assert auto.json()["rezerwacja"]["stolik_id"] == obecny
+
+    assert admin_client.post(
+        f"/api/rezerwacje-stolik/{blokada}/status",
+        json={"status": "odwolana"},
+    ).status_code == 200
+
+    po_reoptymalizacji = _rez_out(admin_client, DZIEN, grupa)
+    assert po_reoptymalizacji["stolik_id"] == obecny
+    assert po_reoptymalizacji["stoliki_dodatkowe"] == []
+
+
 def test_reopt_nie_dubluje_stolu_dwoch_rezerwacji(admin_client, monkeypatch):
     """Regresja: gdy DWIE auto-rezerwacje nachodzą na to samo zwolnione okno, re-optymalizacja
     nie może posadzić obu na tym samym zwolnionym stole. Sesja ma autoflush=False — bezpieczeństwo

@@ -1,6 +1,8 @@
 """Slice 3: endpointy silnika sadzania — SUGESTIA (top-3) i AUTO (przydział best-fit),
 w tym blokowanie stołów składowych kombinacji. 2026-07-13 = poniedziałek."""
 
+import models
+
 PON = "2026-07-13"
 
 
@@ -55,6 +57,91 @@ def test_auto_dobiera_kombinacje_dla_duzej_grupy(admin_client):
     filtrowane = admin_client.get(
         f"/api/rezerwacje-stolik?start={PON}&end={PON}&stolik_id={dodatkowy}").json()["rezerwacje"]
     assert [r["id"] for r in filtrowane] == [rid]
+
+
+def test_legacy_kombinacja_i_sasiedztwo_nie_lacza_roznych_sal(admin_client, db):
+    sale = [
+        models.SalaRezerwacyjna(
+            nazwa=nazwa,
+            nazwa_klucz=nazwa.casefold(),
+            aktywna=True,
+            kolejnosc=index,
+        )
+        for index, nazwa in enumerate(("Sala Lewa", "Sala Prawa"))
+    ]
+    db.add_all(sale)
+    db.commit()
+    a = _stolik(admin_client, "L1", 4, sala_id=sale[0].id)
+    b = _stolik(admin_client, "P1", 4, sala_id=sale[1].id)
+
+    kombinacja = admin_client.post("/api/kombinacje", json={
+        "nazwa": "L1 + P1",
+        "stoliki": [a["id"], b["id"]],
+        "pojemnosc_min": 5,
+    })
+    sasiedztwo = admin_client.post("/api/sasiedztwo", json={
+        "stolik_a": a["id"],
+        "stolik_b": b["id"],
+    })
+
+    assert kombinacja.status_code == 400
+    assert sasiedztwo.status_code == 400
+    assert admin_client.get("/api/kombinacje").json()["kombinacje"] == []
+    assert admin_client.get("/api/sasiedztwo").json()["krawedzie"] == []
+
+
+def test_recepcja_moze_atomowo_zapisac_rezerwacje_z_auto_przydzialem(admin_client):
+    a = _stolik(admin_client, "R1", 4)
+    b = _stolik(admin_client, "R2", 2)
+    admin_client.post("/api/kombinacje", json={
+        "nazwa": "R1+R2",
+        "stoliki": [a["id"], b["id"]],
+        "pojemnosc_min": 5,
+        "pojemnosc_max": 6,
+    })
+
+    created = admin_client.post("/api/rezerwacje-stolik", json={
+        "data": PON,
+        "godz_od": "18:00",
+        "liczba_osob": 6,
+        "nazwisko": "Recepcja auto",
+        "kanal": "reczna",
+        "auto_przydziel": True,
+    })
+
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert {body["stolik_id"], *body["stoliki_dodatkowe"]} == {a["id"], b["id"]}
+    assert body["auto_przydzielony"] is True
+    assert body["kanal"] == "reczna"
+
+
+def test_jawny_walk_in_atomowo_dobiera_kombinacje_i_oznacza_live(admin_client, db):
+    a = _stolik(admin_client, "W1", 4)
+    b = _stolik(admin_client, "W2", 4)
+    admin_client.post("/api/kombinacje", json={
+        "nazwa": "W1+W2",
+        "stoliki": [a["id"], b["id"]],
+        "pojemnosc_min": 5,
+        "pojemnosc_max": 8,
+    })
+
+    created = admin_client.post("/api/rezerwacje-stolik", json={
+        "data": PON,
+        "godz_od": "18:00",
+        "liczba_osob": 6,
+        "nazwisko": "Gość z ulicy",
+        "kanal": "walk_in",
+    })
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["kanal"] == "walk_in"
+    assert body["faza_hosta"] == "posadzony"
+    assert body["auto_przydzielony"] is True
+    assert {body["stolik_id"], *body["stoliki_dodatkowe"]} == {a["id"], b["id"]}
+
+    saved = db.get(models.Termin, body["id"])
+    assert saved.host_seated_at is not None
 
 
 def test_zmiana_liczby_osob_respektuje_min_i_max_kombinacji(admin_client):

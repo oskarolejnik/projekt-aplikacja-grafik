@@ -1256,6 +1256,10 @@ class ListaOczekujacych(Base):
     # Waitlist v2 (S5): powiadomienie „stolik gotowy", tymczasowy HOLD stołu, kanał zapisu.
     powiadomiono_at = Column(DateTime, nullable=True)                                         # kiedy wysłano „stolik gotowy”
     hold_stolik_id  = Column(Integer, ForeignKey("stoliki.id", ondelete="SET NULL"), nullable=True)  # trzymany stół
+    hold_stoliki_dodatkowe = Column(JSON, nullable=True)                                      # pozostałe stoły atomowego zestawu
+    hold_godz_od     = Column(Time, nullable=True)                                             # początek blokowanego okna
+    hold_godz_do     = Column(Time, nullable=True)                                             # koniec wizyty (claim może obejmować też bufor)
+    hold_bufor_min   = Column(Integer, nullable=True)                                          # zamrożony bufor po wizycie
     hold_do         = Column(DateTime, nullable=True)                                         # do kiedy trzymany
     token           = Column(String(64), nullable=True, index=True)                          # magic-link gościa (potwierdzenie holdu)
     kanal           = Column(String(16), nullable=False, default="reczna")                    # reczna|online

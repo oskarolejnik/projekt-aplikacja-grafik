@@ -15,13 +15,14 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from sqlalchemy import delete, insert, or_, select, update
+from sqlalchemy import delete, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import models
 
 
 ACTIVE_STATUSES = frozenset({"rezerwacja", "potwierdzona"})
+LIVE_HOST_PHASES = frozenset({"posadzony", "rachunek", "oplacony"})
 IDEMPOTENCY_TTL_DAYS = 30
 
 
@@ -396,11 +397,63 @@ def _active_hold_filter(now: datetime):
     return or_(claim.expires_at.is_(None), claim.expires_at > now)
 
 
+def _projected_table_ids(primary: Any, additional: Any) -> set[int]:
+    """Best-effort odczyt fizycznych stołów z kompatybilnej projekcji ``Termin``."""
+    if isinstance(additional, str):
+        try:
+            additional = json.loads(additional)
+        except (TypeError, ValueError):
+            additional = ()
+    values = [primary]
+    if isinstance(additional, (list, tuple, set)):
+        values.extend(additional)
+    result = set()
+    for value in values:
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            table_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if table_id > 0:
+            result.add(table_id)
+    return result
+
+
+def _configured_post_buffer_min(db, *, include_r3: bool = True) -> int:
+    """Konserwatywny fallback dla claimów utworzonych przed materializacją R4.
+
+    Stary ``Termin`` nie przechowuje rozstrzygniętej reguły bufora. W takim
+    przypadku bezpieczniej jest użyć największej skonfigurowanej wartości niż
+    przedwcześnie sprzedać zasób. ``include_r3=False`` pozostaje wyłącznie
+    adapterem odbudowy schematu sprzed migracji 0059, gdzie tabele i kolumny R3
+    jeszcze nie istnieją.
+    """
+    values = [db.query(models.LokalConfig.rez_bufor_min).limit(1).scalar()]
+    if include_r3:
+        values.extend((
+            db.execute(
+                select(func.max(models.SalaRezerwacyjna.domyslny_bufor_min))
+            ).scalar_one_or_none(),
+            db.execute(
+                select(func.max(models.RegulaDostepnosciRezerwacji.bufor_min))
+            ).scalar_one_or_none(),
+        ))
+    return max(0, *(int(value or 0) for value in values))
+
+
 def cleanup_expired_holds(db, now: datetime) -> int:
     db.execute(
         update(models.ListaOczekujacych)
         .where(models.ListaOczekujacych.hold_do <= now)
-        .values(hold_stolik_id=None, hold_do=None)
+        .values(
+            hold_stolik_id=None,
+            hold_stoliki_dodatkowe=None,
+            hold_godz_od=None,
+            hold_godz_do=None,
+            hold_bufor_min=None,
+            hold_do=None,
+        )
     )
     result = db.execute(
         delete(models.RezerwacjaStolikClaim).where(
@@ -420,10 +473,21 @@ def occupied_table_ids(
     buffer_min: int = 0,
     exclude_termin_id: int | None = None,
     now: datetime | None = None,
+    include_r3_buffers: bool = True,
 ) -> set[int]:
+    """Zwraca zasoby kolidujące z proponowanym przedziałem.
+
+    ``buffer_min`` jest buforem *po* wizycie. Trwałe claimy nowych alokacji już
+    zawierają własny bufor, a tutaj rozszerzamy wyłącznie koniec propozycji. Dzięki
+    temu wynik nie zależy od kolejności utworzenia dwóch rezerwacji i bufor nie jest
+    naliczany podwójnie.
+
+    Aktywny obrót hosta jest konserwatywną blokadą live: dopóki gość nie wyjdzie,
+    jego wszystkie stoły pozostają zajęte także po planowanym ``godz_do``.
+    """
     start_minute, end_minute = _interval(start, end)
     buffer_min = max(0, int(buffer_min or 0))
-    query_start = max(0, start_minute - buffer_min)
+    query_start = start_minute
     query_end = min(1440, end_minute + buffer_min)
     claim = models.RezerwacjaStolikClaim
     statement = select(claim.stolik_id).where(
@@ -436,7 +500,60 @@ def occupied_table_ids(
         statement = statement.where(
             or_(claim.termin_id.is_(None), claim.termin_id != exclude_termin_id)
         )
-    return set(db.execute(statement).scalars().all())
+    occupied = set(db.execute(statement).scalars().all())
+
+    termin = models.Termin
+    legacy_buffer = _configured_post_buffer_min(
+        db, include_r3=include_r3_buffers,
+    )
+    materialized_termin_ids = set(db.execute(
+        select(claim.termin_id).where(
+            claim.data == data,
+            claim.termin_id.isnot(None),
+        ).distinct()
+    ).scalars().all())
+    scheduled_statement = select(
+        termin.id,
+        termin.stolik_id,
+        termin.stoliki_dodatkowe,
+        termin.godz_od,
+        termin.godz_do,
+    ).where(
+        termin.data == data,
+        termin.rodzaj == "stolik",
+        termin.status.in_(ACTIVE_STATUSES),
+        termin.godz_od.isnot(None),
+        termin.godz_do.isnot(None),
+    )
+    if exclude_termin_id is not None:
+        scheduled_statement = scheduled_statement.where(termin.id != exclude_termin_id)
+    for termin_id, primary, additional, existing_start, existing_end in db.execute(
+        scheduled_statement,
+    ):
+        if termin_id in materialized_termin_ids:
+            continue
+        existing_start_minute, existing_end_minute = _interval(
+            existing_start,
+            existing_end,
+        )
+        existing_blocked_end = min(1440, existing_end_minute + legacy_buffer)
+        if existing_start_minute < query_end and query_start < existing_blocked_end:
+            occupied.update(_projected_table_ids(primary, additional))
+
+    live_statement = select(
+        termin.stolik_id,
+        termin.stoliki_dodatkowe,
+    ).where(
+        termin.data == data,
+        termin.rodzaj == "stolik",
+        termin.status.in_(ACTIVE_STATUSES),
+        termin.faza_hosta.in_(LIVE_HOST_PHASES),
+    )
+    if exclude_termin_id is not None:
+        live_statement = live_statement.where(termin.id != exclude_termin_id)
+    for primary, additional in db.execute(live_statement):
+        occupied.update(_projected_table_ids(primary, additional))
+    return occupied
 
 
 def pacing_status(
@@ -518,7 +635,7 @@ def replace_termin_allocation(
     end: time | None,
     table_ids: Iterable[int] = (),
     party_size: int = 1,
-    buffer_min: int = 0,
+    buffer_min: int | None = None,
     enforce_pacing: bool = False,
     max_reservations: int | None = None,
     max_covers: int | None = None,
@@ -530,6 +647,7 @@ def replace_termin_allocation(
     now: datetime | None = None,
     candidates: Sequence[Mapping[str, Any]] = (),
     alternatives: Sequence[Mapping[str, Any]] = (),
+    cleanup_holds: bool = True,
 ) -> AvailabilityResult:
     """Atomowo zastępuje wszystkie aktywne wpisy ledgera jednego ``Termin``.
 
@@ -538,12 +656,19 @@ def replace_termin_allocation(
     """
 
     effective_now = now or datetime.now()
-    cleanup_expired_holds(db, effective_now)
+    if cleanup_holds:
+        cleanup_expired_holds(db, effective_now)
     release_termin_allocation(
         db, termin_id, include_capacity=include_capacity,
     )
     if start is None:
         return AvailabilityResult(available=True)
+    if buffer_min is None:
+        # ``rez_bufor_min`` jest historycznym fizycznym fallbackiem także dla
+        # zapisów wewnętrznych. Warstwa R3 przekazuje wartość bardziej szczegółową,
+        # gdy ustawi ją serwis/sala/reguła.
+        buffer_min = _configured_post_buffer_min(db, include_r3=cleanup_holds)
+    buffer_min = max(0, int(buffer_min or 0))
     start_minute = _minute(start, field_name="Godzina rozpoczęcia")
     ids = tuple(sorted({int(value) for value in table_ids if value is not None}))
     interval: tuple[int, int] | None = _interval(start, end) if end is not None else None
@@ -563,6 +688,9 @@ def replace_termin_allocation(
             buffer_min=buffer_min,
             exclude_termin_id=termin_id,
             now=effective_now,
+            # ``cleanup_holds=False`` jest używane przez fallback odbudowujący
+            # także schematy sprzed 0059; nie wolno wtedy odczytywać kolumn R3.
+            include_r3_buffers=cleanup_holds,
         )
         conflicts = sorted(set(ids) & occupied)
         if conflicts:
@@ -634,6 +762,7 @@ def replace_termin_allocation(
             db.execute(insert(models.RezerwacjaOblozenieLedger), capacity_rows)
     if ids and interval is not None:
         start_raw, end_raw = interval
+        blocked_end = min(1440, end_raw + buffer_min)
         created_at = _utcnow_naive()
         rows = [
             {
@@ -646,7 +775,7 @@ def replace_termin_allocation(
                 "created_at": created_at,
             }
             for table_id in ids
-            for minute in range(start_raw, end_raw)
+            for minute in range(start_raw, blocked_end)
         ]
         if rows:
             db.execute(insert(models.RezerwacjaStolikClaim), rows)
@@ -669,27 +798,74 @@ def replace_waitlist_hold(
     db,
     *,
     waitlist_id: int,
-    table_id: int,
+    table_id: int | None = None,
+    table_ids: Iterable[int] = (),
     data: date,
     expires_at: datetime,
     now: datetime,
+    start: time | None = None,
+    end: time | None = None,
+    buffer_min: int = 0,
+    cleanup_holds: bool = True,
 ) -> None:
-    cleanup_expired_holds(db, now)
+    """Atomowo zastępuje hold jednym stołem lub pełną kombinacją.
+
+    Nowe holdy zajmują wyłącznie okno wizyty wraz z buforem. Brak czasu jest
+    zachowany jako kompatybilny, konserwatywny hold całego dnia.
+    """
+    if cleanup_holds:
+        cleanup_expired_holds(db, now)
     release_waitlist_hold(db, waitlist_id)
+    ids = tuple(sorted({
+        int(value)
+        for value in ((*table_ids, table_id) if table_id is not None else table_ids)
+        if value is not None
+    }))
+    if not ids:
+        raise ReservationError(
+            400,
+            "INVALID_HOLD_RESOURCE",
+            "Hold wymaga co najmniej jednego stolika.",
+            rule="table_hold",
+        )
+    if (start is None) != (end is None):
+        raise ReservationError(
+            400,
+            "INVALID_RESERVATION_INTERVAL",
+            "Czasowy hold wymaga początku i końca wizyty.",
+            rule="interval",
+        )
+    if start is None:
+        start_minute, blocked_end = 0, 1440
+    else:
+        start_minute, end_minute = _interval(start, end)
+        blocked_end = min(1440, end_minute + max(0, int(buffer_min or 0)))
+
     claim = models.RezerwacjaStolikClaim
-    conflict = db.execute(
-        select(claim.id).where(
-            claim.stolik_id == table_id,
+    conflicts = set(db.execute(
+        select(claim.stolik_id).where(
+            claim.stolik_id.in_(ids),
             claim.data == data,
+            claim.minute >= start_minute,
+            claim.minute < blocked_end,
             _active_hold_filter(now),
             or_(claim.waitlist_id.is_(None), claim.waitlist_id != waitlist_id),
-        ).limit(1)
-    ).first()
-    if conflict:
+        )
+    ).scalars().all())
+    if start is not None:
+        conflicts |= set(ids) & occupied_table_ids(
+            db,
+            data=data,
+            start=start,
+            end=end,
+            buffer_min=buffer_min,
+            now=now,
+        )
+    if conflicts:
         raise ReservationError(
             409,
             "TABLE_CONFLICT",
-            "Stolik jest już zajęty lub trzymany w tym dniu.",
+            "Co najmniej jeden stolik zestawu jest już zajęty lub trzymany w tym czasie.",
             rule="table_hold",
         )
     created_at = _utcnow_naive()
@@ -703,7 +879,8 @@ def replace_waitlist_hold(
             "expires_at": expires_at,
             "created_at": created_at,
         }
-        for minute in range(1440)
+        for table_id in ids
+        for minute in range(start_minute, blocked_end)
     ]
     db.execute(insert(models.RezerwacjaStolikClaim), rows)
 

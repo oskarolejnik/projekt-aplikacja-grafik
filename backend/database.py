@@ -382,6 +382,10 @@ def _rebuild_rezerwacje_ledger():
     waitlist_columns = {
         column["name"] for column in schema.get_columns("lista_oczekujacych")
     }
+    r4_hold_columns = {
+        "hold_stoliki_dodatkowe", "hold_godz_od", "hold_godz_do", "hold_bufor_min",
+    }
+    has_r4_holds = r4_hold_columns.issubset(waitlist_columns)
     if not {
         "data", "rodzaj", "status", "godz_od", "godz_do", "stolik_id",
         "stoliki_dodatkowe", "liczba_osob",
@@ -483,26 +487,75 @@ def _rebuild_rezerwacje_ledger():
                 # minutowego obłożenia jeszcze nie istnieje. R3 odbudowuje ją osobno.
                 include_capacity=False,
                 now=now,
+                # Schemat naprawianej bazy może nie mieć jeszcze kolumn holdów R4.
+                cleanup_holds=False,
             )
 
-        holds = db.query(models.ListaOczekujacych).filter(
+        hold_projection = [
+            models.ListaOczekujacych.id,
+            models.ListaOczekujacych.data,
+            models.ListaOczekujacych.hold_stolik_id,
+            models.ListaOczekujacych.hold_do,
+        ]
+        if has_r4_holds:
+            hold_projection.extend((
+                models.ListaOczekujacych.hold_stoliki_dodatkowe,
+                models.ListaOczekujacych.hold_godz_od,
+                models.ListaOczekujacych.hold_godz_do,
+                models.ListaOczekujacych.hold_bufor_min,
+            ))
+        holds = db.query(*hold_projection).filter(
             models.ListaOczekujacych.status == "oczekuje",
             models.ListaOczekujacych.hold_stolik_id.isnot(None),
             models.ListaOczekujacych.hold_do > now,
         ).order_by(models.ListaOczekujacych.id).all()
         for hold in holds:
-            if hold.hold_stolik_id not in known_tables:
+            raw_extra = hold.hold_stoliki_dodatkowe if has_r4_holds else None
+            if raw_extra is None:
+                raw_extra = []
+            if not isinstance(raw_extra, list):
                 raise RuntimeError(
-                    f"R0B_FALLBACK_MISSING_TABLE table_id={hold.hold_stolik_id} "
-                    f"waitlist_id={hold.id}"
+                    f"R4_FALLBACK_CORRUPT_HOLD_TABLES waitlist_id={hold.id}"
+                )
+            hold_ids = []
+            for value in [hold.hold_stolik_id, *raw_extra]:
+                if isinstance(value, bool):
+                    raise RuntimeError(
+                        f"R4_FALLBACK_CORRUPT_HOLD_TABLE waitlist_id={hold.id}"
+                    )
+                try:
+                    table_id = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"R4_FALLBACK_CORRUPT_HOLD_TABLE waitlist_id={hold.id}"
+                    ) from exc
+                if table_id <= 0 or table_id in hold_ids:
+                    raise RuntimeError(
+                        f"R4_FALLBACK_DUPLICATE_HOLD_TABLE waitlist_id={hold.id}"
+                    )
+                if table_id not in known_tables:
+                    raise RuntimeError(
+                        f"R0B_FALLBACK_MISSING_TABLE table_id={table_id} "
+                        f"waitlist_id={hold.id}"
+                    )
+                hold_ids.append(table_id)
+            start = hold.hold_godz_od if has_r4_holds else None
+            end = hold.hold_godz_do if has_r4_holds else None
+            if (start is None) != (end is None):
+                raise RuntimeError(
+                    f"R4_FALLBACK_INCOMPLETE_HOLD_INTERVAL waitlist_id={hold.id}"
                 )
             reservation_service.replace_waitlist_hold(
                 db,
                 waitlist_id=hold.id,
-                table_id=hold.hold_stolik_id,
+                table_ids=hold_ids,
                 data=hold.data,
                 expires_at=hold.hold_do,
                 now=now,
+                start=start,
+                end=end,
+                buffer_min=(hold.hold_bufor_min or 0) if has_r4_holds else 0,
+                cleanup_holds=False,
             )
 
         reservation_service.touch_days(guards)

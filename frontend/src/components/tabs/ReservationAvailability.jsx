@@ -8,6 +8,7 @@ import { Banner } from '../ui/Banner'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import { useToast } from '../ui/Toast'
+import ReservationAllocationSummary from './ReservationAllocationSummary'
 
 const DAYS = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
 const DAY_SHORT = ['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So', 'Nd']
@@ -640,7 +641,7 @@ export default function ReservationAvailability({ active = true } = {}) {
       }, { signal: controller.signal })
       if (!controller.signal.aborted) setSimulation(result)
     } catch (error) {
-      if (!controller.signal.aborted && error?.name !== 'AbortError') setSimulationError(error.message || 'Nie udało się sprawdzić reguł.')
+      if (!controller.signal.aborted && error?.name !== 'AbortError') setSimulationError(error.message || 'Nie udało się sprawdzić dostępności.')
     } finally {
       if (mutationControllerRef.current === controller) mutationControllerRef.current = null
       if (!controller.signal.aborted) setBusy(null)
@@ -662,6 +663,7 @@ export default function ReservationAvailability({ active = true } = {}) {
   const simulationAllowed = simulation ? Boolean(simulation.available ?? simulation.decision === 'allow') : null
   const simulationOverrideRequired = simulation?.decision === 'override_required' || simulation?.can_override === true
   const simulationIssueCount = Math.max(violations.length, 1)
+  const simulationDetails = violations.length ? violations : checks
 
   if (loading && !data) {
     return (
@@ -911,9 +913,8 @@ export default function ReservationAvailability({ active = true } = {}) {
 
       <section className="rounded-2xl border border-line bg-white/[0.02] p-5 sm:p-6" aria-labelledby="simulator-heading">
         <div>
-          <h3 id="simulator-heading" className="font-display text-lg font-semibold text-ink">Sprawdź reguły</h3>
-          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Zobacz, które limity zadziałają dla konkretnego przykładu.</p>
-          <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted">Ten podgląd sprawdza limity. Nie wybiera ani nie obiecuje konkretnego stołu.</p>
+          <h3 id="simulator-heading" className="font-display text-lg font-semibold text-ink">Sprawdź dostępność</h3>
+          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Zobacz decyzję, proponowany przydział i bezpieczne alternatywy dla konkretnej rezerwacji.</p>
         </div>
         <form onSubmit={runSimulation} className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <Field label="Dzień"><input type="date" value={simulator.data} onChange={(event) => updateSimulator({ data: event.target.value })} className="field mt-1.5 min-h-11" required disabled={busy === 'simulation'} /></Field>
@@ -921,20 +922,40 @@ export default function ReservationAvailability({ active = true } = {}) {
           <Field label="Liczba osób"><input type="number" min="1" value={simulator.liczba_osob} onChange={(event) => updateSimulator({ liczba_osob: event.target.value })} className="field mt-1.5 min-h-11" required disabled={busy === 'simulation'} /></Field>
           <Field label="Kanał"><select value={simulator.kanal} onChange={(event) => updateSimulator({ kanal: event.target.value })} className="field mt-1.5 min-h-11" disabled={busy === 'simulation'}><option value="wewnetrzna">Telefon / obsługa</option><option value="online">Online</option></select></Field>
           <Field label="Sala"><select value={simulator.sala_id} onChange={(event) => updateSimulator({ sala_id: event.target.value })} className="field mt-1.5 min-h-11" disabled={busy === 'simulation'}><option value="">Dowolna sala</option>{data.sale.map((room) => <option key={room.id} value={room.id}>{room.nazwa}</option>)}</select></Field>
-          <div className="sm:col-span-2 lg:col-span-5"><Button type="submit" variant="ghost" size="sm" loading={busy === 'simulation'} loadingLabel="Sprawdzam reguły…" disabled={Boolean(busy) && busy !== 'simulation'}><Icon name="search" className="h-4 w-4" /> Sprawdź reguły</Button></div>
+          <div className="sm:col-span-2 lg:col-span-5"><Button type="submit" variant="ghost" size="sm" loading={busy === 'simulation'} loadingLabel="Sprawdzam dostępność…" disabled={Boolean(busy) && busy !== 'simulation'}><Icon name="search" className="h-4 w-4" /> Sprawdź dostępność</Button></div>
         </form>
 
         {simulationError ? <p role="alert" className="mt-4 text-sm text-danger">{simulationError}</p> : null}
         {simulation ? (
-          <div className={`mt-5 rounded-xl border p-4 ${simulationAllowed ? 'border-success/25 bg-success/[0.06]' : simulationOverrideRequired ? 'border-lemon/30 bg-lemon/[0.06]' : 'border-danger/30 bg-danger/[0.06]'}`} aria-live="polite">
-            <div className="flex items-start gap-3">
+          <div className="mt-5 border-t border-line pt-5">
+            <div className="flex items-start gap-3" aria-live="polite" aria-atomic="true">
               <Icon name={simulationAllowed ? 'check' : 'warning'} className={`mt-0.5 h-5 w-5 shrink-0 ${simulationAllowed ? 'text-success' : simulationOverrideRequired ? 'text-lemon' : 'text-danger'}`} />
               <div className="min-w-0">
                 <p className="break-words font-semibold text-ink">{simulationTitle({ allowed: simulationAllowed, overrideRequired: simulationOverrideRequired, count: simulationIssueCount })}</p>
                 {simulation.service ? <p className="mt-1 break-words text-sm text-muted">{simulation.service.name || simulation.service.nazwa || 'Serwis'} · wizyta do {toTime(simulation.visit_end, '—')}</p> : null}
               </div>
             </div>
-            {(violations.length ? violations : checks).length ? <ul className="mt-4 divide-y divide-line border-t border-line">{(violations.length ? violations : checks).map((check, index) => <li key={`${check.code || check.rule}-${index}`} className="py-3 text-sm"><div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3"><span className="min-w-0 break-words font-medium text-ink">{check.message || check.rule || 'Sprawdzona reguła'}</span><span className="break-words text-xs text-muted sm:shrink-0 sm:text-right">{scopeLabel(check.scope, data.sale)}</span></div>{check.limit != null ? <p className="mt-1 break-words text-xs text-muted">Limit: {check.limit} · teraz: {check.observed ?? '—'} · po operacji: {check.projected ?? '—'}</p> : null}</li>)}</ul> : null}
+
+            {simulation.allocation ? (
+              <ReservationAllocationSummary
+                className="mt-4"
+                allocation={{
+                  ...simulation.allocation,
+                  visit_end: simulation.allocation.visit_end || simulation.visit_end,
+                }}
+                alternatives={simulation.alternatives || []}
+              />
+            ) : null}
+
+            {simulationDetails.length ? (
+              <details className={`group ${simulation.allocation ? '' : 'mt-4 border-y border-line'}`} open={!simulationAllowed}>
+                <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 py-2 text-sm font-semibold text-muted transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mint/60 [&::-webkit-details-marker]:hidden">
+                  <span>{violations.length ? 'Szczegóły decyzji' : 'Sprawdzone reguły'} · {ruleCountLabel(simulationDetails.length)}</span>
+                  <span aria-hidden="true" className="ml-auto text-base leading-none transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none">⌄</span>
+                </summary>
+                <ul className="divide-y divide-line border-t border-line">{simulationDetails.map((check, index) => <li key={`${check.code || check.rule}-${index}`} className="py-3 text-sm"><div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3"><span className="min-w-0 break-words font-medium text-ink">{check.message || check.rule || 'Sprawdzona reguła'}</span><span className="break-words text-xs text-muted sm:shrink-0 sm:text-right">{scopeLabel(check.scope, data.sale)}</span></div>{check.limit != null ? <p className="mt-1 break-words text-xs text-muted">Limit: {check.limit} · teraz: {check.observed ?? '—'} · po operacji: {check.projected ?? '—'}</p> : null}</li>)}</ul>
+              </details>
+            ) : null}
           </div>
         ) : null}
       </section>

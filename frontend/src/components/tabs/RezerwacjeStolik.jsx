@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { DialogFrame } from '../ui/DialogFrame'
+import { PillSwitch } from '../ui/PillSwitch'
 import { Icon } from '../../lib/icons'
 import { api, nowyKluczIdempotencji } from '../../lib/api'
 import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
@@ -11,6 +12,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../ui/Toast'
 import { warsawDateISO } from '../../lib/date'
 import { shiftDateIso } from '../../lib/reservationRoute'
+import ReservationAllocationSummary from './ReservationAllocationSummary'
 import ReservationOverridePanel from './ReservationOverridePanel'
 
 // Zarządzanie rezerwacjami stolików (admin): lista dnia + formularz + zmiana statusu + stoliki.
@@ -52,9 +54,14 @@ const STATUS_FEEDBACK = {
 }
 
 const emptyWaitlist = () => ({ godz_od: '', liczba_osob: '', nazwisko: '', telefon: '' })
+const RESERVATION_CREATE_MODES = [
+  { value: 'reczna', label: 'Rezerwacja' },
+  { value: 'walk_in', label: 'Walk-in (gość na miejscu)' },
+]
 const newReservation = (data) => ({
   data,
   godz_od: '18:00',
+  kanal: 'reczna',
   stolik_id: '',
   liczba_osob: '',
   nazwisko: '',
@@ -77,9 +84,40 @@ const replaceById = (rows, next, sorter = (value) => value) => {
   return sorter(exists ? rows.map((row) => row.id === next.id ? next : row) : [...rows, next])
 }
 
+const allocationFromDraft = (draft, tables) => {
+  const ids = [...new Set([
+    draft?.stolik_id,
+    ...(draft?.stoliki_dodatkowe || []),
+  ].map(Number).filter((id) => Number.isFinite(id) && id > 0))]
+  if (!ids.length) return null
+
+  const assignedTables = ids.map((id) => {
+    const table = tables.find((item) => Number(item.id) === id)
+    return {
+      id,
+      name: table?.nazwa || `Stolik #${id}`,
+      capacity: Number(table?.pojemnosc) || null,
+    }
+  })
+  const sourceTable = tables.find((item) => Number(item.id) === ids[0])
+  const roomName = sourceTable?.sala_nazwa || sourceTable?.strefa || null
+  const capacity = assignedTables.reduce((sum, table) => sum + (table.capacity || 0), 0)
+  const manual = draft?.auto_przydzielony !== true
+  return {
+    state: manual ? 'manual_locked' : 'assigned',
+    visibility: 'exact',
+    room: roomName ? { id: sourceTable?.sala_id || null, name: roomName } : null,
+    tables: assignedTables,
+    capacity: capacity || null,
+    visit_end: draft?.godz_do || null,
+    reasons: manual ? [{ code: 'MANUAL_LOCK', message: 'Stolik wybrany przez obsługę' }] : [],
+  }
+}
+
 const reservationSnapshot = (draft) => JSON.stringify([
   draft?.data || '',
   draft?.godz_od || '',
+  draft?.kanal || '',
   String(draft?.stolik_id || ''),
   String(draft?.liczba_osob ?? ''),
   draft?.nazwisko || '',
@@ -133,6 +171,7 @@ export default function RezerwacjeStolik({
 } = {}) {
   const { confirm } = useToast()
   const { can, isAdmin } = useAuth()
+  const createModeDescriptionId = useId()
   const maPrawo = (permission) => isAdmin || can(permission)
   const canManageFloor = maPrawo('rezerwacje.sala')
   const canViewContacts = maPrawo('rezerwacje.dane_kontaktowe')
@@ -168,9 +207,20 @@ export default function RezerwacjeStolik({
   const [modalAction, setModalAction] = useState(null)
   const [modalFeedback, setModalFeedback] = useState(null)
   const [modalOverrideDraft, setModalOverrideDraft] = useState(emptyOverrideDraft)
+  const [modalAllocationPreview, setModalAllocationPreview] = useState(null)
+  const [modalAllocationError, setModalAllocationError] = useState(null)
+  const clearModalAllocation = useCallback(() => {
+    setModalAllocationPreview(null)
+    setModalAllocationError(null)
+  }, [])
   const clearModalConflict = () => {
     setModalFeedback(null)
     setModalOverrideDraft(emptyOverrideDraft())
+  }
+  const updateModalAllocationContext = (patch) => {
+    setModal((current) => ({ ...current, ...patch }))
+    clearModalConflict()
+    clearModalAllocation()
   }
   const [rowActions, setRowActions] = useState({})
   const [rowFeedback, setRowFeedback] = useState({})
@@ -284,9 +334,10 @@ export default function RezerwacjeStolik({
     modalInitial.current = null
     probaZapisuRef.current = null
     setModalFeedback(null)
+    clearModalAllocation()
     setModal(null)
     if (modal || (selectionControlled && reservationId != null)) onReservationClose?.()
-  }, [cancelMutationContinuations, piiVisibility])
+  }, [cancelMutationContinuations, clearModalAllocation, piiVisibility])
   const reservationDirty = !!modal && reservationSnapshot(modal) !== modalInitial.current
   const waitDraftDirty = !!(nowyOcz.nazwisko.trim() || nowyOcz.godz_od || nowyOcz.liczba_osob || nowyOcz.telefon.trim())
 
@@ -308,9 +359,10 @@ export default function RezerwacjeStolik({
     probaZapisuRef.current = null
     setModalFeedback(null)
     setModalOverrideDraft(emptyOverrideDraft())
+    clearModalAllocation()
     setModal(draft)
     if (notify && draft.id != null) onReservationOpen?.(draft.id)
-  }, [canViewContacts, onReservationOpen])
+  }, [canViewContacts, clearModalAllocation, onReservationOpen])
 
   const closeReservation = async ({ force = false } = {}) => {
     if (modalAction) return
@@ -326,6 +378,7 @@ export default function RezerwacjeStolik({
     probaZapisuRef.current = null
     setModalFeedback(null)
     setModalOverrideDraft(emptyOverrideDraft())
+    clearModalAllocation()
     setModal(null)
     onReservationClose?.()
   }
@@ -340,6 +393,7 @@ export default function RezerwacjeStolik({
         modalInitial.current = null
         probaZapisuRef.current = null
         setModalFeedback(null)
+        clearModalAllocation()
         setModal(null)
       }
       return
@@ -352,6 +406,7 @@ export default function RezerwacjeStolik({
         modalInitial.current = null
         probaZapisuRef.current = null
         setModalFeedback(null)
+        clearModalAllocation()
         setModal(null)
       }
       const invalidKey = `${data}:${selectedKey}`
@@ -367,6 +422,7 @@ export default function RezerwacjeStolik({
     openReservation(selected, null, { notify: false })
   }, [
     canViewContacts,
+    clearModalAllocation,
     data,
     loadError,
     loading,
@@ -420,6 +476,44 @@ export default function RezerwacjeStolik({
 
   const stolikNazwa = (id) => stoliki.find((table) => table.id === id)?.nazwa || 'Bez stolika'
 
+  const zaproponujPrzydzial = async () => {
+    const partySize = num(modal?.liczba_osob)
+    if (!modal || modalAction || modal.stolik_id || !modal.data || !modal.godz_od || !partySize || partySize < 1) return
+    setModalAction('allocation')
+    clearModalAllocation()
+    const mutation = startMutation()
+    try {
+      const result = await api('/rezerwacje/reguly/symuluj', 'POST', {
+        data: modal.data,
+        godz_od: modal.godz_od,
+        liczba_osob: partySize,
+        kanal: 'wewnetrzna',
+        sala_id: null,
+      }, { signal: mutation.controller.signal })
+      if (!mutationIsCurrent(mutation)) return
+      const allocation = result?.allocation || result?.availability?.allocation || null
+      const alternatives = result?.alternatives || result?.availability?.alternatives || []
+      if (!allocation) {
+        const violations = result?.violations || result?.availability?.violations || []
+        setModalAllocationError(violations[0]?.message || 'Brak bezpiecznego przydziału dla wybranego terminu.')
+        return
+      }
+      setModalAllocationPreview({
+        allocation: {
+          ...allocation,
+          visit_end: allocation.visit_end || result?.visit_end || result?.godz_do || null,
+        },
+        alternatives,
+      })
+    } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
+      setModalAllocationError(error.message || 'Nie udało się zaproponować przydziału.')
+    } finally {
+      finishMutation(mutation)
+      if (mutationIsCurrent(mutation)) setModalAction(null)
+    }
+  }
+
   const zapisz = async (nadpisanieLimitow = null) => {
     if (!canViewContacts || !modal || modalAction) return
     if (!modal.nazwisko?.trim()) {
@@ -441,6 +535,8 @@ export default function RezerwacjeStolik({
         stolik_id: modal.stolik_id ? Number(modal.stolik_id) : null,
         liczba_osob: num(modal.liczba_osob),
         nazwisko: modal.nazwisko.trim(),
+        ...(!modal.id ? { kanal: modal.kanal === 'walk_in' ? 'walk_in' : 'reczna' } : {}),
+        ...(!modal.id && !modal.stolik_id && modal.godz_od ? { auto_przydziel: true } : {}),
         ...(canViewContacts ? {
           telefon: modal.telefon?.trim() || null,
           email: modal.email?.trim() || null,
@@ -475,6 +571,7 @@ export default function RezerwacjeStolik({
       })
       modalInitial.current = null
       probaZapisuRef.current = null
+      clearModalAllocation()
       setModal(null)
       onReservationClose?.()
     } catch (error) {
@@ -704,6 +801,7 @@ export default function RezerwacjeStolik({
     try {
       const payload = {
         stolik_id: Number(tableId),
+        tryb: 'walk_in',
         ...(nadpisanieLimitow ? {
           przekrocz_limity: true,
           nadpisanie_limitow: nadpisanieLimitow,
@@ -753,6 +851,15 @@ export default function RezerwacjeStolik({
   const guestCount = activeReservations.reduce((sum, row) => sum + (Number(row.liczba_osob) || 0), 0)
   const dataLabel = parseDay(data).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })
   const isToday = data === dzisISO()
+  const assignedModalAllocation = allocationFromDraft(modal, stoliki)
+  const visibleModalAllocation = assignedModalAllocation || modalAllocationPreview?.allocation || null
+  const visibleModalAlternatives = assignedModalAllocation ? [] : modalAllocationPreview?.alternatives || []
+  const canProposeAllocation = Boolean(
+    modal?.data
+    && modal?.godz_od
+    && num(modal?.liczba_osob) > 0
+    && !modal?.stolik_id,
+  )
 
   return (
     <Card className="p-5 sm:p-8">
@@ -927,24 +1034,70 @@ export default function RezerwacjeStolik({
           restoreFocusRef={reservationTriggerRef}
         >
           <form onSubmit={(event) => { event.preventDefault(); zapisz() }}>
+            {!modal.id ? (
+              <div className="mb-5 border-b border-line pb-5">
+                <PillSwitch
+                  label="Tryb tworzenia rezerwacji"
+                  options={RESERVATION_CREATE_MODES}
+                  value={modal.kanal === 'walk_in' ? 'walk_in' : 'reczna'}
+                  onChange={(kanal) => updateModalAllocationContext({ kanal })}
+                  disabled={!!modalAction}
+                  aria-describedby={createModeDescriptionId}
+                />
+                <p id={createModeDescriptionId} aria-live="polite" className="mt-2.5 text-sm leading-relaxed text-muted">
+                  {modal.kanal === 'walk_in'
+                    ? 'Gość jest już na miejscu. Bez ręcznie wybranego stolika system dobierze bezpieczny przydział przy zapisie.'
+                    : 'Zapisz rezerwację na wybrany termin. Stolik możesz wybrać ręcznie albo pozostawić systemowi.'}
+                </p>
+              </div>
+            ) : null}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="field-label">Data
-                <input type="date" value={modal.data || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, data: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
+                <input type="date" value={modal.data || ''} disabled={!!modalAction} onChange={(event) => updateModalAllocationContext({ data: event.target.value })} className="field mt-1.5" />
               </label>
               <label className="field-label">Godzina
-                <input type="time" value={modal.godz_od || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, godz_od: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
+                <input type="time" value={modal.godz_od || ''} disabled={!!modalAction} onChange={(event) => updateModalAllocationContext({ godz_od: event.target.value })} className="field mt-1.5" />
+              </label>
+              <label className="field-label">Liczba osób
+                <input type="number" min="1" value={modal.liczba_osob ?? ''} disabled={!!modalAction} onChange={(event) => updateModalAllocationContext({ liczba_osob: event.target.value })} className="field mt-1.5" />
               </label>
               <label className="field-label">Stolik
-                <select value={modal.stolik_id || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, stolik_id: event.target.value })); clearModalConflict() }} className="field mt-1.5">
+                <select value={modal.stolik_id || ''} disabled={!!modalAction} onChange={(event) => updateModalAllocationContext({ stolik_id: event.target.value, stoliki_dodatkowe: [], auto_przydzielony: false })} className="field mt-1.5">
                   <option value="">Bez stolika</option>
                   {stoliki.filter((table) => table.aktywny).map((table) => (
                     <option key={table.id} value={table.id}>{table.nazwa}{table.strefa ? ` (${table.strefa})` : ''} · {table.pojemnosc} os.</option>
                   ))}
                 </select>
               </label>
-              <label className="field-label">Liczba osób
-                <input type="number" min="1" value={modal.liczba_osob ?? ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, liczba_osob: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
-              </label>
+            </div>
+
+            <div className="mt-4">
+              {!modal.stolik_id ? (
+                <Button
+                  variant="subtle"
+                  size="sm"
+                  onClick={zaproponujPrzydzial}
+                  loading={modalAction === 'allocation'}
+                  loadingLabel="Proponuję przydział…"
+                  disabled={!canProposeAllocation || Boolean(modalAction)}
+                >
+                  <Icon name="sparkles" className="h-4 w-4" />
+                  Zaproponuj przydział
+                </Button>
+              ) : null}
+              {modalAllocationError ? <p role="alert" className="mt-3 text-sm text-danger">{modalAllocationError}</p> : null}
+              {visibleModalAllocation ? (
+                <ReservationAllocationSummary
+                  className="mt-4"
+                  allocation={visibleModalAllocation}
+                  alternatives={visibleModalAlternatives}
+                />
+              ) : null}
+            </div>
+
+            <div className="mt-5 border-t border-line pt-5">
+              <h4 className="text-sm font-semibold text-ink">Dane gościa</h4>
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="field-label sm:col-span-2">Nazwisko / klient
                 <input ref={reservationNameRef} value={modal.nazwisko || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, nazwisko: event.target.value })); clearModalConflict() }} className="field mt-1.5" placeholder="np. Nowak" autoComplete="name" />
               </label>
@@ -968,6 +1121,7 @@ export default function RezerwacjeStolik({
                   <textarea rows={3} value={modal.notatka || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, notatka: event.target.value })); clearModalConflict() }} className="field mt-1.5 resize-y" />
                 </label>
               ) : null}
+              </div>
             </div>
 
             {canViewContacts && modal.id && modal.email ? (

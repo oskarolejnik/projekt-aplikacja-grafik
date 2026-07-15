@@ -70,7 +70,32 @@ beforeEach(() => {
       available: false,
       service: { id: 11, name: 'Kolacja' },
       visit_end: '20:30',
-      resource_allocation: 'not_simulated',
+      resource_allocation: 'recommended',
+      allocation: {
+        state: 'preview',
+        visibility: 'exact',
+        room: { id: 2, name: 'Ogród' },
+        tables: [
+          { id: 21, name: 'O1', capacity: 6 },
+          { id: 22, name: 'O2', capacity: 6 },
+        ],
+        capacity: 12,
+        visit_end: '20:30',
+        reasons: [
+          { code: 'CAPACITY_FIT', message: '12 miejsc dla 12 osób' },
+          { code: 'TABLES_ADJACENT', message: 'Stoły sąsiadują' },
+        ],
+      },
+      alternatives: [{
+        id: 'later',
+        kind: 'time',
+        date: '2026-08-22',
+        time: '18:30',
+        allocation: {
+          room: { id: 2, name: 'Ogród' },
+          tables: [{ id: 23, name: 'O3', capacity: 12 }],
+        },
+      }],
       checks: [],
       violations: [{
         rule: 'pacing_covers',
@@ -90,22 +115,29 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('ReservationAvailability', () => {
-  it('pokazuje prosty tryb i symuluje reguły bez obiecywania konkretnego stołu', async () => {
+  it('pokazuje prosty tryb i pełną symulację dostępności z przydziałem oraz alternatywami', async () => {
     render(<ReservationAvailability />)
 
     expect(await screen.findByRole('heading', { name: 'Najważniejsze zasady' })).toBeInTheDocument()
     expect(screen.getByText(/Kolacja/)).toBeInTheDocument()
     expect(screen.getByText(/Wigilia/)).toBeInTheDocument()
-    expect(screen.getByText('Ten podgląd sprawdza limity. Nie wybiera ani nie obiecuje konkretnego stołu.')).toBeInTheDocument()
+    expect(screen.getByText('Zobacz decyzję, proponowany przydział i bezpieczne alternatywy dla konkretnej rezerwacji.')).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Dzień'), { target: { value: '2026-08-22' } })
     fireEvent.change(screen.getByLabelText('Godzina'), { target: { value: '18:00' } })
     fireEvent.change(screen.getByLabelText('Liczba osób'), { target: { value: '12' } })
     fireEvent.change(screen.getByLabelText('Sala'), { target: { value: '2' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Sprawdź reguły' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sprawdź dostępność' }))
 
     expect(await screen.findByText('Wymaga decyzji obsługi — przekroczona 1 reguła')).toBeInTheDocument()
+    expect(screen.getByText('Ogród · O1 + O2')).toBeInTheDocument()
+    expect(screen.getByText('12 miejsc · do 20:30')).toBeInTheDocument()
+    expect(screen.getByText('12 miejsc dla 12 osób')).toBeInTheDocument()
+    expect(screen.getByText('Podgląd nie blokuje stołów; przydział potwierdzi się przy zapisie.')).toBeInTheDocument()
     expect(screen.getByText('Limit nowych osób w ciągu 30 minut')).toBeInTheDocument()
+    expect(screen.getByText('Szczegóły decyzji · 1 reguła').closest('details')).toHaveAttribute('open')
+    fireEvent.click(screen.getByRole('button', { name: 'Pokaż 1 alternatywę' }))
+    expect(screen.getByText('2026-08-22 · 18:30 · Ogród · O3')).toBeInTheDocument()
     expect(apiMock).toHaveBeenCalledWith('/rezerwacje/reguly/symuluj', 'POST', {
       data: '2026-08-22',
       godz_od: '18:00',

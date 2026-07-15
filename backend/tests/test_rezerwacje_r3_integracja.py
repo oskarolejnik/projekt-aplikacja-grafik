@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import logging
 
+import pytest
 from sqlalchemy import text
 
 import models
@@ -104,7 +106,9 @@ def test_simulator_manual_i_audytowany_override_maja_ta_sama_decyzje(
     assert simulation.status_code == 200, simulation.text
     assert simulation.json()["decision"] == "override_required"
     assert simulation.json()["code"] == "CONCURRENT_RESERVATION_LIMIT"
-    assert simulation.json()["resource_allocation"] == "not_simulated"
+    assert simulation.json()["resource_allocation"] == "recommended"
+    assert simulation.json()["allocation"]["state"] == "preview"
+    assert simulation.json()["allocation"]["tables"]
 
     blocked = _manual(admin_client, booking_date, second_table["id"], "Druga")
     assert blocked.status_code == 409
@@ -142,6 +146,70 @@ def test_simulator_manual_i_audytowany_override_maja_ta_sama_decyzje(
         "SELECT note FROM reservation_override_context WHERE id=:id"
     ), {"id": context.id}).scalar_one()
     assert raw_note != context.note
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "base_payload", "expects_candidates"),
+    [
+        ("/api/rezerwacje-stolik/{rid}/auto-przydziel", {}, True),
+        ("/api/host/rezerwacja/{rid}/przydziel-stolik", {"stolik_id": "target"}, False),
+        ("/api/host/rezerwacja/{rid}/posadz", {"stolik_id": "target"}, False),
+    ],
+    ids=("auto", "host-fixed", "host-seat"),
+)
+def test_przydzial_hosta_respektuje_limit_i_pozwala_na_audytowany_override(
+    admin_client, db, endpoint, base_payload, expects_candidates,
+):
+    booking_date = _day(45)
+    occupied = _table(admin_client, "R4 zajety")
+    target = _table(admin_client, "R4 cel")
+    first = _manual(admin_client, booking_date, occupied["id"], "Pierwsza")
+    assert first.status_code == 201, first.text
+    pending = admin_client.post("/api/rezerwacje-stolik", json={
+        "data": str(booking_date),
+        "godz_od": "18:00",
+        "liczba_osob": 2,
+        "nazwisko": "Do przydzielenia",
+    })
+    assert pending.status_code == 201, pending.text
+    _service(admin_client, booking_date, max_jednoczesnych_rez=1)
+
+    rid = pending.json()["id"]
+    url = endpoint.format(rid=rid)
+    payload = {
+        key: (target["id"] if value == "target" else value)
+        for key, value in base_payload.items()
+    }
+    warning = admin_client.post(url, json=payload)
+    assert warning.status_code == 409, warning.text
+    availability = warning.json()["availability"]
+    assert availability["decision"] == "override_required"
+    assert availability["can_override"] is True
+    if expects_candidates:
+        assert availability["candidates"]
+
+    confirmed = admin_client.post(url, json={
+        **payload,
+        "nadpisanie_limitow": {
+            "powod": "operational_decision",
+            "notatka": "Host potwierdzil przekroczenie limitu",
+            "potwierdzone": True,
+        },
+    })
+    assert confirmed.status_code == 200, confirmed.text
+
+    db.expire_all()
+    audit = db.query(models.ReservationAudit).filter_by(
+        termin_id=rid, action="override",
+    ).one()
+    context = db.query(models.ReservationOverrideContext).filter_by(
+        audit_id=audit.id,
+    ).one()
+    assert audit.reason == "capacity_override"
+    assert context.reason_code == "operational_decision"
+    assert db.query(models.RezerwacjaOblozenieLedger).filter_by(
+        termin_id=rid, override=True,
+    ).count() > 0
 
 
 def test_reguly_crud_i_globalny_scope(admin_client):
@@ -236,3 +304,34 @@ def test_online_przechodzi_do_kolejnej_sali_po_limicie_pierwszej(
         data=booking_date, rodzaj="stolik",
     ).order_by(models.Termin.id).all()
     assert [row.stolik_id for row in reservations] == [first_table.id, second_table.id]
+
+
+def test_shadow_compare_raportuje_roznice_bez_wplywu_na_wynik(
+    admin_client, monkeypatch, caplog,
+):
+    import main
+
+    booking_date = _day(35)
+    _service(admin_client, booking_date)
+    table = _table(admin_client, "R4-shadow")
+    monkeypatch.setenv("RESERVATION_ALLOCATOR_SHADOW_COMPARE", "1")
+    monkeypatch.setattr(main, "_wolne_przydzialy", lambda *args, **kwargs: [])
+
+    with caplog.at_level(logging.WARNING, logger=main.logger.name):
+        response = admin_client.post("/api/rezerwacje/reguly/symuluj", json={
+            "data": str(booking_date),
+            "godz_od": "18:00",
+            "liczba_osob": 2,
+            "kanal": "wewnetrzna",
+        })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["decision"] == "allow"
+    assert response.json()["allocation"]["tables"][0]["id"] == table["id"]
+    record = next(
+        item for item in caplog.records
+        if item.getMessage() == "reservation_allocator_shadow_diff"
+    )
+    shadow = record.reservation_allocator_shadow
+    assert shadow["canonical_decision"] == "allow"
+    assert shadow["legacy_tables"] == ()

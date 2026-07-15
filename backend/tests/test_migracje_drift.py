@@ -14,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0059_r3_reguly_dostepnosci"
+HEAD = "0060_r4_allocator_core"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -831,7 +831,12 @@ def test_migracja_0059_blokuje_downgrade_z_utrata_konfiguracji(
     con = sqlite3.connect(str(db_file))
     try:
         assert con.execute(verification).fetchone()[0] == expected
-        assert con.execute("SELECT version_num FROM alembic_version").fetchone()[0] == HEAD
+        # 0060 nie zawiera danych R4 w tym scenariuszu, więc jego downgrade
+        # kończy się poprawnie. Dopiero ochronny downgrade 0059 zatrzymuje
+        # operację i pozostawia bazę dokładnie na tej rewizji.
+        assert con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0] == "0059_r3_reguly_dostepnosci"
     finally:
         con.close()
 
@@ -1785,3 +1790,146 @@ def test_programowe_migracje_nie_wyciszaja_loggerow_aplikacji(tmp_path):
         cwd=str(BACKEND), env=env, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _insert_waitlist_hold(
+    db_file,
+    *,
+    r4=False,
+):
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.executemany(
+            """INSERT INTO stoliki
+               (id, nazwa, pojemnosc, laczy_sie, aktywny, kolejnosc)
+               VALUES (?, ?, 4, 0, 1, ?)""",
+            [(1, "H1", 0), (2, "H2", 1)],
+        )
+        columns = (
+            "id, data, nazwisko, status, utworzono_at, "
+            "hold_stolik_id, hold_do, kanal"
+        )
+        values = [
+            1,
+            "2035-07-16",
+            "Hold migracyjny",
+            "oczekuje",
+            "2026-07-15 12:00:00",
+            1,
+            "2090-07-16 12:30:00",
+            "reczna",
+        ]
+        if r4:
+            columns += (
+                ", hold_stoliki_dodatkowe, hold_godz_od, "
+                "hold_godz_do, hold_bufor_min"
+            )
+            values.extend(("[2]", "18:00:00", "20:00:00", 30))
+        placeholders = ", ".join("?" for _ in values)
+        con.execute(
+            f"INSERT INTO lista_oczekujacych ({columns}) VALUES ({placeholders})",
+            values,
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_rebuild_ledgera_na_0059_nie_wymaga_kolumn_holdow_r4(tmp_path):
+    """Fallback uruchomiony przed 0060 zachowuje legacy hold całego dnia."""
+    db_file = tmp_path / "_pre_r4_hold_rebuild.db"
+    env = _env(db_file, "pre-r4-hold")
+    upgraded = _alembic(env, "upgrade", "0059_r3_reguly_dostepnosci")
+    assert upgraded.returncode == 0, upgraded.stderr
+    _insert_waitlist_hold(db_file)
+
+    rebuilt = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database; database._rebuild_rezerwacje_ledger()",
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert rebuilt.returncode == 0, rebuilt.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        columns = {
+            row[1] for row in con.execute("PRAGMA table_info(lista_oczekujacych)")
+        }
+        claims = con.execute(
+            "SELECT count(*), min(minute), max(minute) "
+            "FROM rezerwacje_stoliki_claims WHERE waitlist_id=1"
+        ).fetchone()
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert "hold_stoliki_dodatkowe" not in columns
+    assert claims == (1440, 0, 1439)
+    assert revision == "0059_r3_reguly_dostepnosci"
+
+
+def test_rebuild_ledgera_0060_odtwarza_czasowy_wielostolowy_hold(tmp_path):
+    db_file = tmp_path / "_r4_hold_rebuild.db"
+    env = _env(db_file, "r4-hold")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    _insert_waitlist_hold(db_file, r4=True)
+
+    rebuilt = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database; database._rebuild_rezerwacje_ledger()",
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert rebuilt.returncode == 0, rebuilt.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        claims = con.execute(
+            "SELECT stolik_id, count(*), min(minute), max(minute) "
+            "FROM rezerwacje_stoliki_claims WHERE waitlist_id=1 "
+            "GROUP BY stolik_id ORDER BY stolik_id"
+        ).fetchall()
+    finally:
+        con.close()
+    assert claims == [(1, 150, 1080, 1229), (2, 150, 1080, 1229)]
+
+
+def test_migracja_0060_wznawia_sie_po_czesciowym_dodaniu_kolumn(tmp_path):
+    db_file = tmp_path / "_r4_partial_columns.db"
+    env = _env(db_file, "r4-partial")
+    upgraded = _alembic(env, "upgrade", "0059_r3_reguly_dostepnosci")
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "ALTER TABLE lista_oczekujacych "
+            "ADD COLUMN hold_stoliki_dodatkowe JSON"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    resumed = _alembic(env, "upgrade", HEAD)
+    assert resumed.returncode == 0, resumed.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        columns = {
+            row[1] for row in con.execute("PRAGMA table_info(lista_oczekujacych)")
+        }
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert {
+        "hold_stoliki_dodatkowe", "hold_godz_od",
+        "hold_godz_do", "hold_bufor_min",
+    } <= columns
+    assert revision == HEAD

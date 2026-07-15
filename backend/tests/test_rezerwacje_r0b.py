@@ -280,8 +280,9 @@ def test_public_availability_and_create_use_three_table_combination(admin_client
     )
     assert availability.status_code == 200, availability.text
     slot = next(item for item in availability.json()["sloty"] if item["godz_od"] == "18:00")
-    assert slot["wolne_stoly"] == 0
-    assert slot["wolne"] > 0
+    assert slot["wolne_stoly"] == 1
+    assert slot["wolne"] == 1
+    assert slot["dostepny"] is True
 
     created = _online_create(client, nazwisko="Bankiet osiemnaście", osoby=18)
     assert created.status_code == 201, created.text
@@ -367,7 +368,7 @@ def test_public_cancellation_releases_ledger(admin_client, client, db):
     assert replacement.status_code == 201, replacement.text
 
 
-def test_waitlist_hold_release_removes_full_day_claims(admin_client, db):
+def test_waitlist_hold_release_removes_only_visit_window_claims(admin_client, db):
     table_id = _stolik(admin_client)
     wait = admin_client.post(
         "/api/lista-oczekujacych",
@@ -393,7 +394,8 @@ def test_waitlist_hold_release_removes_full_day_claims(admin_client, db):
         stolik_id=table_id,
         data=BOOKING_DATE,
     ).all()
-    assert len(claims) == 1440
+    assert len(claims) == 120
+    assert {claim.minute for claim in claims} == set(range(18 * 60, 20 * 60))
     assert all(claim.expires_at is not None for claim in claims)
 
     released = admin_client.post(

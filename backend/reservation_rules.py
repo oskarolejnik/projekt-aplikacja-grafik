@@ -22,7 +22,7 @@ import reservation_service
 WARSAW = ZoneInfo("Europe/Warsaw")
 DEFAULT_SLOT_MIN = 120
 Channel = Literal["online", "wewnetrzna"]
-Intent = Literal["quote", "create", "edit", "simulate"]
+Intent = Literal["quote", "create", "edit", "simulate", "assign"]
 
 _SCOPE_ORDER = {"global": 0, "channel": 1, "room": 2, "room_channel": 3}
 _RULE_ORDER = {
@@ -49,6 +49,13 @@ _BAD_REQUEST_CODES = frozenset({
     "PARTY_SIZE_BELOW_MIN",
     "PARTY_SIZE_ABOVE_MAX",
     "ADVANCE_WINDOW_EXCEEDED",
+})
+_ASSIGN_RULES = frozenset({
+    "local_time",
+    "interval",
+    "channel",
+    "concurrent_reservations",
+    "concurrent_covers",
 })
 
 
@@ -88,7 +95,9 @@ def _positive(value: Any) -> int | None:
 
 def normalise_channel(value: str | None) -> Channel:
     raw = (value or "wewnetrzna").strip().lower()
-    if raw in {"reczna", "internal", "wewnetrzny", "wewnetrzna"}:
+    if raw in {
+        "reczna", "internal", "wewnetrzny", "wewnetrzna", "walk_in", "recepcja",
+    }:
         return "wewnetrzna"
     if raw == "online":
         return "online"
@@ -153,7 +162,7 @@ class RuleRequest:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kanal", normalise_channel(self.kanal))
-        if self.intent not in {"quote", "create", "edit", "simulate"}:
+        if self.intent not in {"quote", "create", "edit", "simulate", "assign"}:
             raise ValueError("unsupported rule evaluation intent")
 
 
@@ -597,11 +606,69 @@ def _scope_matches(row: Any, scope: Mapping[str, Any], channel: Channel, sala_id
     return True
 
 
-def _occupancy_rows(db, booking_date: date) -> list[Any]:
+def _occupancy_rows(
+    db,
+    booking_date: date,
+    *,
+    start_minute: int | None = None,
+    end_minute: int | None = None,
+) -> list[Any]:
+    """Odczytuje ledger i przedłuża aktywne wizyty hosta na oceniane okno.
+
+    Minutowy ledger opisuje planowany czas wizyty. Fazy ``posadzony``–``oplacony``
+    są jednak stanem live i muszą uczestniczyć w limitach jednoczesnych tak
+    długo, jak gość faktycznie pozostaje przy stole. Syntetyczne wiersze mają
+    ten sam ``termin_id``, więc nie dublują istniejącego fragmentu ledgera.
+    """
     model = getattr(models, "RezerwacjaOblozenieLedger", None)
     if model is None:
         return []
-    return db.query(model).filter(model.data == booking_date).all()
+    rows = db.query(model).filter(model.data == booking_date).all()
+    if (
+        start_minute is None
+        or end_minute is None
+        or end_minute <= start_minute
+    ):
+        return rows
+
+    existing_meta: dict[int, Any] = {}
+    for row in rows:
+        termin_id = _value(row, "termin_id")
+        if termin_id is not None:
+            existing_meta.setdefault(termin_id, row)
+
+    live = db.query(
+        models.Termin.id,
+        models.Termin.liczba_osob,
+        models.Termin.kanal,
+        models.Stolik.sala_id,
+    ).outerjoin(
+        models.Stolik, models.Stolik.id == models.Termin.stolik_id,
+    ).filter(
+        models.Termin.data == booking_date,
+        models.Termin.rodzaj == "stolik",
+        models.Termin.status.in_(reservation_service.ACTIVE_STATUSES),
+        models.Termin.faza_hosta.in_(reservation_service.LIVE_HOST_PHASES),
+    ).all()
+    for termin_id, covers, raw_channel, table_room_id in live:
+        meta = existing_meta.get(termin_id)
+        room_id = _value(meta, "sala_id", default=table_room_id)
+        channel = _value(
+            meta,
+            "kanal",
+            default=reservation_service.normalise_reservation_channel(raw_channel),
+        )
+        rows.extend(
+            SimpleNamespace(
+                termin_id=termin_id,
+                minute=minute,
+                sala_id=room_id,
+                kanal=channel,
+                covers=max(0, int(covers or 0)),
+            )
+            for minute in range(start_minute, end_minute)
+        )
+    return rows
 
 
 def _concurrent_usage(
@@ -910,7 +977,12 @@ def evaluate_reservation_rules(
                 overrideable=False,
             ))
 
-    occupancy = _occupancy_rows(db, request.data)
+    occupancy = _occupancy_rows(
+        db,
+        request.data,
+        start_minute=start_minute,
+        end_minute=end_minute,
+    )
     pacing_rows = _pacing_rows(db, request.data)
     meta = _occupancy_meta(occupancy)
     pacing_window = _positive(_setting(policy, "pacing_window_min").value) or step
@@ -971,6 +1043,14 @@ def evaluate_reservation_rules(
                     if is_covers else "Osiagnieto limit jednoczesnych rezerwacji."
                 ),
             ))
+
+    # Przydzielenie zasobu do istniejacej rezerwacji nie jest ponowna proba
+    # jej sprzedazy. Dlatego nie blokujemy hosta historycznym cutoffem, limitem
+    # wielkosci grupy, pacingiem ani zmiana okna serwisu. Nadal obowiazuja
+    # reguly bezpieczenstwa samego przydzialu: poprawny czas, kanal sali i
+    # jednoczesna pojemnosc operacyjna.
+    if request.intent == "assign":
+        checks = [item for item in checks if item["rule"] in _ASSIGN_RULES]
 
     ordered_checks = _sort_checks(checks)
     violations = _violations(ordered_checks)

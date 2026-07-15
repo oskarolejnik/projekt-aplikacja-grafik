@@ -7,6 +7,8 @@ wraz z kalendarzem.
 
 from datetime import date, timedelta
 
+import models
+
 _dzis = date.today()
 _dni_do_poniedzialku = (7 - _dzis.weekday()) % 7 or 7
 _poniedzialek = _dzis + timedelta(days=_dni_do_poniedzialku)
@@ -65,7 +67,7 @@ def test_najblizszy_termin_null_gdy_brak(admin_client, client):
 
 # ── magic-link: edycja ───────────────────────────────────────────────────────
 
-def test_edytuj_zmienia_termin_i_realokuje(admin_client, client):
+def test_edytuj_zmienia_termin_i_realokuje(admin_client, client, db):
     _online_online(admin_client)
     _stolik(admin_client)
     _serwis(admin_client, _poniedzialek.weekday())
@@ -73,7 +75,10 @@ def test_edytuj_zmienia_termin_i_realokuje(admin_client, client):
     r = client.post(f"/api/online/rezerwacja/{token}/edytuj", json={"godz_od": "19:00", "liczba_osob": 3})
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["godz_od"] == "19:00" and out["liczba_osob"] == 3 and out["stolik"] is not None
+    assert out["godz_od"] == "19:00" and out["liczba_osob"] == 3
+    assert out["stolik"] is None  # publiczny kontrakt nie ujawnia układu sali
+    saved = db.query(models.Termin).filter_by(token_potwierdzenia=token).one()
+    assert saved.stolik_id is not None
 
 
 def test_edytuj_blackout_odrzucony(admin_client, client):

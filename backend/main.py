@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating, platnosci, uprawnienia
 import reservation_access
+import reservation_allocator
 import reservation_audit
 import reservation_rules
 import reservation_service
@@ -93,6 +94,9 @@ async def reservation_error_handler(request: Request, exc: reservation_service.R
         # zapas coverów, identyfikatory reguł/sal ani pełną konfigurację polityki.
         availability["checks"] = []
         availability["applied_rules"] = []
+        availability["candidates"] = []
+        availability["alternatives"] = []
+        availability.pop("buffer_min", None)
         availability["violations"] = [
             {
                 "code": item.get("code"),
@@ -1588,7 +1592,9 @@ def _waliduj_przydzial_rezerwacji(
         data=data,
         start=godz_od,
         end=godz_do,
-        buffer_min=get_lokal_config(db).rez_bufor_min or 0,
+        # Szybka kontrola konfliktu fizycznego. Wlasciwy, typowany bufor R3
+        # (serwis/sala/wyjatek, lacznie z jawnym zerem) egzekwuje atomowo ledger.
+        buffer_min=0,
         exclude_termin_id=pomin_id,
         now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
     )
@@ -1755,9 +1761,16 @@ def _zastap_ledger_terminu(
             can_override=bool(override),
         )
     pacing = _parametry_pacingu(db, t.data, t.godz_od)
+    has_typed_buffer = bool(
+        evaluation is not None
+        and any(
+            rule.get("key") == "buffer_min"
+            for rule in evaluation.applied_rules
+        )
+    )
     buffer_min = (
         evaluation.buffer_min
-        if evaluation is not None
+        if has_typed_buffer
         else (get_lokal_config(db).rez_bufor_min or 0)
     )
     return reservation_service.replace_termin_allocation(
@@ -2092,6 +2105,7 @@ def _rezerwacja_out(t: models.Termin, user=None) -> dict:
         "liczba_osob": t.liczba_osob,
         "notatka": t.notatka if notatki else None,
         "status": t.status,
+        "faza_hosta": t.faza_hosta,
         "zadatek": (t.zadatek or 0) if finanse else None,
         "kanal": t.kanal,
         "ukryte_pola": ukryte,
@@ -2380,6 +2394,7 @@ def _waliduj_sklad_kombinacji(db, stoliki):
         if not db.get(models.Stolik, sid):
             raise HTTPException(400, f"Nieznany stolik (id={sid}).")
     _wymagaj_legacy_stolikow_poza_planem(db, ids)
+    _sala_dla_stolikow(db, ids)
     nieaktywne = [sid for sid in ids if not db.get(models.Stolik, sid).aktywny]
     if nieaktywne:
         raise HTTPException(
@@ -2531,6 +2546,7 @@ def dodaj_sasiedztwo(dane: schemas.SasiedztwoStolowIn, db: Session = Depends(get
     if not db.get(models.Stolik, a) or not db.get(models.Stolik, b):
         raise HTTPException(400, "Nieznany stolik.")
     _wymagaj_legacy_stolikow_poza_planem(db, (a, b))
+    _sala_dla_stolikow(db, (a, b))
     if db.query(models.SasiedztwoStolow).filter_by(stolik_a=a, stolik_b=b).first():
         raise HTTPException(409, "Ta para stołów już sąsiaduje.")
     k = models.SasiedztwoStolow(stolik_a=a, stolik_b=b)
@@ -2552,30 +2568,42 @@ def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), o
                           strefa: Optional[str] = None, db: Session = Depends(get_db)):
     """Top-3 propozycje stołu/kombinacji dla grupy — host akceptuje jedną (tryb SUGESTIA)."""
     osoby = max(1, osoby)
-    serwis = _serwis_dla_godziny(db, data, godz_od)
-    godz_do = _dodaj_minuty(godz_od, _turn_time(serwis, osoby))
-    zajete = _zajete_stoly(db, data, godz_od, godz_do)
-    pref = {"strefa": strefa} if strefa else None
-    kandydaci = seating.dopasuj(
-        osoby,
-        _stoly_do_seating(db),
-        _kombinacje_do_seating(db, kanal="wewnetrzna"),
-        zajete=zajete,
-        preferencje=pref,
-        sasiedztwo=_sasiedztwo_do_seating(db),
-        obciazenie_sekcji=_obciazenie_sekcji(db, data, godz_od, godz_do),
+    result = _ocen_przydzial_rezerwacji(
+        db,
+        data=data,
+        godz_od=godz_od,
+        osoby=osoby,
+        kanal="wewnetrzna",
+        intent="quote",
+        preferowana_strefa=strefa,
+        alternative_limit=2,
     )
-    return {"data": str(data), "godz_od": _hm(godz_od), "godz_do": _hm(godz_do),
-            "osoby": osoby, "kandydaci": kandydaci}
+    payload = result.to_dict(expose_exact=True)
+    return {
+        "data": str(data),
+        "godz_od": _hm(godz_od),
+        "godz_do": payload.get("visit_end"),
+        "osoby": osoby,
+        "kandydaci": [
+            _kandydat_legacy_z_alokacji(candidate)
+            for candidate in result.candidates
+        ],
+        **payload,
+    }
 
 
 @app.post("/api/rezerwacje-stolik/{rid}/auto-przydziel", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def auto_przydziel_stolik(
     rid: int,
+    dane: Optional[schemas.AutoPrzydzialIn] = None,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
     """Silnik sam dobiera najlepszy stół/kombinację dla rezerwacji (tryb AUTO). 409 gdy brak miejsca."""
+    dane = dane or schemas.AutoPrzydzialIn()
+    override_context = _jawne_nadpisanie_limitow(
+        user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
     t, guards = _zablokuj_termin(db, rid)
     if not t or t.rodzaj != "stolik":
         db.rollback()
@@ -2584,26 +2612,24 @@ def auto_przydziel_stolik(
         raise HTTPException(400, "Rezerwacja bez godziny — nie można dobrać stołu.")
     before = reservation_audit.reservation_snapshot(t)
     osoby = max(1, t.liczba_osob or 1)
-    serwis = _serwis_dla_godziny(db, t.data, t.godz_od)
-    godz_do = t.godz_do or _dodaj_minuty(t.godz_od, _turn_time(serwis, osoby))
-    zajete = _zajete_stoly(db, t.data, t.godz_od, godz_do, pomin_id=rid)
-    wynik = seating.dopasuj(
-        osoby,
-        _stoly_do_seating(db),
-        _kombinacje_do_seating(db, kanal="wewnetrzna"),
-        zajete=zajete,
-        limit=1,
-        sasiedztwo=_sasiedztwo_do_seating(db),
-        obciazenie_sekcji=_obciazenie_sekcji(db, t.data, t.godz_od, godz_do),
+    result = _ocen_przydzial_rezerwacji(
+        db,
+        data=t.data,
+        godz_od=t.godz_od,
+        godz_do=t.godz_do,
+        osoby=osoby,
+        kanal=t.kanal,
+        pomin_id=rid,
+        intent="assign",
     )
-    if not wynik:
-        raise reservation_service.ReservationError(
-            409,
-            "NO_TABLE_CANDIDATE",
-            "Brak wolnego stołu dla tej grupy w tym czasie.",
-            rule="table",
-        )
-    wybrany = wynik[0]
+    override_active = bool(
+        override_context and result.evaluation.decision == "override_required"
+    )
+    selected = _wymagaj_dozwolonego_przydzialu(
+        result, override=override_active,
+    )
+    wybrany = _kandydat_legacy_z_alokacji(selected)
+    godz_do = result.evaluation.godz_do
     t.stolik_id = wybrany["stoliki"][0]
     t.stoliki_dodatkowe = (wybrany["stoliki"][1:] or None)
     t.godz_do = godz_do
@@ -2612,17 +2638,54 @@ def auto_przydziel_stolik(
     try:
         db.flush()
         _zastap_ledger_terminu(
-            db, t, candidates=[{"stoliki": wybrany["stoliki"]}], enforce_pacing=False,
+            db,
+            t,
+            candidates=[{"stoliki": wybrany["stoliki"]}],
+            alternatives=result.to_dict(expose_exact=True).get("alternatives") or (),
+            enforce_pacing=True,
+            evaluation=result.evaluation,
+            override=override_active,
+            intent="assign",
         )
         reservation_audit.add_reservation_audit(
             db, termin=t, action="assign", actor=user, before=before, after=t,
         )
+        override_details = (
+            _szczegoly_nadpisania_r3(
+                result.evaluation,
+                legacy=bool(override_context and override_context["legacy"]),
+            )
+            if override_active else None
+        )
+        if override_details:
+            reservation_audit.add_reservation_audit(
+                db,
+                termin=t,
+                action="override",
+                actor=user,
+                reason=_powod_audytu_nadpisania(result.evaluation),
+                before=before,
+                after=t,
+                override_details=override_details,
+                override_reason_code=override_context["reason_code"],
+                override_note=override_context["note"],
+            )
         _commit_zapis_rezerwacji(db, guards)
     except IntegrityError as exc:
         db.rollback()
         raise reservation_service.translate_integrity_error(exc) from exc
     db.refresh(t)
-    return {"rezerwacja": _rezerwacja_out(t, user), "przydzial": wybrany}
+    payload = result.to_dict(expose_exact=True)
+    return {
+        "rezerwacja": _rezerwacja_out(t, user),
+        "przydzial": wybrany,
+        "allocation": {
+            **(payload.get("allocation") or {}),
+            "state": "assigned",
+        },
+        "alternatives": payload.get("alternatives") or [],
+        "reasons": payload.get("reasons") or [],
+    }
 
 
 # ── Widok hosta: kolejka dnia + fazy operacyjne + przydział stołu ─────────────
@@ -2904,6 +2967,9 @@ def host_przydziel_stolik(
     user: models.User = Depends(get_current_user),
 ):
     """Ręczny przydział/przeniesienie rezerwacji na konkretny stół (walidacja pojemności + kolizji)."""
+    override_context = _jawne_nadpisanie_limitow(
+        user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
     t, guards = _zablokuj_termin(db, rid)
     if not t or t.rodzaj != "stolik":
         db.rollback()
@@ -2918,12 +2984,45 @@ def host_przydziel_stolik(
     t.auto_przydzielony = False         # od tej chwili źródłem przydziału jest decyzja operatora
     _ustaw_proweniencje_przydzialu(t)
     t.godz_do = godz_do
+    evaluation = _ocen_reguly_terminu(
+        db, t, stoliki=[dane.stolik_id], intent="assign",
+    )
+    override_active = bool(
+        override_context and evaluation.decision == "override_required"
+    )
     try:
         db.flush()
-        _zastap_ledger_terminu(db, t, enforce_pacing=False)
+        _zastap_ledger_terminu(
+            db,
+            t,
+            enforce_pacing=True,
+            evaluation=evaluation,
+            override=override_active,
+            intent="assign",
+        )
         reservation_audit.add_reservation_audit(
             db, termin=t, action="assign", actor=user, before=before, after=t,
         )
+        override_details = (
+            _szczegoly_nadpisania_r3(
+                evaluation,
+                legacy=bool(override_context and override_context["legacy"]),
+            )
+            if override_active else None
+        )
+        if override_details:
+            reservation_audit.add_reservation_audit(
+                db,
+                termin=t,
+                action="override",
+                actor=user,
+                reason=_powod_audytu_nadpisania(evaluation),
+                before=before,
+                after=t,
+                override_details=override_details,
+                override_reason_code=override_context["reason_code"],
+                override_note=override_context["note"],
+            )
         _commit_zapis_rezerwacji(db, guards)
     except IntegrityError as exc:
         db.rollback()
@@ -2940,6 +3039,9 @@ def host_posadz_rezerwacje(
     user: models.User = Depends(get_current_user),
 ):
     """Atomowo dobiera/przypisuje stół i przeprowadza rezerwację do fazy ``posadzony``."""
+    override_context = _jawne_nadpisanie_limitow(
+        user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
     t, guards = _zablokuj_termin(db, rid)
     if not t or t.rodzaj != "stolik":
         db.rollback()
@@ -2954,6 +3056,7 @@ def host_posadz_rezerwacje(
     godz_do = t.godz_do or _dodaj_minuty(
         t.godz_od, _dlugosc_dla(db, t.data, t.godz_od, osoby),
     )
+    allocation_result = None
     if dane.stolik_id is not None:
         _waliduj_rezerwacje(
             db, t.data, t.godz_od, godz_do, dane.stolik_id, osoby, pomin_id=t.id,
@@ -2963,28 +3066,38 @@ def host_posadz_rezerwacje(
         t.auto_przydzielony = False
         _ustaw_proweniencje_przydzialu(t)
     elif not t.stolik_id:
-        zajete = _zajete_stoly(db, t.data, t.godz_od, godz_do, pomin_id=t.id)
-        wynik = seating.dopasuj(
-            osoby,
-            _stoly_do_seating(db),
-            _kombinacje_do_seating(db, kanal="wewnetrzna"),
-            zajete=zajete,
-            limit=1,
-            sasiedztwo=_sasiedztwo_do_seating(db),
-            obciazenie_sekcji=_obciazenie_sekcji(db, t.data, t.godz_od, godz_do),
+        allocation_result = _ocen_przydzial_rezerwacji(
+            db,
+            data=t.data,
+            godz_od=t.godz_od,
+            godz_do=godz_do,
+            osoby=osoby,
+            kanal=t.kanal,
+            pomin_id=t.id,
+            intent="assign",
         )
-        if not wynik:
-            raise reservation_service.ReservationError(
-                409,
-                "NO_TABLE_CANDIDATE",
-                "Brak wolnego stołu dla tej grupy w tym czasie.",
-                rule="table",
-            )
-        t.stolik_id = wynik[0]["stoliki"][0]
-        t.stoliki_dodatkowe = (wynik[0]["stoliki"][1:] or None)
+        selected = _wymagaj_dozwolonego_przydzialu(
+            allocation_result,
+            override=bool(
+                override_context
+                and allocation_result.evaluation.decision == "override_required"
+            ),
+        )
+        wybrany = _kandydat_legacy_z_alokacji(selected)
+        t.stolik_id = wybrany["stoliki"][0]
+        t.stoliki_dodatkowe = (wybrany["stoliki"][1:] or None)
         t.auto_przydzielony = True
-        _ustaw_proweniencje_przydzialu(t, wynik[0])
+        _ustaw_proweniencje_przydzialu(t, wybrany)
 
+    evaluation = (
+        allocation_result.evaluation
+        if allocation_result is not None
+        else _ocen_reguly_terminu(db, t, intent="assign")
+    )
+    override_active = bool(
+        override_context and evaluation.decision == "override_required"
+    )
+    godz_do = evaluation.godz_do or godz_do
     teraz = utcnow_naive()
     t.godz_do = godz_do
     t.faza_hosta = "posadzony"
@@ -2994,16 +3107,58 @@ def host_posadz_rezerwacje(
         t.potwierdzono_at = teraz
     try:
         db.flush()
-        _zastap_ledger_terminu(db, t, enforce_pacing=False)
+        _zastap_ledger_terminu(
+            db,
+            t,
+            enforce_pacing=True,
+            evaluation=evaluation,
+            override=override_active,
+            alternatives=(
+                allocation_result.to_dict(expose_exact=True).get("alternatives") or ()
+                if allocation_result else ()
+            ),
+            intent="assign",
+        )
         reservation_audit.add_reservation_audit(
             db, termin=t, action="host", actor=user, before=before, after=t,
         )
+        override_details = (
+            _szczegoly_nadpisania_r3(
+                evaluation,
+                legacy=bool(override_context and override_context["legacy"]),
+            )
+            if override_active else None
+        )
+        if override_details:
+            reservation_audit.add_reservation_audit(
+                db,
+                termin=t,
+                action="override",
+                actor=user,
+                reason=_powod_audytu_nadpisania(evaluation),
+                before=before,
+                after=t,
+                override_details=override_details,
+                override_reason_code=override_context["reason_code"],
+                override_note=override_context["note"],
+            )
         _commit_zapis_rezerwacji(db, guards)
     except IntegrityError as exc:
         db.rollback()
         raise reservation_service.translate_integrity_error(exc) from exc
     db.refresh(t)
-    return _host_out(t, teraz, user=user)
+    response = _host_out(t, teraz, user=user)
+    if allocation_result is not None:
+        payload = allocation_result.to_dict(expose_exact=True)
+        response.update({
+            "allocation": {
+                **(payload.get("allocation") or {}),
+                "state": "assigned",
+            },
+            "alternatives": payload.get("alternatives") or [],
+            "reasons": payload.get("reasons") or [],
+        })
+    return response
 
 
 # ── Bezpieczny kontrakt konfiguracji rezerwacji ──────────────────────────────
@@ -3107,12 +3262,16 @@ def dodaj_rezerwacje_stolik(
     override_context = _jawne_nadpisanie_limitow(
         user, dane.przekrocz_limity, dane.nadpisanie_limitow,
     )
+    kanal = dane.kanal or "reczna"
     guards = reservation_service.begin_locked_write(db, [dane.data])
     teraz = utcnow_naive()
     try:
         idem = reservation_service.begin_idempotency(
             db,
-            operation="reservation.create.manual:v1",
+            operation=(
+                "reservation.create.walk_in:v1"
+                if kanal == "walk_in" else "reservation.create.manual:v1"
+            ),
             raw_key=idempotency_key,
             payload=dane.model_dump(mode="json"),
             secret=SECRET_KEY,
@@ -3121,10 +3280,47 @@ def dodaj_rezerwacje_stolik(
         if idem.replayed:
             replayed = _termin_z_replay_idempotencji(db, idem)
             return _rezerwacja_out(replayed, user)
-        godz_do = _waliduj_rezerwacje(
-            db, dane.data, dane.godz_od, dane.godz_do,
-            dane.stolik_id, dane.liczba_osob,
+        auto_allocate = bool(
+            dane.stolik_id is None and (kanal == "walk_in" or dane.auto_przydziel)
         )
+        if auto_allocate and dane.godz_od is None:
+            raise HTTPException(
+                400,
+                "Automatyczny przydział wymaga godziny rezerwacji.",
+            )
+        allocation_result = None
+        selected = None
+        if auto_allocate:
+            allocation_result = _ocen_przydzial_rezerwacji(
+                db,
+                data=dane.data,
+                godz_od=dane.godz_od,
+                godz_do=dane.godz_do,
+                osoby=dane.liczba_osob or 1,
+                kanal=kanal,
+                intent="create",
+            )
+            if allocation_result.selected is None:
+                _wymagaj_dozwolonego_przydzialu(allocation_result)
+            evaluation = allocation_result.evaluation
+            override_for_selection = bool(
+                override_context and evaluation.decision == "override_required"
+            )
+            if evaluation.decision == "deny" or (
+                evaluation.decision == "override_required" and not override_for_selection
+            ):
+                reservation_rules.enforce_rule_evaluation(evaluation)
+            selected = allocation_result.selected
+            table_ids = list(selected.table_ids)
+            reservation_service.lock_tables(db, table_ids)
+            godz_do = evaluation.godz_do
+        else:
+            table_ids = [dane.stolik_id] if dane.stolik_id is not None else []
+            godz_do = _waliduj_rezerwacje(
+                db, dane.data, dane.godz_od, dane.godz_do,
+                dane.stolik_id, dane.liczba_osob,
+            )
+            evaluation = None
         t = models.Termin(
             data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
             liczba_osob=dane.liczba_osob,
@@ -3134,10 +3330,22 @@ def dodaj_rezerwacje_stolik(
             zadatek=(float(dane.zadatek or 0) if _ma_dostep_rezerwacji(
                 user, "rezerwacje.finanse") else 0.0),
             utworzono_at=teraz,
-            godz_od=dane.godz_od, godz_do=godz_do, stolik_id=dane.stolik_id,
-            rodzaj="stolik", kanal="reczna")
+            godz_od=dane.godz_od, godz_do=godz_do,
+            stolik_id=(table_ids[0] if table_ids else None),
+            stoliki_dodatkowe=(table_ids[1:] or None),
+            auto_przydzielony=(True if selected is not None else False),
+            rodzaj="stolik", kanal=kanal,
+            faza_hosta=("posadzony" if kanal == "walk_in" else None),
+            host_arrived_at=(teraz if kanal == "walk_in" else None),
+            host_seated_at=(teraz if kanal == "walk_in" else None),
+            potwierdzono_at=(teraz if kanal == "walk_in" else None),
+        )
+        if selected is not None:
+            _ustaw_proweniencje_przydzialu(
+                t, _kandydat_legacy_z_alokacji(selected),
+            )
         db.add(t); db.flush()
-        evaluation = _ocen_reguly_terminu(db, t, intent="create")
+        evaluation = evaluation or _ocen_reguly_terminu(db, t, intent="create")
         override_active = bool(
             override_context
             and evaluation is not None
@@ -3156,6 +3364,11 @@ def dodaj_rezerwacje_stolik(
             evaluation=evaluation,
             override=override_active,
             intent="create",
+            candidates=([{"stoliki": table_ids}] if table_ids else ()),
+            alternatives=(
+                allocation_result.to_dict(expose_exact=True).get("alternatives") or ()
+                if allocation_result else ()
+            ),
         )
         odpowiedz = _rezerwacja_out(t, user)
         reservation_audit.add_reservation_audit(
@@ -3336,21 +3549,37 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
             continue
         osoby = max(1, t.liczba_osob or 1)
         obecne = _stoly_terminu(t)
-        zajete = _zajete_stoly(db, data, t.godz_od, t_do, pomin_id=t.id)
-        wynik = seating.dopasuj(
-            osoby,
-            _stoly_do_seating(db),
-            _kombinacje_do_seating(db, kanal="wewnetrzna"),
-            zajete=zajete,
-            limit=0,
-            sasiedztwo=_sasiedztwo_do_seating(db),
-            obciazenie_sekcji=_obciazenie_sekcji(db, data, t.godz_od, t_do),
+        result = _ocen_przydzial_rezerwacji(
+            db,
+            data=data,
+            godz_od=t.godz_od,
+            godz_do=t_do,
+            osoby=osoby,
+            kanal=t.kanal,
+            pomin_id=t.id,
+            intent="reoptimize",
+            alternative_limit=9999,
         )
-        if not wynik:
+        if result.decision != "allow" or result.selected is None:
             continue
-        najlepszy = wynik[0]
-        obecny_koszt = next((k["koszt"] for k in wynik if set(k["stoliki"]) == obecne), None)
-        if set(najlepszy["stoliki"]) != obecne and (obecny_koszt is None or najlepszy["koszt"] < obecny_koszt):
+        obecny_kandydat = _kandydat_zestawu(result, obecne)
+        if (
+            obecny_kandydat is not None
+            and set(result.selected.table_ids) != obecne
+            and result.selected.room_id == obecny_kandydat.room_id
+            and len(result.selected.table_ids) == len(obecny_kandydat.table_ids)
+            and math.isclose(
+                result.selected.ranking_cost,
+                obecny_kandydat.ranking_cost,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+        ):
+            # Deterministyczny tie-break po ID nie jest realną optymalizacją i nie
+            # powinien niepotrzebnie przesadzać przyszłej rezerwacji.
+            continue
+        najlepszy = _kandydat_legacy_z_alokacji(result.selected)
+        if set(najlepszy["stoliki"]) != obecne:
             before = reservation_audit.reservation_snapshot(t)
             t.stolik_id = najlepszy["stoliki"][0]
             t.stoliki_dodatkowe = (najlepszy["stoliki"][1:] or None)
@@ -3360,6 +3589,8 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
                 t,
                 candidates=[{"stoliki": najlepszy["stoliki"]}],
                 enforce_pacing=False,
+                evaluation=result.evaluation,
+                intent="edit",
             )
             reservation_audit.add_reservation_audit(
                 db,
@@ -3512,6 +3743,45 @@ def wyslij_potwierdzenie_stolik(
 
 
 # ── Lista oczekujących (waitlist) ────────────────────────────────────────────
+def _stoliki_zadania(stolik_id=None, stoliki=None) -> list[int]:
+    """Normalizuje kompatybilny pojedynczy stół i nowy zestaw wielostołowy."""
+    raw = []
+    if stolik_id is not None:
+        raw.append(stolik_id)
+    raw.extend(stoliki or [])
+    result = []
+    for value in raw:
+        try:
+            table_id = int(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "Nieprawidłowy stolik w zestawie.") from exc
+        if table_id <= 0:
+            raise HTTPException(400, "Nieprawidłowy stolik w zestawie.")
+        if table_id not in result:
+            result.append(table_id)
+    return result
+
+
+def _kandydat_zestawu(result, table_ids):
+    wanted = set(table_ids)
+    return next(
+        (
+            candidate for candidate in result.candidates
+            if set(candidate.table_ids) == wanted
+        ),
+        None,
+    )
+
+
+def _wyczysc_hold_waitlisty(w):
+    w.hold_stolik_id = None
+    w.hold_stoliki_dodatkowe = None
+    w.hold_godz_od = None
+    w.hold_godz_do = None
+    w.hold_bufor_min = None
+    w.hold_do = None
+
+
 def _lista_out(w: models.ListaOczekujacych, user=None) -> dict:
     kontakt = _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe")
     notatki = _ma_dostep_rezerwacji(user, "rezerwacje.notatki_wewnetrzne")
@@ -3534,6 +3804,10 @@ def _lista_out(w: models.ListaOczekujacych, user=None) -> dict:
         "kanal": w.kanal,
         "powiadomiono_at": w.powiadomiono_at.isoformat() if w.powiadomiono_at else None,
         "hold_stolik_id": w.hold_stolik_id,
+        "hold_stoliki_dodatkowe": list(w.hold_stoliki_dodatkowe or []),
+        "hold_godz_od": _hm(w.hold_godz_od),
+        "hold_godz_do": _hm(w.hold_godz_do),
+        "hold_bufor_min": w.hold_bufor_min,
         "hold_do": w.hold_do.isoformat() if w.hold_do else None,
         "ukryte_pola": ukryte,
     }
@@ -3592,7 +3866,7 @@ def odwolaj_lista_oczekujacych(
     if not w:
         raise HTTPException(404, "Brak wpisu.")
     reservation_service.release_waitlist_hold(db, w.id)
-    w.hold_stolik_id = None; w.hold_do = None
+    _wyczysc_hold_waitlisty(w)
     w.status = "odwolany"
     _commit_zapis_rezerwacji(db, guards); db.refresh(w)
     return _lista_out(w, user)
@@ -3639,23 +3913,92 @@ def zrealizuj_lista_oczekujacych(
         }
     if w.status != "oczekuje":
         raise HTTPException(409, "Wpis już zrealizowany lub odwołany.")
+    held_ids = []
+    if w.hold_do is not None and w.hold_do > teraz and w.hold_stolik_id is not None:
+        held_ids = _stoliki_zadania(
+            w.hold_stolik_id,
+            w.hold_stoliki_dodatkowe,
+        )
+    explicit_ids = _stoliki_zadania(dane.stolik_id, dane.stoliki)
+    requested_ids = explicit_ids or held_ids
     reservation_service.release_waitlist_hold(db, w.id)
-    w.hold_stolik_id = None; w.hold_do = None      # realizacja kończy HOLD w tej samej transakcji
+    _wyczysc_hold_waitlisty(w)      # realizacja kończy HOLD w tej samej transakcji
+    db.flush()
     godz = dane.godz_od or w.godz_od
-    godz_do = _waliduj_rezerwacje(db, w.data, godz, None, dane.stolik_id, w.liczba_osob)
+    if godz is None:
+        raise HTTPException(400, "Ustaw godzinę realizacji wpisu.")
+    is_walk_in = dane.tryb == "walk_in"
+    reservation_channel = (
+        "walk_in" if is_walk_in else ("online" if w.kanal == "online" else "reczna")
+    )
+    if explicit_ids:
+        _waliduj_przydzial_rezerwacji(
+            db,
+            w.data,
+            godz,
+            None,
+            explicit_ids,
+            w.liczba_osob,
+        )
+    result = _ocen_przydzial_rezerwacji(
+        db,
+        data=w.data,
+        godz_od=godz,
+        osoby=w.liczba_osob or 1,
+        kanal=reservation_channel,
+        intent="create",
+        alternative_limit=9999,
+    )
+    candidate = (
+        _kandydat_zestawu(result, requested_ids)
+        if requested_ids else result.selected
+    )
+    if candidate is None:
+        _wymagaj_dozwolonego_przydzialu(result)
+        raise reservation_service.ReservationError(
+            409,
+            "INVALID_TABLE_COMBINATION",
+            "Wybrany zestaw nie jest dostępną, zatwierdzoną konfiguracją.",
+            rule="table",
+        )
+    evaluation = _ocen_reguly_slotu(
+        db,
+        data=w.data,
+        godz_od=godz,
+        liczba_osob=w.liczba_osob or 1,
+        kanal=reservation_channel,
+        sala_id=candidate.room_id,
+        intent="create",
+    )
+    override_active = bool(
+        override_context and evaluation.decision == "override_required"
+    )
+    if evaluation.decision == "deny" or (
+        evaluation.decision == "override_required" and not override_active
+    ):
+        reservation_rules.enforce_rule_evaluation(evaluation)
+    table_ids = list(candidate.table_ids)
+    locked_tables = reservation_service.lock_tables(db, table_ids)
+    if len(locked_tables) != len(table_ids):
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+    godz_do = evaluation.godz_do
+    if godz_do is None:
+        raise HTTPException(400, "Nie udało się wyznaczyć końca wizyty.")
     t = models.Termin(
         data=w.data, nazwisko=w.nazwisko, telefon=w.telefon, email=w.email,
         liczba_osob=w.liczba_osob, notatka=w.notatka, status="potwierdzona", zadatek=0.0,
-        utworzono_at=teraz, godz_od=godz, godz_do=godz_do, stolik_id=dane.stolik_id,
-        rodzaj="stolik", kanal="reczna")
+        utworzono_at=teraz, godz_od=godz, godz_do=godz_do, stolik_id=table_ids[0],
+        stoliki_dodatkowe=(table_ids[1:] or None),
+        auto_przydzielony=not bool(explicit_ids),
+        rodzaj="stolik", kanal=reservation_channel,
+        faza_hosta=("posadzony" if is_walk_in else None),
+        host_arrived_at=(teraz if is_walk_in else None),
+        host_seated_at=(teraz if is_walk_in else None),
+        potwierdzono_at=teraz,
+    )
+    _ustaw_proweniencje_przydzialu(t, _kandydat_legacy_z_alokacji(candidate))
     try:
         db.add(t); db.flush()
-        evaluation = _ocen_reguly_terminu(db, t, intent="create")
-        override_active = bool(
-            override_context
-            and evaluation is not None
-            and evaluation.decision == "override_required"
-        )
         override_details = (
             _szczegoly_nadpisania_r3(
                 evaluation, legacy=bool(override_context and override_context["legacy"]),
@@ -3669,6 +4012,8 @@ def zrealizuj_lista_oczekujacych(
             evaluation=evaluation,
             override=override_active,
             intent="create",
+            candidates=[{"stoliki": table_ids}],
+            alternatives=result.to_dict(expose_exact=True).get("alternatives") or (),
         )
         w.status = "zrealizowany"; w.zrealizowano_at = teraz; w.termin_id = t.id
         odpowiedz = {"rezerwacja": _rezerwacja_out(t, user), "wpis": _lista_out(w, user)}
@@ -3743,34 +4088,81 @@ def hold_lista_oczekujacych(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    """Tymczasowo trzyma wskazany stół dla gościa z waitlisty (na `minuty`). Stół z aktywnym holdem
-    znika z puli wolnych (także online) — patrz _zajete_stoly."""
+    """Trzyma w jednym oknie pełny zestaw stołów wybrany przez wspólny allocator."""
     w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
     if w.status != "oczekuje":
         raise HTTPException(409, "Wpis nie oczekuje już na stolik.")
-    locked_tables = reservation_service.lock_tables(db, [dane.stolik_id])
-    stolik = locked_tables[0] if locked_tables else None
-    runtime_table_ids = {table["id"] for table in _stoly_do_seating(db)}
-    if not stolik or dane.stolik_id not in runtime_table_ids:
-        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
-    if w.godz_od:                                   # gdy znamy porę — sprawdź wolność stołu w oknie gościa
-        godz_do = _dodaj_minuty(w.godz_od, _dlugosc_dla(db, w.data, w.godz_od, w.liczba_osob))
-        if _stolik_zajety(db, w.data, dane.stolik_id, w.godz_od, godz_do):
-            raise HTTPException(409, "Stolik zajęty (lub już trzymany) w tym oknie.")
-    minuty = max(1, int(dane.minuty or 15))
+    godz = dane.godz_od or w.godz_od
+    if godz is None:
+        raise HTTPException(400, "Ustaw godzinę, aby utworzyć czasowy hold.")
     teraz = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    reservation_service.cleanup_expired_holds(db, teraz)
+    reservation_service.release_waitlist_hold(db, w.id)
+    db.flush()
+    requested_ids = _stoliki_zadania(dane.stolik_id, dane.stoliki)
+    runtime_table_ids = {table["id"] for table in _stoly_do_seating(db)}
+    if requested_ids and not set(requested_ids) <= runtime_table_ids:
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+    result = _ocen_przydzial_rezerwacji(
+        db,
+        data=w.data,
+        godz_od=godz,
+        osoby=w.liczba_osob or 1,
+        kanal="wewnetrzna",
+        intent="quote",
+        alternative_limit=9999,
+    )
+    candidate = (
+        _kandydat_zestawu(result, requested_ids)
+        if requested_ids else result.selected
+    )
+    if candidate is None:
+        _wymagaj_dozwolonego_przydzialu(result)
+        raise reservation_service.ReservationError(
+            409,
+            "INVALID_TABLE_COMBINATION",
+            "Wybrany zestaw nie jest dostępną, zatwierdzoną konfiguracją.",
+            rule="table_hold",
+        )
+    evaluation = _ocen_reguly_slotu(
+        db,
+        data=w.data,
+        godz_od=godz,
+        liczba_osob=w.liczba_osob or 1,
+        kanal="wewnetrzna",
+        sala_id=candidate.room_id,
+        intent="create",
+    )
+    if evaluation.decision != "allow":
+        reservation_rules.enforce_rule_evaluation(evaluation)
+    table_ids = list(candidate.table_ids)
+    locked_tables = reservation_service.lock_tables(db, table_ids)
+    if len(locked_tables) != len(table_ids):
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+    godz_do = evaluation.godz_do
+    if godz_do is None:
+        raise HTTPException(400, "Nie udało się wyznaczyć końca wizyty.")
+    minuty = max(1, int(dane.minuty or 15))
     hold_do = teraz + timedelta(minutes=minuty)
     reservation_service.replace_waitlist_hold(
         db,
         waitlist_id=w.id,
-        table_id=dane.stolik_id,
+        table_ids=table_ids,
         data=w.data,
         expires_at=hold_do,
         now=teraz,
+        start=godz,
+        end=godz_do,
+        buffer_min=evaluation.buffer_min,
     )
-    w.hold_stolik_id = dane.stolik_id
+    w.godz_od = godz
+    w.hold_stolik_id = table_ids[0]
+    w.hold_stoliki_dodatkowe = table_ids[1:] or None
+    w.hold_godz_od = godz
+    w.hold_godz_do = godz_do
+    w.hold_bufor_min = evaluation.buffer_min
     w.hold_do = hold_do
     _commit_zapis_rezerwacji(db, guards); db.refresh(w)
     return _lista_out(w, user)
@@ -3787,7 +4179,7 @@ def zwolnij_hold_lista_oczekujacych(
     if not w:
         raise HTTPException(404, "Brak wpisu.")
     reservation_service.release_waitlist_hold(db, w.id)
-    w.hold_stolik_id = None; w.hold_do = None
+    _wyczysc_hold_waitlisty(w)
     _commit_zapis_rezerwacji(db, guards); db.refresh(w)
     return _lista_out(w, user)
 
@@ -3992,6 +4384,7 @@ def _stoly_do_seating(db):
         snapshot = _snapshot_stolika_do_odczytu(pozycja, stolik, sala)
         out.append({
             **snapshot,
+            "sala_nazwa": sala.nazwa,
             "pojemnosc": snapshot["pojemnosc"] or 0,
             "cechy": snapshot["cechy"] or [],
             "priorytet": snapshot["priorytet"] or 0,
@@ -4038,6 +4431,7 @@ def _stoly_do_seating(db):
             "sekcja": stolik.sekcja or stolik.strefa,
             "kolejnosc": stolik.kolejnosc or 0,
             "sala_id": (room.id if room else stolik.sala_id),
+            "sala_nazwa": (room.nazwa if room else stolik.strefa),
             "strategia_zapelniania": (
                 room.strategia_zapelniania if room else "preferuj"
             ),
@@ -4285,6 +4679,252 @@ def _wolne_przydzialy(
     return wyniki
 
 
+def _porownaj_allocator_shadow(
+    db,
+    *,
+    canonical,
+    data,
+    godz_od,
+    osoby,
+    kanal,
+    pomin_id,
+    intent,
+):
+    """Opcjonalny shadow-read starej ścieżki bez wpływu na zapis.
+
+    Flaga środowiskowa służy etapowemu rolloutowi i raportuje wyłącznie różnice
+    decyzji/zasobu — bez danych gościa. Wynik kanoniczny zawsze pozostaje źródłem
+    odpowiedzi i zapisu po cutoverze R4.
+    """
+    enabled = os.environ.get("RESERVATION_ALLOCATOR_SHADOW_COMPARE", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return
+    base = canonical.evaluation
+    legacy_decision = base.decision
+    legacy_tables = ()
+    if base.godz_do is not None:
+        first_blocked = None
+        candidates = _wolne_przydzialy(
+            db,
+            data,
+            godz_od,
+            base.godz_do,
+            osoby,
+            pomin_id=pomin_id,
+            kanal=kanal,
+        )
+        rule_intent = "edit" if intent in {"assign", "reoptimize"} else intent
+        for candidate in candidates:
+            evaluation = _ocen_reguly_slotu(
+                db,
+                data=data,
+                godz_od=godz_od,
+                liczba_osob=osoby,
+                kanal=kanal,
+                sala_id=candidate.get("sala_id"),
+                existing_termin_id=pomin_id,
+                intent=rule_intent,
+            )
+            if evaluation.decision == "allow":
+                legacy_decision = "allow"
+                legacy_tables = tuple(sorted(candidate.get("stoliki") or ()))
+                break
+            if first_blocked is None:
+                first_blocked = evaluation
+        else:
+            if first_blocked is not None:
+                legacy_decision = first_blocked.decision
+
+    canonical_tables = tuple(sorted(
+        canonical.selected.table_ids if canonical.selected is not None else ()
+    ))
+    if canonical.decision == legacy_decision and canonical_tables == legacy_tables:
+        return
+    logger.warning(
+        "reservation_allocator_shadow_diff",
+        extra={
+            "reservation_allocator_shadow": {
+                "data": str(data),
+                "godz_od": _hm(godz_od),
+                "kanal": reservation_rules.normalise_channel(kanal),
+                "intent": intent,
+                "party_size": max(1, int(osoby or 1)),
+                "canonical_decision": canonical.decision,
+                "legacy_decision": legacy_decision,
+                "canonical_tables": canonical_tables,
+                "legacy_tables": legacy_tables,
+            },
+        },
+    )
+
+
+def _kandydat_legacy_z_alokacji(candidate):
+    """Adapter R4 dla starszych zapisow oczekujacych slownika z ``seating``."""
+    if candidate is None:
+        return None
+    return {
+        "stoliki": list(candidate.table_ids),
+        "sala_id": candidate.room_id,
+        "nazwa": candidate.name,
+        "suma_pojemnosci": candidate.capacity,
+        "nadmiar_miejsc": candidate.unused_seats,
+        "kombinacja": candidate.combination,
+        "wersja_planu_id": candidate.plan_version_id,
+        "kombinacja_planu_id": candidate.plan_combination_id,
+    }
+
+
+def _ocen_przydzial_rezerwacji(
+    db,
+    *,
+    data,
+    godz_od,
+    osoby,
+    kanal,
+    godz_do=None,
+    pomin_id=None,
+    intent="quote",
+    preferowana_sala_id=None,
+    preferowana_strefa=None,
+    preferowane_cechy=(),
+    zachowaj_nieaktywny_przydzial=False,
+    alternative_limit=3,
+):
+    """Jedyny evaluator zasobu dla widgetu, recepcji, hosta i symulatora.
+
+    Zajetosc liczymy osobno dla kazdej sali, bo R3 pozwala jej miec wlasny
+    bufor. Krotszy bufor jednej sali nie oslabia wiec ochrony drugiej.
+    """
+    now = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    tables = _stoly_do_seating(db)
+    combinations = _kombinacje_do_seating(
+        db,
+        kanal=reservation_service.normalise_reservation_channel(kanal),
+    )
+    rule_intent = "assign" if intent in {"assign", "reoptimize"} else intent
+    base = _ocen_reguly_slotu(
+        db,
+        data=data,
+        godz_od=godz_od,
+        godz_do=godz_do,
+        liczba_osob=osoby,
+        kanal=kanal,
+        existing_termin_id=pomin_id,
+        intent=rule_intent,
+        preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
+    )
+    occupied = set()
+    table_ids_by_room = defaultdict(set)
+    for table in tables:
+        table_ids_by_room[table.get("sala_id")].add(int(table["id"]))
+    if base is not None and base.godz_do is not None:
+        for room_id, room_table_ids in table_ids_by_room.items():
+            evaluation = base if room_id is None else _ocen_reguly_slotu(
+                db,
+                data=data,
+                godz_od=godz_od,
+                godz_do=godz_do,
+                liczba_osob=osoby,
+                kanal=kanal,
+                sala_id=room_id,
+                existing_termin_id=pomin_id,
+                intent=rule_intent,
+                preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
+            )
+            if evaluation is None or evaluation.godz_do is None:
+                continue
+            occupied |= room_table_ids & reservation_service.occupied_table_ids(
+                db,
+                data=data,
+                start=godz_od,
+                end=evaluation.godz_do,
+                buffer_min=evaluation.buffer_min,
+                exclude_termin_id=pomin_id,
+                now=now,
+            )
+    section_end = base.godz_do if base is not None else godz_do
+    section_load = (
+        _obciazenie_sekcji(db, data, godz_od, section_end, pomin_id=pomin_id)
+        if section_end is not None else {}
+    )
+    result = reservation_allocator.evaluate_allocation(
+        db,
+        reservation_allocator.AllocationRequest(
+            data=data,
+            godz_od=godz_od,
+            godz_do=godz_do,
+            liczba_osob=max(1, int(osoby or 1)),
+            kanal=kanal,
+            intent=intent,
+            existing_termin_id=pomin_id,
+            preferred_room_id=preferowana_sala_id,
+            preferred_zone=preferowana_strefa,
+            preferred_features=tuple(preferowane_cechy or ()),
+            preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
+        ),
+        tables=tables,
+        combinations=combinations,
+        occupied_table_ids=occupied,
+        adjacency=_sasiedztwo_do_seating(db),
+        section_load=section_load,
+        now=now,
+        alternative_limit=alternative_limit,
+    )
+    _porownaj_allocator_shadow(
+        db,
+        canonical=result,
+        data=data,
+        godz_od=godz_od,
+        osoby=osoby,
+        kanal=kanal,
+        pomin_id=pomin_id,
+        intent=intent,
+    )
+    return result
+
+
+class _AllocationAvailabilityAdapter:
+    """Laczy pelny kontrakt regul R3 z kandydatem i alternatywami R4."""
+
+    def __init__(self, result):
+        self.result = result
+
+    def to_dict(self):
+        return self.result.to_dict(expose_exact=True)
+
+
+def _wymagaj_dozwolonego_przydzialu(result, *, override=False):
+    """Zamienia wynik quote/allocate na stabilny błąd domenowy zapisu."""
+    if result.evaluation.decision == "deny" or (
+        result.evaluation.decision == "override_required" and not override
+    ):
+        error = reservation_rules.evaluation_to_reservation_error(result.evaluation)
+        error.availability = _AllocationAvailabilityAdapter(result)
+        raise error
+    if result.selected is None or (
+        result.decision != "allow"
+        and not (override and result.decision == "override_required")
+    ):
+        payload = result.to_dict(expose_exact=True)
+        raise reservation_service.ReservationError(
+            409,
+            result.code or "NO_TABLE_CANDIDATE",
+            result.message or "Brak wolnego stołu dla tej grupy w tym czasie.",
+            rule=result.rule or "table",
+            candidates=payload.get("candidates") or (),
+            alternatives=payload.get("alternatives") or (),
+            decision=result.decision,
+            service=payload.get("service"),
+            krok_slotu_min=payload.get("krok_slotu_min"),
+            turn_time_min=payload.get("turn_time_min"),
+            godz_do=payload.get("visit_end"),
+            violations=payload.get("violations") or (),
+            checks=payload.get("checks") or (),
+            resource_allocation=payload.get("resource_allocation"),
+        )
+    return result.selected
+
+
 def _przydzial_zgodny_z_regulami(
     db,
     *,
@@ -4296,58 +4936,50 @@ def _przydzial_zgodny_z_regulami(
     intent="quote",
     enforce=True,
 ):
-    """Łączy wynik reguł R3 z wyborem zasobu, próbując alternatywne sale."""
-    base = _ocen_reguly_slotu(
+    """Kompatybilny adapter starego API do wspólnego allocatora R4."""
+    result = _ocen_przydzial_rezerwacji(
         db,
         data=data,
         godz_od=godz_od,
-        liczba_osob=osoby,
+        osoby=osoby,
         kanal=kanal,
-        existing_termin_id=pomin_id,
+        pomin_id=pomin_id,
         intent=intent,
     )
-    if base is None:
-        return None, None
-    structural_rules = {"date_not_past", "local_time", "service", "slot_step", "interval"}
-    structural_block = any(
-        violation.rule in structural_rules for violation in base.violations
+    evaluation = result.evaluation
+    if enforce and result.decision != "allow" and result.selected is not None:
+        reservation_rules.enforce_rule_evaluation(evaluation)
+    if enforce and result.selected is None and evaluation.decision != "allow":
+        reservation_rules.enforce_rule_evaluation(evaluation)
+    if result.decision != "allow" or result.selected is None:
+        return None, evaluation
+    return _kandydat_legacy_z_alokacji(result.selected), evaluation
+
+
+@app.post(
+    "/api/rezerwacje/reguly/symuluj",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def symuluj_przydzial_rezerwacji(
+    dane: schemas.SymulacjaRegulRezerwacjiIn,
+    db: Session = Depends(get_db),
+):
+    """Podglad R4: reguly, zasob, powod wyboru i bezpieczne alternatywy."""
+    if (
+        dane.sala_id is not None
+        and db.get(models.SalaRezerwacyjna, dane.sala_id) is None
+    ):
+        raise HTTPException(404, "Brak sali.")
+    result = _ocen_przydzial_rezerwacji(
+        db,
+        data=dane.data,
+        godz_od=dane.godz_od,
+        osoby=dane.liczba_osob,
+        kanal=dane.kanal,
+        intent="simulate",
+        preferowana_sala_id=dane.sala_id,
     )
-    if structural_block:
-        if enforce:
-            reservation_rules.enforce_rule_evaluation(base)
-        return None, base
-    godz_do = base.godz_do
-    if godz_do is None:
-        if enforce:
-            reservation_rules.enforce_rule_evaluation(base)
-        return None, base
-    candidates = _wolne_przydzialy(
-        db, data, godz_od, godz_do, osoby, pomin_id=pomin_id, kanal=kanal,
-    )
-    first_blocked = None
-    for candidate in candidates:
-        room_id = candidate.get("sala_id")
-        if room_id is None:
-            room_id = _sala_dla_stolikow(db, candidate.get("stoliki") or ())
-        evaluation = _ocen_reguly_slotu(
-            db,
-            data=data,
-            godz_od=godz_od,
-            liczba_osob=osoby,
-            kanal=kanal,
-            sala_id=room_id,
-            existing_termin_id=pomin_id,
-            intent=intent,
-        )
-        if evaluation.decision == "allow":
-            return candidate, evaluation
-        if first_blocked is None:
-            first_blocked = evaluation
-    if enforce and first_blocked is not None:
-        reservation_rules.enforce_rule_evaluation(first_blocked)
-    if enforce and first_blocked is None and base.decision != "allow":
-        reservation_rules.enforce_rule_evaluation(base)
-    return None, (first_blocked or base)
+    return result.to_dict(expose_exact=True)
 
 
 def _pierwszy_wolny_slot(db, data, osoby, cfg, teraz_lok):
@@ -4377,7 +5009,9 @@ def _sprawdz_okno_anulacji(cfg, t, teraz_lok):
 def _online_rez_out(t: models.Termin, stolik=None) -> dict:
     return {"data": str(t.data), "godz_od": _hm(t.godz_od), "godz_do": _hm(t.godz_do),
             "liczba_osob": t.liczba_osob, "nazwisko": t.nazwisko, "status": t.status,
-            "stolik": (stolik.nazwa if stolik else None), "token": t.token_potwierdzenia}
+            # Dokładny zasób jest informacją operacyjną. Gość dostaje potwierdzenie
+            # miejsca, ale nie układ sali ani nazwę stołu używaną przez obsługę.
+            "stolik": None, "token": t.token_potwierdzenia}
 
 
 def _rez_po_tokenie(db, token: str):
@@ -4386,22 +5020,11 @@ def _rez_po_tokenie(db, token: str):
 
 @app.get("/api/online/dostepnosc", dependencies=[Depends(_wymagaj_rezerwacje_online)])
 def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Depends(get_db)):
-    """Publicznie: wolne sloty na dany dzień (godzina → liczba wolnych stolików dla 'osoby')."""
+    """Publicznie: dostępność slotów bez ujawniania zapasu ani układu sali."""
     osoby = max(1, osoby)
-    cfg = get_lokal_config(db)
-    teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
     pary = _sloty_dnia(db, data)                                       # blackout → [] (znika sam)
-    stoliki = [
-        stolik for stolik in _stoly_do_seating(db)
-        if (stolik.get("pojemnosc_min") or 1) <= osoby <= stolik["pojemnosc"]
-    ]
     out = []
     for g, serwis in pary:
-        g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
-        wolne_stoly = sum(
-            1 for stolik in stoliki
-            if not _stolik_zajety(db, data, stolik["id"], g, g_do)
-        )
         przydzial, evaluation = _przydzial_zgodny_z_regulami(
             db,
             data=data,
@@ -4418,9 +5041,12 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
             for item in violations
         )
         reguly_blokuja = bool(evaluation and evaluation.decision != "allow")
-        # 'wolne' = efektywnie wolne (0 gdy pacing wyczerpany) — zgodne wstecznie z widgetem gościa.
-        out.append({"godz_od": _hm(g), "wolne": (max(wolne_stoly, 1) if ma_przydzial else 0),
-                    "wolne_stoly": wolne_stoly, "pacing_pelny": pacing_pelny,
+        # Pola liczbowe pozostają zgodne ze starszym widgetem, ale są teraz wyłącznie
+        # flagą 0/1. Publiczny kanał nie poznaje liczby ani rodzaju wolnych zasobów.
+        dostepny = 1 if ma_przydzial else 0
+        out.append({"godz_od": _hm(g), "wolne": dostepny,
+                    "wolne_stoly": dostepny, "dostepny": bool(dostepny),
+                    "pacing_pelny": pacing_pelny,
                     "reguly_blokuja": reguly_blokuja,
                     "decision": (evaluation.decision if evaluation else "deny"),
                     "serwis": (serwis.nazwa if serwis and serwis.nazwa else None)})

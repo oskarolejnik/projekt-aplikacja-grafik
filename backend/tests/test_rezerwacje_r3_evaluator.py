@@ -62,6 +62,7 @@ def _request(
     room_id: int | None = None,
     existing_id: int | None = None,
     end: time | None = None,
+    intent: rules.Intent = "quote",
 ):
     return rules.RuleRequest(
         data=booking_date,
@@ -71,6 +72,7 @@ def _request(
         sala_id=room_id,
         existing_termin_id=existing_id,
         godz_do=end,
+        intent=intent,
     )
 
 
@@ -192,6 +194,86 @@ def test_minute_concurrent_usage_respects_global_room_channel_and_exclusion():
     assert rules._concurrent_usage(
         **common, scope=rules._scope(), exclude_termin_id=1,
     ) == (2, 5)
+
+
+@pytest.mark.parametrize("phase", sorted(reservation_service.LIVE_HOST_PHASES))
+def test_live_host_phase_counts_toward_concurrent_limits_after_planned_end(db, phase):
+    _service(
+        db,
+        duration=90,
+        max_jednoczesnych_rez=1,
+        max_jednoczesnych_osob=4,
+    )
+    room = models.SalaRezerwacyjna(
+        nazwa="Sala live",
+        nazwa_klucz="sala-live",
+        aktywna=True,
+        kolejnosc=0,
+    )
+    db.add(room)
+    db.flush()
+    table = models.Stolik(
+        nazwa="Live-1",
+        pojemnosc=4,
+        aktywny=True,
+        sala_id=room.id,
+        strefa=room.nazwa,
+    )
+    db.add(table)
+    db.flush()
+    live = models.Termin(
+        data=MONDAY,
+        nazwisko="Gosc live",
+        liczba_osob=4,
+        status="potwierdzona",
+        rodzaj="stolik",
+        kanal="online",
+        godz_od=time(18, 0),
+        godz_do=time(19, 0),
+        stolik_id=table.id,
+        faza_hosta=phase,
+    )
+    db.add(live)
+    db.flush()
+    reservation_service.replace_termin_allocation(
+        db,
+        termin_id=live.id,
+        data=MONDAY,
+        start=live.godz_od,
+        end=live.godz_do,
+        table_ids=[table.id],
+        party_size=4,
+        buffer_min=0,
+        room_id=room.id,
+        channel="online",
+        now=NOW.replace(tzinfo=None),
+    )
+
+    result = rules.evaluate_reservation_rules(
+        db,
+        _request(start=time(20, 0), people=1, room_id=room.id),
+        now=NOW,
+    )
+    violations = {item.code: item for item in result.violations}
+
+    assert (violations["CONCURRENT_RESERVATION_LIMIT"].observed,
+            violations["CONCURRENT_RESERVATION_LIMIT"].projected) == (1, 2)
+    assert (violations["CONCURRENT_COVERS_LIMIT"].observed,
+            violations["CONCURRENT_COVERS_LIMIT"].projected) == (4, 5)
+
+    own_edit = rules.evaluate_reservation_rules(
+        db,
+        _request(
+            start=time(20, 0),
+            people=1,
+            room_id=room.id,
+            existing_id=live.id,
+        ),
+        now=NOW,
+    )
+    assert not {
+        "CONCURRENT_RESERVATION_LIMIT", "CONCURRENT_COVERS_LIMIT",
+    } & {item.code for item in own_edit.violations}
 
 
 def test_typed_override_more_specific_than_service_and_room(db, monkeypatch):
@@ -349,3 +431,140 @@ def test_evaluator_rejects_second_precision_like_write_ledger(db):
         "INVALID_RESERVATION_INTERVAL",
     ]
     assert result.violations[0].overrideable_by_operator is False
+
+
+def test_assign_ignores_cutoff_and_party_policy_of_existing_booking(db):
+    _service(
+        db,
+        weekday=NOW.date().weekday(),
+        start=time(8),
+        end=time(12),
+        step=30,
+        duration=60,
+    )
+    room = models.SalaRezerwacyjna(
+        nazwa="Sala przydzialu",
+        nazwa_klucz="sala-przydzialu",
+        aktywna=True,
+        kolejnosc=0,
+        online_aktywna=True,
+        wewnetrzna_aktywna=True,
+    )
+    db.add(room)
+    config = db.get(models.LokalConfig, 1)
+    config.rez_cutoff_min = 120
+    config.rez_max_grupa_online = 2
+    db.flush()
+
+    booking = dict(
+        booking_date=NOW.date(),
+        start=time(9),
+        people=8,
+        channel="online",
+        room_id=room.id,
+    )
+    regular = rules.evaluate_reservation_rules(
+        db, _request(**booking), now=NOW,
+    )
+    assignment = rules.evaluate_reservation_rules(
+        db, _request(**booking, intent="assign"), now=NOW,
+    )
+
+    assert {item.rule for item in regular.violations} >= {"cutoff", "party_max"}
+    assert assignment.decision == "allow"
+    assert assignment.violations == ()
+    assert {item["rule"] for item in assignment.checks} == {
+        "local_time", "interval", "channel",
+    }
+
+
+def test_assign_still_respects_disabled_room_channel(db):
+    _service(db)
+    room = models.SalaRezerwacyjna(
+        nazwa="Sala bez online",
+        nazwa_klucz="sala-bez-online",
+        aktywna=True,
+        kolejnosc=0,
+        online_aktywna=False,
+        wewnetrzna_aktywna=True,
+    )
+    db.add(room)
+    db.flush()
+
+    result = rules.evaluate_reservation_rules(
+        db,
+        _request(room_id=room.id, channel="online", intent="assign"),
+        now=NOW,
+    )
+
+    assert result.decision == "override_required"
+    assert [item.code for item in result.violations] == ["CHANNEL_NOT_ALLOWED"]
+    assert {item["rule"] for item in result.checks} == {
+        "local_time", "interval", "channel",
+    }
+
+
+def test_assign_still_respects_concurrent_room_limit(db):
+    _service(db)
+    room = models.SalaRezerwacyjna(
+        nazwa="Sala z limitem",
+        nazwa_klucz="sala-z-limitem",
+        aktywna=True,
+        kolejnosc=0,
+        online_aktywna=True,
+        wewnetrzna_aktywna=True,
+        limit_jednoczesnych_rez=1,
+    )
+    db.add(room)
+    occupied = models.Termin(
+        data=MONDAY,
+        nazwisko="Zajeta rezerwacja",
+        liczba_osob=2,
+        status="potwierdzona",
+        rodzaj="stolik",
+        kanal="reczna",
+        godz_od=time(18),
+        godz_do=time(19, 30),
+    )
+    target = models.Termin(
+        data=MONDAY,
+        nazwisko="Przydzielana rezerwacja",
+        liczba_osob=2,
+        status="potwierdzona",
+        rodzaj="stolik",
+        kanal="reczna",
+        godz_od=time(18),
+        godz_do=time(19, 30),
+    )
+    db.add_all((occupied, target))
+    db.flush()
+    db.add(models.RezerwacjaOblozenieLedger(
+        termin_id=occupied.id,
+        data=MONDAY,
+        minute=18 * 60,
+        sala_id=room.id,
+        kanal="wewnetrzna",
+        covers=2,
+        override=False,
+        created_at=NOW.replace(tzinfo=None),
+    ))
+    db.flush()
+
+    result = rules.evaluate_reservation_rules(
+        db,
+        _request(
+            room_id=room.id,
+            channel="wewnetrzna",
+            existing_id=target.id,
+            intent="assign",
+        ),
+        now=NOW,
+    )
+
+    assert result.decision == "override_required"
+    assert [item.code for item in result.violations] == [
+        "CONCURRENT_RESERVATION_LIMIT",
+    ]
+    assert {item["rule"] for item in result.checks} == {
+        "local_time", "interval", "channel", "concurrent_reservations",
+    }

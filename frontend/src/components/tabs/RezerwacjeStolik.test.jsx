@@ -113,6 +113,149 @@ describe('Rezerwacje stolików', () => {
     expect(screen.getByText(/1 aktywna rezerwacja · 3 gości/)).toBeInTheDocument()
   })
 
+  it('jawnie proponuje przydział i czyści stary wynik po zmianie trybu lub terminu', async () => {
+    let resolveSimulation
+    const simulation = {
+      decision: 'allow',
+      available: true,
+      visit_end: '20:00',
+      allocation: {
+        state: 'preview',
+        visibility: 'exact',
+        room: { id: 2, name: 'Sala Główna' },
+        tables: [{ id: 4, name: 'S1', capacity: 4 }, { id: 5, name: 'S2', capacity: 2 }],
+        capacity: 6,
+        reasons: [{ code: 'TABLES_ADJACENT', message: 'Stoły sąsiadują' }],
+      },
+      alternatives: [{ kind: 'time', time: '18:30' }],
+    }
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/reguly/symuluj' && method === 'POST') {
+        expect(body).toEqual({
+          data: TEST_DATE,
+          godz_od: '18:00',
+          liczba_osob: 6,
+          kanal: 'wewnetrzna',
+          sala_id: null,
+        })
+        return new Promise((resolve) => { resolveSimulation = resolve })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj rezerwację' }))
+    fireEvent.change(screen.getByLabelText('Liczba osób'), { target: { value: '6' } })
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Kowalska' } })
+
+    const suggest = screen.getByRole('button', { name: 'Zaproponuj przydział' })
+    expect(suggest).toHaveClass('min-h-11')
+    fireEvent.click(suggest)
+    expect(await screen.findByRole('button', { name: 'Proponuję przydział…' })).toBeDisabled()
+
+    await act(async () => resolveSimulation(simulation))
+
+    expect(await screen.findByText('Sala Główna · S1 + S2')).toBeInTheDocument()
+    expect(screen.getByText('6 miejsc · do 20:00')).toBeInTheDocument()
+    expect(screen.getByText('Stoły sąsiadują')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Pokaż 1 alternatywę' }))
+    expect(screen.getByText('18:30')).toBeInTheDocument()
+    expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Kowalska')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Walk-in (gość na miejscu)' }))
+    expect(screen.queryByText('Sala Główna · S1 + S2')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Kowalska')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rezerwacja' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zaproponuj przydział' }))
+    await act(async () => resolveSimulation(simulation))
+    expect(await screen.findByText('Sala Główna · S1 + S2')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Godzina'), { target: { value: '19:00' } })
+    expect(screen.queryByText('Sala Główna · S1 + S2')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Kowalska')
+  })
+
+  it('walk-in z ręcznym stolikiem pokazuje blokadę i nie uruchamia automatu', async () => {
+    let createBody
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      if (path === '/rezerwacje-stolik' && method === 'POST') {
+        createBody = body
+        return Promise.resolve({ ...RESERVATION, ...body, id: 40, status: 'potwierdzona' })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj rezerwację' }))
+
+    const mode = screen.getByRole('group', { name: 'Tryb tworzenia rezerwacji' })
+    const walkIn = screen.getByRole('button', { name: 'Walk-in (gość na miejscu)' })
+    expect(mode).toBeInTheDocument()
+    expect(walkIn).toHaveClass('min-h-11')
+    fireEvent.click(walkIn)
+    const modeHelp = screen.getByText(/Gość jest już na miejscu/)
+    expect(mode).toHaveAttribute('aria-describedby', modeHelp.id)
+    expect(modeHelp).toHaveAttribute('aria-live', 'polite')
+    fireEvent.change(screen.getByLabelText('Stolik'), { target: { value: String(TABLE.id) } })
+
+    expect(walkIn).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('heading', { name: 'Przypisano ręcznie' })).toBeInTheDocument()
+    expect(screen.getByText('Sala · T3')).toBeInTheDocument()
+    expect(screen.getByText('Automat nie zmieni tego przydziału.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Zaproponuj przydział' })).not.toBeInTheDocument()
+    expect(apiMock.mock.calls.some(([path]) => path === '/rezerwacje/reguly/symuluj')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Zapisz' })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Gość przy barze' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
+    await waitFor(() => expect(createBody).toEqual(expect.objectContaining({
+      kanal: 'walk_in',
+      stolik_id: TABLE.id,
+      nazwisko: 'Gość przy barze',
+    })))
+    expect(createBody).not.toHaveProperty('auto_przydziel')
+  })
+
+  it('tworzy walk-in bez stolika i pozostawia automatyczny przydział backendowi', async () => {
+    let createBody
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      if (path === '/rezerwacje-stolik' && method === 'POST') {
+        createBody = body
+        return Promise.resolve({ ...RESERVATION, ...body, id: 41, status: 'potwierdzona' })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj rezerwację' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Walk-in (gość na miejscu)' }))
+    fireEvent.change(screen.getByLabelText('Liczba osób'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Gość z ulicy' } })
+
+    expect(screen.getByText(/Gość jest już na miejscu/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
+
+    await waitFor(() => expect(createBody).toEqual(expect.objectContaining({
+      kanal: 'walk_in',
+      auto_przydziel: true,
+      stolik_id: null,
+      liczba_osob: 3,
+      nazwisko: 'Gość z ulicy',
+    })))
+    expect(apiMock.mock.calls.some(([path]) => path === '/rezerwacje/reguly/symuluj')).toBe(false)
+  })
+
   it('zmienia status lokalnie, nie zasłania listy i blokuje duplikat', async () => {
     let resolveStatus
     let serverReservation = RESERVATION
@@ -151,6 +294,7 @@ describe('Rezerwacje stolików', () => {
     let attempts = 0
     let listLoads = 0
     const idempotencyKeys = []
+    const createBodies = []
     apiMock.mockImplementation((path, method, body, options) => {
       if (path.startsWith('/rezerwacje-stolik?')) {
         listLoads += 1
@@ -161,6 +305,7 @@ describe('Rezerwacje stolików', () => {
       if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
       if (path === '/rezerwacje-stolik' && method === 'POST') {
         idempotencyKeys.push(options?.headers?.['Idempotency-Key'])
+        createBodies.push(body)
         attempts += 1
         return attempts === 1
           ? Promise.reject(new Error('Brak połączenia.'))
@@ -189,6 +334,13 @@ describe('Rezerwacje stolików', () => {
       'manual-reservation-test-key',
       'manual-reservation-test-key',
     ])
+    expect(createBodies).toHaveLength(2)
+    expect(createBodies[0]).toEqual(expect.objectContaining({
+      kanal: 'reczna',
+      auto_przydziel: true,
+      stolik_id: null,
+    }))
+    expect(createBodies[1]).toEqual(createBodies[0])
     expect(listLoads).toBe(1)
   })
 
@@ -217,7 +369,7 @@ describe('Rezerwacje stolików', () => {
   it('realizuje wpis z listy oczekujących w miejscu i natychmiast dodaje rezerwację', async () => {
     let resolveSeat
     let listLoads = 0
-    apiMock.mockImplementation((path, method) => {
+    apiMock.mockImplementation((path, method, body) => {
       if (path.startsWith('/rezerwacje-stolik?')) {
         listLoads += 1
         return Promise.resolve({ rezerwacje: [] })
@@ -226,6 +378,7 @@ describe('Rezerwacje stolików', () => {
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
       if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
       if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/zrealizuj` && method === 'POST') {
+        expect(body).toEqual({ stolik_id: TABLE.id, tryb: 'walk_in' })
         return new Promise((resolve) => { resolveSeat = resolve })
       }
       return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
@@ -302,6 +455,7 @@ describe('Rezerwacje stolików', () => {
     )[1][2]
     expect(overrideBody).toEqual({
       stolik_id: TABLE.id,
+      tryb: 'walk_in',
       przekrocz_limity: true,
       nadpisanie_limitow: {
         powod: 'walk_in',
@@ -624,6 +778,7 @@ describe('Rezerwacje stolików', () => {
     expect(await screen.findByRole('button', { name: 'Dodaj rezerwację' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Konfiguruj sale' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Edytuj rezerwację: Nowak' }))
+    expect(screen.queryByRole('group', { name: 'Tryb tworzenia rezerwacji' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Telefon')).toHaveValue(RESERVATION.telefon)
     expect(screen.getByLabelText('E-mail')).toHaveValue(RESERVATION.email)
     expect(screen.queryByLabelText('Notatka')).not.toBeInTheDocument()
@@ -645,6 +800,7 @@ describe('Rezerwacje stolików', () => {
     const updateBody = apiMock.mock.calls.find(([path, method]) => path === `/rezerwacje-stolik/${RESERVATION.id}` && method === 'PUT')[2]
     expect(updateBody).not.toHaveProperty('notatka')
     expect(updateBody).not.toHaveProperty('zadatek')
+    expect(updateBody).not.toHaveProperty('kanal')
   })
 
   it('w trybie kontrolowanym zgłasza zmianę dnia i czeka na nową wartość z rodzica', async () => {

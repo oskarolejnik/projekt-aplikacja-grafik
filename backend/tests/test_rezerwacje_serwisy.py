@@ -130,7 +130,9 @@ def test_pacing_limit_rezerwacji_blokuje_online(admin_client, client):
     assert rez().status_code == 409            # 3. przekracza pacing mimo wolnych stołów
     slot = next(s for s in client.get(f"/api/online/dostepnosc?data={PON}&osoby=2").json()["sloty"]
                 if s["godz_od"] == "18:00")
-    assert slot["pacing_pelny"] is True and slot["wolne"] == 0 and slot["wolne_stoly"] > 0
+    assert slot["pacing_pelny"] is True
+    assert slot["wolne"] == 0 and slot["wolne_stoly"] == 0
+    assert slot["dostepny"] is False
 
 
 def test_pacing_limit_osob(admin_client, client):
