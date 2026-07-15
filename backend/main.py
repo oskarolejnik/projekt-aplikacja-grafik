@@ -4003,7 +4003,7 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
     pary = _sloty_dnia(db, data)                                       # blackout → [] (znika sam)
     stoliki = [
         stolik for stolik in _stoly_do_seating(db)
-        if stolik["pojemnosc"] >= osoby
+        if (stolik.get("pojemnosc_min") or 1) <= osoby <= stolik["pojemnosc"]
     ]
     out = []
     for g, serwis in pary:

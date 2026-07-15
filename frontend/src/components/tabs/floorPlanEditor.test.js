@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  combinationCapacityBreakdown,
   combinationKey,
   editorSignature,
   findStructuralSeating,
@@ -19,6 +20,23 @@ const tables = [
 ]
 
 describe('floorPlanEditor R2.2a', () => {
+  it('czytelnie rozpisuje różne pojemności stołów w zestawie', () => {
+    expect(combinationCapacityBreakdown({ stoliki: [1, 4] }, tables)).toEqual({
+      capacities: [4, 2],
+      total: 6,
+      label: '4 + 2 = 6 miejsc',
+    })
+    expect(combinationCapacityBreakdown({ stoliki: [2, 1] }, tables)).toMatchObject({
+      total: 10,
+      label: '4 + 6 = 10 miejsc',
+    })
+    expect(combinationCapacityBreakdown({ stoliki: [1, 99] }, tables)).toBeNull()
+    expect(combinationCapacityBreakdown({ stoliki: [1, 99] }, [
+      tables[0],
+      { id: 99 },
+    ])).toBeNull()
+  })
+
   it('normalizuje nieskierowane krawędzie i pełny snapshot deterministycznie', () => {
     const edges = normalizeEdges([
       { stolik_a_id: 2, stolik_b_id: 1 },

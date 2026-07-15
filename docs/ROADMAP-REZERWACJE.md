@@ -553,12 +553,15 @@ starszy klient R2.1 zachowuje pominiętą topologię, a jawne puste listy ją cz
 wyłącznie bieżący opublikowany snapshot i nie tworzy rezerwowalnych podgrafów z samego sąsiedztwa.
 Legacy CRUD jest adapterem tylko poza wersjonowanymi salami, a próba podwójnego zapisu zwraca
 `FLOOR_PLAN_VERSIONING_REQUIRED`. Publikacja ponownie waliduje graf, blokuje stoły i zatrzymuje
-redukcję pojemności kolidującą z przyszłą rezerwacją lub holdem.
+redukcję pojemności albo zakresu jawnego zestawu kolidującą z przyszłą rezerwacją lub holdem.
+Publiczna dostępność respektuje również snapshotowe minimum osób pojedynczego stołu.
 
 Edytor R2.2a oferuje `Ustaw stoły | Połącz stoły`, linie i równoważną listę tekstową sąsiedztwa,
 propozycje spójnych zestawów do czterech stołów, jawne zatwierdzanie i edycję zestawu, właściwości
-stołu, undo/redo oraz strukturalny sprawdzian domyślnie dla 18 osób. Sprawdzian mówi, że układ może
-obsłużyć grupę, ale nie obiecuje dostępności w konkretnym terminie.
+stołu, undo/redo oraz strukturalny sprawdzian domyślnie dla 18 osób. Różne pojemności mogą
+współistnieć i nakładać się w jawnych konfiguracjach, np. `4 + 2 = 6` oraz `6 + 4 = 10`; edytor
+pokazuje ten skład osobno od dozwolonego zakresu grupy. Sprawdzian mówi, że układ może obsłużyć
+grupę, ale nie obiecuje dostępności w konkretnym terminie.
 
 R2 nie jest jeszcze zamknięte. R2.2b pozostawia przyciąganie do siatki, wyrównywanie grup,
 strategię/priorytet sal i trwałą proweniencję wersji zestawu na historycznym przydziale. Nie należy

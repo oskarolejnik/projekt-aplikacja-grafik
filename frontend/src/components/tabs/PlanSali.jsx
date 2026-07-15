@@ -10,6 +10,7 @@ import { PillSwitch } from '../ui/PillSwitch'
 import { useToast } from '../ui/Toast'
 import {
   cloneEditorSnapshot,
+  combinationCapacityBreakdown,
   combinationKey,
   edgeKey,
   editorSignature,
@@ -1725,20 +1726,29 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                             <h4 id="proposed-combinations-heading" className="text-base font-semibold text-ink">
                               {proposalFocusTable ? `Proponowane zestawy dla ${proposalFocusTable.nazwa}` : 'Proponowane zestawy'}
                             </h4>
-                            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Lista dotyczy wybranego stołu i powstaje tylko z jego połączeń. Dzięki temu każda część sali ma własne propozycje. Zestaw zacznie działać dopiero po zatwierdzeniu i publikacji planu.</p>
+                            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Propozycje powstają z połączeń wybranego stołu. Stoły mogą mieć różną liczbę miejsc, np. 4 + 2. Zestaw zadziała po zatwierdzeniu i publikacji planu.</p>
                             {proposedCombinations.length ? (
                               <ul className="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
-                                {proposedCombinations.map((proposal) => (
-                                  <li key={combinationKey(proposal)} className="flex min-h-14 items-center justify-between gap-3 border-b border-line py-2">
-                                    <div className="min-w-0">
-                                      <p className="truncate text-sm font-medium text-ink" title={proposal.nazwa}>{proposal.nazwa}</p>
-                                      <p className="mt-0.5 text-xs text-muted">{proposal.pojemnosc_min}–{proposal.pojemnosc_max} osób · maks. {proposal.stoliki.length} {tablesLabel(proposal.stoliki.length)}</p>
-                                    </div>
-                                    <Button variant="ghost" size="sm" onClick={() => approveCombination(proposal)} disabled={Boolean(busy)}>
-                                      Zatwierdź
-                                    </Button>
-                                  </li>
-                                ))}
+                                {proposedCombinations.map((proposal) => {
+                                  const capacityBreakdown = combinationCapacityBreakdown(
+                                    proposal,
+                                    activeTables,
+                                  )
+                                  return (
+                                    <li key={combinationKey(proposal)} className="flex min-h-14 items-center justify-between gap-3 border-b border-line py-2">
+                                      <div className="min-w-0">
+                                        <p className="truncate text-sm font-medium text-ink" title={proposal.nazwa}>{proposal.nazwa}</p>
+                                        {capacityBreakdown ? (
+                                          <p className="mt-0.5 text-xs font-medium text-ink/80">Miejsca: {capacityBreakdown.label}</p>
+                                        ) : null}
+                                        <p className="mt-0.5 text-xs text-muted">Dla {proposal.pojemnosc_min}–{proposal.pojemnosc_max} osób · {proposal.stoliki.length} {tablesLabel(proposal.stoliki.length)}</p>
+                                      </div>
+                                      <Button variant="ghost" size="sm" onClick={() => approveCombination(proposal)} disabled={Boolean(busy)}>
+                                        Zatwierdź
+                                      </Button>
+                                    </li>
+                                  )
+                                })}
                               </ul>
                             ) : (
                               <p className="mt-4 text-sm text-muted">
@@ -1757,9 +1767,14 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                             <ul className="mt-4 space-y-4">
                               {combinations.map((combination) => {
                                 const key = combinationKey(combination)
-                                const physicalCapacity = combination.stoliki.reduce((sum, tableId) => (
-                                  sum + Number(positions[tableId]?.pojemnosc || 0)
-                                ), 0)
+                                const capacityBreakdown = combinationCapacityBreakdown(
+                                  combination,
+                                  combination.stoliki.map((tableId) => ({
+                                    id: tableId,
+                                    ...positions[tableId],
+                                  })),
+                                )
+                                const physicalCapacity = capacityBreakdown?.total || 0
                                 const hasInactiveMember = combination.stoliki.some((tableId) => (
                                   positions[tableId]?.aktywny_w_planie === false
                                 ))
@@ -1774,7 +1789,10 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                                           </span>
                                         </div>
                                         {mode === 'published' ? (
-                                          <p className="mt-1 text-xs text-muted">{combination.pojemnosc_min}–{combination.pojemnosc_max} osób · {combination.kanal === 'oba' ? 'online i wewnętrznie' : combination.kanal === 'online' ? 'online' : 'wewnętrznie'}</p>
+                                          <p className="mt-1 text-xs text-muted">{combination.pojemnosc_min}–{combination.pojemnosc_max} osób · {combination.kanal === 'oba' ? 'online i przez obsługę' : combination.kanal === 'online' ? 'online' : 'przez obsługę'}</p>
+                                        ) : null}
+                                        {capacityBreakdown ? (
+                                          <p className="mt-0.5 text-xs font-medium text-ink/80">Miejsca: {capacityBreakdown.label}</p>
                                         ) : null}
                                       </div>
                                       {mode === 'draft' ? (
@@ -1820,8 +1838,8 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                                             className="field mt-1.5 min-h-11 normal-case tracking-normal"
                                             disabled={Boolean(busy)}
                                           >
-                                            <option value="oba">Online i wewnętrznie</option>
-                                            <option value="wewnetrzna">Tylko wewnętrznie</option>
+                                            <option value="oba">Online i przez obsługę</option>
+                                            <option value="wewnetrzna">Tylko przez obsługę</option>
                                             <option value="online">Tylko online</option>
                                           </select>
                                         </label>
@@ -1892,7 +1910,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                               }}
                               className="field mt-1.5 min-h-11 normal-case tracking-normal"
                             >
-                              <option value="wewnetrzna">Wewnętrzna / recepcja</option>
+                              <option value="wewnetrzna">Przez obsługę / recepcję</option>
                               <option value="online">Online</option>
                             </select>
                           </label>

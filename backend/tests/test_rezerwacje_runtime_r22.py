@@ -506,6 +506,53 @@ def test_inactive_room_is_excluded_from_new_host_online_and_auto_candidates(
     }
 
 
+def test_public_availability_respects_snapshot_table_minimum(
+    admin_client,
+    client,
+    db,
+):
+    setup = _published_room(db, second_active=False)
+    position = db.query(models.PozycjaStolikaPlanu).filter_by(
+        wersja_id=setup["version"].id,
+        stolik_id=setup["tables"][0].id,
+    ).one()
+    position.pojemnosc = 6
+    position.pojemnosc_min = 4
+    db.commit()
+
+    assert admin_client.put(
+        "/api/lokal/config",
+        json={"rezerwacje_online": True},
+    ).status_code == 200
+    service = admin_client.post("/api/godziny-otwarcia", json={
+        "dzien_tygodnia": 0,
+        "godz_od": "17:00",
+        "godz_do": "21:00",
+        "dlugosc_slotu_min": 60,
+    })
+    assert service.status_code == 201, service.text
+
+    too_small = client.get(
+        "/api/online/dostepnosc?data=2035-07-16&osoby=2",
+    )
+    assert too_small.status_code == 200, too_small.text
+    assert too_small.json()["sloty"]
+    assert all(
+        slot["wolne"] == 0 and slot["wolne_stoly"] == 0
+        for slot in too_small.json()["sloty"]
+    )
+
+    matching = client.get(
+        "/api/online/dostepnosc?data=2035-07-16&osoby=4",
+    )
+    assert matching.status_code == 200, matching.text
+    assert matching.json()["sloty"]
+    assert all(
+        slot["wolne"] == 1 and slot["wolne_stoly"] == 1
+        for slot in matching.json()["sloty"]
+    )
+
+
 def test_inactive_room_keeps_assigned_table_on_operational_timeline(
     admin_client, db,
 ):

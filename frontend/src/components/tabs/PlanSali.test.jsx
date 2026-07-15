@@ -709,7 +709,47 @@ describe('Plan sali R2.2', () => {
     expect(canvas.querySelectorAll('line')).toHaveLength(1)
     expect(screen.getByRole('list', { name: 'S1 sąsiaduje z' })).toHaveTextContent('S2')
     expect(screen.getByRole('heading', { name: 'Zatwierdzone zestawy' })).toBeInTheDocument()
-    expect(screen.getByText('5–6 osób · online i wewnętrznie')).toBeInTheDocument()
+    expect(screen.getByText('5–6 osób · online i przez obsługę')).toBeInTheDocument()
+    expect(screen.getByText('Miejsca: 4 + 2 = 6 miejsc')).toBeInTheDocument()
+  })
+
+  it('pokazuje równocześnie nakładające się propozycje 6 + 4 oraz 4 + 2', async () => {
+    const mixedTables = [
+      { ...tables[0], id: 102, nazwa: 'Stół 4', pojemnosc: 4 },
+      { ...tables[0], id: 101, nazwa: 'Stół 6', pojemnosc: 6 },
+      { ...tables[1], id: 103, nazwa: 'Stół 2', pojemnosc: 2 },
+    ]
+    const mixedEdges = [
+      { stolik_a_id: 101, stolik_b_id: 102 },
+      { stolik_a_id: 102, stolik_b_id: 103 },
+    ]
+    const mixedPublished = {
+      ...published,
+      stoliki: mixedTables,
+      krawedzie: mixedEdges,
+      kombinacje: [],
+    }
+    const mixedDraft = {
+      ...draft,
+      stoliki: mixedTables,
+      krawedzie: mixedEdges,
+      kombinacje: [],
+    }
+    apiMock.mockImplementation((path, method = 'GET') => {
+      if (path === '/sale-rezerwacyjne/1/plan' && method === 'GET') return Promise.resolve(mixedPublished)
+      if (path === '/sale-rezerwacyjne/1/plan/szkic' && method === 'POST') return Promise.resolve(mixedDraft)
+      return route(path, method)
+    })
+
+    render(<PlanSali roomId={1} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edytuj jako szkic' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Połącz stoły' }))
+
+    expect(screen.getByRole('heading', { name: 'Proponowane zestawy dla Stół 4' })).toBeInTheDocument()
+    const sixPlusFour = screen.getByText('Stół 6 + Stół 4').closest('li')
+    const fourPlusTwo = screen.getByText('Stół 4 + Stół 2').closest('li')
+    expect(within(sixPlusFour).getByText('Miejsca: 6 + 4 = 10 miejsc')).toBeInTheDocument()
+    expect(within(fourPlusTwo).getByText('Miejsca: 4 + 2 = 6 miejsc')).toBeInTheDocument()
   })
 
   it('wyraźnie oznacza wyłączony zestaw i pozwala włączyć go w szkicu', async () => {
@@ -884,7 +924,9 @@ describe('Plan sali R2.2', () => {
     fireEvent.click(screen.getByRole('button', { name: /^S3,/ }))
 
     const proposal = screen.getByText('S1 + S2 + S3').closest('li')
+    expect(within(proposal).getByText('Miejsca: 4 + 6 + 8 = 18 miejsc')).toBeInTheDocument()
     fireEvent.click(within(proposal).getByRole('button', { name: 'Zatwierdź' }))
+    expect(screen.getByText('Miejsca: 4 + 6 + 8 = 18 miejsc')).toBeInTheDocument()
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Od osób' }), { target: { value: '10' } })
     const maximum = screen.getByRole('spinbutton', { name: 'Do osób' })
     fireEvent.change(maximum, { target: { value: '99' } })

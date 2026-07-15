@@ -1,10 +1,17 @@
-"""Slice v2 S6: tor gościa online — „najbliższy termin" + magic-link (edycja/anulacja z polityką).
-Publiczne endpointy pod /api/online (osobny TestClient `client`). 2026-07-13 = poniedziałek (weekday 0)."""
+"""Slice v2 S6: tor gościa online — najbliższy termin i magic-link.
+
+Publiczne endpointy działają pod /api/online (osobny TestClient ``client``).
+Daty testowe zawsze wskazują przyszły poniedziałek, więc zestaw nie starzeje się
+wraz z kalendarzem.
+"""
 
 from datetime import date, timedelta
 
-PON = "2026-07-13"       # poniedziałek (weekday 0)
-WTOREK = "2026-07-14"    # wtorek (weekday 1)
+_dzis = date.today()
+_dni_do_poniedzialku = (7 - _dzis.weekday()) % 7 or 7
+_poniedzialek = _dzis + timedelta(days=_dni_do_poniedzialku)
+PON = str(_poniedzialek)
+WTOREK = str(_poniedzialek + timedelta(days=1))
 
 
 def _online_online(admin_client):

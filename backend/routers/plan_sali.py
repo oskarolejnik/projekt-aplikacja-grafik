@@ -811,6 +811,71 @@ def _konflikty_redukcji_pojemnosci(db: Session, pojemnosci):
     )
 
 
+def _konflikty_zakresu_kombinacji(db: Session, kombinacje):
+    """Chroni dokładne, istniejące przydziały przed nowym zakresem zestawu.
+
+    Termin nie przechowuje jeszcze identyfikatora wersji kombinacji, dlatego
+    porównujemy kanoniczny zestaw stolików. Częściowe nakładanie zestawów nie jest
+    konfliktem: A+B i A+C pozostają dwiema niezależnymi definicjami.
+    """
+    range_by_tables = {}
+    for combination in kombinacje or []:
+        if not bool(_wartosc(combination, "aktywna_w_planie", True)):
+            continue
+        table_ids = frozenset(_ids_stolikow(_wartosc(combination, "stoliki")))
+        minimum = _wartosc(combination, "pojemnosc_min")
+        maximum = _wartosc(combination, "pojemnosc_max")
+        if len(table_ids) >= 2 and minimum is not None and maximum is not None:
+            range_by_tables[table_ids] = (int(minimum), int(maximum))
+    if not range_by_tables:
+        return [], [], []
+
+    reservation_ids = set()
+    conflict_table_ids = set()
+    reservations = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik",
+        models.Termin.data >= _dzis_lokalnie(),
+        models.Termin.status.in_(_AKTYWNE),
+    ).all()
+    for reservation in reservations:
+        table_ids = _ids_stolikow(reservation.stoliki_dodatkowe)
+        if reservation.stolik_id:
+            table_ids.add(reservation.stolik_id)
+        allowed_range = range_by_tables.get(frozenset(table_ids))
+        people = int(reservation.liczba_osob or 0)
+        if allowed_range is not None and not allowed_range[0] <= people <= allowed_range[1]:
+            reservation_ids.add(reservation.id)
+            conflict_table_ids.update(table_ids)
+
+    claims = db.query(models.RezerwacjaStolikClaim).filter(
+        models.RezerwacjaStolikClaim.waitlist_id.isnot(None),
+        models.RezerwacjaStolikClaim.expires_at > _teraz(),
+    ).all()
+    claims_by_waitlist = defaultdict(list)
+    for claim in claims:
+        claims_by_waitlist[claim.waitlist_id].append(claim)
+    hold_ids = set()
+    if claims_by_waitlist:
+        waitlist_rows = db.query(models.ListaOczekujacych).filter(
+            models.ListaOczekujacych.id.in_(claims_by_waitlist),
+            models.ListaOczekujacych.status == "oczekuje",
+        ).all()
+        for waitlist in waitlist_rows:
+            owned_claims = claims_by_waitlist[waitlist.id]
+            table_ids = {claim.stolik_id for claim in owned_claims}
+            allowed_range = range_by_tables.get(frozenset(table_ids))
+            people = int(waitlist.liczba_osob or 0)
+            if allowed_range is not None and not allowed_range[0] <= people <= allowed_range[1]:
+                hold_ids.update(claim.id for claim in owned_claims)
+                conflict_table_ids.update(table_ids)
+
+    return (
+        sorted(reservation_ids),
+        sorted(hold_ids),
+        sorted(conflict_table_ids),
+    )
+
+
 def _nowe_nieaktywne_stoliki_szkicu(db: Session, draft_id: int):
     """Stoły utworzone wyłącznie w tym szkicu, które można usunąć z nim bez historii."""
     ids = {
@@ -1226,10 +1291,11 @@ def publikuj_plan(
         _revision_conflict(draft)
     pozycje = _snapshot_z_bazy(db, sala, draft)
     # Walidacja pełnego snapshotu również przy publikacji chroni przed uszkodzeniem poza API.
+    draft_combinations = _kombinacje_wersji(db, draft)
     _waliduj_topologie(
         pozycje,
         _krawedzie_wersji(db, draft),
-        _kombinacje_wersji(db, draft),
+        draft_combinations,
     )
     room_table_ids = [stolik.id for stolik in _stoliki_sali(db, sala)]
     locked_tables = reservation_service.lock_tables(db, room_table_ids)
@@ -1249,15 +1315,26 @@ def publikuj_plan(
             },
         )
     )
-    reservation_ids = sorted(set(reservation_ids) | set(capacity_reservation_ids))
-    hold_ids = sorted(set(hold_ids) | set(capacity_hold_ids))
-    conflict_table_ids = sorted(set(deaktywowane) | set(capacity_table_ids))
+    combination_reservation_ids, combination_hold_ids, combination_table_ids = (
+        _konflikty_zakresu_kombinacji(db, draft_combinations)
+    )
+    reservation_ids = sorted(
+        set(reservation_ids)
+        | set(capacity_reservation_ids)
+        | set(combination_reservation_ids)
+    )
+    hold_ids = sorted(
+        set(hold_ids) | set(capacity_hold_ids) | set(combination_hold_ids)
+    )
+    conflict_table_ids = sorted(
+        set(deaktywowane) | set(capacity_table_ids) | set(combination_table_ids)
+    )
     if reservation_ids or hold_ids:
         raise HTTPException(
             409,
             detail={
                 "code": "PLAN_PUBLISH_CONFLICT",
-                "message": "Nie można wyłączyć stolika używanego przez przyszłą rezerwację lub hold.",
+                "message": "Nie można opublikować planu, który unieważnia przyszłą rezerwację lub aktywny hold.",
                 "table_ids": conflict_table_ids,
                 "reservation_ids": reservation_ids,
                 "hold_ids": hold_ids,

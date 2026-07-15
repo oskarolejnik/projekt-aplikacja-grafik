@@ -119,6 +119,34 @@ const capacityMinimum = (table = {}) => Math.max(
   Math.min(capacityMaximum(table), Math.round(number(table.pojemnosc_min, 1))),
 )
 
+const placesWord = (count) => {
+  const absolute = Math.abs(Number(count) || 0)
+  if (absolute === 1) return 'miejsce'
+  const lastTwo = absolute % 100
+  const last = absolute % 10
+  return last >= 2 && last <= 4 && !(lastTwo >= 12 && lastTwo <= 14)
+    ? 'miejsca'
+    : 'miejsc'
+}
+
+export const combinationCapacityBreakdown = (combination = {}, tables = []) => {
+  const byId = new Map(tables.map((table) => [Number(table.id), table]))
+  const ids = tableIds(combination)
+  if (ids.length < 2 || ids.some((id) => !byId.has(id))) return null
+  const capacities = ids.map((id) => {
+    const table = byId.get(id)
+    const parsed = Number(table?.pojemnosc_max ?? table?.pojemnosc)
+    return Number.isFinite(parsed) && parsed >= 1 ? Math.round(parsed) : null
+  })
+  if (capacities.some((capacity) => capacity == null)) return null
+  const total = capacities.reduce((sum, capacity) => sum + capacity, 0)
+  return {
+    capacities,
+    total,
+    label: `${capacities.join(' + ')} = ${total} ${placesWord(total)}`,
+  }
+}
+
 export const proposeConnectedCombinations = (
   tables = [],
   edges = [],
