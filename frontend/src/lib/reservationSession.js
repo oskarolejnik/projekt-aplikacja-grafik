@@ -100,7 +100,7 @@ export function readReservationSession(user) {
     }
     const scroll = Object.fromEntries(
       Object.entries(saved.scroll || {})
-        .filter(([view, value]) => ['today', 'calendar', 'database', 'host'].includes(view)
+        .filter(([view, value]) => ['today', 'calendar', 'database', 'host', 'availability', 'rooms'].includes(view)
           && Number.isFinite(value) && value >= 0),
     )
     return { route: normalizeReservationRoute(saved.route), scroll }
@@ -116,7 +116,7 @@ export function writeReservationSession(user, { route, scroll = {} }) {
   const safeRoute = normalizeReservationRoute(route)
   const safeScroll = Object.fromEntries(
     Object.entries(scroll)
-      .filter(([view, value]) => ['today', 'calendar', 'database', 'host'].includes(view)
+      .filter(([view, value]) => ['today', 'calendar', 'database', 'host', 'availability', 'rooms'].includes(view)
         && Number.isFinite(value) && value >= 0),
   )
   try {

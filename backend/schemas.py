@@ -37,7 +37,6 @@ class SalaRezerwacyjnaIn(BaseModel):
     kolejnosc: int = Field(default=0, ge=0)
     strategia_zapelniania: Literal["preferuj", "wypelniaj_kolejno"] = "preferuj"
     priorytet: int = Field(default=0, ge=0)
-
     @field_validator("nazwa")
     @classmethod
     def _nazwa_bez_pustych_znakow(cls, value):
@@ -712,17 +711,47 @@ class SasiedztwoStolowIn(BaseModel):
     stolik_b: int
 
 class GodzinyOtwarciaIn(BaseModel):
-    dzien_tygodnia: int            # 0=poniedziałek … 6=niedziela
+    dzien_tygodnia: int = Field(ge=0, le=6)  # 0=poniedziałek … 6=niedziela
     godz_od: time
     godz_do: time
     ostatni_zasiadek: Optional[time] = None
-    dlugosc_slotu_min: int = 120
+    # ``dlugosc_slotu_min`` pozostaje adapterem dla starszej PWA. Nowy kontrakt
+    # rozdziela częstotliwość oferowanych godzin od czasu zajęcia zasobu.
+    dlugosc_slotu_min: int = Field(default=120, ge=1, le=1440)
+    krok_slotu_min: int = Field(default=120, ge=1, le=1440)
+    domyslny_turn_time_min: int = Field(default=120, ge=1, lt=1440)
     aktywny: bool = True
     nazwa: Optional[str] = None                       # etykieta serwisu (Lunch/Kolacja)
     turn_time_progi: Optional[List[dict]] = None       # [{do_osob,min}] — czas zasiadku wg grupy
     pacing_max_rez: Optional[int] = Field(default=None, ge=0)   # 0/NULL = brak limitu
     pacing_max_osob: Optional[int] = Field(default=None, ge=0)  # 0/NULL = brak limitu
-    pacing_okno_min: Optional[int] = None              # długość okna pacingu (min); NULL = krok slotu
+    pacing_okno_min: Optional[int] = Field(default=None, ge=1, le=1440)
+    max_jednoczesnych_rez: Optional[int] = Field(default=None, ge=0)
+    max_jednoczesnych_osob: Optional[int] = Field(default=None, ge=0)
+    duza_grupa_od: Optional[int] = Field(default=None, ge=1)
+    duza_grupa_tryb: Optional[Literal["online", "do_zatwierdzenia", "telefon"]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _rozdziel_legacy_slot(cls, value):
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        legacy = data.get("dlugosc_slotu_min")
+        if data.get("krok_slotu_min") is None:
+            data["krok_slotu_min"] = legacy if legacy is not None else 120
+        if data.get("domyslny_turn_time_min") is None:
+            data["domyslny_turn_time_min"] = legacy if legacy is not None else 120
+        # Starsza aplikacja nadal odczytuje to pole jako krok. Synchronizacja
+        # zapobiega rozjazdowi po edycji wykonanej przez nowy formularz.
+        data["dlugosc_slotu_min"] = data["krok_slotu_min"]
+        return data
+
+    @model_validator(mode="after")
+    def _waliduj_duza_grupe(self):
+        if (self.duza_grupa_od is None) != (self.duza_grupa_tryb is None):
+            raise ValueError("Próg dużej grupy i sposób obsługi muszą być ustawione razem.")
+        return self
 
     @field_validator("turn_time_progi")
     @classmethod
@@ -760,10 +789,126 @@ class WyjatekKalendarzaIn(BaseModel):
     godz_do: Optional[time] = None
     ostatni_zasiadek: Optional[time] = None
     dlugosc_slotu_min: Optional[int] = None
+    krok_slotu_min: Optional[int] = Field(default=None, ge=1, le=1440)
+    domyslny_turn_time_min: Optional[int] = Field(default=None, ge=1, lt=1440)
     nazwa: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _rozdziel_legacy_slot(cls, value):
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        legacy = data.get("dlugosc_slotu_min")
+        if data.get("krok_slotu_min") is None and legacy is not None:
+            data["krok_slotu_min"] = legacy
+        if data.get("domyslny_turn_time_min") is None and legacy is not None:
+            data["domyslny_turn_time_min"] = legacy
+        if data.get("krok_slotu_min") is not None:
+            data["dlugosc_slotu_min"] = data["krok_slotu_min"]
+        return data
 class WyjatekKalendarzaOut(WyjatekKalendarzaIn):
     id: int
     model_config = ConfigDict(from_attributes=True)
+
+
+class NadpisanieLimitowIn(BaseModel):
+    """Jawne potwierdzenie operatora po otrzymaniu konkretnego konfliktu reguł."""
+
+    powod: Literal[
+        "guest_request",
+        "large_group_confirmed",
+        "event_exception",
+        "operational_decision",
+        "walk_in",
+        "other",
+    ]
+    notatka: Optional[str] = Field(default=None, max_length=240)
+    potwierdzone: Literal[True]
+
+    @field_validator("notatka")
+    @classmethod
+    def _oczysc_notatke(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @model_validator(mode="after")
+    def _wymagaj_opisu_innego_powodu(self):
+        if self.powod == "other" and not self.notatka:
+            raise ValueError("Inny powód wymaga krótkiej notatki.")
+        return self
+
+
+class RegulaDostepnosciRezerwacjiIn(BaseModel):
+    serwis_id: Optional[int] = Field(default=None, gt=0)
+    sala_id: Optional[int] = Field(default=None, gt=0)
+    kanal: Literal["oba", "online", "wewnetrzna"] = "oba"
+    pacing_okno_min: Optional[int] = Field(default=None, ge=1, le=1440)
+    pacing_max_rez: Optional[int] = Field(default=None, ge=0)
+    pacing_max_osob: Optional[int] = Field(default=None, ge=0)
+    max_jednoczesnych_rez: Optional[int] = Field(default=None, ge=0)
+    max_jednoczesnych_osob: Optional[int] = Field(default=None, ge=0)
+    bufor_min: Optional[int] = Field(default=None, ge=0, le=1440)
+    okno_wyprzedzenia_dni: Optional[int] = Field(default=None, ge=0, le=730)
+    cutoff_min: Optional[int] = Field(default=None, ge=0, le=10080)
+    min_grupa: Optional[int] = Field(default=None, ge=1)
+    max_grupa: Optional[int] = Field(default=None, ge=0)
+    duza_grupa_od: Optional[int] = Field(default=None, ge=1)
+    duza_grupa_tryb: Optional[Literal["online", "do_zatwierdzenia", "telefon"]] = None
+
+    @model_validator(mode="after")
+    def _waliduj_scope_i_wartosci(self):
+        if (self.duza_grupa_od is None) != (self.duza_grupa_tryb is None):
+            raise ValueError("Próg dużej grupy i sposób obsługi muszą być ustawione razem.")
+        if self.max_grupa not in (None, 0) and self.min_grupa is not None and self.max_grupa < self.min_grupa:
+            raise ValueError("Maksymalna grupa nie może być mniejsza od minimalnej.")
+        scope_fields = {
+            "serwis_id", "sala_id", "kanal",
+        }
+        if not any(
+            value is not None
+            for name, value in self.model_dump().items()
+            if name not in scope_fields
+        ):
+            raise ValueError("Ustaw co najmniej jedną wartość reguły.")
+        return self
+
+
+class RegulaDostepnosciRezerwacjiOut(RegulaDostepnosciRezerwacjiIn):
+    id: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PolitykaRezerwacjiR3In(BaseModel):
+    okno_wyprzedzenia_dni: int = Field(default=0, ge=0, le=730)
+    cutoff_min: int = Field(default=0, ge=0, le=10080)
+    min_grupa_online: int = Field(default=1, ge=1)
+    max_grupa_online: int = Field(default=0, ge=0)
+    bufor_min: int = Field(default=0, ge=0, le=1440)
+
+    @model_validator(mode="after")
+    def _waliduj_grupy(self):
+        if self.max_grupa_online and self.max_grupa_online < self.min_grupa_online:
+            raise ValueError("Maksymalna grupa online nie może być mniejsza od minimalnej.")
+        return self
+
+
+class SalaDostepnoscR3In(BaseModel):
+    online_aktywna: bool = True
+    wewnetrzna_aktywna: bool = True
+    limit_jednoczesnych_rez: Optional[int] = Field(default=None, ge=0)
+    limit_jednoczesnych_osob: Optional[int] = Field(default=None, ge=0)
+    domyslny_bufor_min: Optional[int] = Field(default=None, ge=0, le=1440)
+
+
+class SymulacjaRegulRezerwacjiIn(BaseModel):
+    data: date
+    godz_od: time
+    liczba_osob: int = Field(default=2, ge=1)
+    kanal: Literal["online", "wewnetrzna"] = "wewnetrzna"
+    sala_id: Optional[int] = Field(default=None, gt=0)
 
 class RezerwacjaIn(BaseModel):
     """Rezerwacja stolika (rodzaj=stolik). godz_do liczone z długości slotu, gdy puste."""
@@ -778,6 +923,7 @@ class RezerwacjaIn(BaseModel):
     notatka: Optional[str] = None
     zadatek: float = 0.0
     przekrocz_limity: bool = False   # jawne ponowienie po 409; wymaga osobnego uprawnienia
+    nadpisanie_limitow: Optional["NadpisanieLimitowIn"] = None
 
 class RezerwacjeWyszukajIn(BaseModel):
     """PII-safe kontrakt bazy rezerwacji.
@@ -847,6 +993,7 @@ class ZrealizujIn(BaseModel):
     stolik_id: int
     godz_od: Optional[time] = None   # opcjonalne nadpisanie godziny z wpisu
     przekrocz_limity: bool = False
+    nadpisanie_limitow: Optional["NadpisanieLimitowIn"] = None
 
 class HoldIn(BaseModel):
     """Tymczasowy HOLD stołu dla wpisu z listy oczekujących (waitlist v2)."""

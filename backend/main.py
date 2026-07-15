@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating, platnosci, uprawnienia
 import reservation_access
 import reservation_audit
+import reservation_rules
 import reservation_service
 from crm_identity import (
     hash_key as _hash_klucz_crm,
@@ -66,6 +67,10 @@ from routers.zaproszenia import router as zaproszenia_router
 from routers.flota import router as flota_router
 from routers.pos import router as pos_router
 from routers.rodo import router as rodo_router
+from routers.reguly_rezerwacji import (
+    router as reguly_rezerwacji_router,
+    _waliduj_serwis as _waliduj_serwis_r3,
+)
 import provisioning
 
 logger = logging.getLogger(__name__)
@@ -80,13 +85,33 @@ app = FastAPI(
 
 
 @app.exception_handler(reservation_service.ReservationError)
-async def reservation_error_handler(_request: Request, exc: reservation_service.ReservationError):
+async def reservation_error_handler(request: Request, exc: reservation_service.ReservationError):
     """Stabilny kontrakt konfliktu bez łamania istniejącego klienta czytającego ``detail``."""
+    availability = exc.availability.to_dict()
+    if request.url.path == "/api/online" or request.url.path.startswith("/api/online/"):
+        # Widget gościa dostaje decyzję i czytelny komunikat, nigdy wewnętrzny
+        # zapas coverów, identyfikatory reguł/sal ani pełną konfigurację polityki.
+        availability["checks"] = []
+        availability["applied_rules"] = []
+        availability["violations"] = [
+            {
+                "code": item.get("code"),
+                "rule": item.get("rule"),
+                "message": item.get("message"),
+            }
+            for item in (availability.get("violations") or [])
+        ]
+        availability["can_override"] = False
+        service = availability.get("service")
+        if isinstance(service, dict):
+            availability["service"] = {
+                key: service.get(key) for key in ("name", "godz_od", "godz_do")
+            }
     return JSONResponse(
         {
             "detail": exc.message,
             "code": exc.code,
-            "availability": exc.availability.to_dict(),
+            "availability": availability,
         },
         status_code=exc.status_code,
     )
@@ -109,6 +134,7 @@ app.include_router(kadry_router)       # kadry i konta zespołu — users/pracow
 app.include_router(zaproszenia_router) # zaproszenia pracowników do kont — jedyna ścieżka rejestracji (feedback UX)
 app.include_router(flota_router)       # samoobsługowe zakładanie lokali + panel floty (feedback: zero ręcznej pracy)
 app.include_router(pos_router)         # uniwersalne API danych POS: utarg dnia + heartbeat agenta (tor A integracji)
+app.include_router(reguly_rezerwacji_router)  # R3 — konfiguracja i symulator reguł dostępności
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -210,7 +236,10 @@ TRASY_PUBLICZNE = (
 READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health", "/api/rodo")
 # Odczytowe komendy POST mają dokładne dopasowanie metoda+trasa. Nie dodajemy ich do
 # prefiksowej listy powyżej, żeby przyszła podtrasa zapisu nie odziedziczyła wyjątku.
-READ_ONLY_POST_ODCZYT = frozenset({"/api/rezerwacje-stolik/wyszukaj"})
+READ_ONLY_POST_ODCZYT = frozenset({
+    "/api/rezerwacje-stolik/wyszukaj",
+    "/api/rezerwacje/reguly/symuluj",
+})
 
 # Odpowiedzi tych przestrzeni mogą zawierać PII gościa. Segmentowe dopasowanie
 # zapobiega przypadkowemu objęciu podobnie nazwanej przyszłej trasy.
@@ -1478,27 +1507,8 @@ def _dodaj_minuty(t: time, minuty: int) -> time:
 
 
 def _serwisy_dnia(db, data: date):
-    """Serwisy (okna przyjęć) danego dnia — z wierszy GodzinyOtwarcia wg dnia tygodnia (lunch+kolacja),
-    z NADPISANIEM przez WyjatekKalendarza dla tej daty: blackout → [] (zamknięte); godziny_specjalne →
-    jeden syntetyczny serwis wg wyjątku (turn-time/pacing dziedziczone z bazowego serwisu dnia)."""
-    baza = (db.query(models.GodzinyOtwarcia)
-            .filter_by(dzien_tygodnia=data.weekday(), aktywny=True)
-            .order_by(models.GodzinyOtwarcia.godz_od).all())
-    wyjatki = db.query(models.WyjatekKalendarza).filter_by(data=data).all()
-    if any(w.typ == "blackout" for w in wyjatki):
-        return []
-    spec = next((w for w in wyjatki if w.typ == "godziny_specjalne" and w.godz_od and w.godz_do), None)
-    if spec is None:
-        return baza
-    wzor = baza[0] if baza else None
-    return [models.GodzinyOtwarcia(
-        dzien_tygodnia=data.weekday(), aktywny=True, nazwa=spec.nazwa,
-        godz_od=spec.godz_od, godz_do=spec.godz_do, ostatni_zasiadek=spec.ostatni_zasiadek,
-        dlugosc_slotu_min=(spec.dlugosc_slotu_min or (wzor.dlugosc_slotu_min if wzor else DOMYSLNY_SLOT_MIN)),
-        turn_time_progi=(wzor.turn_time_progi if wzor else None),
-        pacing_max_rez=(wzor.pacing_max_rez if wzor else None),
-        pacing_max_osob=(wzor.pacing_max_osob if wzor else None),
-        pacing_okno_min=(wzor.pacing_okno_min if wzor else None))]
+    """Kompatybilny adapter do kanonicznego resolvera serwisów R3."""
+    return list(reservation_rules.serwisy_dnia(db, data))
 
 
 def _jest_blackout(db, data) -> bool:
@@ -1508,31 +1518,16 @@ def _jest_blackout(db, data) -> bool:
 
 
 def _serwis_dla_godziny(db, data, godz_od):
-    """Serwis, którego okno przyjęć obejmuje godz_od (w [godz_od, ostatni_zasiadek||godz_do]).
-    Fallback = pierwszy serwis dnia (zachowuje historyczne zachowanie 'jeden slot dla dnia')."""
+    """Adapter legacy; zapisy używają ścisłego evaluatora R3 bez fallbacku."""
     if godz_od is None:
         return None
-    serwisy = _serwisy_dnia(db, data)
-    for s in serwisy:
-        last = s.ostatni_zasiadek or s.godz_do
-        if s.godz_od <= godz_od <= last:
-            return s
-    return serwisy[0] if serwisy else None
+    return reservation_rules.serwis_dla_godziny(
+        db, data, godz_od, strict=False,
+    )
 
 
 def _turn_time(serwis, liczba_osob) -> int:
-    """Czas zasiadku (min) dla serwisu i wielkości grupy. Progi = [{do_osob,min}] rosnąco;
-    NULL → dlugosc_slotu_min (fallback DOMYSLNY_SLOT_MIN)."""
-    baza = (getattr(serwis, "dlugosc_slotu_min", None) if serwis else None) or DOMYSLNY_SLOT_MIN
-    progi = getattr(serwis, "turn_time_progi", None) if serwis else None
-    if not progi:
-        return baza
-    osoby = max(1, liczba_osob or 1)
-    progi = sorted(progi, key=lambda p: p.get("do_osob", 0))
-    for prog in progi:
-        if osoby <= prog.get("do_osob", 0):
-            return int(prog.get("min") or baza)
-    return int(progi[-1].get("min") or baza)   # większa grupa niż najwyższy próg → najdłuższy zasiadek
+    return reservation_rules.turn_time(serwis, liczba_osob)
 
 
 def _dlugosc_dla(db, data, godz_od, liczba_osob) -> int:
@@ -1635,6 +1630,89 @@ def _parametry_pacingu(db, data, godz_od):
     }
 
 
+def _sala_dla_stolikow(db, stoliki) -> Optional[int]:
+    """Rozwiązuje salę przydziału także dla legacy stolików mapowanych po strefie."""
+    ids = _ids_stolikow(stoliki)
+    if not ids:
+        return None
+    rows = db.query(models.Stolik).filter(models.Stolik.id.in_(ids)).all()
+    if len(rows) != len(ids):
+        # Walidacja przydziału zwróci właściwy błąd zasobu; evaluator może nadal
+        # bezpiecznie sprawdzić limity globalne i kanałowe.
+        return None
+    room_by_name = {
+        (room.nazwa or "").strip().casefold(): room.id
+        for room in db.query(models.SalaRezerwacyjna).all()
+    }
+    sale = {
+        row.sala_id
+        if row.sala_id is not None
+        else room_by_name.get((row.strefa or "").strip().casefold())
+        for row in rows
+    }
+    niepuste = {sala_id for sala_id in sale if sala_id is not None}
+    if len(niepuste) > 1 or (niepuste and None in sale):
+        raise HTTPException(400, "Stoły jednego przydziału muszą należeć do tej samej sali.")
+    return next(iter(niepuste)) if niepuste else None
+
+
+def _ocen_reguly_slotu(
+    db,
+    *,
+    data,
+    godz_od,
+    liczba_osob,
+    kanal,
+    godz_do=None,
+    intent="create",
+    sala_id=None,
+    existing_termin_id=None,
+    preserve_existing_room_access=False,
+):
+    if godz_od is None:
+        return None
+    return reservation_rules.evaluate_reservation_rules(
+        db,
+        reservation_rules.RuleRequest(
+            data=data,
+            godz_od=godz_od,
+            godz_do=godz_do,
+            liczba_osob=max(1, int(liczba_osob or 1)),
+            kanal=reservation_service.normalise_reservation_channel(kanal),
+            sala_id=sala_id,
+            existing_termin_id=existing_termin_id,
+            intent=intent,
+            preserve_existing_room_access=preserve_existing_room_access,
+        ),
+        now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+
+def _ocen_reguly_terminu(
+    db,
+    t,
+    *,
+    stoliki=None,
+    intent="create",
+    sala_id=None,
+    preserve_existing_room_access=False,
+):
+    ids = _ids_stolikow(stoliki if stoliki is not None else _stoly_terminu(t))
+    room_id = sala_id if sala_id is not None else _sala_dla_stolikow(db, ids)
+    return _ocen_reguly_slotu(
+        db,
+        data=t.data,
+        godz_od=t.godz_od,
+        godz_do=t.godz_do,
+        liczba_osob=t.liczba_osob,
+        kanal=t.kanal,
+        sala_id=room_id,
+        existing_termin_id=(t.id if getattr(t, "id", None) else None),
+        intent=intent,
+        preserve_existing_room_access=preserve_existing_room_access,
+    )
+
+
 def _zastap_ledger_terminu(
     db,
     t,
@@ -1644,6 +1722,9 @@ def _zastap_ledger_terminu(
     candidates=(),
     alternatives=(),
     zachowaj_nieaktywny_przydzial=False,
+    evaluation=None,
+    override=False,
+    intent="create",
 ):
     """Aktualizuje ledger w tej samej transakcji co projekcję ``Termin``."""
     if t.status not in REZ_AKTYWNE:
@@ -1656,7 +1737,29 @@ def _zastap_ledger_terminu(
         not zachowaj_nieaktywny_przydzial and not ids <= runtime_ids
     ):
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+    room_id = _sala_dla_stolikow(db, ids)
+    evaluation = evaluation or _ocen_reguly_terminu(
+        db,
+        t,
+        stoliki=ids,
+        intent=intent,
+        sala_id=room_id,
+        preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
+    )
+    if evaluation is not None and evaluation.godz_do is not None:
+        t.godz_do = evaluation.godz_do
+    if evaluation is not None and enforce_pacing:
+        reservation_rules.enforce_rule_evaluation(
+            evaluation,
+            override=bool(override),
+            can_override=bool(override),
+        )
     pacing = _parametry_pacingu(db, t.data, t.godz_od)
+    buffer_min = (
+        evaluation.buffer_min
+        if evaluation is not None
+        else (get_lokal_config(db).rez_bufor_min or 0)
+    )
     return reservation_service.replace_termin_allocation(
         db,
         termin_id=t.id,
@@ -1665,8 +1768,14 @@ def _zastap_ledger_terminu(
         end=t.godz_do,
         table_ids=ids,
         party_size=t.liczba_osob or 1,
-        buffer_min=get_lokal_config(db).rez_bufor_min or 0,
-        enforce_pacing=enforce_pacing,
+        buffer_min=buffer_min,
+        # Kanoniczny evaluator wykonał kontrolę już pod blokadą dnia. Stary
+        # checker pozostaje dla bezpośrednich klientów warstwy service, lecz tutaj
+        # nie może nadpisać typowanych wyjątków R3 ustawieniami legacy.
+        enforce_pacing=False,
+        override=bool(override),
+        room_id=room_id,
+        channel=reservation_service.normalise_reservation_channel(t.kanal),
         now=_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None),
         candidates=candidates,
         alternatives=alternatives,
@@ -1833,13 +1942,23 @@ def _ma_dostep_rezerwacji(user, permission: str) -> bool:
     return user is None or uprawnienia.ma_user(user, permission)
 
 
-def _jawne_nadpisanie_limitow(user, requested: bool) -> bool:
-    """Przekroczenie pacingu jest dozwolone tylko jako jawne ponowienie po ostrzeżeniu."""
-    if not requested:
-        return False
+def _jawne_nadpisanie_limitow(user, requested: bool, confirmation=None) -> Optional[dict]:
+    """Normalizuje stare potwierdzenie bool i nowy, audytowalny kontrakt R3."""
+    if not requested and confirmation is None:
+        return None
     if not _ma_dostep_rezerwacji(user, "rezerwacje.nadpisuj_limity"):
         raise HTTPException(403, "Brak uprawnienia do przekraczania limitów rezerwacji.")
-    return True
+    if confirmation is not None:
+        return {
+            "reason_code": confirmation.powod,
+            "note": confirmation.notatka,
+            "legacy": False,
+        }
+    return {
+        "reason_code": "legacy_confirmation",
+        "note": None,
+        "legacy": True,
+    }
 
 
 def _szczegoly_przekroczenia_pacingu(db, t: models.Termin) -> Optional[dict]:
@@ -1873,6 +1992,38 @@ def _szczegoly_przekroczenia_pacingu(db, t: models.Termin) -> Optional[dict]:
             "projected": status["would_covers"],
         })
     return {"violations": violations} if violations else None
+
+
+def _szczegoly_nadpisania_r3(evaluation, *, legacy=False) -> Optional[dict]:
+    """Buduje wyłącznie bezpieczne, typowane metadane faktycznie złamanych reguł."""
+    if evaluation is None or evaluation.decision != "override_required":
+        return None
+    violations = []
+    for item in evaluation.violations:
+        row = {
+            "rule": item.rule,
+            "observed": item.observed,
+            "limit": item.limit,
+            "projected": item.projected,
+        }
+        if not legacy:
+            row["code"] = item.code
+            row["scope"] = item.scope
+            row["source"] = item.source
+        violations.append(row)
+    return {"violations": violations} if violations else None
+
+
+def _powod_audytu_nadpisania(evaluation) -> str:
+    rules = {item.rule for item in (evaluation.violations if evaluation else ())}
+    if rules & {"concurrent_reservations", "concurrent_covers"}:
+        return "capacity_override"
+    if rules & {"pacing_reservations", "pacing_covers"}:
+        return "pacing_override"
+    # Ogolne nadpisania dostepnosci korzystaja z istniejacej wartosci CHECK.
+    # Szczegolowy typ reguly i kod powodu operatora sa zapisane osobno w
+    # bezpiecznych metadanych R3 oraz szyfrowanym kontekscie override.
+    return "other"
 
 
 def _wartosci_pii_rezerwacji(t: models.Termin) -> dict:
@@ -2317,10 +2468,45 @@ def dodaj_wyjatek_kalendarza(dane: schemas.WyjatekKalendarzaIn, db: Session = De
     typ = (dane.typ or "").strip()
     if typ not in _WYJ_TYPY:
         raise HTTPException(400, "typ musi być 'blackout' lub 'godziny_specjalne'.")
-    if typ == "godziny_specjalne" and not (dane.godz_od and dane.godz_do):
-        raise HTTPException(400, "Godziny specjalne wymagają godz_od i godz_do.")
+    if typ == "godziny_specjalne":
+        if not (dane.godz_od and dane.godz_do):
+            raise HTTPException(400, "Godziny specjalne wymagają godz_od i godz_do.")
+        if dane.godz_do <= dane.godz_od:
+            raise HTTPException(400, "Godziny specjalne muszą kończyć się po rozpoczęciu.")
+        if dane.ostatni_zasiadek is not None and not (
+            dane.godz_od <= dane.ostatni_zasiadek <= dane.godz_do
+        ):
+            raise HTTPException(400, "Ostatnie przyjęcie musi mieścić się w godzinach specjalnych.")
     w = models.WyjatekKalendarza(**{**dane.model_dump(), "typ": typ})
     db.add(w); db.commit(); db.refresh(w)
+    return schemas.WyjatekKalendarzaOut.model_validate(w).model_dump()
+
+
+@app.put("/api/wyjatki-kalendarza/{wid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def edytuj_wyjatek_kalendarza(
+    wid: int,
+    dane: schemas.WyjatekKalendarzaIn,
+    db: Session = Depends(get_db),
+):
+    w = db.get(models.WyjatekKalendarza, wid)
+    if w is None:
+        raise HTTPException(404, "Brak wyjątku kalendarza.")
+    typ = (dane.typ or "").strip()
+    if typ not in _WYJ_TYPY:
+        raise HTTPException(400, "typ musi być 'blackout' lub 'godziny_specjalne'.")
+    if typ == "godziny_specjalne":
+        if not (dane.godz_od and dane.godz_do):
+            raise HTTPException(400, "Godziny specjalne wymagają godz_od i godz_do.")
+        if dane.godz_do <= dane.godz_od:
+            raise HTTPException(400, "Godziny specjalne muszą kończyć się po rozpoczęciu.")
+        if dane.ostatni_zasiadek is not None and not (
+            dane.godz_od <= dane.ostatni_zasiadek <= dane.godz_do
+        ):
+            raise HTTPException(400, "Ostatnie przyjęcie musi mieścić się w godzinach specjalnych.")
+    for key, value in dane.model_dump().items():
+        setattr(w, key, value)
+    w.typ = typ
+    db.commit(); db.refresh(w)
     return schemas.WyjatekKalendarzaOut.model_validate(w).model_dump()
 
 
@@ -2840,6 +3026,7 @@ def get_godziny_otwarcia(db: Session = Depends(get_db)):
 def dodaj_godziny_otwarcia(dane: schemas.GodzinyOtwarciaIn, db: Session = Depends(get_db)):
     if not (0 <= dane.dzien_tygodnia <= 6):
         raise HTTPException(400, "dzien_tygodnia musi być 0–6.")
+    _waliduj_serwis_r3(db, dane)
     g = models.GodzinyOtwarcia(**dane.model_dump()); db.add(g); db.commit(); db.refresh(g)
     return schemas.GodzinyOtwarciaOut.model_validate(g).model_dump()
 
@@ -2917,7 +3104,9 @@ def dodaj_rezerwacje_stolik(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    override_limitow = _jawne_nadpisanie_limitow(user, dane.przekrocz_limity)
+    override_context = _jawne_nadpisanie_limitow(
+        user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
     guards = reservation_service.begin_locked_write(db, [dane.data])
     teraz = utcnow_naive()
     try:
@@ -2948,10 +3137,26 @@ def dodaj_rezerwacje_stolik(
             godz_od=dane.godz_od, godz_do=godz_do, stolik_id=dane.stolik_id,
             rodzaj="stolik", kanal="reczna")
         db.add(t); db.flush()
-        override_details = (
-            _szczegoly_przekroczenia_pacingu(db, t) if override_limitow else None
+        evaluation = _ocen_reguly_terminu(db, t, intent="create")
+        override_active = bool(
+            override_context
+            and evaluation is not None
+            and evaluation.decision == "override_required"
         )
-        _zastap_ledger_terminu(db, t, enforce_pacing=not override_limitow)
+        override_details = (
+            _szczegoly_nadpisania_r3(
+                evaluation, legacy=bool(override_context and override_context["legacy"]),
+            )
+            if override_active else None
+        )
+        _zastap_ledger_terminu(
+            db,
+            t,
+            enforce_pacing=True,
+            evaluation=evaluation,
+            override=override_active,
+            intent="create",
+        )
         odpowiedz = _rezerwacja_out(t, user)
         reservation_audit.add_reservation_audit(
             db,
@@ -2967,9 +3172,11 @@ def dodaj_rezerwacje_stolik(
                 termin=t,
                 action="override",
                 actor=user,
-                reason="pacing_override",
+                reason=_powod_audytu_nadpisania(evaluation),
                 after=t,
                 override_details=override_details,
+                override_reason_code=override_context["reason_code"],
+                override_note=override_context["note"],
             )
         reservation_service.complete_idempotency(
             idem.record, response=odpowiedz, http_status=201, termin_id=t.id, now=teraz,
@@ -2992,7 +3199,9 @@ def edytuj_rezerwacje_stolik(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    override_limitow = _jawne_nadpisanie_limitow(user, dane.przekrocz_limity)
+    override_context = _jawne_nadpisanie_limitow(
+        user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
     t, guards = _zablokuj_termin(db, rid, [dane.data])
     if not t or t.rodzaj != "stolik":
         db.rollback()
@@ -3038,14 +3247,31 @@ def edytuj_rezerwacje_stolik(
     try:
         _migruj_osierocony_profil_po_zmianie_tozsamosci(db, t, crm_identity_before)
         db.flush()
+        evaluation = _ocen_reguly_terminu(
+            db,
+            t,
+            intent="edit",
+            preserve_existing_room_access=zachowaj_przydzial,
+        )
+        override_active = bool(
+            override_context
+            and evaluation is not None
+            and evaluation.decision == "override_required"
+        )
         override_details = (
-            _szczegoly_przekroczenia_pacingu(db, t) if override_limitow else None
+            _szczegoly_nadpisania_r3(
+                evaluation, legacy=bool(override_context and override_context["legacy"]),
+            )
+            if override_active else None
         )
         _zastap_ledger_terminu(
             db,
             t,
-            enforce_pacing=not override_limitow,
+            enforce_pacing=True,
             zachowaj_nieaktywny_przydzial=zachowaj_przydzial,
+            evaluation=evaluation,
+            override=override_active,
+            intent="edit",
         )
         reservation_audit.add_reservation_audit(
             db,
@@ -3062,10 +3288,12 @@ def edytuj_rezerwacje_stolik(
                 termin=t,
                 action="override",
                 actor=user,
-                reason="pacing_override",
+                reason=_powod_audytu_nadpisania(evaluation),
                 before=before,
                 after=t,
                 override_details=override_details,
+                override_reason_code=override_context["reason_code"],
+                override_note=override_context["note"],
             )
         _commit_zapis_rezerwacji(db, guards)
     except IntegrityError as exc:
@@ -3380,7 +3608,9 @@ def zrealizuj_lista_oczekujacych(
 ):
     """Realizuje wpis z listy oczekujących → tworzy rezerwację na wskazanym stoliku
     (walidacja pojemności/kolizji). Wpis dostaje status 'zrealizowany'."""
-    override_limitow = _jawne_nadpisanie_limitow(user, dane.przekrocz_limity)
+    override_context = _jawne_nadpisanie_limitow(
+        user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
     w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
@@ -3420,10 +3650,26 @@ def zrealizuj_lista_oczekujacych(
         rodzaj="stolik", kanal="reczna")
     try:
         db.add(t); db.flush()
-        override_details = (
-            _szczegoly_przekroczenia_pacingu(db, t) if override_limitow else None
+        evaluation = _ocen_reguly_terminu(db, t, intent="create")
+        override_active = bool(
+            override_context
+            and evaluation is not None
+            and evaluation.decision == "override_required"
         )
-        _zastap_ledger_terminu(db, t, enforce_pacing=not override_limitow)
+        override_details = (
+            _szczegoly_nadpisania_r3(
+                evaluation, legacy=bool(override_context and override_context["legacy"]),
+            )
+            if override_active else None
+        )
+        _zastap_ledger_terminu(
+            db,
+            t,
+            enforce_pacing=True,
+            evaluation=evaluation,
+            override=override_active,
+            intent="create",
+        )
         w.status = "zrealizowany"; w.zrealizowano_at = teraz; w.termin_id = t.id
         odpowiedz = {"rezerwacja": _rezerwacja_out(t, user), "wpis": _lista_out(w, user)}
         reservation_audit.add_reservation_audit(
@@ -3440,9 +3686,11 @@ def zrealizuj_lista_oczekujacych(
                 termin=t,
                 action="override",
                 actor=user,
-                reason="pacing_override",
+                reason=_powod_audytu_nadpisania(evaluation),
                 after=t,
                 override_details=override_details,
+                override_reason_code=override_context["reason_code"],
+                override_note=override_context["note"],
             )
         reservation_service.complete_idempotency(
             idem.record, response=odpowiedz, http_status=200, termin_id=t.id, now=teraz,
@@ -3558,21 +3806,8 @@ def _wymagaj_rezerwacje_online(db: Session = Depends(get_db)):
 
 
 def _sloty_dnia(db, data: date):
-    """Lista (godzina_slotu, serwis) ze WSZYSTKICH aktywnych serwisów dnia (lunch+kolacja).
-    Pusta gdy zamknięte. Duplikaty godzin scalane (wcześniejszy serwis wygrywa)."""
-    pary, widziane = [], set()
-    for s in _serwisy_dnia(db, data):
-        krok = s.dlugosc_slotu_min or DOMYSLNY_SLOT_MIN
-        last = s.ostatni_zasiadek or s.godz_do
-        m, last_m = s.godz_od.hour * 60 + s.godz_od.minute, last.hour * 60 + last.minute
-        while m <= last_m:
-            t = time(m // 60, m % 60)
-            if t not in widziane:
-                widziane.add(t)
-                pary.append((t, s))
-            m += krok
-    pary.sort(key=lambda p: p[0])
-    return pary
+    """Kompatybilny adapter do siatki ofert R3 (krok ≠ czas wizyty)."""
+    return list(reservation_rules.sloty_dnia(db, data))
 
 
 def _pacing_pelny(db, data, godz_od, serwis, osoby, pomin_id=None) -> bool:
@@ -4016,30 +4251,118 @@ def _wybierz_wolny_przydzial(
     db, data, godz_od, godz_do, osoby, pomin_id=None, kanal="wewnetrzna",
 ):
     """Najlepszy pojedynczy stół lub dozwolona kombinacja ze wspólnego silnika sadzania."""
+    wyniki = _wolne_przydzialy(
+        db, data, godz_od, godz_do, osoby, pomin_id=pomin_id, kanal=kanal,
+    )
+    return wyniki[0] if wyniki else None
+
+
+def _wolne_przydzialy(
+    db, data, godz_od, godz_do, osoby, pomin_id=None, kanal="wewnetrzna",
+):
+    """Wszystkie legalne zasobowo przydziały, w kolejności preferencji silnika."""
     zajete = _zajete_stoly(db, data, godz_od, godz_do, pomin_id=pomin_id)
     wyniki = seating.dopasuj(
         max(1, osoby or 1),
         _stoly_do_seating(db),
         _kombinacje_do_seating(db, kanal=kanal),
         zajete=zajete,
-        limit=1,
+        limit=0,
         sasiedztwo=_sasiedztwo_do_seating(db),
         obciazenie_sekcji=_obciazenie_sekcji(
             db, data, godz_od, godz_do, pomin_id=pomin_id,
         ),
+        respect_room_fill=False,
     )
-    return wyniki[0] if wyniki else None
+    wyniki.sort(key=lambda candidate: (
+        0 if candidate.get("strategia_zapelniania") == "wypelniaj_kolejno" else 1,
+        candidate.get("priorytet_sali") or 0,
+        candidate.get("kolejnosc_sali") or 0,
+        candidate.get("koszt") or 0,
+        len(candidate.get("stoliki") or ()),
+        candidate.get("stoliki") or (),
+    ))
+    return wyniki
+
+
+def _przydzial_zgodny_z_regulami(
+    db,
+    *,
+    data,
+    godz_od,
+    osoby,
+    kanal,
+    pomin_id=None,
+    intent="quote",
+    enforce=True,
+):
+    """Łączy wynik reguł R3 z wyborem zasobu, próbując alternatywne sale."""
+    base = _ocen_reguly_slotu(
+        db,
+        data=data,
+        godz_od=godz_od,
+        liczba_osob=osoby,
+        kanal=kanal,
+        existing_termin_id=pomin_id,
+        intent=intent,
+    )
+    if base is None:
+        return None, None
+    structural_rules = {"date_not_past", "local_time", "service", "slot_step", "interval"}
+    structural_block = any(
+        violation.rule in structural_rules for violation in base.violations
+    )
+    if structural_block:
+        if enforce:
+            reservation_rules.enforce_rule_evaluation(base)
+        return None, base
+    godz_do = base.godz_do
+    if godz_do is None:
+        if enforce:
+            reservation_rules.enforce_rule_evaluation(base)
+        return None, base
+    candidates = _wolne_przydzialy(
+        db, data, godz_od, godz_do, osoby, pomin_id=pomin_id, kanal=kanal,
+    )
+    first_blocked = None
+    for candidate in candidates:
+        room_id = candidate.get("sala_id")
+        if room_id is None:
+            room_id = _sala_dla_stolikow(db, candidate.get("stoliki") or ())
+        evaluation = _ocen_reguly_slotu(
+            db,
+            data=data,
+            godz_od=godz_od,
+            liczba_osob=osoby,
+            kanal=kanal,
+            sala_id=room_id,
+            existing_termin_id=pomin_id,
+            intent=intent,
+        )
+        if evaluation.decision == "allow":
+            return candidate, evaluation
+        if first_blocked is None:
+            first_blocked = evaluation
+    if enforce and first_blocked is not None:
+        reservation_rules.enforce_rule_evaluation(first_blocked)
+    if enforce and first_blocked is None and base.decision != "allow":
+        reservation_rules.enforce_rule_evaluation(base)
+    return None, (first_blocked or base)
 
 
 def _pierwszy_wolny_slot(db, data, osoby, cfg, teraz_lok):
-    """Pierwszy slot z przydziałem pojedynczym lub kombinacją, zgodny z pacingiem."""
+    """Pierwszy slot zgodny z pełnym zestawem reguł i zasobem stołów."""
     for g, serwis in _sloty_dnia(db, data):                     # blackout → [] (pusto, sam znika)
-        if cfg.rez_cutoff_min and (datetime.combine(data, g) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
-            continue
-        if _pacing_pelny(db, data, g, serwis, osoby):
-            continue
-        g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
-        if _wybierz_wolny_przydzial(db, data, g, g_do, osoby, kanal="online"):
+        przydzial, evaluation = _przydzial_zgodny_z_regulami(
+            db,
+            data=data,
+            godz_od=g,
+            osoby=osoby,
+            kanal="online",
+            intent="quote",
+            enforce=False,
+        )
+        if przydzial and evaluation and evaluation.decision == "allow":
             return (g, serwis)
     return None
 
@@ -4067,8 +4390,6 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
     osoby = max(1, osoby)
     cfg = get_lokal_config(db)
     teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
-    if cfg.rez_okno_wyprzedzenia_dni and data > teraz_lok.date() + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
-        return {"data": str(data), "osoby": osoby, "sloty": []}       # poza oknem wyprzedzenia
     pary = _sloty_dnia(db, data)                                       # blackout → [] (znika sam)
     stoliki = [
         stolik for stolik in _stoly_do_seating(db)
@@ -4076,22 +4397,32 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
     ]
     out = []
     for g, serwis in pary:
-        if cfg.rez_cutoff_min and (datetime.combine(data, g) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
-            continue                                                   # slot po cutoffie — nie pokazuj
         g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
         wolne_stoly = sum(
             1 for stolik in stoliki
             if not _stolik_zajety(db, data, stolik["id"], g, g_do)
         )
-        ma_przydzial = bool(
-            _wybierz_wolny_przydzial(
-                db, data, g, g_do, osoby, kanal="online",
-            )
+        przydzial, evaluation = _przydzial_zgodny_z_regulami(
+            db,
+            data=data,
+            godz_od=g,
+            osoby=osoby,
+            kanal="online",
+            intent="quote",
+            enforce=False,
         )
-        pacing_pelny = _pacing_pelny(db, data, g, serwis, osoby)
+        ma_przydzial = bool(przydzial and evaluation and evaluation.decision == "allow")
+        violations = list(evaluation.violations) if evaluation is not None else []
+        pacing_pelny = any(
+            item.rule in {"pacing_reservations", "pacing_covers"}
+            for item in violations
+        )
+        reguly_blokuja = bool(evaluation and evaluation.decision != "allow")
         # 'wolne' = efektywnie wolne (0 gdy pacing wyczerpany) — zgodne wstecznie z widgetem gościa.
-        out.append({"godz_od": _hm(g), "wolne": (0 if pacing_pelny else max(wolne_stoly, int(ma_przydzial))),
+        out.append({"godz_od": _hm(g), "wolne": (max(wolne_stoly, 1) if ma_przydzial else 0),
                     "wolne_stoly": wolne_stoly, "pacing_pelny": pacing_pelny,
+                    "reguly_blokuja": reguly_blokuja,
+                    "decision": (evaluation.decision if evaluation else "deny"),
                     "serwis": (serwis.nazwa if serwis and serwis.nazwa else None)})
     return {"data": str(data), "osoby": osoby, "sloty": out}
 
@@ -4108,8 +4439,6 @@ def online_najblizszy_termin(osoby: int = 2, od: Optional[date] = None, dni: int
     limit_dni = max(1, min(int(dni or 14), 60))                    # twardy limit skanowania
     for i in range(limit_dni):
         d = start + timedelta(days=i)
-        if cfg.rez_okno_wyprzedzenia_dni and d > teraz_lok.date() + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
-            break                                                  # poza oknem — dalej nie warto skanować
         slot = _pierwszy_wolny_slot(db, d, osoby, cfg, teraz_lok)
         if slot:
             g, serwis = slot
@@ -4170,18 +4499,6 @@ def online_rezerwacja(
             return response
 
         cfg = get_lokal_config(db)
-        if cfg.rez_okno_wyprzedzenia_dni and dane.data > dzis_lokalnie + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
-            raise HTTPException(400, f"Rezerwacje można składać najwyżej {cfg.rez_okno_wyprzedzenia_dni} dni w przód.")
-        if (dane.liczba_osob or 0) < cfg.rez_min_grupa_online or \
-                (cfg.rez_max_grupa_online and dane.liczba_osob > cfg.rez_max_grupa_online):
-            raise HTTPException(400, "Liczba osób poza zakresem dozwolonym dla rezerwacji online.")
-        if _jest_blackout(db, dane.data):
-            raise HTTPException(409, "W tym dniu nie przyjmujemy rezerwacji online.")
-        if cfg.rez_cutoff_min:
-            start = datetime.combine(dane.data, dane.godz_od)
-            if (start - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
-                raise HTTPException(409, "Zbyt późno na rezerwację online w tym terminie.")
-
         ip = request.client.host if request.client else "?"
         if not ratelimit.zuzyj_kwote(
             f"online-rez:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY,
@@ -4201,11 +4518,14 @@ def online_rezerwacja(
             if ile >= ONLINE_LIMIT_DZIENNY:
                 raise HTTPException(429, "Przekroczono dzienny limit rezerwacji online.")
 
-        serwis = _serwis_dla_godziny(db, dane.data, dane.godz_od)
-        godz_do = _dodaj_minuty(dane.godz_od, _turn_time(serwis, dane.liczba_osob))
-        przydzial = _wybierz_wolny_przydzial(
-            db, dane.data, dane.godz_od, godz_do, dane.liczba_osob,
+        przydzial, evaluation = _przydzial_zgodny_z_regulami(
+            db,
+            data=dane.data,
+            godz_od=dane.godz_od,
+            osoby=dane.liczba_osob,
             kanal="online",
+            intent="create",
+            enforce=True,
         )
         if not przydzial:
             raise reservation_service.ReservationError(
@@ -4214,6 +4534,7 @@ def online_rezerwacja(
                 "Brak wolnego stołu w wybranym czasie.",
                 rule="table",
             )
+        godz_do = evaluation.godz_do
         stoliki = przydzial["stoliki"]
         stolik = db.get(models.Stolik, stoliki[0])
         status = "potwierdzona" if cfg.rezerwacje_auto_potwierdzenie else "rezerwacja"
@@ -4244,6 +4565,8 @@ def online_rezerwacja(
             t,
             enforce_pacing=True,
             candidates=[{"stoliki": stoliki}],
+            evaluation=evaluation,
+            intent="create",
         )
         reservation_audit.add_reservation_audit(
             db,
@@ -4390,18 +4713,15 @@ def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Sessi
         raise HTTPException(400, "Rezerwacja bez godziny — nie można zmienić.")
     if data < teraz_lok.date():
         raise HTTPException(400, "Nie można przenieść rezerwacji wstecz.")
-    if cfg.rez_okno_wyprzedzenia_dni and data > teraz_lok.date() + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
-        raise HTTPException(400, f"Termin poza oknem {cfg.rez_okno_wyprzedzenia_dni} dni.")
-    if osoby < cfg.rez_min_grupa_online or (cfg.rez_max_grupa_online and osoby > cfg.rez_max_grupa_online):
-        raise HTTPException(400, "Liczba osób poza zakresem dozwolonym online.")
-    if _jest_blackout(db, data):
-        raise HTTPException(409, "W tym dniu nie przyjmujemy rezerwacji online.")
-    if cfg.rez_cutoff_min and (datetime.combine(data, godz_od) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
-        raise HTTPException(409, "Zbyt późno na wybrany termin.")
-    serwis = _serwis_dla_godziny(db, data, godz_od)
-    godz_do = _dodaj_minuty(godz_od, _turn_time(serwis, osoby))
-    przydzial = _wybierz_wolny_przydzial(
-        db, data, godz_od, godz_do, osoby, pomin_id=t.id, kanal="online",
+    przydzial, evaluation = _przydzial_zgodny_z_regulami(
+        db,
+        data=data,
+        godz_od=godz_od,
+        osoby=osoby,
+        pomin_id=t.id,
+        kanal="online",
+        intent="edit",
+        enforce=True,
     )
     if not przydzial:
         raise reservation_service.ReservationError(
@@ -4410,6 +4730,7 @@ def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Sessi
             "Brak wolnego stołu dla nowego terminu.",
             rule="table",
         )
+    godz_do = evaluation.godz_do
     stoliki = przydzial["stoliki"]
     stolik = db.get(models.Stolik, stoliki[0])
     stary_okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
@@ -4425,6 +4746,8 @@ def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Sessi
             t,
             enforce_pacing=True,
             candidates=[{"stoliki": stoliki}],
+            evaluation=evaluation,
+            intent="edit",
         )
         reservation_audit.add_reservation_audit(
             db, termin=t, action="edit", actor_kind="guest", before=before, after=t,

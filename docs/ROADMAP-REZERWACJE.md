@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a, R0b, R1a, R1b i R2 wdrożone · następny checkpoint R3 (reguły dostępności, serwisy i symulator) · 15 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R3 wdrożone · następny checkpoint R4 (wspólny silnik alokacji 2.0 i atomowość) · 15 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -653,6 +653,16 @@ Testy:
 **Done:** administrator sam konfiguruje politykę, a podgląd reguł korzysta z tego samego ewaluatora
 co ręczne i publiczne API. Pełna rekomendacja konkretnego stołu pozostaje bramką R4.
 
+**Wdrożono 15 lipca 2026:** migracja `0059` rozdziela krok slotu od czasu wizyty, dodaje typowane
+reguły per serwis/sala/kanał, minutowy ledger obłożenia oraz szyfrowany kontekst powodów override.
+Jeden evaluator obsługuje symulator, zapis ręczny i publiczny, w tym pacing, limity jednoczesne,
+bufory, duże grupy, wyprzedzenie, cutoff, wyjątki kalendarza i `Europe/Warsaw`. Manager oraz
+Recepcja/Host mogą przekroczyć miękką regułę dopiero po jawnym potwierdzeniu z powodem, a decyzja
+trafia transakcyjnie do audytu. Widok `Dostępność` ma tryb prosty i ustawienia zaawansowane,
+konfigurację serwisów, sal, kanałów, wyjątków i podgląd decyzji. Migracja tworzy edytowalne serwisy
+zgodności wyłącznie dla wcześniejszych lokali, które miały już włączoną sprzedaż online bez grafiku.
+Symulator R3 świadomie nie wybiera jeszcze konkretnego stołu — ten zakres pozostaje w R4.
+
 ### R4 — Wspólny silnik alokacji 2.0 i atomowość
 
 **Cel:** panel i widget nigdy nie sprzedają tego samego zasobu ani nie podejmują sprzecznych decyzji.
@@ -917,8 +927,7 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a, R0b, R1a, R1b i R2 są zamkniętymi checkpointami. Następny milestone to `R3`: wspólne reguły
-dostępności, serwisy, czasy wizyt, pacing oraz symulator decyzji. Pełna symulacja przydziału stołów
-i strategii sal pozostaje w R4; R3 najpierw dostarcza jeden evaluator limitów oraz audytowanego
-przekroczenia. Serwerowa blokada stanowiska z sesją operatora i PIN-em
+R0a–R3 są zamkniętymi checkpointami. Następny milestone to `R4`: wspólny, atomowy silnik alokacji
+dla widgetu, recepcji i hosta, z pełną symulacją przydziału stołów, alternatywami, buforem zasobowym
+i strategiami sal. Serwerowa blokada stanowiska z sesją operatora i PIN-em
 pozostaje oddzielnym zadaniem, którego nie wolno udawać samą zasłoną frontendu.

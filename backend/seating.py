@@ -188,7 +188,7 @@ def koszt(kand, osoby, zajete, preferencje, wagi, obciazenie_sekcji=None):
 
 
 def dopasuj(osoby, stoliki, kombinacje, zajete=(), preferencje=None, wagi=None, limit=3,
-            sasiedztwo=None, obciazenie_sekcji=None):
+            sasiedztwo=None, obciazenie_sekcji=None, respect_room_fill=True):
     """Top-N kandydatów posortowanych po koszcie. [] gdy brak dopasowania.
     Sortowanie remisów: mniej stołów (prostota), potem id (deterministycznie)."""
     osoby = max(1, int(osoby or 1))
@@ -225,7 +225,7 @@ def dopasuj(osoby, stoliki, kombinacje, zajete=(), preferencje=None, wagi=None, 
         if kandydat["strategia_zapelniania"] == "wypelniaj_kolejno"
         and kandydat["sala_id"] is not None
     ]
-    if scisle:
+    if scisle and respect_room_fill:
         pierwsza_sala = min(
             (
                 kandydat["priorytet_sali"],

@@ -223,6 +223,7 @@ def test_public_create_enforces_pacing_with_stable_code(admin_client, client, db
 
 def test_public_idempotency_replays_reservation_and_payment_once(admin_client, client, db):
     _enable_online(admin_client)
+    _serwis(admin_client)
     _stolik(admin_client)
     config = admin_client.put(
         "/api/lokal/config",
@@ -345,6 +346,7 @@ def test_terminal_status_releases_table_and_pacing_ledger(
 
 def test_public_cancellation_releases_ledger(admin_client, client, db):
     _enable_online(admin_client)
+    _serwis(admin_client)
     table_id = _stolik(admin_client)
     created = _online_create(client, nazwisko="Anulowana online")
     assert created.status_code == 201, created.text

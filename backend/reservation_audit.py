@@ -57,7 +57,28 @@ PII_FIELDS = frozenset({
 
 _TOKEN_FIELDS = frozenset({"status", "kanal", "faza_hosta"})
 _SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,31}$")
-_PACING_OVERRIDE_RULES = frozenset({"pacing_reservations", "pacing_covers"})
+_OVERRIDE_RULES = frozenset({
+    "pacing_reservations",
+    "pacing_covers",
+    "concurrent_reservations",
+    "concurrent_covers",
+    "channel",
+    "service",
+    "advance_window",
+    "cutoff",
+    "party_min",
+    "party_max",
+    "large_party",
+})
+_OVERRIDE_REASON_CODES = frozenset({
+    "guest_request",
+    "large_group_confirmed",
+    "event_exception",
+    "operational_decision",
+    "walk_in",
+    "other",
+    "legacy_confirmation",
+})
 _MISSING = object()
 
 
@@ -189,29 +210,102 @@ def build_reservation_diff(
 
 def _normalise_override_details(details: Mapping[str, Any]) -> dict[str, Any]:
     """Waliduje metadane override tak, by nie dało się przemycić dowolnego tekstu/PII."""
-    if not isinstance(details, Mapping) or set(details) != {"violations"}:
+    if not isinstance(details, Mapping) or not set(details).issubset({
+        "violations", "operator_reason_code",
+    }) or "violations" not in details:
         raise ValueError("invalid override audit details")
+    reason_code = details.get("operator_reason_code")
+    if reason_code is not None and reason_code not in _OVERRIDE_REASON_CODES:
+        raise ValueError("invalid override audit reason code")
     raw_violations = details["violations"]
     if not isinstance(raw_violations, (list, tuple)) or not raw_violations:
         raise ValueError("invalid override audit details")
     violations: list[dict[str, Any]] = []
     for item in raw_violations:
-        if not isinstance(item, Mapping) or set(item) != {
+        allowed_keys = {
+            "code", "rule", "scope", "source", "observed", "limit", "projected",
+        }
+        if not isinstance(item, Mapping) or not set(item).issubset(allowed_keys) or not {
             "rule", "observed", "limit", "projected",
-        }:
+        }.issubset(item):
             raise ValueError("invalid override audit details")
         rule = item["rule"]
-        if rule not in _PACING_OVERRIDE_RULES:
+        if rule not in _OVERRIDE_RULES:
             raise ValueError("invalid override audit rule")
         values = {key: item[key] for key in ("observed", "limit", "projected")}
-        if any(isinstance(value, bool) or not isinstance(value, int) for value in values.values()):
+        if any(
+            value is not None and (isinstance(value, bool) or not isinstance(value, int))
+            for value in values.values()
+        ):
             raise ValueError("invalid override audit values")
-        if values["observed"] < 0 or values["limit"] <= 0:
+        limit_rules = {
+            "pacing_reservations", "pacing_covers",
+            "concurrent_reservations", "concurrent_covers",
+        }
+        if rule in limit_rules and any(
+            value is None or value < 0 for value in values.values()
+        ):
             raise ValueError("invalid override audit values")
-        if values["projected"] <= values["limit"]:
+        if rule in limit_rules and (
+            values["projected"] is not None
+            and values["limit"] is not None
+            and values["projected"] <= values["limit"]
+        ):
             raise ValueError("override audit must describe a real limit breach")
-        violations.append({"rule": rule, **values})
-    return {"violations": sorted(violations, key=lambda item: item["rule"])}
+        violation = {"rule": rule, **values}
+        code = item.get("code")
+        if code is not None:
+            if not isinstance(code, str) or not _SAFE_TOKEN.fullmatch(code.casefold()):
+                raise ValueError("invalid override audit code")
+            violation["code"] = code
+        source = item.get("source")
+        if source is not None:
+            if isinstance(source, Mapping):
+                if not set(source).issubset({"type", "id"}) or "type" not in source:
+                    raise ValueError("invalid override audit source")
+                source_type = source["type"]
+                if not isinstance(source_type, str) or not _SAFE_TOKEN.fullmatch(source_type):
+                    raise ValueError("invalid override audit source")
+                source_id = source.get("id")
+                if source_id is not None:
+                    source_id = _normalise_integer(source_id, positive=True)
+                violation["source"] = {"type": source_type, "id": source_id}
+            else:
+                if not isinstance(source, str) or not _SAFE_TOKEN.fullmatch(source):
+                    raise ValueError("invalid override audit source")
+                violation["source"] = source
+        scope = item.get("scope")
+        if scope is not None:
+            if not isinstance(scope, Mapping) or not set(scope).issubset({
+                "kind", "service_id", "room_id", "channel",
+                "type", "sala_id", "kanal",
+            }):
+                raise ValueError("invalid override audit scope")
+            clean_scope = {}
+            for key, value in scope.items():
+                if key in {"service_id", "room_id", "sala_id"}:
+                    clean_scope[key] = (
+                        _normalise_integer(value, positive=True)
+                        if value is not None else None
+                    )
+                else:
+                    if value is not None and (
+                        not isinstance(value, str) or not _SAFE_TOKEN.fullmatch(value)
+                    ):
+                        raise ValueError("invalid override audit scope")
+                    clean_scope[key] = value
+            violation["scope"] = clean_scope
+        violations.append(violation)
+    result = {"violations": sorted(
+        violations,
+        key=lambda item: (
+            item["rule"],
+            str(item.get("scope") or ""),
+        ),
+    )}
+    if reason_code is not None:
+        result["operator_reason_code"] = reason_code
+    return result
 
 
 def reservation_reference(termin: models.Termin) -> str:
@@ -252,6 +346,8 @@ def add_reservation_audit(
     after: Any = None,
     pii_changed: Iterable[str] = (),
     override_details: Mapping[str, Any] | None = None,
+    override_reason_code: str | None = None,
+    override_note: str | None = None,
     now: datetime | None = None,
 ) -> models.ReservationAudit | None:
     """Dodaje audyt do bieżącej transakcji; nie wykonuje flush/commit/rollback."""
@@ -265,6 +361,16 @@ def add_reservation_audit(
         raise ValueError("override audit requires a reason")
     if override_details is not None and action != "override":
         raise ValueError("override details require override action")
+    if override_reason_code is not None and (
+        action != "override" or override_reason_code not in _OVERRIDE_REASON_CODES
+    ):
+        raise ValueError("invalid override reason code")
+    if override_note is not None:
+        override_note = override_note.strip()
+        if not override_note:
+            override_note = None
+        elif len(override_note) > 240:
+            raise ValueError("override note is too long")
 
     actor_user_id = None
     actor_login = None
@@ -285,7 +391,7 @@ def add_reservation_audit(
 
     diff = build_reservation_diff(before, after, pii_changed=pii_changed)
     if override_details is not None:
-        diff["override"] = _normalise_override_details(override_details)
+        diff["override"] = _normalise_override_details(dict(override_details))
     if action in {"edit", "status", "host", "assign"} and not (
         diff["changes"] or diff.get("pii_changed")
     ):
@@ -303,4 +409,13 @@ def add_reservation_audit(
         diff=diff,
     )
     db.add(record)
+    if override_reason_code is not None:
+        # Swobodna notatka nie trafia do jawnego, PII-free diffu. Osobna tabela
+        # używa tego samego szyfrowania at-rest co dane kontaktowe gościa.
+        db.flush()
+        db.add(models.ReservationOverrideContext(
+            audit_id=record.id,
+            reason_code=override_reason_code,
+            note=override_note,
+        ))
     return record

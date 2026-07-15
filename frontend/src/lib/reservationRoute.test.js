@@ -63,6 +63,11 @@ describe('reservationRoute', () => {
       view: 'rooms',
       roomId: 7,
     })).toBe('#/rezerwacje/sale?sala=7')
+
+    expect(buildReservationHash({
+      view: 'availability',
+      date: '2026-08-17',
+    })).toBe('#/rezerwacje/dostepnosc')
   })
 
   it('normalizuje niepoprawne wartości i zakres dat', () => {

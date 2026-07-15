@@ -14,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0058_r22b_strategia_proweniencja"
+HEAD = "0059_r3_reguly_dostepnosci"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -25,6 +25,8 @@ _TABELE = [
     "sale_rezerwacyjne", "plany_sali", "wersje_planu_sali",
     "pozycje_stolikow_planu", "krawedzie_sasiedztwa_planu",
     "kombinacje_stolow_planu", "skladniki_kombinacji_planu",
+    "reguly_dostepnosci_rezerwacji", "rezerwacje_oblozenie_ledger",
+    "reservation_override_context",
 ]
 
 
@@ -634,6 +636,333 @@ def test_migracja_0058_strategia_i_proweniencja_round_trip(tmp_path):
 
     upgraded_again = _alembic(env, "upgrade", HEAD)
     assert upgraded_again.returncode == 0, upgraded_again.stderr
+
+
+def test_migracja_0059_backfilluje_roomless_oblozenie_i_rozdziela_czas(tmp_path):
+    db_file = tmp_path / "_r3_rules_occupancy.db"
+    env = _env(db_file, "r3-rules-occupancy")
+    upgraded_0058 = _alembic(env, "upgrade", "0058_r22b_strategia_proweniencja")
+    assert upgraded_0058.returncode == 0, upgraded_0058.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("PRAGMA foreign_keys=ON")
+        con.execute(
+            "INSERT INTO godziny_otwarcia "
+            "(id,dzien_tygodnia,godz_od,godz_do,dlugosc_slotu_min,aktywny) "
+            "VALUES (1,2,'12:00:00','23:00:00',90,1)"
+        )
+        # Historyczny stolik bez sali pozostaje legalny dla globalnych limitow R3.
+        con.execute(
+            "INSERT INTO stoliki "
+            "(id,nazwa,pojemnosc,laczy_sie,aktywny,kolejnosc,sala_id) "
+            "VALUES (1,'Legacy roomless',4,0,1,0,NULL)"
+        )
+        con.execute(
+            "INSERT INTO terminy "
+            "(id,data,nazwisko,liczba_osob,status,zadatek,godz_od,godz_do,"
+            "kanal,rodzaj,stolik_id) VALUES "
+            "(1,'2030-01-02','Historyczny',4,'potwierdzona',0,"
+            "'18:00:00','19:30:00','reczna','stolik',1)"
+        )
+        con.execute(
+            "INSERT INTO rezerwacje_pacing_ledger "
+            "(termin_id,data,start_minute,covers,override,created_at) VALUES "
+            "(1,'2030-01-02',1080,4,0,'2026-07-15 12:00:00')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        split = con.execute(
+            "SELECT krok_slotu_min,domyslny_turn_time_min "
+            "FROM godziny_otwarcia WHERE id=1"
+        ).fetchone()
+        occupancy = con.execute(
+            "SELECT count(*),min(minute),max(minute),min(sala_id),min(kanal),"
+            "min(covers) FROM rezerwacje_oblozenie_ledger WHERE termin_id=1"
+        ).fetchone()
+        version = con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        con.close()
+    assert split == (90, 90)
+    assert occupancy == (90, 1080, 1169, None, "wewnetrzna", 4)
+    assert version == HEAD
+    assert {
+        "reguly_dostepnosci_rezerwacji",
+        "rezerwacje_oblozenie_ledger",
+        "reservation_override_context",
+    } <= tables
+
+    downgraded = _alembic(env, "downgrade", "0058_r22b_strategia_proweniencja")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        service_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(godziny_otwarcia)")
+        }
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    finally:
+        con.close()
+    assert not {"krok_slotu_min", "domyslny_turn_time_min"} & service_columns
+    assert not {
+        "reguly_dostepnosci_rezerwacji",
+        "rezerwacje_oblozenie_ledger",
+        "reservation_override_context",
+    } & tables
+
+    upgraded_again = _alembic(env, "upgrade", HEAD)
+    assert upgraded_again.returncode == 0, upgraded_again.stderr
+
+
+def test_migracja_0059_nie_zamyka_legacy_online_bez_serwisow(tmp_path):
+    db_file = tmp_path / "_r3_legacy_online_services.db"
+    env = _env(db_file, "r3-legacy-online-services")
+    upgraded_0058 = _alembic(env, "upgrade", "0058_r22b_strategia_proweniencja")
+    assert upgraded_0058.returncode == 0, upgraded_0058.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO lokal_config "
+            "(id,nazwa_lokalu,poczatek_tygodnia,modul_rozliczenia,modul_imprezy,"
+            "modul_pos,modul_sprzatanie,rezerwacje_online) "
+            "VALUES (1,'Legacy online',0,0,0,0,0,1)"
+        )
+        assert con.execute("SELECT count(*) FROM godziny_otwarcia").fetchone()[0] == 0
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        rows = con.execute(
+            "SELECT dzien_tygodnia,godz_od,godz_do,ostatni_zasiadek,"
+            "krok_slotu_min,domyslny_turn_time_min,nazwa "
+            "FROM godziny_otwarcia ORDER BY dzien_tygodnia"
+        ).fetchall()
+    finally:
+        con.close()
+    assert len(rows) == 7
+    assert [row[0] for row in rows] == list(range(7))
+    assert all(
+        row[1].startswith("00:00:00")
+        and row[2].startswith("23:59:00")
+        and row[3].startswith("21:59:00")
+        and row[4:6] == (120, 120)
+        for row in rows
+    )
+    assert {row[6] for row in rows} == {"Cały dzień · zgodność R3"}
+
+    downgraded = _alembic(env, "downgrade", "0058_r22b_strategia_proweniencja")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        assert con.execute("SELECT count(*) FROM godziny_otwarcia").fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize(("mutation", "verification", "expected"), [
+    (
+        "UPDATE godziny_otwarcia SET max_jednoczesnych_rez=3 "
+        "WHERE dzien_tygodnia=0",
+        "SELECT max_jednoczesnych_rez FROM godziny_otwarcia "
+        "WHERE dzien_tygodnia=0",
+        3,
+    ),
+    (
+        "INSERT INTO sale_rezerwacyjne "
+        "(nazwa,aktywna,kolejnosc,online_aktywna) "
+        "VALUES ('Sala z polityka R3',1,0,0)",
+        "SELECT online_aktywna FROM sale_rezerwacyjne "
+        "WHERE nazwa='Sala z polityka R3'",
+        0,
+    ),
+])
+def test_migracja_0059_blokuje_downgrade_z_utrata_konfiguracji(
+    tmp_path, mutation, verification, expected,
+):
+    db_file = tmp_path / "_r3_unsafe_downgrade.db"
+    env = _env(db_file, "r3-unsafe-downgrade")
+    upgraded_0058 = _alembic(env, "upgrade", "0058_r22b_strategia_proweniencja")
+    assert upgraded_0058.returncode == 0, upgraded_0058.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO lokal_config "
+            "(id,nazwa_lokalu,poczatek_tygodnia,modul_rozliczenia,modul_imprezy,"
+            "modul_pos,modul_sprzatanie,rezerwacje_online) "
+            "VALUES (1,'Legacy online',0,0,0,0,0,1)"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(mutation)
+        con.commit()
+    finally:
+        con.close()
+
+    downgraded = _alembic(env, "downgrade", "0058_r22b_strategia_proweniencja")
+    assert downgraded.returncode != 0
+    assert "R3_DOWNGRADE_CONFIGURATION_LOSS" in downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        assert con.execute(verification).fetchone()[0] == expected
+        assert con.execute("SELECT version_num FROM alembic_version").fetchone()[0] == HEAD
+    finally:
+        con.close()
+
+
+def test_migracja_0059_zachowuje_edytowany_legacy_pacing_przy_downgrade(tmp_path):
+    db_file = tmp_path / "_r3_legacy_pacing_downgrade.db"
+    env = _env(db_file, "r3-legacy-pacing-downgrade")
+    upgraded_0058 = _alembic(env, "upgrade", "0058_r22b_strategia_proweniencja")
+    assert upgraded_0058.returncode == 0, upgraded_0058.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO lokal_config "
+            "(id,nazwa_lokalu,poczatek_tygodnia,modul_rozliczenia,modul_imprezy,"
+            "modul_pos,modul_sprzatanie,rezerwacje_online) "
+            "VALUES (1,'Legacy online',0,0,0,0,0,1)"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "UPDATE godziny_otwarcia SET pacing_max_rez=3 WHERE dzien_tygodnia=0"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    downgraded = _alembic(env, "downgrade", "0058_r22b_strategia_proweniencja")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        assert con.execute("SELECT count(*) FROM godziny_otwarcia").fetchone()[0] == 7
+        assert con.execute(
+            "SELECT pacing_max_rez FROM godziny_otwarcia WHERE dzien_tygodnia=0"
+        ).fetchone()[0] == 3
+    finally:
+        con.close()
+
+
+def test_adopcja_pelnego_create_all_r3_stampuje_0059(tmp_path):
+    db_file = tmp_path / "_r3_create_all_adoption.db"
+    env = _env(db_file, "r3-create-all-adoption")
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+
+    # Create-all nie wykonuje backfillu. Adopcja peĹ‚nego, niewersjonowanego R3
+    # musi odbudowaÄ‡ oba ledgery przed bezpiecznym stemplem 0059.
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO terminy "
+            "(id,data,nazwisko,liczba_osob,status,zadatek,utworzono_at,godz_od,godz_do,"
+            "kanal,rodzaj) VALUES "
+            "(1,'2030-01-02','Recovery',3,'potwierdzona',0,"
+            "'2026-07-15 12:00:00','18:00:00','19:30:00','reczna','stolik')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    adopted = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert adopted.returncode == 0, adopted.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        version = con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        pacing = con.execute(
+            "SELECT count(*),min(start_minute),min(covers) "
+            "FROM rezerwacje_pacing_ledger WHERE termin_id=1"
+        ).fetchone()
+        occupancy = con.execute(
+            "SELECT count(*),min(minute),max(minute),min(sala_id),min(covers) "
+            "FROM rezerwacje_oblozenie_ledger WHERE termin_id=1"
+        ).fetchone()
+        assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        con.close()
+    assert version == HEAD
+    assert pacing == (1, 1080, 3)
+    assert occupancy == (90, 1080, 1169, None, 3)
+
+
+def test_adopcja_pelnej_niewersjonowanej_bazy_0058_wykonuje_upgrade_r3(tmp_path):
+    db_file = tmp_path / "_r3_adopt_0058.db"
+    env = _env(db_file, "r3-adopt-0058")
+    upgraded = _alembic(env, "upgrade", "0058_r22b_strategia_proweniencja")
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("DROP TABLE alembic_version")
+        con.commit()
+    finally:
+        con.close()
+
+    adopted = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert adopted.returncode == 0, adopted.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        version = con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    finally:
+        con.close()
+    assert version == HEAD
+    assert _TABELE[-3:] == [
+        "reguly_dostepnosci_rezerwacji",
+        "rezerwacje_oblozenie_ledger",
+        "reservation_override_context",
+    ]
+    assert set(_TABELE[-3:]) <= tables
 
 
 def test_migracja_0057_downgrade_zachowuje_topologie_niewersjonowanej_sali(tmp_path):

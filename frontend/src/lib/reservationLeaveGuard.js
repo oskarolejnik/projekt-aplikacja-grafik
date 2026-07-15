@@ -1,22 +1,28 @@
-let activeGuard = null
+const activeGuards = new Map()
 let pendingConfirmation = null
+let nextGuardId = 0
 
 export function registerReservationLeaveGuard(handler) {
-  activeGuard = handler
+  const id = ++nextGuardId
+  activeGuards.set(id, handler)
   return () => {
-    if (activeGuard === handler) activeGuard = null
+    activeGuards.delete(id)
   }
 }
 
-export const hasReservationLeaveGuard = () => typeof activeGuard === 'function'
+export const hasReservationLeaveGuard = () => activeGuards.size > 0
 
 export function confirmReservationLeave() {
-  if (!activeGuard) return true
+  if (!activeGuards.size) return true
   if (pendingConfirmation) return pendingConfirmation
-  const handler = activeGuard
+  const handlers = [...activeGuards.values()]
   pendingConfirmation = Promise.resolve()
-    .then(() => handler())
-    .then(Boolean)
+    .then(async () => {
+      for (const handler of handlers) {
+        if (!(await handler())) return false
+      }
+      return true
+    })
     .catch(() => false)
     .finally(() => { pendingConfirmation = null })
   return pendingConfirmation

@@ -18,6 +18,7 @@ import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
 import { Icon } from '../../lib/icons'
 import { Banner } from '../ui/Banner'
 import { Button } from '../ui/Button'
+import { PillSwitch } from '../ui/PillSwitch'
 import { useToast } from '../ui/Toast'
 import RezerwacjeStolik from './RezerwacjeStolik'
 import WidokHosta from './WidokHosta'
@@ -25,12 +26,18 @@ import ReservationsCalendar from './ReservationsCalendar'
 import ReservationsDatabase from './ReservationsDatabase'
 import GuestProfileDialog from './GuestProfileDialog'
 import PlanSali from './PlanSali'
+import ReservationAvailability from './ReservationAvailability'
 
 const VIEW_META = {
   today: { label: 'Dzisiaj', icon: 'clock' },
   calendar: { label: 'Kalendarz', icon: 'calendar' },
   database: { label: 'Baza', icon: 'server' },
   host: { label: 'Host', icon: 'users' },
+}
+
+const CONFIG_META = {
+  availability: { label: 'Dostępność' },
+  rooms: { label: 'Sale' },
 }
 
 const scrollElement = (root) => {
@@ -76,16 +83,21 @@ export default function ReservationsWorkspace() {
   const canHost = has('rezerwacje.host')
   const canViewContacts = has('rezerwacje.dane_kontaktowe')
   const canConfigureRooms = has('rezerwacje.sala')
+  const canConfigureRules = has('rezerwacje.reguly')
 
   const operationalViews = useMemo(() => [
     ...(canOperate ? ['today', 'calendar'] : []),
     ...(canOperate && canViewContacts ? ['database'] : []),
     ...(canHost ? ['host'] : []),
   ], [canHost, canOperate, canViewContacts])
+  const configurationViews = useMemo(() => [
+    ...(canConfigureRules ? ['availability'] : []),
+    ...(canConfigureRooms ? ['rooms'] : []),
+  ], [canConfigureRooms, canConfigureRules])
   const availableViews = useMemo(() => [
     ...operationalViews,
-    ...(canConfigureRooms ? ['rooms'] : []),
-  ], [canConfigureRooms, operationalViews])
+    ...configurationViews,
+  ], [configurationViews, operationalViews])
 
   const [route, setRoute] = useState(() => {
     const fromUrl = readReservationRoute()
@@ -131,6 +143,15 @@ export default function ReservationsWorkspace() {
       profileReservationId: null,
     })
   }, [patchRoute])
+
+  const handleOpenSettings = useCallback(() => {
+    patchRoute({
+      view: canConfigureRules ? 'availability' : 'rooms',
+      roomId: null,
+      reservationId: null,
+      profileReservationId: null,
+    })
+  }, [canConfigureRules, patchRoute])
 
   const handleGuestProfileDirtyChange = useCallback((dirty) => {
     guestProfileDirtyRef.current = Boolean(dirty)
@@ -430,6 +451,8 @@ export default function ReservationsWorkspace() {
     })
   }
 
+  const configurationMode = configurationViews.includes(safeView)
+
   const openReservation = (reservation) => {
     const withDetails = canViewContacts ? reservation.id : null
     if (withDetails) selectionDates.current.set(withDetails, reservation.data)
@@ -497,14 +520,16 @@ export default function ReservationsWorkspace() {
       <div className="flex flex-col gap-4 border-b border-line pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-muted">
-            {safeView === 'rooms' ? 'Ustawienia rezerwacji' : 'Workspace operacyjny'}
+            {configurationMode ? 'Ustawienia rezerwacji' : 'Workspace operacyjny'}
           </p>
           <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight text-ink">
-            {safeView === 'rooms' ? 'Konfiguracja sal' : 'Rezerwacje'}
+            {safeView === 'availability' ? 'Dostępność' : safeView === 'rooms' ? 'Konfiguracja sal' : 'Rezerwacje'}
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
-            {safeView === 'rooms'
-              ? 'Przygotuj układ jako szkic i opublikuj go dopiero, gdy jest gotowy do pracy.'
+            {safeView === 'availability'
+              ? 'Ustal serwisy, limity i wyjątki, a potem sprawdź ich działanie na konkretnym przykładzie.'
+              : safeView === 'rooms'
+                ? 'Przygotuj układ jako szkic i opublikuj go dopiero, gdy jest gotowy do pracy.'
               : 'Plan dnia, kalendarz, historia i obsługa gości w jednym miejscu.'}
           </p>
         </div>
@@ -529,22 +554,35 @@ export default function ReservationsWorkspace() {
           })}
           </nav>
           ) : null}
-          {canConfigureRooms && operationalViews.length ? (
+          {configurationViews.length && operationalViews.length ? (
             <Button
               variant="ghost"
               size="sm"
-              aria-current={safeView === 'rooms' ? 'page' : undefined}
-              onClick={() => switchView(
-                safeView === 'rooms' ? lastOperationalView.current : 'rooms'
-              )}
+              aria-current={configurationMode ? 'page' : undefined}
+              onClick={() => configurationMode
+                ? switchView(lastOperationalView.current)
+                : handleOpenSettings()}
               className="w-full shrink-0 sm:w-auto"
             >
-              <Icon name={safeView === 'rooms' ? 'chevronDown' : 'office'} className={`h-4 w-4 ${safeView === 'rooms' ? 'rotate-90' : ''}`} />
-              {safeView === 'rooms' ? 'Wróć do rezerwacji' : 'Konfiguracja sal'}
+              <Icon name={configurationMode ? 'chevronDown' : 'office'} className={`h-4 w-4 ${configurationMode ? 'rotate-90' : ''}`} />
+              {configurationMode ? 'Wróć do rezerwacji' : 'Ustawienia rezerwacji'}
             </Button>
           ) : null}
         </div>
       </div>
+
+      {configurationMode && configurationViews.length > 1 ? (
+        <PillSwitch
+          className="w-full sm:max-w-md"
+          label="Obszar ustawień rezerwacji"
+          value={safeView}
+          onChange={switchView}
+          options={configurationViews.map((view) => ({
+            value: view,
+            label: CONFIG_META[view].label,
+          }))}
+        />
+      ) : null}
 
       {selectionError ? (
         <div role="alert">
@@ -633,6 +671,15 @@ export default function ReservationsWorkspace() {
             roomId={route.roomId}
             active={safeView === 'rooms'}
             onRoomChange={handleRoomChange}
+          />
+        </section>
+      ) : null}
+
+      {availableViews.includes('availability') && visited.has('availability') ? (
+        <section hidden={safeView !== 'availability'} inert={safeView !== 'availability' ? '' : undefined} aria-label="Dostępność rezerwacji">
+          <ReservationAvailability
+            key={`availability:${privacyVersion}`}
+            active={safeView === 'availability'}
           />
         </section>
       ) : null}

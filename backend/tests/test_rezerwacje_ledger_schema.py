@@ -218,6 +218,128 @@ def test_pacing_jest_jeden_na_termin_i_ma_poprawny_zakres(db):
     db.rollback()
 
 
+def test_oblozenie_r3_ma_jeden_bucket_na_termin_i_typowany_zakres(db):
+    termin = _termin(db)
+    now = datetime(2026, 7, 15, 10, 0)
+    db.add(models.RezerwacjaOblozenieLedger(
+        termin_id=termin.id,
+        data=termin.data,
+        minute=18 * 60,
+        sala_id=None,
+        kanal="wewnetrzna",
+        covers=4,
+        override=False,
+        created_at=now,
+    ))
+    db.commit()
+
+    db.add(models.RezerwacjaOblozenieLedger(
+        termin_id=termin.id,
+        data=termin.data,
+        minute=18 * 60,
+        sala_id=None,
+        kanal="online",
+        covers=4,
+        override=False,
+        created_at=now,
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+    other = _termin(db, nazwisko="Niepoprawny bucket")
+    db.add(models.RezerwacjaOblozenieLedger(
+        termin_id=other.id,
+        data=other.data,
+        minute=1440,
+        sala_id=None,
+        kanal="wewnetrzna",
+        covers=4,
+        override=False,
+        created_at=now,
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_reguly_r3_wymuszaja_typed_override_i_unikalny_scope(db):
+    db.add(models.RegulaDostepnosciRezerwacji(
+        kanal="online",
+        cutoff_min=60,
+    ))
+    db.commit()
+
+    db.add(models.RegulaDostepnosciRezerwacji(
+        kanal="online",
+        pacing_max_rez=4,
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+    db.add(models.RegulaDostepnosciRezerwacji(kanal="wewnetrzna"))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+    db.add(models.RegulaDostepnosciRezerwacji(
+        kanal="wewnetrzna",
+        duza_grupa_od=12,
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_override_context_r3_szyfruje_notatke_i_wymusza_reason_code(db):
+    termin = _termin(db)
+    audit = models.ReservationAudit(
+        created_at=datetime(2026, 7, 15, 10, 0),
+        reservation_ref="a" * 64,
+        termin_id=termin.id,
+        actor_kind="system",
+        action="override",
+        reason="capacity_override",
+        diff={},
+    )
+    db.add(audit)
+    db.flush()
+    context = models.ReservationOverrideContext(
+        audit_id=audit.id,
+        reason_code="operational_decision",
+        note="Decyzja kierownika zmiany",
+    )
+    db.add(context)
+    db.commit()
+
+    raw_note = db.execute(sa.text(
+        "SELECT note FROM reservation_override_context WHERE id=:id"
+    ), {"id": context.id}).scalar_one()
+    assert raw_note.startswith("enc:v1:")
+    assert context.note == "Decyzja kierownika zmiany"
+
+    other_audit = models.ReservationAudit(
+        created_at=datetime(2026, 7, 15, 10, 1),
+        reservation_ref="b" * 64,
+        termin_id=termin.id,
+        actor_kind="system",
+        action="override",
+        reason="capacity_override",
+        diff={},
+    )
+    db.add(other_audit)
+    db.flush()
+    db.add(models.ReservationOverrideContext(
+        audit_id=other_audit.id,
+        reason_code="operator_correction",
+        note=None,
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
 def test_migracja_backfilluje_wszystkie_aktywne_rezerwacje_i_hold(tmp_path):
     db_file = tmp_path / "ledger_backfill.db"
     _upgrade_0050(db_file)

@@ -2,15 +2,20 @@
 (lunch/kolacja) oraz pacing (limit coverów na okno). Publiczne endpointy online wołane przez
 osobny `client` (bez tokenu); admin konfiguruje przez `admin_client`.
 
-2026-07-13 i 2026-07-20 to poniedziałki (weekday=0).
+Daty testowe zawsze wskazują dwa kolejne przyszłe poniedziałki (weekday=0).
 """
+
+from datetime import date, timedelta
 
 import database
 import models
 import reservation_service
 
-PON = "2026-07-13"
-PON2 = "2026-07-20"
+_DZIS = date.today()
+_DNI_DO_PONIEDZIALKU = (7 - _DZIS.weekday()) % 7 or 7
+_PONIEDZIALEK = _DZIS + timedelta(days=_DNI_DO_PONIEDZIALKU)
+PON = _PONIEDZIALEK.isoformat()
+PON2 = (_PONIEDZIALEK + timedelta(days=7)).isoformat()
 
 
 def test_lock_tables_odswieza_stan_z_identity_map(db):

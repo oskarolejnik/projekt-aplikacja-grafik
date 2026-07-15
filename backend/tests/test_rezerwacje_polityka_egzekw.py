@@ -13,8 +13,18 @@ def _enable(admin_client):
 def _setup_dzis(admin_client, pojemnosc=4):
     """Stolik + serwis dla dnia tygodnia DZIS (żeby DZIS i DZIS+7 miały okno)."""
     admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": pojemnosc})
-    admin_client.post("/api/godziny-otwarcia", json={"dzien_tygodnia": DZIS.weekday(),
-                      "godz_od": "08:00", "godz_do": "23:00", "dlugosc_slotu_min": 120})
+    _serwis_dla_daty(admin_client, DZIS)
+
+
+def _serwis_dla_daty(admin_client, data):
+    response = admin_client.post("/api/godziny-otwarcia", json={
+        "dzien_tygodnia": data.weekday(),
+        "godz_od": "08:00",
+        "godz_do": "23:00",
+        "krok_slotu_min": 60,
+        "domyslny_turn_time_min": 120,
+    })
+    assert response.status_code == 201, response.text
 
 
 def _rez(client, data, osoby=2, godz="18:00"):
@@ -72,4 +82,6 @@ def test_bufor_miedzy_rezerwacjami(admin_client):
 def test_bez_polityki_zachowanie_bez_zmian(admin_client, client):
     # regresja: wszystkie pola polityki = default (0/1) → tor online działa jak dotąd.
     _enable(admin_client); _setup_dzis(admin_client)
-    assert _rez(client, DZIS + dt.timedelta(days=3)).status_code == 201
+    data_rezerwacji = DZIS + dt.timedelta(days=3)
+    _serwis_dla_daty(admin_client, data_rezerwacji)
+    assert _rez(client, data_rezerwacji).status_code == 201

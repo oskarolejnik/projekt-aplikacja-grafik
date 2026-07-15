@@ -5,6 +5,7 @@ const VIEW_TO_PATH = {
   calendar: 'kalendarz',
   database: 'baza',
   host: 'host',
+  availability: 'dostepnosc',
   rooms: 'sale',
 }
 
@@ -116,6 +117,9 @@ export function buildReservationHash(value) {
 
   if (route.view === 'rooms') {
     if (route.roomId) params.set('sala', String(route.roomId))
+  } else if (route.view === 'availability') {
+    // Konfiguracja reguł nie zawiera kontekstu gościa ani dnia operacyjnego.
+    // Czysty adres jest stabilnym punktem wejścia dla administratora i managera.
   } else if (route.view === 'database') {
     params.set('od', route.from)
     params.set('do', route.to)

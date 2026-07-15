@@ -37,6 +37,14 @@ class AvailabilityResult:
     message: str | None = None
     candidates: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     alternatives: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    decision: str | None = None
+    service: dict[str, Any] | None = None
+    krok_slotu_min: int | None = None
+    turn_time_min: int | None = None
+    godz_do: str | None = None
+    violations: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    checks: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    resource_allocation: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +53,14 @@ class AvailabilityResult:
             "rule": self.rule,
             "candidates": list(self.candidates),
             "alternatives": list(self.alternatives),
+            "decision": self.decision,
+            "service": self.service,
+            "krok_slotu_min": self.krok_slotu_min,
+            "turn_time_min": self.turn_time_min,
+            "godz_do": self.godz_do,
+            "violations": list(self.violations),
+            "checks": list(self.checks),
+            "resource_allocation": self.resource_allocation,
         }
 
 
@@ -60,6 +76,14 @@ class ReservationError(Exception):
         rule: str | None = None,
         candidates: Sequence[Mapping[str, Any]] = (),
         alternatives: Sequence[Mapping[str, Any]] = (),
+        decision: str | None = None,
+        service: Mapping[str, Any] | None = None,
+        krok_slotu_min: int | None = None,
+        turn_time_min: int | None = None,
+        godz_do: str | None = None,
+        violations: Sequence[Mapping[str, Any]] = (),
+        checks: Sequence[Mapping[str, Any]] = (),
+        resource_allocation: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -72,6 +96,14 @@ class ReservationError(Exception):
             message=message,
             candidates=tuple(dict(item) for item in candidates),
             alternatives=tuple(dict(item) for item in alternatives),
+            decision=decision,
+            service=dict(service) if service is not None else None,
+            krok_slotu_min=krok_slotu_min,
+            turn_time_min=turn_time_min,
+            godz_do=godz_do,
+            violations=tuple(dict(item) for item in violations),
+            checks=tuple(dict(item) for item in checks),
+            resource_allocation=resource_allocation,
         )
 
 
@@ -421,10 +453,11 @@ def pacing_status(
     start_minute = _minute(start, field_name="Godzina rozpoczęcia")
     window_min = max(1, int(window_min or 1))
     ledger = models.RezerwacjaPacingLedger
+    bucket_start = (start_minute // window_min) * window_min
     statement = select(ledger).where(
         ledger.data == data,
-        ledger.start_minute >= start_minute,
-        ledger.start_minute < min(1440, start_minute + window_min),
+        ledger.start_minute >= bucket_start,
+        ledger.start_minute < min(1440, bucket_start + window_min),
     )
     if exclude_termin_id is not None:
         statement = statement.where(ledger.termin_id != exclude_termin_id)
@@ -445,10 +478,14 @@ def pacing_status(
         "would_covers": would_covers,
         "max_reservations": max_reservations,
         "max_covers": max_covers,
+        "bucket_start": bucket_start,
+        "bucket_end": min(1440, bucket_start + window_min),
     }
 
 
-def release_termin_allocation(db, termin_id: int) -> None:
+def release_termin_allocation(
+    db, termin_id: int, *, include_capacity: bool = True,
+) -> None:
     db.execute(
         delete(models.RezerwacjaStolikClaim).where(
             models.RezerwacjaStolikClaim.termin_id == termin_id
@@ -459,6 +496,17 @@ def release_termin_allocation(db, termin_id: int) -> None:
             models.RezerwacjaPacingLedger.termin_id == termin_id
         )
     )
+    if include_capacity:
+        db.execute(
+            delete(models.RezerwacjaOblozenieLedger).where(
+                models.RezerwacjaOblozenieLedger.termin_id == termin_id
+            )
+        )
+
+
+def normalise_reservation_channel(value: str | None) -> str:
+    """Ledger reguł ma dwa kanały; historyczne źródła operatora są wewnętrzne."""
+    return "online" if value == "online" else "wewnetrzna"
 
 
 def replace_termin_allocation(
@@ -476,6 +524,9 @@ def replace_termin_allocation(
     max_covers: int | None = None,
     pacing_window_min: int = 1,
     override: bool = False,
+    room_id: int | None = None,
+    channel: str = "wewnetrzna",
+    include_capacity: bool = True,
     now: datetime | None = None,
     candidates: Sequence[Mapping[str, Any]] = (),
     alternatives: Sequence[Mapping[str, Any]] = (),
@@ -488,12 +539,14 @@ def replace_termin_allocation(
 
     effective_now = now or datetime.now()
     cleanup_expired_holds(db, effective_now)
-    release_termin_allocation(db, termin_id)
+    release_termin_allocation(
+        db, termin_id, include_capacity=include_capacity,
+    )
     if start is None:
         return AvailabilityResult(available=True)
     start_minute = _minute(start, field_name="Godzina rozpoczęcia")
     ids = tuple(sorted({int(value) for value in table_ids if value is not None}))
-    interval: tuple[int, int] | None = None
+    interval: tuple[int, int] | None = _interval(start, end) if end is not None else None
     if ids:
         if end is None:
             raise ReservationError(
@@ -502,7 +555,6 @@ def replace_termin_allocation(
                 "Przydział stołu wymaga godziny zakończenia.",
                 rule="interval",
             )
-        interval = _interval(start, end)
         occupied = occupied_table_ids(
             db,
             data=data,
@@ -558,10 +610,28 @@ def replace_termin_allocation(
             data=data,
             start_minute=start_minute,
             covers=max(0, int(party_size or 0)),
-            override=bool(override or (not enforce_pacing and pacing["full"])),
+            override=bool(override),
             created_at=_utcnow_naive(),
         )
     )
+    if include_capacity and interval is not None:
+        start_raw, end_raw = interval
+        capacity_created_at = _utcnow_naive()
+        capacity_rows = [
+            {
+                "termin_id": termin_id,
+                "data": data,
+                "minute": minute,
+                "sala_id": room_id,
+                "kanal": normalise_reservation_channel(channel),
+                "covers": max(0, int(party_size or 0)),
+                "override": bool(override),
+                "created_at": capacity_created_at,
+            }
+            for minute in range(start_raw, end_raw)
+        ]
+        if capacity_rows:
+            db.execute(insert(models.RezerwacjaOblozenieLedger), capacity_rows)
     if ids and interval is not None:
         start_raw, end_raw = interval
         created_at = _utcnow_naive()

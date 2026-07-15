@@ -247,6 +247,70 @@ describe('Rezerwacje stolików', () => {
     expect(listLoads).toBe(1)
   })
 
+  it('przy przekroczeniu z listy oczekujących wymaga powodu i wysyła audytowalne nadpisanie', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.nadpisuj_limity',
+    ]
+    let attempts = 0
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/zrealizuj` && method === 'POST') {
+        attempts += 1
+        if (attempts === 1) {
+          const error = new Error('Limit osób w wybranym oknie został przekroczony.')
+          error.availability = {
+            decision: 'override_required',
+            violations: [{
+              code: 'PACING_COVERS_LIMIT',
+              limit: 20,
+              observed: 19,
+              projected: 21,
+              message: 'Limit nowych osób w ciągu 30 minut',
+              overrideable_by_operator: true,
+            }],
+          }
+          return Promise.reject(error)
+        }
+        return Promise.resolve({
+          wpis: { ...WAITLIST_ENTRY, status: 'zrealizowany', termin_id: 32 },
+          rezerwacja: { ...RESERVATION, ...body, id: 32, nazwisko: WAITLIST_ENTRY.nazwisko },
+        })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Oczekujący (1)' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Stolik dla Kowalska' }), { target: { value: String(TABLE.id) } })
+    fireEvent.click(screen.getByRole('button', { name: 'Posadź' }))
+
+    expect(await screen.findByText('Limit nowych osób w ciągu 30 minut')).toBeInTheDocument()
+    const overrideButton = screen.getByRole('button', { name: 'Posadź mimo limitu' })
+    expect(overrideButton).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Powód przekroczenia'), { target: { value: 'walk_in' } })
+    fireEvent.click(overrideButton)
+
+    await waitFor(() => expect(attempts).toBe(2))
+    const overrideBody = apiMock.mock.calls.filter(
+      ([path, method]) => path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/zrealizuj` && method === 'POST',
+    )[1][2]
+    expect(overrideBody).toEqual({
+      stolik_id: TABLE.id,
+      przekrocz_limity: true,
+      nadpisanie_limitow: {
+        powod: 'walk_in',
+        notatka: null,
+        potwierdzone: true,
+      },
+    })
+  })
+
   it('prowadzi do wersjonowanej konfiguracji sal zamiast martwego modalu stolików', async () => {
     mockInitial()
     const onOpenRooms = vi.fn()
@@ -497,6 +561,18 @@ describe('Rezerwacje stolików', () => {
         if (attempts === 1) {
           const error = new Error('Osiągnięto limit nowych rezerwacji.')
           error.code = 'PACING_RESERVATION_LIMIT'
+          error.availability = {
+            decision: 'override_required',
+            can_override: true,
+            violations: [{
+              rule: 'pacing_reservations',
+              code: 'PACING_RESERVATION_LIMIT',
+              limit: 4,
+              observed: 4,
+              projected: 5,
+              message: 'Limit nowych rezerwacji w ciągu 30 minut',
+            }],
+          }
           return Promise.reject(error)
         }
         return Promise.resolve({ ...RESERVATION, ...body, id: 55, status: 'potwierdzona' })
@@ -510,12 +586,19 @@ describe('Rezerwacje stolików', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
 
     expect(await screen.findByText('Osiągnięto limit nowych rezerwacji.')).toHaveClass('text-lemon')
+    expect(screen.getByRole('button', { name: 'Zapisz mimo limitu' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Powód przekroczenia'), { target: { value: 'operational_decision' } })
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz mimo limitu' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     const overrideBody = apiMock.mock.calls.filter(
       ([path, method]) => path === '/rezerwacje-stolik' && method === 'POST',
     )[1][2]
     expect(overrideBody.przekrocz_limity).toBe(true)
+    expect(overrideBody.nadpisanie_limitow).toEqual({
+      powod: 'operational_decision',
+      notatka: null,
+      potwierdzone: true,
+    })
   })
 
   it('preset Recepcji zachowuje tworzenie i kontakty, ale ukrywa salę, finanse, notatki i DELETE', async () => {

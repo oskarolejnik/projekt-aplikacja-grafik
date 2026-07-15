@@ -1,12 +1,26 @@
-"""Slice v2 S9: zadatki online + no-show fee (za flagą; sandbox — realne pobieranie po wpięciu bramki).
-Zadatek = Platnosc(status=oczekuje) z linkiem; opłacenie zapisuje kwotę na Termin.zadatek.
-2026-07-13 = poniedziałek (przyszłość — online nie odrzuca jako wstecz)."""
+"""Slice v2 S9: zadatki online + no-show fee (sandbox)."""
 
-PON = "2026-07-13"
+from datetime import date, timedelta
+
+
+def _przyszly_poniedzialek():
+    dzis = date.today()
+    return dzis + timedelta(days=((7 - dzis.weekday()) % 7 or 7))
+
+
+PON_DATA = _przyszly_poniedzialek()
+PON = PON_DATA.isoformat()
 
 
 def _online(admin_client):
     admin_client.put("/api/lokal/config", json={"rezerwacje_online": True})
+    serwis = admin_client.post("/api/godziny-otwarcia", json={
+        "dzien_tygodnia": PON_DATA.weekday(),
+        "godz_od": "12:00",
+        "godz_do": "22:00",
+        "dlugosc_slotu_min": 120,
+    })
+    assert serwis.status_code == 201, serwis.text
 
 
 def _stolik(admin_client, poj=6):

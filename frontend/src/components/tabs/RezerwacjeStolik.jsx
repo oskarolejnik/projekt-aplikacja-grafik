@@ -11,6 +11,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../ui/Toast'
 import { warsawDateISO } from '../../lib/date'
 import { shiftDateIso } from '../../lib/reservationRoute'
+import ReservationOverridePanel from './ReservationOverridePanel'
 
 // Zarządzanie rezerwacjami stolików (admin): lista dnia + formularz + zmiana statusu + stoliki.
 // Backend: /api/rezerwacje-stolik, /api/stoliki. Moduł za flagą LokalConfig.modul_rezerwacje.
@@ -18,6 +19,7 @@ import { shiftDateIso } from '../../lib/reservationRoute'
 const num = (v) => (v === '' || v == null ? null : parseInt(v, 10))
 const dzisISO = () => warsawDateISO()
 const parseDay = (value) => new Date(`${value}T12:00:00`)
+const emptyOverrideDraft = () => ({ powod: '', notatka: '' })
 
 const STATUS_META = {
   rezerwacja: {
@@ -165,6 +167,11 @@ export default function RezerwacjeStolik({
   const reservationNameRef = useRef(null)
   const [modalAction, setModalAction] = useState(null)
   const [modalFeedback, setModalFeedback] = useState(null)
+  const [modalOverrideDraft, setModalOverrideDraft] = useState(emptyOverrideDraft)
+  const clearModalConflict = () => {
+    setModalFeedback(null)
+    setModalOverrideDraft(emptyOverrideDraft())
+  }
   const [rowActions, setRowActions] = useState({})
   const [rowFeedback, setRowFeedback] = useState({})
   const [pageFeedback, setPageFeedback] = useState(null)
@@ -177,6 +184,8 @@ export default function RezerwacjeStolik({
   const [waitActions, setWaitActions] = useState({})
   const [waitFeedback, setWaitFeedback] = useState(null)
   const [waitRowFeedback, setWaitRowFeedback] = useState({})
+  const [waitOverrides, setWaitOverrides] = useState({})
+  const [waitOverrideDrafts, setWaitOverrideDrafts] = useState({})
 
   const cancelReadRequests = useCallback(() => {
     requestId.current += 1
@@ -298,6 +307,7 @@ export default function RezerwacjeStolik({
     modalInitial.current = reservationSnapshot(draft)
     probaZapisuRef.current = null
     setModalFeedback(null)
+    setModalOverrideDraft(emptyOverrideDraft())
     setModal(draft)
     if (notify && draft.id != null) onReservationOpen?.(draft.id)
   }, [canViewContacts, onReservationOpen])
@@ -315,6 +325,7 @@ export default function RezerwacjeStolik({
     modalInitial.current = null
     probaZapisuRef.current = null
     setModalFeedback(null)
+    setModalOverrideDraft(emptyOverrideDraft())
     setModal(null)
     onReservationClose?.()
   }
@@ -381,6 +392,8 @@ export default function RezerwacjeStolik({
     }
     setNowyOcz(emptyWaitlist())
     setWaitFeedback(null)
+    setWaitOverrides({})
+    setWaitOverrideDrafts({})
     setListaModal(false)
   }
 
@@ -407,7 +420,7 @@ export default function RezerwacjeStolik({
 
   const stolikNazwa = (id) => stoliki.find((table) => table.id === id)?.nazwa || 'Bez stolika'
 
-  const zapisz = async (przekroczLimity = false) => {
+  const zapisz = async (nadpisanieLimitow = null) => {
     if (!canViewContacts || !modal || modalAction) return
     if (!modal.nazwisko?.trim()) {
       setModalFeedback({ type: 'error', message: 'Podaj nazwisko lub nazwę klienta.' })
@@ -434,7 +447,10 @@ export default function RezerwacjeStolik({
         } : {}),
         ...(canViewNotes ? { notatka: modal.notatka?.trim() || null } : {}),
         ...(canViewFinances ? { zadatek: parseFloat(modal.zadatek) || 0 } : {}),
-        ...(przekroczLimity ? { przekrocz_limity: true } : {}),
+        ...(nadpisanieLimitow ? {
+          przekrocz_limity: true,
+          nadpisanie_limitow: nadpisanieLimitow,
+        } : {}),
       }
       const fingerprint = JSON.stringify(body)
       if (!modal.id && probaZapisuRef.current?.fingerprint !== fingerprint) {
@@ -465,10 +481,14 @@ export default function RezerwacjeStolik({
       if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       if (error.code === 'IDEMPOTENCY_KEY_REUSED') probaZapisuRef.current = null
       const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
+        || error.availability?.decision === 'override_required'
+        || error.availability?.can_override === true
+        || error.availability?.violations?.some((violation) => violation.overrideable_by_operator)
       setModalFeedback({
         type: pacingConflict && canOverrideLimits ? 'warning' : 'error',
         message: error.message || 'Nie udało się zapisać rezerwacji.',
         canOverride: pacingConflict && canOverrideLimits,
+        availability: error.availability || null,
       })
     } finally {
       finishMutation(mutation)
@@ -668,7 +688,7 @@ export default function RezerwacjeStolik({
     }
   }
 
-  const posadz = async (entry) => {
+  const posadz = async (entry, nadpisanieLimitow = null) => {
     if (waitActions[entry.id]) return
     const tableId = posadzStolik[entry.id]
     if (!tableId) {
@@ -682,32 +702,22 @@ export default function RezerwacjeStolik({
     setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
     const mutation = startMutation()
     try {
-      const payload = { stolik_id: Number(tableId) }
-      let result
-      try {
-        result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', payload, { signal: mutation.controller.signal })
-      } catch (error) {
-        if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
-        const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
-        if (!pacingConflict || !canOverrideLimits) throw error
-        const approved = await confirm(`${error.message}\n\nPosadzić gości mimo ustawionego limitu?`, {
-          title: 'Przekroczenie limitu',
-          confirmText: 'Posadź mimo limitu',
-          cancelText: 'Wróć',
-        })
-        if (!mutationIsCurrent(mutation)) return
-        if (!approved) throw error
-        result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', {
-          ...payload,
+      const payload = {
+        stolik_id: Number(tableId),
+        ...(nadpisanieLimitow ? {
           przekrocz_limity: true,
-        }, { signal: mutation.controller.signal })
+          nadpisanie_limitow: nadpisanieLimitow,
+        } : {}),
       }
+      const result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', payload, { signal: mutation.controller.signal })
       if (!mutationIsCurrent(mutation)) return
       setLista((current) => replaceById(current, result.wpis, sortWaitlist))
       setRez((current) => result.rezerwacja.data === data
         ? replaceById(current, result.rezerwacja, sortReservations)
         : current)
       setPosadzStolik((current) => ({ ...current, [entry.id]: '' }))
+      setWaitOverrides((current) => ({ ...current, [entry.id]: null }))
+      setWaitOverrideDrafts((current) => ({ ...current, [entry.id]: emptyOverrideDraft() }))
       setWaitRowFeedback((current) => ({
         ...current,
         [entry.id]: { type: 'success', message: 'Posadzono gości i utworzono rezerwację.' },
@@ -715,9 +725,17 @@ export default function RezerwacjeStolik({
       setPageFeedback({ type: 'success', message: `Posadzono: ${canViewContacts ? entry.nazwisko : 'Gość'}.` })
     } catch (error) {
       if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
+      const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
+        || error.availability?.decision === 'override_required'
+        || error.availability?.can_override === true
+        || error.availability?.violations?.some((violation) => violation.overrideable_by_operator)
+      if (pacingConflict && canOverrideLimits) {
+        setWaitOverrides((current) => ({ ...current, [entry.id]: error.availability || { violations: [] } }))
+        setWaitOverrideDrafts((current) => ({ ...current, [entry.id]: current[entry.id] || emptyOverrideDraft() }))
+      }
       setWaitRowFeedback((current) => ({
         ...current,
-        [entry.id]: { type: 'error', message: error.message || 'Nie udało się posadzić gości.' },
+        [entry.id]: { type: pacingConflict && canOverrideLimits ? 'warning' : 'error', message: error.message || 'Nie udało się posadzić gości.' },
       }))
     } finally {
       finishMutation(mutation)
@@ -911,13 +929,13 @@ export default function RezerwacjeStolik({
           <form onSubmit={(event) => { event.preventDefault(); zapisz() }}>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="field-label">Data
-                <input type="date" value={modal.data || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, data: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" />
+                <input type="date" value={modal.data || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, data: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
               </label>
               <label className="field-label">Godzina
-                <input type="time" value={modal.godz_od || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, godz_od: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" />
+                <input type="time" value={modal.godz_od || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, godz_od: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
               </label>
               <label className="field-label">Stolik
-                <select value={modal.stolik_id || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, stolik_id: event.target.value })); setModalFeedback(null) }} className="field mt-1.5">
+                <select value={modal.stolik_id || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, stolik_id: event.target.value })); clearModalConflict() }} className="field mt-1.5">
                   <option value="">Bez stolika</option>
                   {stoliki.filter((table) => table.aktywny).map((table) => (
                     <option key={table.id} value={table.id}>{table.nazwa}{table.strefa ? ` (${table.strefa})` : ''} · {table.pojemnosc} os.</option>
@@ -925,29 +943,29 @@ export default function RezerwacjeStolik({
                 </select>
               </label>
               <label className="field-label">Liczba osób
-                <input type="number" min="1" value={modal.liczba_osob ?? ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, liczba_osob: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" />
+                <input type="number" min="1" value={modal.liczba_osob ?? ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, liczba_osob: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
               </label>
               <label className="field-label sm:col-span-2">Nazwisko / klient
-                <input ref={reservationNameRef} value={modal.nazwisko || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, nazwisko: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" placeholder="np. Nowak" autoComplete="name" />
+                <input ref={reservationNameRef} value={modal.nazwisko || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, nazwisko: event.target.value })); clearModalConflict() }} className="field mt-1.5" placeholder="np. Nowak" autoComplete="name" />
               </label>
               {canViewContacts ? (
                 <>
                   <label className="field-label">Telefon
-                    <input type="tel" value={modal.telefon || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, telefon: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" autoComplete="tel" />
+                    <input type="tel" value={modal.telefon || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, telefon: event.target.value })); clearModalConflict() }} className="field mt-1.5" autoComplete="tel" />
                   </label>
                   <label className="field-label">E-mail
-                    <input type="email" value={modal.email || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, email: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" autoComplete="email" />
+                    <input type="email" value={modal.email || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, email: event.target.value })); clearModalConflict() }} className="field mt-1.5" autoComplete="email" />
                   </label>
                 </>
               ) : null}
               {canViewFinances ? (
                 <label className="field-label">Zadatek (zł)
-                  <input type="number" min="0" step="0.01" value={modal.zadatek ?? 0} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, zadatek: event.target.value })); setModalFeedback(null) }} className="field mt-1.5" />
+                  <input type="number" min="0" step="0.01" value={modal.zadatek ?? 0} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, zadatek: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
                 </label>
               ) : null}
               {canViewNotes ? (
                 <label className="field-label sm:col-span-2">Notatka
-                  <textarea rows={3} value={modal.notatka || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, notatka: event.target.value })); setModalFeedback(null) }} className="field mt-1.5 resize-y" />
+                  <textarea rows={3} value={modal.notatka || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, notatka: event.target.value })); clearModalConflict() }} className="field mt-1.5 resize-y" />
                 </label>
               ) : null}
             </div>
@@ -972,6 +990,20 @@ export default function RezerwacjeStolik({
               feedback={modalFeedback}
               className="mt-3"
             />
+
+            {modalFeedback?.canOverride ? (
+              <ReservationOverridePanel
+                availability={modalFeedback.availability}
+                value={modalOverrideDraft}
+                onChange={setModalOverrideDraft}
+                onCancel={() => {
+                  setModalFeedback(null)
+                  setModalOverrideDraft(emptyOverrideDraft())
+                }}
+                onConfirm={zapisz}
+                busy={modalAction === 'save'}
+              />
+            ) : null}
 
             <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-line pt-4">
               {modal.id && onGuestProfileOpen ? (
@@ -1001,19 +1033,6 @@ export default function RezerwacjeStolik({
               ) : null}
               <div className="ml-auto flex flex-wrap justify-end gap-2">
                 <Button variant="subtle" size="sm" onClick={closeReservation} disabled={!!modalAction}>Anuluj</Button>
-                {modalFeedback?.canOverride ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => zapisz(true)}
-                    disabled={!!modalAction}
-                    className="border-lemon/30 text-lemon hover:bg-lemon/10"
-                  >
-                    <Icon name="warning" className="h-4 w-4" />
-                    Zapisz mimo limitu
-                  </Button>
-                ) : null}
                 <Button type="submit" size="sm" loading={modalAction === 'save'} loadingLabel="Zapisuję…" disabled={!!modalAction && modalAction !== 'save'}>
                   <Icon name="check" className="h-4 w-4" />
                   {modalFeedback?.type === 'error' ? 'Ponów zapis' : 'Zapisz'}
@@ -1071,6 +1090,8 @@ export default function RezerwacjeStolik({
                           onChange={(event) => {
                             setPosadzStolik((current) => ({ ...current, [entry.id]: event.target.value }))
                             setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
+                            setWaitOverrides((current) => ({ ...current, [entry.id]: null }))
+                            setWaitOverrideDrafts((current) => ({ ...current, [entry.id]: emptyOverrideDraft() }))
                           }}
                           disabled={!!action}
                           className="field"
@@ -1107,6 +1128,21 @@ export default function RezerwacjeStolik({
                     feedback={waitRowFeedback[entry.id]}
                     className="mt-2"
                   />
+                  {waitOverrides[entry.id] ? (
+                    <ReservationOverridePanel
+                      availability={waitOverrides[entry.id]}
+                      value={waitOverrideDrafts[entry.id] || emptyOverrideDraft()}
+                      onChange={(value) => setWaitOverrideDrafts((current) => ({ ...current, [entry.id]: value }))}
+                      onCancel={() => {
+                        setWaitOverrides((current) => ({ ...current, [entry.id]: null }))
+                        setWaitOverrideDrafts((current) => ({ ...current, [entry.id]: emptyOverrideDraft() }))
+                        setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
+                      }}
+                      onConfirm={(override) => posadz(entry, override)}
+                      busy={action === 'seat'}
+                      actionLabel="Posadź mimo limitu"
+                    />
+                  ) : null}
                 </div>
               )
             })}

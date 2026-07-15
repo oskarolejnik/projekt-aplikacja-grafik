@@ -635,6 +635,18 @@ class SalaRezerwacyjna(Base):
         CheckConstraint("kolejnosc >= 0", name="ck_sale_rezerwacyjne_kolejnosc"),
         CheckConstraint("priorytet >= 0", name="ck_sale_rezerwacyjne_priorytet"),
         CheckConstraint(
+            "limit_jednoczesnych_rez IS NULL OR limit_jednoczesnych_rez >= 0",
+            name="ck_sale_rezerwacyjne_limit_jednoczesnych_rez",
+        ),
+        CheckConstraint(
+            "limit_jednoczesnych_osob IS NULL OR limit_jednoczesnych_osob >= 0",
+            name="ck_sale_rezerwacyjne_limit_jednoczesnych_osob",
+        ),
+        CheckConstraint(
+            "domyslny_bufor_min IS NULL OR domyslny_bufor_min >= 0",
+            name="ck_sale_rezerwacyjne_domyslny_bufor_min",
+        ),
+        CheckConstraint(
             "strategia_zapelniania IN ('preferuj', 'wypelniaj_kolejno')",
             name="ck_sale_rezerwacyjne_strategia_zapelniania",
         ),
@@ -649,6 +661,15 @@ class SalaRezerwacyjna(Base):
         String(24), nullable=False, default="preferuj", server_default="preferuj",
     )
     priorytet = Column(Integer, nullable=False, default=0, server_default="0")
+    online_aktywna = Column(
+        Boolean, nullable=False, default=True, server_default=text("true"),
+    )
+    wewnetrzna_aktywna = Column(
+        Boolean, nullable=False, default=True, server_default=text("true"),
+    )
+    limit_jednoczesnych_rez = Column(Integer, nullable=True)
+    limit_jednoczesnych_osob = Column(Integer, nullable=True)
+    domyslny_bufor_min = Column(Integer, nullable=True)
 
     stoliki = relationship("Stolik", back_populates="sala")
     plany = relationship("PlanSali", back_populates="sala", cascade="all, delete-orphan")
@@ -1000,12 +1021,52 @@ class GodzinyOtwarcia(Base):
     """Serwis rezerwacyjny (okno przyjęć) per dzień tygodnia — kilka wierszy na dzień = lunch/kolacja.
     Historycznie „godziny otwarcia"; rozszerzone o turn-time zależny od grupy i pacing (limit coverów)."""
     __tablename__ = "godziny_otwarcia"
+    __table_args__ = (
+        CheckConstraint(
+            "krok_slotu_min >= 1 AND krok_slotu_min <= 1440",
+            name="ck_godziny_otwarcia_krok_slotu_min",
+        ),
+        CheckConstraint(
+            "domyslny_turn_time_min >= 1 AND domyslny_turn_time_min <= 1439",
+            name="ck_godziny_otwarcia_domyslny_turn_time_min",
+        ),
+        CheckConstraint(
+            "max_jednoczesnych_rez IS NULL OR max_jednoczesnych_rez >= 0",
+            name="ck_godziny_otwarcia_max_jednoczesnych_rez",
+        ),
+        CheckConstraint(
+            "max_jednoczesnych_osob IS NULL OR max_jednoczesnych_osob >= 0",
+            name="ck_godziny_otwarcia_max_jednoczesnych_osob",
+        ),
+        CheckConstraint(
+            "duza_grupa_od IS NULL OR duza_grupa_od > 0",
+            name="ck_godziny_otwarcia_duza_grupa_od",
+        ),
+        CheckConstraint(
+            "duza_grupa_tryb IS NULL OR duza_grupa_tryb IN "
+            "('online', 'do_zatwierdzenia', 'telefon')",
+            name="ck_godziny_otwarcia_duza_grupa_tryb",
+        ),
+        CheckConstraint(
+            "(duza_grupa_od IS NULL AND duza_grupa_tryb IS NULL) OR "
+            "(duza_grupa_od IS NOT NULL AND duza_grupa_tryb IS NOT NULL)",
+            name="ck_godziny_otwarcia_duza_grupa_spojnosc",
+        ),
+    )
     id                = Column(Integer, primary_key=True, index=True)
     dzien_tygodnia    = Column(Integer, nullable=False)        # 0=poniedziałek … 6=niedziela
     godz_od           = Column(Time, nullable=False)
     godz_do           = Column(Time, nullable=False)
     ostatni_zasiadek  = Column(Time, nullable=True)            # ostatnia możliwa godzina rezerwacji
     dlugosc_slotu_min = Column(Integer, nullable=False, default=120)   # krok siatki + bazowy turn-time
+    # R3 rozdziela częstotliwość oferowanych terminów od czasu zajęcia zasobu.
+    # ``dlugosc_slotu_min`` pozostaje adapterem kompatybilności przez okres migracyjny.
+    krok_slotu_min = Column(
+        Integer, nullable=False, default=120, server_default="120",
+    )
+    domyslny_turn_time_min = Column(
+        Integer, nullable=False, default=120, server_default="120",
+    )
     aktywny           = Column(Boolean, nullable=False, default=True)
     nazwa             = Column(String(32), nullable=True)      # etykieta serwisu: „Lunch"/„Kolacja" (NULL = jeden serwis dnia)
     # Turn-time zależny od wielkości grupy: [{"do_osob":2,"min":90},{"do_osob":6,"min":120}] rosnąco.
@@ -1015,12 +1076,28 @@ class GodzinyOtwarcia(Base):
     pacing_max_rez    = Column(Integer, nullable=True)
     pacing_max_osob   = Column(Integer, nullable=True)
     pacing_okno_min   = Column(Integer, nullable=True)
+    max_jednoczesnych_rez = Column(Integer, nullable=True)
+    max_jednoczesnych_osob = Column(Integer, nullable=True)
+    duza_grupa_od = Column(Integer, nullable=True)
+    duza_grupa_tryb = Column(String(24), nullable=True)
 
 
 class WyjatekKalendarza(Base):
     """Nadpisanie parametrów rezerwacji na konkretny dzień: blackout (zamknięte) lub godziny
     specjalne (inne okno/slot). Ma pierwszeństwo nad GodzinyOtwarcia w _serwisy_dnia."""
     __tablename__ = "wyjatki_kalendarza"
+    __table_args__ = (
+        CheckConstraint(
+            "krok_slotu_min IS NULL OR "
+            "(krok_slotu_min >= 1 AND krok_slotu_min <= 1440)",
+            name="ck_wyjatki_kalendarza_krok_slotu_min",
+        ),
+        CheckConstraint(
+            "domyslny_turn_time_min IS NULL OR "
+            "(domyslny_turn_time_min >= 1 AND domyslny_turn_time_min <= 1439)",
+            name="ck_wyjatki_kalendarza_domyslny_turn_time_min",
+        ),
+    )
     id                = Column(Integer, primary_key=True, index=True)
     data              = Column(Date, nullable=False, index=True)
     typ               = Column(String(16), nullable=False)      # blackout | godziny_specjalne
@@ -1028,7 +1105,136 @@ class WyjatekKalendarza(Base):
     godz_do           = Column(Time, nullable=True)
     ostatni_zasiadek  = Column(Time, nullable=True)
     dlugosc_slotu_min = Column(Integer, nullable=True)
+    krok_slotu_min    = Column(Integer, nullable=True)
+    domyslny_turn_time_min = Column(Integer, nullable=True)
     nazwa             = Column(String(64), nullable=True)       # np. „Sylwester", „Wielkanoc"
+
+
+class RegulaDostepnosciRezerwacji(Base):
+    """Typowane, dziedziczone nadpisanie reguł R3 dla serwisu, sali i kanału."""
+    __tablename__ = "reguly_dostepnosci_rezerwacji"
+    __table_args__ = (
+        CheckConstraint(
+            "kanal IN ('oba', 'online', 'wewnetrzna')",
+            name="ck_reguly_dostepnosci_kanal",
+        ),
+        CheckConstraint(
+            "pacing_okno_min IS NULL OR pacing_okno_min > 0",
+            name="ck_reguly_dostepnosci_pacing_okno_min",
+        ),
+        CheckConstraint(
+            "pacing_max_rez IS NULL OR pacing_max_rez >= 0",
+            name="ck_reguly_dostepnosci_pacing_max_rez",
+        ),
+        CheckConstraint(
+            "pacing_max_osob IS NULL OR pacing_max_osob >= 0",
+            name="ck_reguly_dostepnosci_pacing_max_osob",
+        ),
+        CheckConstraint(
+            "max_jednoczesnych_rez IS NULL OR max_jednoczesnych_rez >= 0",
+            name="ck_reguly_dostepnosci_max_jednoczesnych_rez",
+        ),
+        CheckConstraint(
+            "max_jednoczesnych_osob IS NULL OR max_jednoczesnych_osob >= 0",
+            name="ck_reguly_dostepnosci_max_jednoczesnych_osob",
+        ),
+        CheckConstraint(
+            "bufor_min IS NULL OR bufor_min >= 0",
+            name="ck_reguly_dostepnosci_bufor_min",
+        ),
+        CheckConstraint(
+            "okno_wyprzedzenia_dni IS NULL OR okno_wyprzedzenia_dni >= 0",
+            name="ck_reguly_dostepnosci_okno_wyprzedzenia_dni",
+        ),
+        CheckConstraint(
+            "cutoff_min IS NULL OR cutoff_min >= 0",
+            name="ck_reguly_dostepnosci_cutoff_min",
+        ),
+        CheckConstraint(
+            "min_grupa IS NULL OR min_grupa > 0",
+            name="ck_reguly_dostepnosci_min_grupa",
+        ),
+        CheckConstraint(
+            "max_grupa IS NULL OR max_grupa >= 0",
+            name="ck_reguly_dostepnosci_max_grupa",
+        ),
+        CheckConstraint(
+            "min_grupa IS NULL OR max_grupa IS NULL OR max_grupa = 0 "
+            "OR max_grupa >= min_grupa",
+            name="ck_reguly_dostepnosci_zakres_grupy",
+        ),
+        CheckConstraint(
+            "duza_grupa_od IS NULL OR duza_grupa_od > 0",
+            name="ck_reguly_dostepnosci_duza_grupa_od",
+        ),
+        CheckConstraint(
+            "duza_grupa_tryb IS NULL OR duza_grupa_tryb IN "
+            "('online', 'do_zatwierdzenia', 'telefon')",
+            name="ck_reguly_dostepnosci_duza_grupa_tryb",
+        ),
+        CheckConstraint(
+            "(duza_grupa_od IS NULL AND duza_grupa_tryb IS NULL) OR "
+            "(duza_grupa_od IS NOT NULL AND duza_grupa_tryb IS NOT NULL)",
+            name="ck_reguly_dostepnosci_duza_grupa_spojnosc",
+        ),
+        CheckConstraint(
+            "pacing_okno_min IS NOT NULL OR pacing_max_rez IS NOT NULL OR "
+            "pacing_max_osob IS NOT NULL OR max_jednoczesnych_rez IS NOT NULL OR "
+            "max_jednoczesnych_osob IS NOT NULL OR bufor_min IS NOT NULL OR "
+            "okno_wyprzedzenia_dni IS NOT NULL OR cutoff_min IS NOT NULL OR "
+            "min_grupa IS NOT NULL OR max_grupa IS NOT NULL OR "
+            "duza_grupa_od IS NOT NULL OR duza_grupa_tryb IS NOT NULL",
+            name="ck_reguly_dostepnosci_nie_puste",
+        ),
+        Index(
+            "uq_reguly_dostepnosci_global_kanal",
+            "kanal",
+            unique=True,
+            sqlite_where=text("serwis_id IS NULL AND sala_id IS NULL"),
+            postgresql_where=text("serwis_id IS NULL AND sala_id IS NULL"),
+        ),
+        Index(
+            "uq_reguly_dostepnosci_serwis_kanal",
+            "serwis_id", "kanal",
+            unique=True,
+            sqlite_where=text("serwis_id IS NOT NULL AND sala_id IS NULL"),
+            postgresql_where=text("serwis_id IS NOT NULL AND sala_id IS NULL"),
+        ),
+        Index(
+            "uq_reguly_dostepnosci_sala_kanal",
+            "sala_id", "kanal",
+            unique=True,
+            sqlite_where=text("serwis_id IS NULL AND sala_id IS NOT NULL"),
+            postgresql_where=text("serwis_id IS NULL AND sala_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_reguly_dostepnosci_serwis_sala_kanal",
+            "serwis_id", "sala_id", "kanal",
+            unique=True,
+            sqlite_where=text("serwis_id IS NOT NULL AND sala_id IS NOT NULL"),
+            postgresql_where=text("serwis_id IS NOT NULL AND sala_id IS NOT NULL"),
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    serwis_id = Column(
+        Integer, ForeignKey("godziny_otwarcia.id", ondelete="CASCADE"), nullable=True,
+    )
+    sala_id = Column(
+        Integer, ForeignKey("sale_rezerwacyjne.id", ondelete="CASCADE"), nullable=True,
+    )
+    kanal = Column(String(16), nullable=False, default="oba", server_default="oba")
+    pacing_okno_min = Column(Integer, nullable=True)
+    pacing_max_rez = Column(Integer, nullable=True)
+    pacing_max_osob = Column(Integer, nullable=True)
+    max_jednoczesnych_rez = Column(Integer, nullable=True)
+    max_jednoczesnych_osob = Column(Integer, nullable=True)
+    bufor_min = Column(Integer, nullable=True)
+    okno_wyprzedzenia_dni = Column(Integer, nullable=True)
+    cutoff_min = Column(Integer, nullable=True)
+    min_grupa = Column(Integer, nullable=True)
+    max_grupa = Column(Integer, nullable=True)
+    duza_grupa_od = Column(Integer, nullable=True)
+    duza_grupa_tryb = Column(String(24), nullable=True)
 
 
 class ListaOczekujacych(Base):
@@ -1170,6 +1376,47 @@ class RezerwacjaPacingLedger(Base):
     created_at   = Column(DateTime, nullable=False)
 
 
+class RezerwacjaOblozenieLedger(Base):
+    """Minutowe buckety jednoczesnego obłożenia aktywnych rezerwacji R3."""
+    __tablename__ = "rezerwacje_oblozenie_ledger"
+    __table_args__ = (
+        UniqueConstraint(
+            "termin_id", "minute", name="uq_rezerwacje_oblozenie_termin_minute",
+        ),
+        CheckConstraint(
+            "minute >= 0 AND minute < 1440",
+            name="ck_rezerwacje_oblozenie_minute",
+        ),
+        CheckConstraint("covers >= 0", name="ck_rezerwacje_oblozenie_covers"),
+        CheckConstraint(
+            "kanal IN ('online', 'wewnetrzna')",
+            name="ck_rezerwacje_oblozenie_kanal",
+        ),
+        Index(
+            "ix_rezerwacje_oblozenie_data_minute_sala_kanal",
+            "data", "minute", "sala_id", "kanal",
+        ),
+        Index("ix_rezerwacje_oblozenie_termin_id", "termin_id"),
+    )
+    id = Column(Integer, primary_key=True)
+    termin_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=False,
+    )
+    data = Column(Date, nullable=False)
+    minute = Column(Integer, nullable=False)
+    sala_id = Column(
+        Integer, ForeignKey("sale_rezerwacyjne.id", ondelete="RESTRICT"), nullable=True,
+    )
+    kanal = Column(
+        String(16), nullable=False, default="wewnetrzna", server_default="wewnetrzna",
+    )
+    covers = Column(Integer, nullable=False, default=0, server_default="0")
+    override = Column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
+    created_at = Column(DateTime, nullable=False)
+
+
 class ReservationAudit(Base):
     """Transakcyjna historia operacji na rezerwacji stolika.
 
@@ -1236,6 +1483,33 @@ class ReservationAudit(Base):
     action          = Column(String(16), nullable=False)
     reason          = Column(String(64), nullable=True)
     diff            = Column(JSON, nullable=False)
+
+
+class ReservationOverrideContext(Base):
+    """Szyfrowany kontekst powodu jawnego przekroczenia reguły rezerwacji."""
+    __tablename__ = "reservation_override_context"
+    __table_args__ = (
+        UniqueConstraint(
+            "audit_id", name="uq_reservation_override_context_audit_id",
+        ),
+        CheckConstraint(
+            "reason_code IN ("
+            "'guest_request', 'large_group_confirmed', 'event_exception', "
+            "'operational_decision', 'walk_in', 'other', 'legacy_confirmation')",
+            name="ck_reservation_override_context_reason_code",
+        ),
+        Index(
+            "ix_reservation_override_context_reason_code", "reason_code",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    audit_id = Column(
+        Integer,
+        ForeignKey("reservation_audit.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reason_code = Column(String(32), nullable=False)
+    note = Column(EncryptedString(1024), nullable=True)
 
 
 class ProfilGoscia(Base):

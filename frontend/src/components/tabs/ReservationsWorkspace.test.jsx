@@ -110,6 +110,10 @@ vi.mock('./PlanSali', () => ({
   ),
 }))
 
+vi.mock('./ReservationAvailability', () => ({
+  default: ({ active }) => <div data-testid="reservation-availability">Dostępność reguł {String(active)}</div>,
+}))
+
 import ReservationsWorkspace from './ReservationsWorkspace'
 import { purgeReservationPrivacy } from '../../lib/reservationPrivacy'
 import { writeReservationSession } from '../../lib/reservationSession'
@@ -186,6 +190,34 @@ describe('ReservationsWorkspace', () => {
     expect(window.location.hash).toBe('#/rezerwacje/sale?sala=9')
     expect(screen.getByTestId('floor-room')).toHaveTextContent('9')
     expect(screen.getByRole('button', { name: 'Wróć do rezerwacji' })).toBeInTheDocument()
+  })
+
+  it('prowadzi do ustawień rezerwacji i przełącza Dostępność oraz Sale bez rozbudowy nawigacji operacyjnej', async () => {
+    setPermissions('rezerwacje.operacje', 'rezerwacje.reguly', 'rezerwacje.sala')
+    render(<ReservationsWorkspace />)
+
+    expect(screen.getByRole('navigation', { name: 'Widoki rezerwacji' }).querySelectorAll('button')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Ustawienia rezerwacji' }))
+
+    expect(await screen.findByRole('heading', { name: 'Dostępność' })).toBeInTheDocument()
+    expect(window.location.hash).toBe('#/rezerwacje/dostepnosc')
+    expect(screen.getByTestId('reservation-availability')).toHaveTextContent('true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sale' }))
+    expect(await screen.findByRole('heading', { name: 'Konfiguracja sal' })).toBeInTheDocument()
+    expect(window.location.hash).toBe('#/rezerwacje/sale')
+  })
+
+  it('dla konta rules-only pokazuje samą Dostępność bez martwego powrotu', async () => {
+    setPermissions('rezerwacje.reguly')
+    setHash('#/rezerwacje/dostepnosc')
+
+    render(<ReservationsWorkspace />)
+
+    expect(await screen.findByRole('heading', { name: 'Dostępność' })).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Widoki rezerwacji' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Wróć do rezerwacji' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Obszar ustawień rezerwacji' })).not.toBeInTheDocument()
   })
 
   it('dla konta floor-only pokazuje samą konfigurację bez martwego powrotu', async () => {

@@ -196,6 +196,7 @@ _PRE_R0B_REVISION = "0050_rezerwacje_source_identity"
 _R1A_AUDIT_TABLE = "reservation_audit"
 _R1A_REVISION = "0052_reservation_audit"
 _R2_REVISION = "0058_r22b_strategia_proweniencja"
+_R3_REVISION = "0059_r3_reguly_dostepnosci"
 _R2_TABLES = {
     "sale_rezerwacyjne",
     "plany_sali",
@@ -232,6 +233,66 @@ _R2_COLUMNS = {
     "skladniki_kombinacji_planu": {
         "id", "kombinacja_id", "wersja_id", "stolik_id",
     },
+}
+_R3_TABLES = {
+    "reguly_dostepnosci_rezerwacji",
+    "rezerwacje_oblozenie_ledger",
+    "reservation_override_context",
+}
+_R3_COLUMNS = {
+    "reguly_dostepnosci_rezerwacji": {
+        "id", "serwis_id", "sala_id", "kanal", "pacing_okno_min",
+        "pacing_max_rez", "pacing_max_osob", "max_jednoczesnych_rez",
+        "max_jednoczesnych_osob", "bufor_min", "okno_wyprzedzenia_dni",
+        "cutoff_min", "min_grupa", "max_grupa", "duza_grupa_od",
+        "duza_grupa_tryb",
+    },
+    "rezerwacje_oblozenie_ledger": {
+        "id", "termin_id", "data", "minute", "sala_id", "kanal",
+        "covers", "override", "created_at",
+    },
+    "reservation_override_context": {
+        "id", "audit_id", "reason_code", "note",
+    },
+}
+_R3_BASE_COLUMNS = {
+    "godziny_otwarcia": {
+        "krok_slotu_min", "domyslny_turn_time_min",
+        "max_jednoczesnych_rez", "max_jednoczesnych_osob",
+        "duza_grupa_od", "duza_grupa_tryb",
+    },
+    "wyjatki_kalendarza": {
+        "krok_slotu_min", "domyslny_turn_time_min",
+    },
+    "sale_rezerwacyjne": {
+        "online_aktywna", "wewnetrzna_aktywna",
+        "limit_jednoczesnych_rez", "limit_jednoczesnych_osob",
+        "domyslny_bufor_min",
+    },
+}
+_R3_CHECK_TABLES = _R3_TABLES | set(_R3_BASE_COLUMNS)
+_R3_CHECKS = {
+    table_name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in Base.metadata.tables[table_name].constraints
+        if constraint.name and hasattr(constraint, "sqltext")
+        and (
+            table_name in _R3_TABLES
+            or any(
+                column_name.casefold() in str(constraint.sqltext).casefold()
+                for column_name in _R3_BASE_COLUMNS.get(table_name, set())
+            )
+        )
+    }
+    for table_name in _R3_CHECK_TABLES
+}
+_R3_NULLABLE = {
+    table_name: {
+        column.name: bool(column.nullable)
+        for column in Base.metadata.tables[table_name].columns
+        if column.name in _R3_COLUMNS.get(table_name, set())
+    }
+    for table_name in _R3_TABLES
 }
 def _strip_r2_outer_parentheses(sql: str) -> str:
     """Usuwa wyłącznie pary obejmujące całe wyrażenie, bez parsowania logiki."""
@@ -418,6 +479,9 @@ def _rebuild_rezerwacje_ledger():
                 table_ids=ids,
                 party_size=record.liczba_osob or 0,
                 enforce_pacing=False,
+                # Ta funkcja obsługuje również bazy sprzed 0059, w których tabela
+                # minutowego obłożenia jeszcze nie istnieje. R3 odbudowuje ją osobno.
+                include_capacity=False,
                 now=now,
             )
 
@@ -442,6 +506,213 @@ def _rebuild_rezerwacje_ledger():
             )
 
         reservation_service.touch_days(guards)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _rebuild_rezerwacje_oblozenie_ledger() -> None:
+    """Odbudowuje buckety R3 tylko wtedy, gdy pełny schemat 0059 już istnieje."""
+    from datetime import time as time_value
+
+    from sqlalchemy import inspect
+
+    import models
+    import reservation_service
+
+    schema = inspect(engine)
+    tables = set(schema.get_table_names())
+    if not _R3_TABLES.issubset(tables):
+        return
+    for table_name, expected in _R3_COLUMNS.items():
+        actual = {column["name"] for column in schema.get_columns(table_name)}
+        if actual != expected:
+            raise RuntimeError(
+                f"R3_FALLBACK_INCOMPLETE_TABLE table={table_name}"
+            )
+    for table_name, expected in _R3_BASE_COLUMNS.items():
+        actual = {column["name"] for column in schema.get_columns(table_name)}
+        if not expected.issubset(actual):
+            raise RuntimeError(
+                f"R3_FALLBACK_INCOMPLETE_COLUMNS table={table_name}"
+            )
+
+    def minute(value, *, code: str) -> int:
+        if isinstance(value, str):
+            try:
+                value = time_value.fromisoformat(value)
+            except ValueError as exc:
+                raise RuntimeError(code) from exc
+        if (
+            not isinstance(value, time_value)
+            or value.tzinfo is not None
+            or value.second
+            or value.microsecond
+        ):
+            raise RuntimeError(code)
+        return value.hour * 60 + value.minute
+
+    db = SessionLocal()
+    try:
+        active = tuple(reservation_service.ACTIVE_STATUSES)
+        reservations = db.query(
+            models.Termin.id,
+            models.Termin.data,
+            models.Termin.godz_od,
+            models.Termin.godz_do,
+            models.Termin.stolik_id,
+            models.Termin.stoliki_dodatkowe,
+            models.Termin.kanal,
+        ).filter(
+            models.Termin.rodzaj == "stolik",
+            models.Termin.status.in_(active),
+        ).order_by(models.Termin.id).all()
+        pacing_by_termin = {
+            row.termin_id: row
+            for row in db.query(models.RezerwacjaPacingLedger).all()
+        }
+        expected = {row.id for row in reservations if row.godz_od is not None}
+        if expected != set(pacing_by_termin):
+            raise RuntimeError("R3_FALLBACK_PACING_LEDGER_MISMATCH")
+
+        room_by_table = {
+            table_id: room_id for table_id, room_id in db.query(
+                models.Stolik.id, models.Stolik.sala_id,
+            ).all()
+        }
+        services_by_weekday: dict[int, list] = {}
+        for service in db.query(models.GodzinyOtwarcia).filter_by(
+            aktywny=True,
+        ).order_by(
+            models.GodzinyOtwarcia.dzien_tygodnia,
+            models.GodzinyOtwarcia.godz_od,
+        ).all():
+            services_by_weekday.setdefault(service.dzien_tygodnia, []).append(service)
+        exceptions_by_date = {
+            row.data: row for row in db.query(models.WyjatekKalendarza).filter_by(
+                typ="godziny_specjalne",
+            ).order_by(models.WyjatekKalendarza.id).all()
+        }
+
+        def duration(record, start_minute: int) -> int:
+            special = exceptions_by_date.get(record.data)
+            if special is not None:
+                value = (
+                    special.domyslny_turn_time_min
+                    or special.dlugosc_slotu_min
+                )
+                if value:
+                    return int(value)
+            services = services_by_weekday.get(record.data.weekday(), ())
+            selected = None
+            for service in services:
+                service_start = minute(
+                    service.godz_od, code="R3_FALLBACK_INVALID_SERVICE_TIME",
+                )
+                service_end = minute(
+                    service.ostatni_zasiadek or service.godz_do,
+                    code="R3_FALLBACK_INVALID_SERVICE_TIME",
+                )
+                if service_start <= start_minute <= service_end:
+                    selected = service
+                    break
+            if selected is None and services:
+                selected = services[0]
+            return int(
+                (selected.domyslny_turn_time_min or selected.dlugosc_slotu_min)
+                if selected is not None else 120
+            )
+
+        db.query(models.RezerwacjaOblozenieLedger).delete(
+            synchronize_session=False,
+        )
+        values = []
+        for record in reservations:
+            if record.godz_od is None:
+                if record.stolik_id is not None or record.stoliki_dodatkowe:
+                    raise RuntimeError(
+                        f"R3_FALLBACK_MISSING_START record_id={record.id}"
+                    )
+                continue
+            pacing = pacing_by_termin[record.id]
+            start_minute = minute(
+                record.godz_od,
+                code=f"R3_FALLBACK_INVALID_START record_id={record.id}",
+            )
+            if start_minute != pacing.start_minute or record.data != pacing.data:
+                raise RuntimeError(
+                    f"R3_FALLBACK_PACING_MISMATCH record_id={record.id}"
+                )
+            end_minute = (
+                minute(
+                    record.godz_do,
+                    code=f"R3_FALLBACK_INVALID_END record_id={record.id}",
+                )
+                if record.godz_do is not None
+                else start_minute + duration(record, start_minute)
+            )
+            if end_minute <= start_minute or end_minute > 1440:
+                raise RuntimeError(
+                    f"R3_FALLBACK_INVALID_INTERVAL record_id={record.id}"
+                )
+
+            raw_extra = record.stoliki_dodatkowe
+            if raw_extra is None:
+                extra = []
+            elif isinstance(raw_extra, list):
+                extra = raw_extra
+            else:
+                raise RuntimeError(
+                    f"R3_FALLBACK_CORRUPT_EXTRA_TABLES record_id={record.id}"
+                )
+            ids = ([] if record.stolik_id is None else [record.stolik_id]) + extra
+            normalized_ids = []
+            for raw in ids:
+                if isinstance(raw, bool):
+                    raise RuntimeError(
+                        f"R3_FALLBACK_INVALID_TABLE record_id={record.id}"
+                    )
+                try:
+                    table_id = int(raw)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"R3_FALLBACK_INVALID_TABLE record_id={record.id}"
+                    ) from exc
+                if table_id <= 0 or table_id in normalized_ids:
+                    raise RuntimeError(
+                        f"R3_FALLBACK_INVALID_TABLE record_id={record.id}"
+                    )
+                normalized_ids.append(table_id)
+            if any(table_id not in room_by_table for table_id in normalized_ids):
+                raise RuntimeError(
+                    f"R3_FALLBACK_MISSING_TABLE record_id={record.id}"
+                )
+            rooms = {room_by_table[table_id] for table_id in normalized_ids}
+            concrete_rooms = {room_id for room_id in rooms if room_id is not None}
+            if len(concrete_rooms) > 1 or (concrete_rooms and None in rooms):
+                raise RuntimeError(
+                    f"R3_FALLBACK_CROSS_ROOM record_id={record.id}"
+                )
+            room_id = next(iter(concrete_rooms)) if concrete_rooms else None
+            for bucket_minute in range(start_minute, end_minute):
+                values.append({
+                    "termin_id": record.id,
+                    "data": record.data,
+                    "minute": bucket_minute,
+                    "sala_id": room_id,
+                    "kanal": (
+                        "online" if record.kanal == "online" else "wewnetrzna"
+                    ),
+                    "covers": int(pacing.covers or 0),
+                    "override": bool(pacing.override),
+                    "created_at": pacing.created_at,
+                })
+        table = models.RezerwacjaOblozenieLedger.__table__
+        for offset in range(0, len(values), 2000):
+            db.execute(table.insert(), values[offset:offset + 2000])
         db.commit()
     except Exception:
         db.rollback()
@@ -628,7 +899,9 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     ostemplowany i pominięty przez Alembica. Dla tabel ledgera wymagamy dokładnego zestawu
     kolumn bieżącego modelu; pozostałe tabele muszą odpowiadać pełnemu schematowi sprzed 0052.
     """
-    if not (model_tables - {_R1A_AUDIT_TABLE} - _R2_TABLES).issubset(tables):
+    if not (
+        model_tables - {_R1A_AUDIT_TABLE} - _R2_TABLES - _R3_TABLES
+    ).issubset(tables):
         return False
     for table_name in _R0B_LEDGER_TABLES:
         expected = {
@@ -772,11 +1045,15 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             "Schemat R2 jest niekompletny; nie można oznaczyć bieżącej migracji."
         )
 
+    has_complete_r3 = _R3_TABLES.issubset(tables)
     for table_name, expected in _R2_COLUMNS.items():
         actual = {
             column["name"] for column in inspector.get_columns(table_name)
         }
-        if actual != expected:
+        allowed = expected | (
+            _R3_BASE_COLUMNS.get(table_name, set()) if has_complete_r3 else set()
+        )
+        if actual != allowed:
             raise RuntimeError(
                 f"Tabela {table_name} jest niekompletna; nie można oznaczyć bieżącej migracji."
             )
@@ -985,9 +1262,11 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
         actual_columns = {
             column["name"]: column for column in inspector.get_columns(table_name)
         }
+        r2_column_names = _R2_COLUMNS[table_name]
         if any(
             bool(actual_columns[column.name].get("nullable")) != bool(column.nullable)
             for column in model_table.columns
+            if column.name in r2_column_names
         ):
             raise RuntimeError(
                 f"Tabela {table_name} ma nieprawidłową nullowalność R2."
@@ -996,6 +1275,10 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             constraint.name: normalized_sql(constraint.sqltext)
             for constraint in model_table.constraints
             if isinstance(constraint, CheckConstraint) and constraint.name
+            and not any(
+                column_name.casefold() in normalized_sql(constraint.sqltext)
+                for column_name in _R3_BASE_COLUMNS.get(table_name, set())
+            )
         }
         actual_checks = {
             constraint.get("name"): normalized_sql(constraint.get("sqltext"))
@@ -1269,6 +1552,255 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
     return True
 
 
+def _r3_occupancy_adoption_is_valid(conn) -> bool:
+    """Sprawdza kompletność i ciągłość minutowych bucketów bez PII."""
+    from datetime import time as time_value
+    from sqlalchemy import text
+
+    def minute(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                value = time_value.fromisoformat(value)
+            except ValueError:
+                return None
+        if (
+            not isinstance(value, time_value)
+            or value.tzinfo is not None
+            or value.second
+            or value.microsecond
+        ):
+            return None
+        return value.hour * 60 + value.minute
+
+    missing_pacing = conn.execute(text(
+        "SELECT count(*) FROM terminy t "
+        "LEFT JOIN rezerwacje_pacing_ledger p ON p.termin_id=t.id "
+        "WHERE t.rodzaj='stolik' AND t.status IN ('rezerwacja','potwierdzona') "
+        "AND t.godz_od IS NOT NULL AND p.termin_id IS NULL"
+    )).scalar_one()
+    extra_buckets = conn.execute(text(
+        "SELECT count(*) FROM rezerwacje_oblozenie_ledger o "
+        "JOIN terminy t ON t.id=o.termin_id "
+        "WHERE t.rodzaj<>'stolik' OR t.status NOT IN ('rezerwacja','potwierdzona') "
+        "OR t.godz_od IS NULL"
+    )).scalar_one()
+    invalid_context = conn.execute(text(
+        "SELECT count(*) FROM reservation_override_context c "
+        "JOIN reservation_audit a ON a.id=c.audit_id "
+        "WHERE a.action<>'override'"
+    )).scalar_one()
+    if missing_pacing or extra_buckets or invalid_context:
+        return False
+
+    rows = conn.execute(text(
+        "SELECT p.termin_id,p.data,p.start_minute,p.covers,t.godz_do,"
+        "count(o.id) AS bucket_count,min(o.minute) AS first_minute,"
+        "max(o.minute) AS last_minute,"
+        "sum(CASE WHEN o.data<>p.data OR o.covers<>p.covers THEN 1 ELSE 0 END) "
+        "AS mismatched_values, count(DISTINCT o.sala_id) AS room_count "
+        "FROM rezerwacje_pacing_ledger p "
+        "JOIN terminy t ON t.id=p.termin_id "
+        "LEFT JOIN rezerwacje_oblozenie_ledger o ON o.termin_id=p.termin_id "
+        "WHERE t.rodzaj='stolik' AND t.status IN ('rezerwacja','potwierdzona') "
+        "AND t.godz_od IS NOT NULL "
+        "GROUP BY p.termin_id,p.data,p.start_minute,p.covers,t.godz_do"
+    )).mappings().all()
+    for row in rows:
+        count = int(row["bucket_count"] or 0)
+        first = row["first_minute"]
+        last = row["last_minute"]
+        if (
+            count <= 0
+            or first != row["start_minute"]
+            or last is None
+            or count != int(last) - int(first) + 1
+            or int(row["mismatched_values"] or 0)
+            or int(row["room_count"] or 0) > 1
+        ):
+            return False
+        end = minute(row["godz_do"])
+        if row["godz_do"] is not None and (end is None or int(last) != end - 1):
+            return False
+    return True
+
+
+def _validate_r3_adoption_schema(inspector=None, *, validate_data: bool = True) -> bool:
+    """Waliduje pełny niewersjonowany schemat R3 przed stemplem 0059."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspector or inspect(engine)
+    if engine.dialect.name == "postgresql":
+        raise RuntimeError(
+            "R3_POSTGRES_ADOPTION_REQUIRES_VERIFIED_STAMP: automatyczna adopcja "
+            "niewersjonowanej bazy PostgreSQL jest zablokowana. Zweryfikuj kolumny, "
+            "CHECK/UNIQUE/FK, partial indexes i backfill oblozenia, nastepnie wykonaj "
+            "`alembic stamp 0059_r3_reguly_dostepnosci` i `alembic upgrade head`."
+        )
+
+    tables = set(inspector.get_table_names())
+    if not _R3_TABLES.issubset(tables):
+        raise RuntimeError(
+            "Schemat R3 jest niekompletny; nie mozna oznaczyc migracji 0059."
+        )
+    for table_name, expected in _R3_COLUMNS.items():
+        columns = {
+            column["name"]: bool(column["nullable"])
+            for column in inspector.get_columns(table_name)
+        }
+        if set(columns) != expected or columns != _R3_NULLABLE[table_name]:
+            raise RuntimeError(
+                f"Tabela {table_name} jest niekompletna dla R3."
+            )
+    for table_name, expected in _R3_BASE_COLUMNS.items():
+        actual = {column["name"] for column in inspector.get_columns(table_name)}
+        if not expected.issubset(actual):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma wymaganych kolumn R3."
+            )
+
+    expected_indexes = {
+        "reguly_dostepnosci_rezerwacji": {
+            "uq_reguly_dostepnosci_global_kanal": (
+                ("kanal",), True, "serwis_id IS NULL AND sala_id IS NULL",
+            ),
+            "uq_reguly_dostepnosci_serwis_kanal": (
+                ("serwis_id", "kanal"), True,
+                "serwis_id IS NOT NULL AND sala_id IS NULL",
+            ),
+            "uq_reguly_dostepnosci_sala_kanal": (
+                ("sala_id", "kanal"), True,
+                "serwis_id IS NULL AND sala_id IS NOT NULL",
+            ),
+            "uq_reguly_dostepnosci_serwis_sala_kanal": (
+                ("serwis_id", "sala_id", "kanal"), True,
+                "serwis_id IS NOT NULL AND sala_id IS NOT NULL",
+            ),
+        },
+        "rezerwacje_oblozenie_ledger": {
+            "ix_rezerwacje_oblozenie_data_minute_sala_kanal": (
+                ("data", "minute", "sala_id", "kanal"), False, None,
+            ),
+            "ix_rezerwacje_oblozenie_termin_id": (
+                ("termin_id",), False, None,
+            ),
+        },
+        "reservation_override_context": {
+            "ix_reservation_override_context_reason_code": (
+                ("reason_code",), False, None,
+            ),
+        },
+    }
+    for table_name, shapes in expected_indexes.items():
+        actual = {
+            index["name"]: index for index in inspector.get_indexes(table_name)
+            if index.get("name")
+        }
+        for name, (columns, unique, predicate) in shapes.items():
+            index = actual.get(name)
+            dialect_options = index.get("dialect_options", {}) if index else {}
+            where = " ".join(
+                str(value) for key, value in dialect_options.items()
+                if key.endswith("_where") and value is not None
+            )
+            if (
+                index is None
+                or tuple(index.get("column_names") or ()) != columns
+                or bool(index.get("unique")) is not unique
+                or _normalize_r2_index_predicate(where)
+                != _normalize_r2_index_predicate(predicate)
+            ):
+                raise RuntimeError(
+                    f"Indeks {name} ma nieprawidlowa definicje R3."
+                )
+
+    expected_uniques = {
+        "rezerwacje_oblozenie_ledger": {
+            "uq_rezerwacje_oblozenie_termin_minute": ("termin_id", "minute"),
+        },
+        "reservation_override_context": {
+            "uq_reservation_override_context_audit_id": ("audit_id",),
+        },
+    }
+    for table_name, expected in expected_uniques.items():
+        actual = {
+            item.get("name"): tuple(item.get("column_names") or ())
+            for item in inspector.get_unique_constraints(table_name)
+        }
+        if any(actual.get(name) != columns for name, columns in expected.items()):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma wymaganych UNIQUE R3."
+            )
+
+    expected_fks = {
+        "reguly_dostepnosci_rezerwacji": {
+            (("serwis_id",), "godziny_otwarcia", ("id",), "CASCADE"),
+            (("sala_id",), "sale_rezerwacyjne", ("id",), "CASCADE"),
+        },
+        "rezerwacje_oblozenie_ledger": {
+            (("termin_id",), "terminy", ("id",), "CASCADE"),
+            (("sala_id",), "sale_rezerwacyjne", ("id",), "RESTRICT"),
+        },
+        "reservation_override_context": {
+            (("audit_id",), "reservation_audit", ("id",), "CASCADE"),
+        },
+    }
+    for table_name, expected in expected_fks.items():
+        actual = {
+            (
+                tuple(fk.get("constrained_columns") or ()),
+                fk.get("referred_table"),
+                tuple(fk.get("referred_columns") or ()),
+                str((fk.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for fk in inspector.get_foreign_keys(table_name)
+        }
+        if not expected.issubset(actual):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma wymaganych FK R3."
+            )
+
+    for table_name, expected in _R3_CHECKS.items():
+        actual = {
+            constraint.get("name"): constraint.get("sqltext")
+            for constraint in inspector.get_check_constraints(table_name)
+        }
+        if engine.dialect.name == "sqlite":
+            with engine.connect() as conn:
+                table_sql = conn.execute(text(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type='table' AND name=:table_name"
+                ), {"table_name": table_name}).scalar_one_or_none()
+            normalized_table_sql = _normalise_check_sql(table_sql)
+            for name, sql in expected.items():
+                marker = _normalise_check_sql(
+                    f"CONSTRAINT {name} CHECK ({sql})"
+                )
+                if marker not in normalized_table_sql:
+                    raise RuntimeError(
+                        f"Tabela {table_name} nie ma kanonicznego CHECK {name} R3."
+                    )
+        elif (
+            not set(expected).issubset(actual)
+            or any(
+                _normalise_check_sql(actual[name]) != _normalise_check_sql(sql)
+                for name, sql in expected.items()
+            )
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma kanonicznych CHECK R3."
+            )
+
+    if validate_data:
+        with engine.connect() as conn:
+            if not _r3_occupancy_adoption_is_valid(conn):
+                raise RuntimeError(
+                    "Backfill R3 jest niekompletny; nie mozna oznaczyc migracji 0059."
+                )
+    return True
+
+
 def init_db():
     """Przygotowanie schematu, świadome Alembica (idempotentne).
 
@@ -1319,9 +1851,20 @@ def init_db():
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
         complete_current = model_tables.issubset(tables)
+        r3_tables_present = _R3_TABLES & tables
+        if r3_tables_present and r3_tables_present != _R3_TABLES:
+            raise RuntimeError(
+                "Schemat R3 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
+            )
+        complete_r2 = (
+            (model_tables - _R3_TABLES).issubset(tables)
+            and _R2_TABLES.issubset(tables)
+            and not r3_tables_present
+        )
         complete_r0b = _is_complete_r0b_schema(insp, tables, model_tables)
         pre_r0b_tables = (
-            model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE} - _R2_TABLES
+            model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE}
+            - _R2_TABLES - _R3_TABLES
         )
         termin_columns = (
             {column["name"] for column in insp.get_columns("terminy")}
@@ -1333,16 +1876,28 @@ def init_db():
         )
         if complete_current:
             _validate_r1a_audit_schema(insp)
+            # Walidacja struktury przed rebuildem chroni przed query do częściowo
+            # utworzonego schematu. PostgreSQL kończy się tu kontrolowanym wymogiem stampu.
+            _validate_r3_adoption_schema(insp, validate_data=False)
+            _validate_r2_adoption_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
+            _rebuild_rezerwacje_oblozenie_ledger()
             _sanitize_legacy_rodo_audit_resources()
-            if _R2_TABLES.issubset(tables):
-                _validate_r2_adoption_schema(insp)
-                revision = _R2_REVISION
-            else:
-                revision = _R1A_REVISION
+            refreshed = inspect(engine)
+            _validate_r3_adoption_schema(refreshed)
             _require_alembic_run(
-                lambda command, cfg: command.stamp(cfg, revision)
+                lambda command, cfg: command.stamp(cfg, _R3_REVISION)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            return
+        if complete_r2:
+            # Pełna niewersjonowana baza 0058 nie może spaść do baseline ani
+            # dostać create_all tabel R3 przed wykonaniem migracyjnego backfillu.
+            _validate_r1a_audit_schema(insp)
+            _validate_r2_adoption_schema(insp)
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, _R2_REVISION)
             )
             _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
             return

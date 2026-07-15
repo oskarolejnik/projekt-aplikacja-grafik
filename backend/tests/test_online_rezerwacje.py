@@ -11,6 +11,17 @@ def _enable(admin_client, **extra):
     assert admin_client.put("/api/lokal/config", json={"rezerwacje_online": True, **extra}).status_code == 200
 
 
+def _serwis_dla_daty(admin_client, data, *, godz_od="10:00", godz_do="22:00"):
+    response = admin_client.post("/api/godziny-otwarcia", json={
+        "dzien_tygodnia": data.weekday(),
+        "godz_od": godz_od,
+        "godz_do": godz_do,
+        "krok_slotu_min": 120,
+        "domyslny_turn_time_min": 120,
+    })
+    assert response.status_code == 201, response.text
+
+
 def test_online_wylaczone_404(admin_client, client):
     # domyślnie rezerwacje online wyłączone → publiczne endpointy 404
     assert client.get("/api/online/dostepnosc?data=2026-07-01").status_code == 404
@@ -32,8 +43,9 @@ def test_online_dostepnosc(admin_client, client):
 def test_online_rezerwacja_flow(admin_client, client):
     _enable(admin_client)
     admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": 4})
-    fut = _fut().isoformat()
-    r = client.post("/api/online/rezerwacja", json={"data": fut, "godz_od": "18:00", "liczba_osob": 3,
+    fut = _fut()
+    _serwis_dla_daty(admin_client, fut)
+    r = client.post("/api/online/rezerwacja", json={"data": fut.isoformat(), "godz_od": "18:00", "liczba_osob": 3,
                     "nazwisko": "Gość Online", "email": "gosc@example.pl"})
     assert r.status_code == 201, r.text
     body = r.json()
@@ -54,7 +66,9 @@ def test_online_rezerwacja_flow(admin_client, client):
 def test_online_auto_potwierdzenie(admin_client, client):
     _enable(admin_client, rezerwacje_auto_potwierdzenie=True)
     admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": 4})
-    r = client.post("/api/online/rezerwacja", json={"data": _fut().isoformat(), "godz_od": "18:00",
+    fut = _fut()
+    _serwis_dla_daty(admin_client, fut)
+    r = client.post("/api/online/rezerwacja", json={"data": fut.isoformat(), "godz_od": "18:00",
                     "liczba_osob": 2, "nazwisko": "Auto"})
     assert r.json()["rezerwacja"]["status"] == "potwierdzona"
 
@@ -62,7 +76,9 @@ def test_online_auto_potwierdzenie(admin_client, client):
 def test_online_brak_stolika_409(admin_client, client):
     _enable(admin_client)
     admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": 2})
-    r = client.post("/api/online/rezerwacja", json={"data": _fut().isoformat(), "godz_od": "18:00",
+    fut = _fut()
+    _serwis_dla_daty(admin_client, fut)
+    r = client.post("/api/online/rezerwacja", json={"data": fut.isoformat(), "godz_od": "18:00",
                     "liczba_osob": 5, "nazwisko": "ZaDuzo"})
     assert r.status_code == 409
 
@@ -81,7 +97,9 @@ def test_online_limit_per_ip_bez_kontaktu(admin_client, client, monkeypatch):
     monkeypatch.setattr(main, "ONLINE_LIMIT_IP_DZIENNY", 3)
     _enable(admin_client)
     admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": 4})
-    fut = _fut().isoformat()
+    fut_date = _fut()
+    _serwis_dla_daty(admin_client, fut_date)
+    fut = fut_date.isoformat()
     for g in ["10:00", "12:00", "14:00"]:                 # 3x bez kontaktu → mieszczą się w limicie IP
         assert client.post("/api/online/rezerwacja", json={"data": fut, "godz_od": g,
                            "liczba_osob": 2, "nazwisko": "Anon"}).status_code == 201
@@ -93,7 +111,9 @@ def test_online_limit_per_ip_bez_kontaktu(admin_client, client, monkeypatch):
 def test_online_antyspam_429(admin_client, client):
     _enable(admin_client)
     admin_client.post("/api/stoliki", json={"nazwa": "S1", "pojemnosc": 4})
-    fut = _fut().isoformat()
+    fut_date = _fut()
+    _serwis_dla_daty(admin_client, fut_date)
+    fut = fut_date.isoformat()
     for g in ["10:00", "12:00", "14:00", "16:00", "18:00"]:   # 5x, brak kolizji (sloty 120 min)
         rr = client.post("/api/online/rezerwacja", json={"data": fut, "godz_od": g, "liczba_osob": 2,
                          "nazwisko": "Spam", "telefon": "600100200"})

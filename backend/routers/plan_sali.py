@@ -149,6 +149,11 @@ def _sala_out(db: Session, sala: models.SalaRezerwacyjna):
         "kolejnosc": sala.kolejnosc,
         "strategia_zapelniania": sala.strategia_zapelniania,
         "priorytet": sala.priorytet,
+        "online_aktywna": sala.online_aktywna,
+        "wewnetrzna_aktywna": sala.wewnetrzna_aktywna,
+        "limit_jednoczesnych_rez": sala.limit_jednoczesnych_rez,
+        "limit_jednoczesnych_osob": sala.limit_jednoczesnych_osob,
+        "domyslny_bufor_min": sala.domyslny_bufor_min,
         "plan_id": plan.id if plan else None,
         "liczba_stolikow": len(_stoliki_sali(db, sala)),
         "wersja_opublikowana": _meta_wersji(published),
@@ -984,7 +989,10 @@ def edytuj_sale_rezerwacyjna(
     payload = dane.model_dump()
     # Starsze PWA nie znają strategii R2.2b; brak nowych pól nie może cicho
     # wyzerować konfiguracji sali podczas zwykłej zmiany nazwy/aktywności.
-    for key in ("strategia_zapelniania", "priorytet"):
+    for key in (
+        "strategia_zapelniania",
+        "priorytet",
+    ):
         if key not in dane.model_fields_set:
             payload.pop(key, None)
     for key, value in payload.items():

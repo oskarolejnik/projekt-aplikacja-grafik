@@ -39,6 +39,12 @@ _WAITLIST_ITEM = re.compile(
 _CONFIG_ITEM = re.compile(
     r"^/api/(?P<resource>stoliki|kombinacje|sasiedztwo|godziny-otwarcia|wyjatki-kalendarza)/[1-9]\d*$"
 )
+_RESERVATION_RULE_OVERRIDE_ITEM = re.compile(
+    r"^/api/nadpisania-regul-rezerwacji/[1-9]\d*$"
+)
+_RESERVATION_RULE_ROOM_ITEM = re.compile(
+    r"^/api/rezerwacje/reguly/sale/[1-9]\d*$"
+)
 _HOST_RESERVATION_ITEM = re.compile(
     r"^/api/host/rezerwacja/[1-9]\d*/(?P<action>faza|przydziel-stolik|posadz)$"
 )
@@ -65,6 +71,8 @@ _PROTECTED_PREFIXES = (
     "/api/godziny-otwarcia",
     "/api/wyjatki-kalendarza",
     "/api/rezerwacje/config",
+    "/api/rezerwacje/reguly",
+    "/api/nadpisania-regul-rezerwacji",
     "/api/plan-sali",
     "/api/sale-rezerwacyjne",
     "/api/analityka/rezerwacje",
@@ -173,6 +181,24 @@ def requirement_for(method: str, path: str) -> Requirement | None:
 
     if path == "/api/rezerwacje/config":
         return Requirement(any_of=(OPERATIONS, HOST, FLOOR)) if method == "GET" else ADMIN_ONLY
+
+    if path == "/api/rezerwacje/reguly":
+        return Requirement(any_of=(OPERATIONS, HOST, RULES)) if method == "GET" else ADMIN_ONLY
+
+    if path == "/api/rezerwacje/reguly/polityka":
+        return Requirement(all_of=(RULES,)) if method == "PUT" else ADMIN_ONLY
+
+    if path == "/api/rezerwacje/reguly/symuluj":
+        return Requirement(all_of=(RULES,)) if method == "POST" else ADMIN_ONLY
+
+    if _RESERVATION_RULE_ROOM_ITEM.fullmatch(path):
+        return Requirement(all_of=(RULES,)) if method == "PUT" else ADMIN_ONLY
+
+    if path == "/api/nadpisania-regul-rezerwacji":
+        return Requirement(all_of=(RULES,)) if method == "POST" else ADMIN_ONLY
+
+    if _RESERVATION_RULE_OVERRIDE_ITEM.fullmatch(path):
+        return Requirement(all_of=(RULES,)) if method in {"PUT", "DELETE"} else ADMIN_ONLY
 
     if path in {"/api/stoliki", "/api/kombinacje", "/api/sasiedztwo"}:
         if method == "GET":
