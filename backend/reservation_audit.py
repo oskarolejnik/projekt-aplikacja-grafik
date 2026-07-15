@@ -41,6 +41,8 @@ AUDITABLE_FIELDS = (
     "stolik_id",
     "stoliki_dodatkowe",
     "auto_przydzielony",
+    "przydzial_wersja_planu_id",
+    "przydzial_kombinacja_planu_id",
     "kanal",
     "faza_hosta",
 )
@@ -112,7 +114,11 @@ def _normalise(field: str, value: Any) -> Any:
         return _normalise_time(value)
     if field == "liczba_osob":
         return _normalise_integer(value)
-    if field == "stolik_id":
+    if field in {
+        "stolik_id",
+        "przydzial_wersja_planu_id",
+        "przydzial_kombinacja_planu_id",
+    }:
         return _normalise_integer(value, positive=True)
     if field == "stoliki_dodatkowe":
         if value is None:

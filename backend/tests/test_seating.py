@@ -7,6 +7,19 @@ def _t(id, poj, **kw):
     return {"id": id, "nazwa": f"S{id}", "pojemnosc": poj, **kw}
 
 
+def _sala(id, poj, sala_id, *, strategia="preferuj", priorytet=0, kolejnosc=0,
+          wersja_id=None):
+    return _t(
+        id,
+        poj,
+        sala_id=sala_id,
+        strategia_zapelniania=strategia,
+        priorytet_sali=priorytet,
+        kolejnosc_sali=kolejnosc,
+        wersja_id=wersja_id,
+    )
+
+
 def test_best_fit_wybiera_najmniejszy():
     stoly = [_t(1, 2), _t(2, 4), _t(3, 8)]
     k = seating.dopasuj(2, stoly, [], zajete=set())
@@ -104,6 +117,64 @@ def test_priorytet_kombinacji_rozstrzyga_remis():
     k = seating.dopasuj(8, stoly, kombinacje, zajete=set())
 
     assert k[0]["stoliki"] == [3, 4]            # niższy priorytet kombinacji = wcześniej
+
+
+def test_preferuj_jest_miekkim_kosztem_a_nie_filtrem_sali():
+    stoly = [
+        _sala(1, 8, 10, priorytet=0),
+        _sala(2, 4, 20, priorytet=10),
+    ]
+
+    wynik = seating.dopasuj(4, stoly, [], limit=1)
+
+    assert wynik[0]["stoliki"] == [2]
+    assert wynik[0]["strategia_zapelniania"] == "preferuj"
+
+
+def test_wypelniaj_kolejno_filtruje_do_pierwszej_sali_z_bezpiecznym_kandydatem():
+    stoly = [
+        _sala(1, 8, 10, strategia="wypelniaj_kolejno", priorytet=0),
+        _sala(2, 4, 20, strategia="wypelniaj_kolejno", priorytet=1),
+        _sala(3, 4, 30, strategia="preferuj", priorytet=0),
+    ]
+
+    pierwszy = seating.dopasuj(4, stoly, [], limit=1)
+    po_zajeciu = seating.dopasuj(4, stoly, [], zajete={1}, limit=1)
+
+    assert pierwszy[0]["stoliki"] == [1]
+    assert po_zajeciu[0]["stoliki"] == [2]
+
+
+def test_wypelniaj_kolejno_fallbackuje_do_preferuj_gdy_scisle_sale_nie_maja_kandydata():
+    stoly = [
+        _sala(1, 2, 10, strategia="wypelniaj_kolejno", priorytet=0),
+        _sala(2, 4, 20, strategia="preferuj", priorytet=0),
+    ]
+
+    wynik = seating.dopasuj(4, stoly, [], limit=1)
+
+    assert wynik[0]["stoliki"] == [2]
+
+
+def test_kandydat_przenosi_proweniencje_opublikowanej_kombinacji():
+    stoly = [
+        _sala(1, 4, 10, wersja_id=57),
+        _sala(2, 2, 10, wersja_id=57),
+    ]
+    kombinacje = [{
+        "id": 91,
+        "wersja_id": 57,
+        "nazwa": "4 + 2",
+        "stoliki": [1, 2],
+        "pojemnosc_min": 5,
+        "pojemnosc_max": 6,
+    }]
+
+    wynik = seating.dopasuj(6, stoly, kombinacje, limit=1)
+
+    assert wynik[0]["wersja_planu_id"] == 57
+    assert wynik[0]["kombinacja_planu_id"] == 91
+    assert wynik[0]["sala_id"] == 10
 
 
 def test_top3_limit_i_kolejnosc():

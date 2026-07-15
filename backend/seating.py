@@ -5,8 +5,10 @@ odrzuca zajęte oraz nie-mieszczące grupy, ocenia funkcją kosztu i zwraca poso
 najlepszy). Wołany przez /api/host/sugestia-stolika (top-N) i /api/rezerwacje-stolik/{id}/auto-przydziel.
 
 Wejście to zwykłe słowniki (odseparowane od SQLAlchemy):
-  stolik:     {"id","nazwa","pojemnosc","pojemnosc_min"?,"cechy"?,"priorytet"?,"strefa"?,"sekcja"?}
-  kombinacja: {"id","nazwa","stoliki":[id,…],"pojemnosc_min"?,"pojemnosc_max"?,"priorytet"?}
+  stolik:     {"id","nazwa","pojemnosc",...,"sala_id"?,"strategia_zapelniania"?,
+               "priorytet_sali"?,"kolejnosc_sali"?,"wersja_id"?}
+  kombinacja: {"id","wersja_id"?,"nazwa","stoliki":[id,…],"pojemnosc_min"?,
+               "pojemnosc_max"?,"priorytet"?}
   zajete:     zbiór/lista id stołów zajętych w rozważanym oknie czasu
   sasiedztwo: lista krawędzi [(id_a,id_b),…] — które stoły da się złączyć (auto-kombinacje)
   obciazenie_sekcji: {sekcja: liczba_zajętych} — do balansu obłożenia kelnerów
@@ -21,6 +23,7 @@ DOMYSLNE_WAGI = {
     "strefa": 0.4,        # kara za niezgodność strefy z preferencją
     "balans_sekcji": 0.5,  # kara za dokładanie do już obłożonej sekcji kelnerskiej
     "holdback": 0.6,      # kwadratowa kara za DUŻY nadmiar (rezerwuj duże stoły dla dużych grup)
+    "priorytet_sali": 0.5,  # miękki koszt sal ``preferuj``; ścisłe są filtrowane osobno
 }
 HOLDBACK_PROG = 4            # nadmiar ≥ tylu miejsc uruchamia hold-back
 MAX_STOLOW_KOMBINACJI = 4    # ile stołów max w auto-kombinacji z grafu
@@ -32,6 +35,36 @@ def _poj(stol):
 
 def _poj_min(stol):
     return stol.get("pojemnosc_min") or 1
+
+
+def _metadane_sali(stoly):
+    """Wspólna sala/snapshot kandydata; zestaw między salami nie dostaje polityki."""
+    if not stoly:
+        return {
+            "_sala_id": None,
+            "_strategia_zapelniania": "preferuj",
+            "_priorytet_sali": 0,
+            "_kolejnosc_sali": 0,
+            "_wersja_planu_id": None,
+        }
+    room_ids = {stol.get("sala_id") for stol in stoly}
+    if len(room_ids) != 1:
+        return {
+            "_sala_id": None,
+            "_strategia_zapelniania": "preferuj",
+            "_priorytet_sali": 0,
+            "_kolejnosc_sali": 0,
+            "_wersja_planu_id": None,
+        }
+    first = stoly[0]
+    version_ids = {stol.get("wersja_id") for stol in stoly}
+    return {
+        "_sala_id": first.get("sala_id"),
+        "_strategia_zapelniania": first.get("strategia_zapelniania") or "preferuj",
+        "_priorytet_sali": first.get("priorytet_sali") or 0,
+        "_kolejnosc_sali": first.get("kolejnosc_sali") or 0,
+        "_wersja_planu_id": next(iter(version_ids)) if len(version_ids) == 1 else None,
+    }
 
 
 def _kombinacje_z_grafu(osoby, stoliki, sasiedztwo):
@@ -54,7 +87,9 @@ def _kombinacje_z_grafu(osoby, stoliki, sasiedztwo):
                     znalezione[fs] = {
                         "stoliki": sorted(zbior),
                         "nazwa": "+".join(str(by_id[i].get("nazwa") or i) for i in sorted(zbior)),
-                        "suma_pojemnosci": suma, "kombinacja": True, "_stoly": czlonkowie}
+                        "suma_pojemnosci": suma, "kombinacja": True, "_stoly": czlonkowie,
+                        **_metadane_sali(czlonkowie),
+                        "_kombinacja_planu_id": None}
             return                                    # minimalny zbiór — nie rozszerzaj
         if len(zbior) >= MAX_STOLOW_KOMBINACJI:
             return
@@ -74,7 +109,8 @@ def kandydaci(osoby, stoliki, kombinacje, sasiedztwo=None):
     for s in stoliki:
         if _poj_min(s) <= osoby <= _poj(s):
             out.append({"stoliki": [s["id"]], "nazwa": s.get("nazwa"),
-                        "suma_pojemnosci": _poj(s), "kombinacja": False, "_stoly": [s]})
+                        "suma_pojemnosci": _poj(s), "kombinacja": False, "_stoly": [s],
+                        **_metadane_sali([s]), "_kombinacja_planu_id": None})
     by_id = {s["id"]: s for s in stoliki}
     for k in kombinacje:
         raw_stoliki = k.get("stoliki")
@@ -92,8 +128,14 @@ def kandydaci(osoby, stoliki, kombinacje, sasiedztwo=None):
         poj_max = k.get("pojemnosc_max") or sum(_poj(s) for s in czlonkowie)
         poj_min = k.get("pojemnosc_min") or 1
         if poj_min <= osoby <= poj_max:
+            room_meta = _metadane_sali(czlonkowie)
+            version_id = k.get("wersja_id")
+            if version_id is not None:
+                room_meta["_wersja_planu_id"] = version_id
             out.append({"stoliki": [s["id"] for s in czlonkowie], "nazwa": k.get("nazwa"),
                         "suma_pojemnosci": poj_max, "kombinacja": True, "_stoly": czlonkowie,
+                        **room_meta,
+                        "_kombinacja_planu_id": (k.get("id") if version_id is not None else None),
                         "_priorytet_kombinacji": k.get("priorytet") or 0})
     if sasiedztwo:
         widziane = {frozenset(k["stoliki"]) for k in out}
@@ -128,6 +170,8 @@ def koszt(kand, osoby, zajete, preferencje, wagi, obciazenie_sekcji=None):
     prio = [(s.get("priorytet") or 0) for s in kand["_stoly"]]
     c += w["priorytet"] * (sum(prio) / len(prio) if prio else 0)
     c += w["priorytet"] * (kand.get("_priorytet_kombinacji") or 0)
+    if kand.get("_strategia_zapelniania") != "wypelniaj_kolejno":
+        c += w["priorytet_sali"] * (kand.get("_priorytet_sali") or 0)
     if nadmiar >= HOLDBACK_PROG:                      # hold-back: chroni duże stoły przed małą grupą
         c += w["holdback"] * nadmiar ** 2
     if obciazenie_sekcji:                             # balans: nie dokładaj do obłożonej sekcji
@@ -156,6 +200,12 @@ def dopasuj(osoby, stoliki, kombinacje, zajete=(), preferencje=None, wagi=None, 
         oceniony = {
             "stoliki": kand["stoliki"], "nazwa": kand["nazwa"],
             "suma_pojemnosci": kand["suma_pojemnosci"], "kombinacja": kand["kombinacja"],
+            "sala_id": kand.get("_sala_id"),
+            "strategia_zapelniania": kand.get("_strategia_zapelniania") or "preferuj",
+            "priorytet_sali": kand.get("_priorytet_sali") or 0,
+            "kolejnosc_sali": kand.get("_kolejnosc_sali") or 0,
+            "wersja_planu_id": kand.get("_wersja_planu_id"),
+            "kombinacja_planu_id": kand.get("_kombinacja_planu_id"),
             "nadmiar_miejsc": max(0, kand["suma_pojemnosci"] - osoby),
             "koszt": round(c, 3),
             "skladniki": {"marnowanie": max(0, kand["suma_pojemnosci"] - osoby),
@@ -170,5 +220,27 @@ def dopasuj(osoby, stoliki, kombinacje, zajete=(), preferencje=None, wagi=None, 
         ):
             najlepsze_zestawy[klucz] = oceniony
     wynik = list(najlepsze_zestawy.values())
+    scisle = [
+        kandydat for kandydat in wynik
+        if kandydat["strategia_zapelniania"] == "wypelniaj_kolejno"
+        and kandydat["sala_id"] is not None
+    ]
+    if scisle:
+        pierwsza_sala = min(
+            (
+                kandydat["priorytet_sali"],
+                kandydat["kolejnosc_sali"],
+                kandydat["sala_id"],
+            )
+            for kandydat in scisle
+        )
+        wynik = [
+            kandydat for kandydat in scisle
+            if (
+                kandydat["priorytet_sali"],
+                kandydat["kolejnosc_sali"],
+                kandydat["sala_id"],
+            ) == pierwsza_sala
+        ]
     wynik.sort(key=lambda x: (x["koszt"], len(x["stoliki"]), x["stoliki"]))
     return wynik[:limit] if limit else wynik

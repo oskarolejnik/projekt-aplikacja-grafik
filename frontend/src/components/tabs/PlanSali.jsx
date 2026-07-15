@@ -8,7 +8,9 @@ import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { PillSwitch } from '../ui/PillSwitch'
 import { useToast } from '../ui/Toast'
+import RoomAllocationSettings from './RoomAllocationSettings'
 import {
+  alignTablePositions,
   cloneEditorSnapshot,
   combinationCapacityBreakdown,
   combinationKey,
@@ -20,6 +22,7 @@ import {
   normalizeCombinations,
   normalizeEdges,
   proposeConnectedCombinations,
+  snapPointToGrid,
 } from './floorPlanEditor'
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0))
@@ -127,12 +130,17 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
   const [checkerChannel, setCheckerChannel] = useState('wewnetrzna')
   const [checkerResult, setCheckerResult] = useState(null)
   const [selectedTableId, setSelectedTableId] = useState(null)
+  const [selectedTableIds, setSelectedTableIds] = useState([])
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [snapToGrid, setSnapToGrid] = useState(true)
   const [busy, setBusy] = useState(null)
   const [conflict, setConflict] = useState(null)
   const [announcement, setAnnouncement] = useState('')
   const [addingRoom, setAddingRoom] = useState(false)
   const [newRoomName, setNewRoomName] = useState('')
   const [roomFeedback, setRoomFeedback] = useState(null)
+  const [roomSettingsOpen, setRoomSettingsOpen] = useState(false)
+  const [roomSettingsDirty, setRoomSettingsDirty] = useState(false)
   const [addingTable, setAddingTable] = useState(false)
   const [newTableName, setNewTableName] = useState('')
   const [newTableCapacity, setNewTableCapacity] = useState(2)
@@ -173,6 +181,10 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
   const selectedProperties = selectedTable
     ? positions[selectedTable.id] || geometry(selectedTable)
     : null
+  const selectedTableIdSet = useMemo(
+    () => new Set(selectedTableIds.map(Number)),
+    [selectedTableIds],
+  )
   const selectedNeighborIds = useMemo(
     () => neighborIds(selectedTableId, edges),
     [edges, selectedTableId],
@@ -213,7 +225,11 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     && (newTableName.trim() || Number(newTableCapacity) !== 2),
   )
   const roomFormDirty = Boolean(addingRoom && newRoomName.trim())
-  const unsavedLocalChanges = dirty || tableFormDirty || roomFormDirty
+  const unsavedLocalChanges = dirty || tableFormDirty || roomFormDirty || roomSettingsDirty
+
+  useEffect(() => {
+    if (!selectionMode) setSelectedTableIds(selectedTableId ? [selectedTableId] : [])
+  }, [selectedTableId, selectionMode])
 
   const cancelReads = useCallback(() => {
     roomsRequestRef.current += 1
@@ -272,8 +288,12 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     setConnectionTargetId('')
     setConnectionFeedback(null)
     setCheckerResult(null)
+    setSelectionMode(false)
     setSelectedTableId(null)
     setConflict(null)
+    setRoomSettingsOpen(false)
+    setRoomSettingsDirty(false)
+    setRoomFeedback(null)
     setAddingTable(false)
     setNewTableName('')
     setTableFeedback(null)
@@ -305,6 +325,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     setHistory(emptyHistory)
     historyRef.current = emptyHistory
     setMode(nextMode)
+    setSelectionMode(false)
     setSelectedTableId((current) => (
       response?.stoliki?.some((table) => table.id === current)
         ? current
@@ -414,7 +435,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
 
   const chooseRoom = async (nextRoomId) => {
     if (nextRoomId === selectedRoomId || busy) return
-    if (dirty || tableFormDirty) {
+    if (dirty || tableFormDirty || roomSettingsDirty) {
       const discard = await confirm('Odrzucić niezapisane zmiany i wpisane dane tej sali?', {
         title: 'Niezapisany szkic',
         confirmText: 'Odrzuć zmiany',
@@ -445,7 +466,11 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     setConnectionTargetId('')
     setConnectionFeedback(null)
     setCheckerResult(null)
+    setSelectionMode(false)
     setSelectedTableId(null)
+    setRoomSettingsOpen(false)
+    setRoomSettingsDirty(false)
+    setRoomFeedback(null)
     setAddingTable(false)
     setNewTableName('')
     setTableFeedback(null)
@@ -456,7 +481,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     event.preventDefault()
     const name = newRoomName.trim()
     if (!name || busy) return
-    if (dirty || tableFormDirty) {
+    if (dirty || tableFormDirty || roomSettingsDirty) {
       const discard = await confirm('Dodać nową salę i odrzucić niezapisane zmiany tej sali?', {
         title: 'Niezapisany szkic',
         confirmText: 'Dodaj i odrzuć zmiany',
@@ -473,10 +498,14 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
         nazwa: name,
         aktywna: true,
         kolejnosc: rooms.length,
+        strategia_zapelniania: 'preferuj',
+        priorytet: rooms.length,
       }, { signal: controller.signal })
       if (controller.signal.aborted) return
       setNewRoomName('')
       setAddingRoom(false)
+      setRoomSettingsOpen(false)
+      setRoomSettingsDirty(false)
       setRoomFeedback({ type: 'success', message: `Dodano salę „${created.nazwa}”.` })
       await loadRooms({ silent: true, preferredRoomId: created.id })
       if (controller.signal.aborted) return
@@ -484,6 +513,56 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     } catch (error) {
       if (controller.signal.aborted || error?.name === 'AbortError') return
       setRoomFeedback({ type: 'error', message: error.message || 'Nie udało się dodać sali.' })
+    } finally {
+      if (mutationControllerRef.current === controller) mutationControllerRef.current = null
+      if (!controller.signal.aborted) setBusy(null)
+    }
+  }
+
+  const toggleRoomSettings = async () => {
+    if (busy) return
+    if (roomSettingsOpen && roomSettingsDirty) {
+      const discard = await confirm('Zamknąć ustawienia sali i odrzucić niezapisane zmiany?', {
+        title: 'Niezapisane ustawienia sali',
+        confirmText: 'Odrzuć zmiany',
+        cancelText: 'Zostań tutaj',
+      })
+      if (!discard) return
+    }
+    setRoomFeedback(null)
+    setRoomSettingsOpen((current) => !current)
+  }
+
+  const saveRoomSettings = async (payload) => {
+    if (!selectedRoomId || busy) return
+    const controller = new AbortController()
+    mutationControllerRef.current = controller
+    setBusy('room-settings')
+    setRoomFeedback(null)
+    try {
+      const updated = await api(
+        `/sale-rezerwacyjne/${selectedRoomId}`,
+        'PUT',
+        payload,
+        { signal: controller.signal },
+      )
+      if (controller.signal.aborted) return
+      setRooms((current) => current.map((room) => (
+        room.id === updated.id ? updated : room
+      )))
+      if (planRef.current?.sala?.id === updated.id) {
+        const nextPlan = {
+          ...planRef.current,
+          sala: { ...planRef.current.sala, ...updated },
+        }
+        planRef.current = nextPlan
+        setPlan(nextPlan)
+      }
+      setRoomSettingsDirty(false)
+      setRoomFeedback({ type: 'success', message: 'Ustawienia obsadzania sali zostały zapisane.' })
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === 'AbortError') return
+      setRoomFeedback({ type: 'error', message: error.message || 'Nie udało się zapisać ustawień sali.' })
     } finally {
       if (mutationControllerRef.current === controller) mutationControllerRef.current = null
       if (!controller.signal.aborted) setBusy(null)
@@ -634,16 +713,35 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
 
   const handleEditorShortcut = (event) => {
     if (mode !== 'draft' || busy) return
+    const anyTextEntry = event.target instanceof HTMLElement
+      && event.target.matches('input, textarea, select, [contenteditable="true"]')
+    // Escape najpierw należy do aktywnego pola/selecta; globalne tryby edytora
+    // nie mogą przejmować zamykania natywnego dropdownu ani edycji wartości.
+    if (event.key === 'Escape' && anyTextEntry) return
     if (event.key === 'Escape' && connectionStartId) {
       event.preventDefault()
       setConnectionStartId(null)
       setAnnouncement('Anulowano wybór pierwszego stołu.')
       return
     }
+    if (event.key === 'Escape' && selectionMode) {
+      event.preventDefault()
+      setSelectionMode(false)
+      setAnnouncement('Zakończono wybór wielu stołów.')
+      return
+    }
     const textEntry = event.target instanceof HTMLElement
-      && (event.target.matches('input:not([data-editor-history]), textarea, [contenteditable="true"]'))
+      && (event.target.matches('input:not([data-editor-history]), textarea, select, [contenteditable="true"]'))
+    if (event.key.toLowerCase() === 'a' && anyTextEntry) return
     if (textEntry || !(event.ctrlKey || event.metaKey)) return
-    if (event.key.toLowerCase() === 'z' && event.shiftKey) {
+    if (event.key.toLowerCase() === 'a' && editorTool === 'layout') {
+      event.preventDefault()
+      const ids = tables.map((table) => table.id)
+      setSelectionMode(true)
+      setSelectedTableIds(ids)
+      setSelectedTableId((current) => current && ids.includes(current) ? current : ids[0] || null)
+      setAnnouncement(`Zaznaczono ${ids.length} ${tablesLabel(ids.length)}.`)
+    } else if (event.key.toLowerCase() === 'z' && event.shiftKey) {
       event.preventDefault()
       redoEditor()
     } else if (event.key.toLowerCase() === 'z') {
@@ -751,6 +849,65 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     || tables.find((table) => table.id === Number(tableId))?.nazwa
     || `Stół ${tableId}`
 
+  const toggleSelectionMode = () => {
+    if (mode !== 'draft' || editorTool !== 'layout' || busy) return
+    const nextMode = !selectionMode
+    setSelectionMode(nextMode)
+    setSelectedTableIds(selectedTableId ? [selectedTableId] : [])
+    setAnnouncement(nextMode
+      ? 'Wybór wielu stołów. Dodaj stoły, a potem ustaw je w jednym rzędzie lub kolumnie.'
+      : 'Zakończono wybór wielu stołów.')
+  }
+
+  const toggleTableSelection = (tableId) => {
+    const selected = selectedTableIdSet.has(Number(tableId))
+    const nextIds = selected
+      ? selectedTableIds.filter((id) => Number(id) !== Number(tableId))
+      : [...selectedTableIds, tableId]
+    setSelectedTableIds(nextIds)
+    if (selected) {
+      if (Number(selectedTableId) === Number(tableId)) setSelectedTableId(nextIds.at(-1) || null)
+    } else {
+      setSelectedTableId(tableId)
+    }
+    setAnnouncement(selected
+      ? `${nameForTable(tableId)} usunięty z zaznaczenia. Zaznaczono ${nextIds.length} ${tablesLabel(nextIds.length)}.`
+      : `${nameForTable(tableId)} dodany do zaznaczenia. Zaznaczono ${nextIds.length} ${tablesLabel(nextIds.length)}.`)
+  }
+
+  const alignSelectedTables = (axis) => {
+    if (mode !== 'draft' || editorTool !== 'layout' || busy) return
+    const ids = selectedTableIds.filter((id) => positionsRef.current[id])
+    if (ids.length < 2) return
+    const anchorId = ids.includes(selectedTableId) ? selectedTableId : ids[0]
+    const coordinate = axis === 'row' ? 'plan_y' : 'plan_x'
+    const extentCoordinate = axis === 'row' ? 'y' : 'x'
+    const aligned = alignTablePositions(positionsRef.current, ids, axis, anchorId)
+    const minimum = Math.ceil(Math.max(...ids.map((id) => {
+      const value = positionsRef.current[id]
+      return rotatedHalfExtents(
+        value.szerokosc,
+        value.wysokosc,
+        value.obrot,
+        canvasRef.current,
+      )[extentCoordinate]
+    })))
+    const maximum = Math.floor(100 - minimum)
+    const target = clamp(aligned[anchorId][coordinate], minimum, maximum)
+    const changedIds = ids.filter((id) => Number(positionsRef.current[id][coordinate]) !== target)
+    if (!changedIds.length) {
+      setAnnouncement(axis === 'row'
+        ? 'Zaznaczone stoły są już ustawione w jednym rzędzie.'
+        : 'Zaznaczone stoły są już ustawione w jednej kolumnie.')
+      return
+    }
+    pushHistory(currentEditorSnapshot())
+    changedIds.forEach((id) => {
+      setTableGeometry(id, { [coordinate]: target }, { record: false })
+    })
+    setAnnouncement(`${ids.length} ${tablesLabel(ids.length)} ustawiono ${axis === 'row' ? 'w jednym rzędzie' : 'w jednej kolumnie'} względem ${nameForTable(anchorId)}.`)
+  }
+
   const toggleEdge = (firstId, secondId) => {
     if (mode !== 'draft' || busy) return false
     const key = edgeKey(firstId, secondId)
@@ -785,7 +942,15 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     return true
   }
 
-  const handleTableClick = (tableId) => {
+  const handleTableClick = (event, tableId) => {
+    if (mode === 'draft' && editorTool === 'layout'
+      && (selectionMode || event.shiftKey || event.ctrlKey || event.metaKey)) {
+      if (!selectionMode) setSelectionMode(true)
+      toggleTableSelection(tableId)
+      return
+    }
+    setSelectionMode(false)
+    setSelectedTableIds([tableId])
     setSelectedTableId(tableId)
     if (mode !== 'draft' || editorTool !== 'connect' || busy) return
     if (!connectionStartId) {
@@ -893,6 +1058,8 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
   }
 
   const onPointerDown = (event, tableId) => {
+    if (selectionMode || event.shiftKey || event.ctrlKey || event.metaKey) return
+    setSelectedTableIds([tableId])
     setSelectedTableId(tableId)
     if (mode !== 'draft' || editorTool !== 'layout' || busy || !canvasRef.current) return
     const rect = canvasRef.current.getBoundingClientRect()
@@ -912,10 +1079,15 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     const drag = dragRef.current
     const rect = canvasRef.current?.getBoundingClientRect()
     if (busy || !drag || !rect || drag.pointerId !== event.pointerId) return
-    setTableGeometry(drag.tableId, {
+    const point = {
       plan_x: ((event.clientX - rect.left) / rect.width) * 100 - drag.offsetX,
       plan_y: ((event.clientY - rect.top) / rect.height) * 100 - drag.offsetY,
-    }, { record: false })
+    }
+    setTableGeometry(
+      drag.tableId,
+      snapToGrid ? snapPointToGrid(point, 5) : point,
+      { record: false },
+    )
   }
 
   const endPointer = (event) => {
@@ -1082,6 +1254,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
       setConnectionTargetId('')
       setConnectionFeedback(null)
       setCheckerResult(null)
+      setSelectionMode(false)
       setSelectedTableId(null)
       setAddingTable(false)
       setTableFeedback(null)
@@ -1189,7 +1362,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
             </form>
           ) : null}
 
-          {roomFeedback ? (
+          {roomFeedback && !roomSettingsOpen ? (
             <p className={`mt-3 text-xs ${roomFeedback.type === 'error' ? 'text-danger' : 'text-success'}`} role={roomFeedback.type === 'error' ? 'alert' : 'status'}>
               {roomFeedback.message}
             </p>
@@ -1255,6 +1428,16 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={toggleRoomSettings}
+                    disabled={Boolean(busy)}
+                    aria-expanded={roomSettingsOpen}
+                    aria-controls="room-allocation-settings-heading"
+                  >
+                    {roomSettingsOpen ? 'Zamknij ustawienia sali' : 'Ustawienia sali'}
+                  </Button>
                   {mode === 'published' ? (
                     <Button variant="primary" size="sm" onClick={startDraft} loading={busy === 'draft'} loadingLabel="Otwieram…" disabled={Boolean(busy)}>
                       {selectedRoom.szkic ? 'Otwórz szkic' : 'Edytuj jako szkic'}
@@ -1285,6 +1468,18 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                   )}
                 </div>
               </div>
+
+              {roomSettingsOpen ? (
+                <RoomAllocationSettings
+                  key={selectedRoom.id}
+                  room={selectedRoom}
+                  disabled={Boolean(busy)}
+                  saving={busy === 'room-settings'}
+                  feedback={roomFeedback}
+                  onSave={saveRoomSettings}
+                  onDirtyChange={setRoomSettingsDirty}
+                />
+              ) : null}
 
               {addingTable && mode === 'draft' ? (
                 <form onSubmit={createTable} className="mt-5 grid gap-3 rounded-xl border border-line bg-white/[0.025] p-4 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
@@ -1358,6 +1553,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                     value={editorTool}
                     onChange={(nextTool) => {
                       setEditorTool(nextTool)
+                      setSelectionMode(false)
                       setConnectionStartId(null)
                       setConnectionTargetId('')
                       setConnectionFeedback(null)
@@ -1394,6 +1590,86 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                 </div>
               ) : null}
 
+              {mode === 'draft' && tables.length && editorTool === 'layout' ? (
+                <div className="mt-3 flex flex-col gap-3 border-b border-line pb-3" aria-label="Ustawianie stołów">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-line bg-white/[0.025] px-3 text-sm text-ink">
+                      <input
+                        type="checkbox"
+                        checked={snapToGrid}
+                        onChange={(event) => {
+                          setSnapToGrid(event.target.checked)
+                          setAnnouncement(event.target.checked
+                            ? 'Włączono przyciąganie podczas przeciągania do siatki co 5%.'
+                            : 'Wyłączono przyciąganie podczas przeciągania.')
+                        }}
+                        disabled={Boolean(busy)}
+                        className="h-5 w-5 accent-mint"
+                      />
+                      Przyciągaj do siatki 5%
+                    </label>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={toggleSelectionMode}
+                      disabled={Boolean(busy)}
+                      aria-pressed={selectionMode}
+                      className="min-h-11"
+                    >
+                      {selectionMode ? 'Zakończ zaznaczanie' : 'Zaznacz kilka'}
+                    </Button>
+                    {selectionMode ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          const ids = tables.map((table) => table.id)
+                          setSelectedTableIds(ids)
+                          setSelectedTableId((current) => current && ids.includes(current) ? current : ids[0] || null)
+                          setAnnouncement(`Zaznaczono ${ids.length} ${tablesLabel(ids.length)}.`)
+                        }}
+                        disabled={Boolean(busy) || selectedTableIds.length === tables.length}
+                        aria-keyshortcuts="Control+A Meta+A"
+                        className="min-h-11"
+                      >
+                        Zaznacz wszystkie
+                      </Button>
+                    ) : null}
+                  </div>
+                  {selectionMode ? (
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-sm text-muted" role="status">
+                        Zaznaczono {selectedTableIds.length} {tablesLabel(selectedTableIds.length)}
+                        {selectedTableId ? ` · punkt odniesienia: ${nameForTable(selectedTableId)}` : ''}
+                      </p>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          onClick={() => alignSelectedTables('row')}
+                          disabled={Boolean(busy) || selectedTableIds.length < 2}
+                          className="min-h-11"
+                        >
+                          Ustaw środki w jednym rzędzie
+                        </Button>
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          onClick={() => alignSelectedTables('column')}
+                          disabled={Boolean(busy) || selectedTableIds.length < 2}
+                          className="min-h-11"
+                        >
+                          Ustaw środki w jednej kolumnie
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                  <p className="text-xs leading-relaxed text-muted">
+                    Siatka działa tylko podczas przeciągania. Strzałki nadal przesuwają precyzyjnie o 1%, a Shift + strzałka o 5%.
+                  </p>
+                </div>
+              ) : null}
+
               {connectionFeedback && mode === 'draft' && editorTool === 'connect' ? (
                 <p
                   className={`mt-3 text-sm ${connectionFeedback.type === 'error' ? 'text-danger' : 'text-success'}`}
@@ -1426,7 +1702,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                           onPointerUp={endPointer}
                           onPointerCancel={endPointer}
                           className="relative aspect-[4/3] w-full min-w-[46rem] overflow-hidden rounded-2xl border border-white/[0.10] bg-surface"
-                          style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px)', backgroundSize: '24px 24px' }}
+                          style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px)', backgroundSize: '5% 5%' }}
                           aria-label={`Plan: ${selectedRoom.nazwa}`}
                         >
                         <svg
@@ -1459,6 +1735,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                         {tables.map((table) => {
                           const value = positions[table.id] || geometry(table)
                           const selected = table.id === selectedTableId
+                          const includedInSelection = selectedTableIdSet.has(table.id)
                           const connectionAnchor = table.id === connectionStartId
                           const neighbors = neighborIds(table.id, edges)
                             .map((id) => nameForTable(id))
@@ -1469,11 +1746,11 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                               type="button"
                               onPointerDown={(event) => onPointerDown(event, table.id)}
                               onKeyDown={(event) => onTableKeyDown(event, table.id)}
-                              onClick={() => handleTableClick(table.id)}
+                              onClick={(event) => handleTableClick(event, table.id)}
                               disabled={Boolean(busy)}
-                              aria-pressed={editorTool === 'connect' && mode === 'draft' ? connectionAnchor : selected}
+                              aria-pressed={editorTool === 'connect' && mode === 'draft' ? connectionAnchor : includedInSelection}
                               aria-label={`${value.nazwa}, ${value.pojemnosc} ${placesLabel(value.pojemnosc)}, ${value.aktywny_w_planie ? 'aktywny w planie' : 'nieaktywny w planie'}, pozycja X ${Math.round(value.plan_x)}%, Y ${Math.round(value.plan_y)}%, ${neighbors ? `sąsiaduje z: ${neighbors}` : 'bez zaznaczonego sąsiedztwa'}`}
-                              className={`absolute z-10 grid min-h-11 min-w-11 place-items-center rounded-xl border text-center transition-[border-color,background-color,box-shadow] duration-150 ${value.aktywny_w_planie ? 'border-white/[0.16] bg-surface-2 text-ink' : 'border-line bg-bg/80 text-muted'} ${selected || connectionAnchor ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : 'hover:border-white/[0.24]'} ${busy ? 'cursor-wait' : mode === 'draft' && editorTool === 'layout' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
+                              className={`absolute z-10 grid min-h-11 min-w-11 place-items-center rounded-xl border text-center transition-[border-color,background-color,box-shadow] duration-150 ${value.aktywny_w_planie ? 'border-white/[0.16] bg-surface-2 text-ink' : 'border-line bg-bg/80 text-muted'} ${selected || connectionAnchor ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : includedInSelection ? 'ring-2 ring-mint/50 ring-offset-2 ring-offset-bg' : 'hover:border-white/[0.24]'} ${busy ? 'cursor-wait' : mode === 'draft' && editorTool === 'layout' && !selectionMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
                               style={{
                                 left: `${value.plan_x}%`,
                                 top: `${value.plan_y}%`,
@@ -1498,7 +1775,9 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                             ? `${nameForTable(connectionStartId)} wybrany. Wybierz stół stojący obok; Escape anuluje wybór.`
                             : 'Wybierz pierwszy stół, a potem stół stojący obok. Na telefonie możesz użyć także listy tekstowej.'
                           : mode === 'draft'
-                            ? 'Przeciągnij stół albo zaznacz go i użyj strzałek. Shift + strzałka przesuwa o 5%. Na małym ekranie przesuń cały plan w bok.'
+                            ? selectionMode
+                              ? 'Dotknij lub wybierz klawiaturą stoły do wspólnego wyrównania. Aktywny stół jest punktem odniesienia; Escape kończy zaznaczanie.'
+                              : 'Przeciągnij stół albo zaznacz go i użyj strzałek. Shift + strzałka przesuwa o 5%. Na małym ekranie przesuń cały plan w bok.'
                             : 'Wybierz stół, aby zobaczyć jego pozycję, rozmiar i sąsiedztwo. Na małym ekranie przesuń cały plan w bok.'}
                       </p>
                     </div>

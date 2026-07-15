@@ -29,6 +29,8 @@ const room = {
   nazwa: 'Sala główna',
   aktywna: true,
   kolejnosc: 0,
+  strategia_zapelniania: 'preferuj',
+  priorytet: 0,
   plan_id: 7,
   liczba_stolikow: 2,
   wersja_opublikowana: { id: 11, numer: 1, rewizja: 1, status: 'published' },
@@ -39,6 +41,8 @@ const garden = {
   nazwa: 'Ogród z bardzo długą nazwą widoczną w podpowiedzi',
   aktywna: true,
   kolejnosc: 1,
+  strategia_zapelniania: 'preferuj',
+  priorytet: 1,
   plan_id: 8,
   liczba_stolikow: 0,
   wersja_opublikowana: null,
@@ -139,6 +143,8 @@ describe('Plan sali R2.2', () => {
     expect(await screen.findByRole('heading', { name: 'Sala główna' })).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /S1, 4 miejsca, aktywny w planie/ })).toBeInTheDocument()
     expect(screen.getByText('Opublikowany v1')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Przyciągaj do siatki 5%' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Zaznacz kilka' })).not.toBeInTheDocument()
     expect(screen.queryByText(/Anna Nowak|500 600 700|anna@example\.com/i)).not.toBeInTheDocument()
     expect(apiMock).toHaveBeenCalledWith(
       '/sale-rezerwacyjne/1/plan',
@@ -661,6 +667,67 @@ describe('Plan sali R2.2', () => {
     expect(screen.getByRole('spinbutton', { name: 'Pozycja X stołu S1' })).toHaveValue(38)
   })
 
+  it('zapisuje zrozumiałą strategię i kolejność obsadzania wybranej sali', async () => {
+    apiMock.mockImplementation((path, method = 'GET', body) => {
+      if (path === '/sale-rezerwacyjne/1' && method === 'PUT') {
+        return Promise.resolve({ ...room, ...body })
+      }
+      return route(path, method)
+    })
+    render(<PlanSali roomId={1} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Ustawienia sali' }))
+    fireEvent.change(screen.getByRole('combobox', { name: /Sposób zapełniania/ }), {
+      target: { value: 'wypelniaj_kolejno' },
+    })
+    fireEvent.change(screen.getByRole('spinbutton', { name: /Kolejność obsadzania/ }), {
+      target: { value: '2' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Przyjmuj nowe rezerwacje/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz ustawienia' }))
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/sale-rezerwacyjne/1',
+      'PUT',
+      expect.objectContaining({
+        nazwa: 'Sala główna',
+        aktywna: false,
+        kolejnosc: 0,
+        strategia_zapelniania: 'wypelniaj_kolejno',
+        priorytet: 1,
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ))
+    expect(await screen.findByText('Ustawienia obsadzania sali zostały zapisane.')).toBeInTheDocument()
+    expect(screen.getByText(/Dopóki ta sala ma bezpieczny wolny zestaw/)).toBeInTheDocument()
+  })
+
+  it('zachowuje niezapisane ustawienia sali po odświeżeniu planu', async () => {
+    apiMock.mockImplementation((path, method = 'GET') => {
+      if (path === '/sale-rezerwacyjne' && method === 'GET') {
+        return Promise.resolve({ sale: [{ ...room }, { ...garden }] })
+      }
+      return route(path, method)
+    })
+    render(<PlanSali roomId={1} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Ustawienia sali' }))
+    const strategy = screen.getByRole('combobox', { name: /Sposób zapełniania/ })
+    fireEvent.change(strategy, { target: { value: 'wypelniaj_kolejno' } })
+    expect(screen.getByRole('button', { name: 'Zapisz ustawienia' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edytuj jako szkic' }))
+
+    expect(await screen.findByRole('button', { name: 'Odrzuć' })).toBeInTheDocument()
+    expect(strategy).toHaveValue('wypelniaj_kolejno')
+    expect(screen.getByRole('button', { name: 'Zapisz ustawienia' })).toBeEnabled()
+    fireEvent.keyDown(strategy, { key: 'a', ctrlKey: true })
+    expect(screen.queryByRole('button', { name: 'Zakończ zaznaczanie' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Zaznacz kilka' }))
+    fireEvent.keyDown(strategy, { key: 'Escape' })
+    expect(screen.getByRole('button', { name: 'Zakończ zaznaczanie' })).toBeInTheDocument()
+  })
+
   it('czyści szkic i abortuje pracę po sygnale privacy purge', async () => {
     let resolveDraft
     let draftSignal
@@ -875,6 +942,76 @@ describe('Plan sali R2.2', () => {
     expect(screen.getByRole('button', { name: 'Cofnij' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Ponów' }))
     expect(screen.getByRole('spinbutton', { name: 'Pozycja X stołu S1' })).toHaveValue(40)
+  })
+
+  it('przyciąga tylko podczas przeciągania i pozostawia precyzyjne sterowanie klawiaturą', async () => {
+    render(<PlanSali roomId={1} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edytuj jako szkic' }))
+    const canvas = await screen.findByLabelText('Plan: Sala główna')
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 1000,
+      height: 750,
+      right: 1000,
+      bottom: 750,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+    const table = screen.getByRole('button', { name: /^S1,/ })
+    const snap = screen.getByRole('checkbox', { name: 'Przyciągaj do siatki 5%' })
+    expect(snap).toBeChecked()
+
+    fireEvent.pointerDown(table, { pointerId: 8, clientX: 300, clientY: 300 })
+    fireEvent.pointerMove(canvas, { pointerId: 8, clientX: 374, clientY: 394.5 })
+    fireEvent.pointerUp(canvas, { pointerId: 8, clientX: 374, clientY: 394.5 })
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja X stołu S1' })).toHaveValue(35)
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja Y stołu S1' })).toHaveValue(55)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cofnij' }))
+    fireEvent.keyDown(table, { key: 'ArrowRight' })
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja X stołu S1' })).toHaveValue(31)
+    fireEvent.click(screen.getByRole('button', { name: 'Cofnij' }))
+
+    fireEvent.click(snap)
+    fireEvent.pointerDown(table, { pointerId: 9, clientX: 300, clientY: 300 })
+    fireEvent.pointerMove(canvas, { pointerId: 9, clientX: 374, clientY: 394.5 })
+    fireEvent.pointerUp(canvas, { pointerId: 9, clientX: 374, clientY: 394.5 })
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja X stołu S1' })).toHaveValue(37)
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja Y stołu S1' })).toHaveValue(53)
+  })
+
+  it('pozwala dotykiem zaznaczyć wiele stołów i cofnąć wyrównanie jako jedną zmianę', async () => {
+    render(<PlanSali roomId={1} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edytuj jako szkic' }))
+
+    const multiSelect = await screen.findByRole('button', { name: 'Zaznacz kilka' })
+    expect(multiSelect).toHaveClass('min-h-11')
+    fireEvent.keyDown(screen.getByRole('spinbutton', { name: 'Pozycja X stołu S1' }), {
+      key: 'a',
+      ctrlKey: true,
+    })
+    expect(screen.queryByRole('button', { name: 'Zakończ zaznaczanie' })).not.toBeInTheDocument()
+    fireEvent.click(multiSelect)
+    const first = screen.getByRole('button', { name: /^S1,/ })
+    const second = screen.getByRole('button', { name: /^S2,/ })
+    fireEvent.click(second)
+    expect(first).toHaveAttribute('aria-pressed', 'true')
+    expect(second).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/Zaznaczono 2 stoły · punkt odniesienia: S2/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ustaw środki w jednym rzędzie' }))
+    expect(screen.getByText('2 stoły ustawiono w jednym rzędzie względem S2.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Zakończ zaznaczanie' }))
+    fireEvent.click(first)
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja Y stołu S1' })).toHaveValue(55)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cofnij' }))
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja Y stołu S1' })).toHaveValue(40)
+    expect(screen.getByRole('button', { name: 'Cofnij' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Ponów' }))
+    expect(screen.getByRole('spinbutton', { name: 'Pozycja Y stołu S1' })).toHaveValue(55)
   })
 
   it('zatwierdza spójny zestaw dla 18 osób oraz edytuje zakres, kanał i priorytet', async () => {

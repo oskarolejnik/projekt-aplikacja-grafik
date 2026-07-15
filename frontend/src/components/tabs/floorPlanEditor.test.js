@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  alignTablePositions,
   combinationCapacityBreakdown,
   combinationKey,
   editorSignature,
@@ -9,6 +10,7 @@ import {
   normalizeCombinations,
   normalizeEdges,
   proposeConnectedCombinations,
+  snapPointToGrid,
 } from './floorPlanEditor'
 
 const tables = [
@@ -20,6 +22,36 @@ const tables = [
 ]
 
 describe('floorPlanEditor R2.2a', () => {
+  it('przyciąga punkt do czytelnej siatki bez gubienia pozostałych danych', () => {
+    expect(snapPointToGrid({ plan_x: 37.4, plan_y: 52.6, nazwa: 'S1' })).toEqual({
+      plan_x: 35,
+      plan_y: 55,
+      nazwa: 'S1',
+    })
+    expect(snapPointToGrid({ plan_x: 37.4, plan_y: 52.6 }, 10)).toMatchObject({
+      plan_x: 40,
+      plan_y: 50,
+    })
+  })
+
+  it('wyrównuje środki stołów względem wskazanego stołu bez mutowania wejścia', () => {
+    const positions = {
+      1: { plan_x: 30, plan_y: 40, nazwa: 'S1' },
+      2: { plan_x: 70, plan_y: 55, nazwa: 'S2' },
+      3: { plan_x: 80, plan_y: 75, nazwa: 'S3' },
+    }
+
+    const row = alignTablePositions(positions, [1, 2], 'row', 2)
+    const column = alignTablePositions(positions, [1, 2], 'column', 1)
+
+    expect(row[1]).toMatchObject({ plan_x: 30, plan_y: 55 })
+    expect(row[2]).toMatchObject({ plan_x: 70, plan_y: 55 })
+    expect(column[1]).toMatchObject({ plan_x: 30, plan_y: 40 })
+    expect(column[2]).toMatchObject({ plan_x: 30, plan_y: 55 })
+    expect(row[3]).toBe(positions[3])
+    expect(positions[1]).toMatchObject({ plan_x: 30, plan_y: 40 })
+  })
+
   it('czytelnie rozpisuje różne pojemności stołów w zestawie', () => {
     expect(combinationCapacityBreakdown({ stoliki: [1, 4] }, tables)).toEqual({
       capacities: [4, 2],

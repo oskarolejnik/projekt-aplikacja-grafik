@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a, R0b, R1a, R1b, R2.1 i R2.2a wdrożone · następny checkpoint R2.2b (snap, wyrównywanie i priorytety sal) · 15 lipca 2026
+> Status: kierunek zatwierdzony · R0a, R0b, R1a, R1b i R2 wdrożone · następny checkpoint R3 (reguły dostępności, serwisy i symulator) · 15 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -563,9 +563,19 @@ współistnieć i nakładać się w jawnych konfiguracjach, np. `4 + 2 = 6` oraz
 pokazuje ten skład osobno od dozwolonego zakresu grupy. Sprawdzian mówi, że układ może obsłużyć
 grupę, ale nie obiecuje dostępności w konkretnym terminie.
 
-R2 nie jest jeszcze zamknięte. R2.2b pozostawia przyciąganie do siatki, wyrównywanie grup,
-strategię/priorytet sal i trwałą proweniencję wersji zestawu na historycznym przydziale. Nie należy
-udawać tych możliwości na podstawie legacy `lacze_sie`, `sasiedztwo` lub `KombinacjaStolow`.
+**Stan wdrożenia R2.2b (15 lipca 2026):** R2 jest zamknięte. Migracja `0058` dodaje niezależny
+priorytet sali, miękkie `preferuj`, ścisłe `wypelniaj_kolejno` oraz trwałą proweniencję wersji planu
+i jawnej kombinacji użytej przez automat. Ścisły tryb wybiera pierwszą salę z bezpiecznym kandydatem;
+gdy żadna ścisła sala go nie ma, silnik wraca do miękkiego najlepszego dopasowania. Ręczna zmiana
+stołu świadomie czyści proweniencję, a starsze przydziały bez tych pól pozostają zgodne bez
+zgadywania wersji z samych identyfikatorów stołów. Historyczny przydział nadal respektuje zakres
+wycofanej kombinacji po opublikowaniu nowszego planu.
+
+Edytor szkicu ma opcjonalne przyciąganie do siatki 5% wyłącznie podczas przeciągania, precyzyjne
+przesuwanie klawiaturą, jawne zaznaczanie wielu stołów dotykiem lub klawiaturą i wyrównywanie ich
+środków względem aktywnego stołu. Wyrównanie uwzględnia obrócone obwiednie, jest jedną operacją
+undo/redo i nie tworzy sąsiedztwa. Ustawienia sali opisują strategię oraz kolejność językiem
+operacyjnym, zachowują kompatybilność starszego PWA i pozostają oddzielone od publikacji geometrii.
 
 Backend/migracja:
 
@@ -907,8 +917,8 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a, R0b, R1a, R1b, R2.1 i R2.2a są zamkniętymi checkpointami. Następny milestone to `R2.2b`:
-snap, wyrównywanie, strategia/priorytet sal oraz domknięcie proweniencji historycznego przydziału.
-Nie rozszerzamy jeszcze pełnego ewaluatora R3/R4; korzysta on z gotowych granic uprawnień, audytu
-i atomowości dopiero w swoim etapie. Serwerowa blokada stanowiska z sesją operatora i PIN-em
+R0a, R0b, R1a, R1b i R2 są zamkniętymi checkpointami. Następny milestone to `R3`: wspólne reguły
+dostępności, serwisy, czasy wizyt, pacing oraz symulator decyzji. Pełna symulacja przydziału stołów
+i strategii sal pozostaje w R4; R3 najpierw dostarcza jeden evaluator limitów oraz audytowanego
+przekroczenia. Serwerowa blokada stanowiska z sesją operatora i PIN-em
 pozostaje oddzielnym zadaniem, którego nie wolno udawać samą zasłoną frontendu.

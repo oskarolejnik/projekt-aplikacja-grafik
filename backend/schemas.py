@@ -35,6 +35,8 @@ class SalaRezerwacyjnaIn(BaseModel):
     nazwa: str = Field(min_length=1, max_length=32)
     aktywna: bool = True
     kolejnosc: int = Field(default=0, ge=0)
+    strategia_zapelniania: Literal["preferuj", "wypelniaj_kolejno"] = "preferuj"
+    priorytet: int = Field(default=0, ge=0)
 
     @field_validator("nazwa")
     @classmethod

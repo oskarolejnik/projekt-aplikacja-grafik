@@ -3,6 +3,37 @@ const number = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+export const snapPointToGrid = (point = {}, step = 5) => {
+  const grid = Math.max(1, Math.round(number(step, 5)))
+  const snap = (value) => Math.round(number(value) / grid) * grid
+  return {
+    ...point,
+    plan_x: snap(point.plan_x),
+    plan_y: snap(point.plan_y),
+  }
+}
+
+export const alignTablePositions = (
+  positions = {},
+  tableIds = [],
+  axis = 'row',
+  anchorTableId = null,
+) => {
+  const ids = [...new Set(tableIds.map(Number))].filter((id) => positions[id])
+  if (ids.length < 2 || !['row', 'column'].includes(axis)) return positions
+  const anchorId = ids.includes(Number(anchorTableId)) ? Number(anchorTableId) : ids[0]
+  const coordinate = axis === 'row' ? 'plan_y' : 'plan_x'
+  const anchorValue = number(positions[anchorId]?.[coordinate], NaN)
+  if (!Number.isFinite(anchorValue)) return positions
+  return {
+    ...positions,
+    ...Object.fromEntries(ids.map((id) => [id, {
+      ...positions[id],
+      [coordinate]: anchorValue,
+    }])),
+  }
+}
+
 const tableIds = (combination = {}) => [...new Set(
   (combination.stoliki || []).map((id) => Number(id)).filter((id) => id > 0),
 )].sort((first, second) => first - second)

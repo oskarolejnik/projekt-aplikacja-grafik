@@ -195,7 +195,7 @@ _R0B_REVISION = "0051_rezerwacje_atomic_ledger"
 _PRE_R0B_REVISION = "0050_rezerwacje_source_identity"
 _R1A_AUDIT_TABLE = "reservation_audit"
 _R1A_REVISION = "0052_reservation_audit"
-_R2_REVISION = "0057_r22_topologia_planu"
+_R2_REVISION = "0058_r22b_strategia_proweniencja"
 _R2_TABLES = {
     "sale_rezerwacyjne",
     "plany_sali",
@@ -208,6 +208,7 @@ _R2_TABLES = {
 _R2_COLUMNS = {
     "sale_rezerwacyjne": {
         "id", "nazwa", "nazwa_klucz", "aktywna", "kolejnosc",
+        "strategia_zapelniania", "priorytet",
     },
     "plany_sali": {"id", "sala_id", "nazwa"},
     "wersje_planu_sali": {
@@ -387,7 +388,18 @@ def _rebuild_rezerwacje_ledger():
                 result.append(table_id)
             return result
 
-        reservations = db.query(models.Termin).filter(
+        # W ścieżce naprawczej baza może być jeszcze na 0050. Nie ładuj całego
+        # bieżącego modelu Termin, bo nowsze kolumny zostaną dodane dopiero po
+        # odbudowie i oznaczeniu ledgera 0051.
+        reservations = db.query(
+            models.Termin.id,
+            models.Termin.data,
+            models.Termin.godz_od,
+            models.Termin.godz_do,
+            models.Termin.stolik_id,
+            models.Termin.stoliki_dodatkowe,
+            models.Termin.liczba_osob,
+        ).filter(
             models.Termin.rodzaj == "stolik",
             models.Termin.status.in_(active),
         ).order_by(models.Termin.id).all()
@@ -743,7 +755,7 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             "niewersjonowanej bazy PostgreSQL jest zablokowana, ponieważ sama "
             "introspekcja nazw CHECK nie dowodzi ich działania. Zweryfikuj ręcznie "
             "CHECK/UNIQUE/FK oraz backfill R2, następnie wykonaj "
-            "`alembic stamp 0057_r22_topologia_planu` i `alembic upgrade head`."
+            "`alembic stamp 0058_r22b_strategia_proweniencja` i `alembic upgrade head`."
         )
 
     def normalized_sql(value) -> str:
@@ -768,6 +780,16 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             raise RuntimeError(
                 f"Tabela {table_name} jest niekompletna; nie można oznaczyć bieżącej migracji."
             )
+    termin_columns = {
+        column["name"] for column in inspector.get_columns("terminy")
+    }
+    if not {
+        "przydzial_wersja_planu_id",
+        "przydzial_kombinacja_planu_id",
+    }.issubset(termin_columns):
+        raise RuntimeError(
+            "Tabela terminy nie ma proweniencji R2.2b; nie można oznaczyć bieżącej migracji."
+        )
     stoliki_columns = {
         column["name"] for column in inspector.get_columns("stoliki")
     }
@@ -818,6 +840,10 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             "uq_skladniki_kombinacji_planu_stolik",
         },
         "stoliki": {"ix_stoliki_sala_id"},
+        "terminy": {
+            "ix_terminy_przydzial_wersja_planu_id",
+            "ix_terminy_przydzial_kombinacja_planu_id",
+        },
     }
     for table_name, expected in required_indexes.items():
         actual = {
@@ -878,6 +904,14 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
         },
         "stoliki": {
             "ix_stoliki_sala_id": (("sala_id",), False, None),
+        },
+        "terminy": {
+            "ix_terminy_przydzial_wersja_planu_id": (
+                ("przydzial_wersja_planu_id",), False, None,
+            ),
+            "ix_terminy_przydzial_kombinacja_planu_id": (
+                ("przydzial_kombinacja_planu_id",), False, None,
+            ),
         },
     }
     for table_name, shapes in expected_index_shapes.items():
@@ -968,6 +1002,24 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             for constraint in inspector.get_check_constraints(table_name)
             if constraint.get("name")
         }
+        if engine.dialect.name == "sqlite":
+            # Inspector SQLAlchemy potrafi skleić nazwy kilku CHECK-ów dodanych
+            # natywnym ALTER TABLE ADD COLUMN. Baza nadal egzekwuje poprawne DDL;
+            # weryfikujemy więc dokładny nazwany fragment źródłowego CREATE TABLE.
+            missing_from_inspector = set(expected_checks) - set(actual_checks)
+            if missing_from_inspector:
+                with engine.connect() as conn:
+                    table_sql = conn.execute(text(
+                        "SELECT sql FROM sqlite_master "
+                        "WHERE type='table' AND name=:table_name"
+                    ), {"table_name": table_name}).scalar_one_or_none()
+                normalized_table_sql = normalized_sql(table_sql)
+                for name in missing_from_inspector:
+                    marker = (
+                        f"constraint{name}check({expected_checks[name]})"
+                    )
+                    if marker in normalized_table_sql:
+                        actual_checks[name] = expected_checks[name]
         missing_checks = set(expected_checks) - set(actual_checks)
         # SQLite zwraca zapis CHECK bez przepisywania, więc możemy porównać go
         # dokładnie. PostgreSQL normalizuje IN do ANY i dodaje casty; tam pełne
@@ -980,6 +1032,42 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             raise RuntimeError(
                 f"Tabela {table_name} nie ma wymaganych CHECK R2."
             )
+
+    termin_model = Base.metadata.tables["terminy"]
+    expected_termin_checks = {
+        constraint.name: normalized_sql(constraint.sqltext)
+        for constraint in termin_model.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name
+            and constraint.name.startswith("ck_terminy_przydzial_")
+        )
+    }
+    actual_termin_checks = {
+        constraint.get("name"): normalized_sql(constraint.get("sqltext"))
+        for constraint in inspector.get_check_constraints("terminy")
+        if constraint.get("name")
+    }
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as conn:
+            terminy_sql = conn.execute(text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='terminy'"
+            )).scalar_one_or_none()
+        normalized_terminy_sql = normalized_sql(terminy_sql)
+        for name, check_sql in expected_termin_checks.items():
+            if (
+                actual_termin_checks.get(name) != check_sql
+                and f"constraint{name}check({check_sql})" in normalized_terminy_sql
+            ):
+                actual_termin_checks[name] = check_sql
+    if any(
+        actual_termin_checks.get(name) != sql
+        for name, sql in expected_termin_checks.items()
+    ):
+        raise RuntimeError(
+            "Tabela terminy nie ma wymaganych CHECK proweniencji R2.2b."
+        )
 
     expected_fks = {
         "stoliki": {("sala_id",): ("sale_rezerwacyjne", ("id",), None)},
@@ -1029,6 +1117,90 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
                 f"Tabela {table_name} ma nieprawidłowy klucz obcy R2."
             )
 
+    termin_fks = {}
+    for foreign_key in inspector.get_foreign_keys("terminy"):
+        columns = tuple(foreign_key.get("constrained_columns") or ())
+        options = foreign_key.get("options") or {}
+        termin_fks[columns] = (
+            foreign_key.get("referred_table"),
+            tuple(foreign_key.get("referred_columns") or ()),
+            (options.get("ondelete") or "").upper() or None,
+        )
+    version_fk = termin_fks.get(("przydzial_wersja_planu_id",))
+    valid_version_fk = (
+        version_fk is not None
+        and version_fk[:2] == ("wersje_planu_sali", ("id",))
+        and version_fk[2] in {None, "RESTRICT"}
+    )
+    composite_fk = termin_fks.get((
+        "przydzial_kombinacja_planu_id", "przydzial_wersja_planu_id",
+    ))
+    valid_composite_fk = (
+        composite_fk is not None
+        and composite_fk[:2] == (
+            "kombinacje_stolow_planu", ("id", "wersja_id"),
+        )
+        and composite_fk[2] in {None, "RESTRICT"}
+    )
+    if not valid_version_fk:
+        raise RuntimeError(
+            "Tabela terminy ma nieprawidłowy klucz obcy proweniencji R2.2b."
+        )
+    if not valid_composite_fk:
+        # SQLite nie potrafi dodać kompozytowego FK bez niebezpiecznego rebuild.
+        # Kanoniczna migracja używa FK do kombinacji oraz dwóch symetrycznych
+        # triggerów sprawdzających zgodność wersji na INSERT i UPDATE.
+        combination_fk = termin_fks.get(("przydzial_kombinacja_planu_id",))
+        valid_combination_fk = (
+            combination_fk is not None
+            and combination_fk[:2] == ("kombinacje_stolow_planu", ("id",))
+            and combination_fk[2] in {None, "RESTRICT"}
+        )
+        with engine.connect() as conn:
+            triggers = {
+                row["name"]: normalized_sql(row["sql"])
+                for row in conn.execute(text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type='trigger' AND name IN ("
+                    "'fk_terminy_przydzial_kombinacja_wersja_insert',"
+                    "'fk_terminy_przydzial_kombinacja_wersja_update'"
+                    ")"
+                )).mappings()
+            }
+        expected_trigger_sql = {
+            "fk_terminy_przydzial_kombinacja_wersja_insert": normalized_sql(
+                "CREATE TRIGGER fk_terminy_przydzial_kombinacja_wersja_insert "
+                "BEFORE INSERT ON terminy "
+                "WHEN NEW.przydzial_kombinacja_planu_id IS NOT NULL "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM kombinacje_stolow_planu k "
+                "WHERE k.id = NEW.przydzial_kombinacja_planu_id "
+                "AND k.wersja_id = NEW.przydzial_wersja_planu_id"
+                ") BEGIN SELECT RAISE(ABORT, "
+                "'przydzial combination/version mismatch'); END"
+            ),
+            "fk_terminy_przydzial_kombinacja_wersja_update": normalized_sql(
+                "CREATE TRIGGER fk_terminy_przydzial_kombinacja_wersja_update "
+                "BEFORE UPDATE OF przydzial_kombinacja_planu_id, "
+                "przydzial_wersja_planu_id ON terminy "
+                "WHEN NEW.przydzial_kombinacja_planu_id IS NOT NULL "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM kombinacje_stolow_planu k "
+                "WHERE k.id = NEW.przydzial_kombinacja_planu_id "
+                "AND k.wersja_id = NEW.przydzial_wersja_planu_id"
+                ") BEGIN SELECT RAISE(ABORT, "
+                "'przydzial combination/version mismatch'); END"
+            ),
+        }
+        valid_triggers = all(
+            triggers.get(name) == expected_sql
+            for name, expected_sql in expected_trigger_sql.items()
+        )
+        if not valid_combination_fk or not valid_triggers:
+            raise RuntimeError(
+                "Tabela terminy nie chroni pary proweniencji R2.2b."
+            )
+
     with engine.connect() as conn:
         invalid_room_keys = sum(
             1
@@ -1070,6 +1242,17 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             "OR kolejnosc IS NULL OR pojemnosc IS NULL"
         )).scalar_one()
         invalid_topology = not _r2_adoption_topology_is_valid(conn)
+        invalid_provenance = conn.execute(text(
+            "SELECT count(*) FROM terminy t "
+            "WHERE (t.przydzial_wersja_planu_id IS NOT NULL AND NOT EXISTS ("
+            "  SELECT 1 FROM wersje_planu_sali w "
+            "  WHERE w.id = t.przydzial_wersja_planu_id"
+            ")) OR (t.przydzial_kombinacja_planu_id IS NOT NULL AND NOT EXISTS ("
+            "  SELECT 1 FROM kombinacje_stolow_planu k "
+            "  WHERE k.id = t.przydzial_kombinacja_planu_id "
+            "    AND k.wersja_id = t.przydzial_wersja_planu_id"
+            "))"
+        )).scalar_one()
     if (
         invalid_room_keys
         or missing_rooms
@@ -1078,6 +1261,7 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
         or cross_room_positions
         or positions_without_snapshot_properties
         or invalid_topology
+        or invalid_provenance
     ):
         raise RuntimeError(
             "Backfill R2 jest niekompletny; nie można oznaczyć bieżącej migracji."

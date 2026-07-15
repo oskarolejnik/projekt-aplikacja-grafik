@@ -1742,8 +1742,35 @@ def _jawne_kombinacje_dla_zestawu(db, stoliki):
     ]
 
 
-def _pojemnosc_zachowanego_zestawu(db, stoliki):
+def _zamrozona_kombinacja_terminu(db, termin, stoliki):
+    """Zwraca historyczny snapshot kombinacji tylko dla dokładnie tego przydziału."""
+    if termin is None or not termin.przydzial_kombinacja_planu_id:
+        return None
+    version_id = termin.przydzial_wersja_planu_id
+    combination = db.query(models.KombinacjaStolowPlanu).filter_by(
+        id=termin.przydzial_kombinacja_planu_id,
+        wersja_id=version_id,
+    ).first()
+    if combination is None:
+        return None
+    member_ids = {
+        table_id for (table_id,) in db.query(
+            models.SkladnikKombinacjiPlanu.stolik_id,
+        ).filter_by(
+            kombinacja_id=combination.id,
+            wersja_id=version_id,
+        ).all()
+    }
+    if member_ids != _ids_stolikow(stoliki):
+        return None
+    return combination
+
+
+def _pojemnosc_zachowanego_zestawu(db, stoliki, termin=None):
     ids = _ids_stolikow(stoliki)
+    frozen = _zamrozona_kombinacja_terminu(db, termin, ids)
+    if frozen is not None:
+        return frozen.pojemnosc_max
     jawne = _jawne_kombinacje_dla_zestawu(db, ids)
     if not jawne:
         return None
@@ -1756,14 +1783,21 @@ def _pojemnosc_zachowanego_zestawu(db, stoliki):
     return max((combination["pojemnosc_max"] or fizyczna) for combination in jawne)
 
 
-def _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, liczba_osob):
+def _waliduj_rozmiar_zachowanej_kombinacji(
+    db, stoliki, liczba_osob, termin=None,
+):
     """Zmiana liczby gości musi pozostawić istniejący zestaw legalnym kandydatem silnika."""
     ids = _ids_stolikow(stoliki)
     if len(ids) < 2:
         return
     osoby = max(1, int(liczba_osob or 1))
+    frozen = _zamrozona_kombinacja_terminu(db, termin, ids)
+    if termin is not None and termin.przydzial_kombinacja_planu_id and frozen is None:
+        raise HTTPException(409, "Historyczna proweniencja przydziału jest niespójna.")
     jawne = _jawne_kombinacje_dla_zestawu(db, ids)
-    if jawne:
+    if frozen is not None:
+        dozwolone = frozen.pojemnosc_min <= osoby <= frozen.pojemnosc_max
+    elif jawne:
         runtime_by_id = {stolik["id"]: stolik for stolik in _stoly_do_seating(db)}
         pojemnosc_fizyczna = sum(
             runtime_by_id[sid]["pojemnosc"] for sid in ids
@@ -1776,11 +1810,8 @@ def _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, liczba_osob):
             for combination in jawne
         )
     elif ids & _wersjonowane_stoliki_ids(db):
-        # Istniejący Termin przechowuje dziś tylko zamrożony zestaw IDs, bez
-        # proweniencji definicji. Wycofanie kombinacji nie może unieważnić jego
-        # niealokacyjnej edycji; fizyczną pojemność i aktywność sprawdził już
-        # _waliduj_przydzial_rezerwacji. Nowe kandydatury nadal wymagają jawnej
-        # published kombinacji. Immutable provenance powstanie w kolejnym slice.
+        # Starszy przydział sprzed R2.2b nie ma wiarygodnej proweniencji. Zachowujemy
+        # kompatybilność bez zgadywania wersji; nowe przydziały zawsze zapisują snapshot.
         dozwolone = True
     else:
         kandydaci = seating.kandydaci(
@@ -1902,6 +1933,8 @@ def _rezerwacja_out(t: models.Termin, user=None) -> dict:
         "stolik_id": t.stolik_id,
         "stoliki_dodatkowe": t.stoliki_dodatkowe or [],
         "auto_przydzielony": bool(t.auto_przydzielony),
+        "przydzial_wersja_planu_id": t.przydzial_wersja_planu_id,
+        "przydzial_kombinacja_planu_id": t.przydzial_kombinacja_planu_id,
         "nazwisko": t.nazwisko if kontakt else "Gość",
         "telefon": t.telefon if kontakt else None,
         "email": t.email if kontakt else None,
@@ -2389,6 +2422,7 @@ def auto_przydziel_stolik(
     t.stoliki_dodatkowe = (wybrany["stoliki"][1:] or None)
     t.godz_do = godz_do
     t.auto_przydzielony = True
+    _ustaw_proweniencje_przydzialu(t, wybrany)
     try:
         db.flush()
         _zastap_ledger_terminu(
@@ -2696,6 +2730,7 @@ def host_przydziel_stolik(
     t.stolik_id = dane.stolik_id
     t.stoliki_dodatkowe = None          # ręczny pojedynczy stół kasuje wcześniejszą kombinację
     t.auto_przydzielony = False         # od tej chwili źródłem przydziału jest decyzja operatora
+    _ustaw_proweniencje_przydzialu(t)
     t.godz_do = godz_do
     try:
         db.flush()
@@ -2740,6 +2775,7 @@ def host_posadz_rezerwacje(
         t.stolik_id = dane.stolik_id
         t.stoliki_dodatkowe = None
         t.auto_przydzielony = False
+        _ustaw_proweniencje_przydzialu(t)
     elif not t.stolik_id:
         zajete = _zajete_stoly(db, t.data, t.godz_od, godz_do, pomin_id=t.id)
         wynik = seating.dopasuj(
@@ -2761,6 +2797,7 @@ def host_posadz_rezerwacje(
         t.stolik_id = wynik[0]["stoliki"][0]
         t.stoliki_dodatkowe = (wynik[0]["stoliki"][1:] or None)
         t.auto_przydzielony = True
+        _ustaw_proweniencje_przydzialu(t, wynik[0])
 
     teraz = utcnow_naive()
     t.godz_do = godz_do
@@ -2969,7 +3006,7 @@ def edytuj_rezerwacje_stolik(
     )
     stoliki = _stoly_terminu(t) if zachowaj_przydzial else [dane.stolik_id]
     pojemnosc_override = (
-        _pojemnosc_zachowanego_zestawu(db, stoliki)
+        _pojemnosc_zachowanego_zestawu(db, stoliki, t)
         if zachowaj_przydzial and len(stoliki) > 1 else None
     )
     godz_do = _waliduj_przydzial_rezerwacji(
@@ -2979,7 +3016,9 @@ def edytuj_rezerwacje_stolik(
         zachowaj_nieaktywny_przydzial=zachowaj_przydzial,
     )
     if zachowaj_przydzial and len(stoliki) > 1 and dane.liczba_osob != t.liczba_osob:
-        _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, dane.liczba_osob)
+        _waliduj_rozmiar_zachowanej_kombinacji(
+            db, stoliki, dane.liczba_osob, t,
+        )
     t.data = dane.data
     if _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
         t.nazwisko = dane.nazwisko.strip(); t.telefon = dane.telefon; t.email = dane.email
@@ -2995,6 +3034,7 @@ def edytuj_rezerwacje_stolik(
         # zachować niewidocznych składników wcześniejszej kombinacji ani flagi AUTO.
         t.stoliki_dodatkowe = None
         t.auto_przydzielony = False
+        _ustaw_proweniencje_przydzialu(t)
     try:
         _migruj_osierocony_profil_po_zmianie_tozsamosci(db, t, crm_identity_before)
         db.flush()
@@ -3086,6 +3126,7 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
             before = reservation_audit.reservation_snapshot(t)
             t.stolik_id = najlepszy["stoliki"][0]
             t.stoliki_dodatkowe = (najlepszy["stoliki"][1:] or None)
+            _ustaw_proweniencje_przydzialu(t, najlepszy)
             _zastap_ledger_terminu(
                 db,
                 t,
@@ -3721,10 +3762,19 @@ def _stoly_do_seating(db):
             "priorytet": snapshot["priorytet"] or 0,
             "sekcja": snapshot["sekcja"] or snapshot["strefa"],
             "kolejnosc": snapshot["kolejnosc"] or 0,
+            "strategia_zapelniania": sala.strategia_zapelniania or "preferuj",
+            "priorytet_sali": sala.priorytet or 0,
+            "kolejnosc_sali": sala.kolejnosc or 0,
         })
 
     versioned_ids = _wersjonowane_stoliki_ids(db)
     inactive_room_ids, inactive_room_names = _nieaktywne_sale_runtime(db)
+    rooms = db.query(models.SalaRezerwacyjna).all()
+    rooms_by_id = {room.id: room for room in rooms}
+    rooms_by_name = {
+        (room.nazwa or "").strip().casefold(): room
+        for room in rooms if room.aktywna
+    }
     for stolik in (
         db.query(models.Stolik)
         .filter(models.Stolik.aktywny.is_(True))
@@ -3738,6 +3788,9 @@ def _stoly_do_seating(db):
             and (stolik.strefa or "").strip().casefold() in inactive_room_names
         ):
             continue
+        room = rooms_by_id.get(stolik.sala_id)
+        if room is None and stolik.sala_id is None:
+            room = rooms_by_name.get((stolik.strefa or "").strip().casefold())
         out.append({
             "id": stolik.id,
             "nazwa": stolik.nazwa,
@@ -3749,7 +3802,12 @@ def _stoly_do_seating(db):
             "strefa": stolik.strefa,
             "sekcja": stolik.sekcja or stolik.strefa,
             "kolejnosc": stolik.kolejnosc or 0,
-            "sala_id": stolik.sala_id,
+            "sala_id": (room.id if room else stolik.sala_id),
+            "strategia_zapelniania": (
+                room.strategia_zapelniania if room else "preferuj"
+            ),
+            "priorytet_sali": (room.priorytet if room else 0),
+            "kolejnosc_sali": (room.kolejnosc if room else 0),
             "rewir_nr": stolik.rewir_nr,
             "wersja_id": None,
         })
@@ -3924,6 +3982,17 @@ def _kombinacje_do_seating(db, kanal=None):
             "kanal": "oba",
         })
     return out
+
+
+def _ustaw_proweniencje_przydzialu(termin, kandydat=None):
+    """Ustawia lub czyści snapshot razem z każdą zmianą zasobu rezerwacji."""
+    kandydat = kandydat or {}
+    version_id = kandydat.get("wersja_planu_id")
+    combination_id = kandydat.get("kombinacja_planu_id")
+    termin.przydzial_wersja_planu_id = version_id
+    termin.przydzial_kombinacja_planu_id = (
+        combination_id if version_id is not None else None
+    )
 
 
 def _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby, pomin_id=None):
@@ -4168,6 +4237,7 @@ def online_rezerwacja(
             token_potwierdzenia=secrets.token_urlsafe(24),
             potwierdzono_at=(teraz if status == "potwierdzona" else None),
         )
+        _ustaw_proweniencje_przydzialu(t, przydzial)
         db.add(t); db.flush()
         _zastap_ledger_terminu(
             db,
@@ -4347,6 +4417,7 @@ def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Sessi
     t.data = data; t.godz_od = godz_od; t.godz_do = godz_do; t.liczba_osob = osoby
     t.stolik_id = stoliki[0]; t.stoliki_dodatkowe = (stoliki[1:] or None)
     t.auto_przydzielony = True
+    _ustaw_proweniencje_przydzialu(t, przydzial)
     try:
         db.flush()
         _zastap_ledger_terminu(

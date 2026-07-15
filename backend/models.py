@@ -309,6 +309,22 @@ class Termin(Base):
             "source_external_id",
             unique=True,
         ),
+        ForeignKeyConstraint(
+            ["przydzial_kombinacja_planu_id", "przydzial_wersja_planu_id"],
+            ["kombinacje_stolow_planu.id", "kombinacje_stolow_planu.wersja_id"],
+            name="fk_terminy_przydzial_kombinacja_wersja",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "przydzial_kombinacja_planu_id IS NULL "
+            "OR przydzial_wersja_planu_id IS NOT NULL",
+            name="ck_terminy_przydzial_kombinacja_wymaga_wersji",
+        ),
+        Index("ix_terminy_przydzial_wersja_planu_id", "przydzial_wersja_planu_id"),
+        Index(
+            "ix_terminy_przydzial_kombinacja_planu_id",
+            "przydzial_kombinacja_planu_id",
+        ),
     )
     id           = Column(Integer, primary_key=True, index=True)
     data         = Column(Date, nullable=False, index=True)   # data imprezy
@@ -346,6 +362,18 @@ class Termin(Base):
     # Kombinacja stołów: stolik_id = wiodący, stoliki_dodatkowe = pozostałe stoły złączki (JSON lista id).
     stoliki_dodatkowe   = Column(JSON, nullable=True)
     auto_przydzielony   = Column(Boolean, nullable=True)   # audyt: stół dobrał silnik sadzania, nie człowiek
+    # Niezmienna proweniencja snapshotu użytego przy przydziale. Wersja pozostaje
+    # ustawiona także dla pojedynczego stołu; kombinacja tylko dla jawnego zestawu.
+    przydzial_wersja_planu_id = Column(
+        Integer,
+        ForeignKey(
+            "wersje_planu_sali.id",
+            name="fk_terminy_przydzial_wersja_planu",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
+    przydzial_kombinacja_planu_id = Column(Integer, nullable=True)
     # --- Faza operacyjna hosta (obok status księgowego): przybyl→posadzony→rachunek→oplacony→wyszedl ---
     faza_hosta      = Column(String(16), nullable=True)    # NULL = jeszcze nie przyszedł
     host_arrived_at = Column(DateTime, nullable=True)
@@ -605,6 +633,11 @@ class SalaRezerwacyjna(Base):
         ),
         CheckConstraint("length(trim(nazwa)) > 0", name="ck_sale_rezerwacyjne_nazwa"),
         CheckConstraint("kolejnosc >= 0", name="ck_sale_rezerwacyjne_kolejnosc"),
+        CheckConstraint("priorytet >= 0", name="ck_sale_rezerwacyjne_priorytet"),
+        CheckConstraint(
+            "strategia_zapelniania IN ('preferuj', 'wypelniaj_kolejno')",
+            name="ck_sale_rezerwacyjne_strategia_zapelniania",
+        ),
     )
     id        = Column(Integer, primary_key=True, index=True)
     # Legacy Stolik.strefa ma 32 znaki i pozostaje projekcją nazwy sali.
@@ -612,6 +645,10 @@ class SalaRezerwacyjna(Base):
     nazwa_klucz = Column(String(128), nullable=False)
     aktywna   = Column(Boolean, nullable=False, default=True)
     kolejnosc = Column(Integer, nullable=False, default=0)
+    strategia_zapelniania = Column(
+        String(24), nullable=False, default="preferuj", server_default="preferuj",
+    )
+    priorytet = Column(Integer, nullable=False, default=0, server_default="0")
 
     stoliki = relationship("Stolik", back_populates="sala")
     plany = relationship("PlanSali", back_populates="sala", cascade="all, delete-orphan")

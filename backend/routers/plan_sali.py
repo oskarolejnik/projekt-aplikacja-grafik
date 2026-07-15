@@ -147,6 +147,8 @@ def _sala_out(db: Session, sala: models.SalaRezerwacyjna):
         "nazwa": sala.nazwa,
         "aktywna": sala.aktywna,
         "kolejnosc": sala.kolejnosc,
+        "strategia_zapelniania": sala.strategia_zapelniania,
+        "priorytet": sala.priorytet,
         "plan_id": plan.id if plan else None,
         "liczba_stolikow": len(_stoliki_sali(db, sala)),
         "wersja_opublikowana": _meta_wersji(published),
@@ -979,7 +981,13 @@ def edytuj_sale_rezerwacyjna(
     ).first()
     if duplicate:
         raise HTTPException(409, detail=_ROOM_NAME_CONFLICT)
-    for key, value in dane.model_dump().items():
+    payload = dane.model_dump()
+    # Starsze PWA nie znają strategii R2.2b; brak nowych pól nie może cicho
+    # wyzerować konfiguracji sali podczas zwykłej zmiany nazwy/aktywności.
+    for key in ("strategia_zapelniania", "priorytet"):
+        if key not in dane.model_fields_set:
+            payload.pop(key, None)
+    for key, value in payload.items():
         setattr(sala, key, value)
     sala.nazwa_klucz = name_key
     for stolik in db.query(models.Stolik).filter_by(sala_id=sala.id).all():

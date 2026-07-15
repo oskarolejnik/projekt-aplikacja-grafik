@@ -14,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0057_r22_topologia_planu"
+HEAD = "0058_r22b_strategia_proweniencja"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -553,6 +553,89 @@ def test_migracja_0057_backfilluje_topologie_i_round_tripuje_published(tmp_path)
         con.close()
 
 
+def test_migracja_0058_strategia_i_proweniencja_round_trip(tmp_path):
+    db_file = tmp_path / "_r22b_strategy_provenance.db"
+    env = _prepare_r2_0052(db_file)
+    upgraded_0057 = _alembic(env, "upgrade", "0057_r22_topologia_planu")
+    assert upgraded_0057.returncode == 0, upgraded_0057.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        version_id, combination_id = _insert_valid_r22_topology(con)
+        other_version_id = con.execute(
+            "SELECT id FROM wersje_planu_sali WHERE id<>? ORDER BY id LIMIT 1",
+            (version_id,),
+        ).fetchone()[0]
+        room_id = con.execute(
+            "SELECT id FROM sale_rezerwacyjne ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+        con.execute(
+            "UPDATE sale_rezerwacyjne SET kolejnosc=7 WHERE id=?", (room_id,)
+        )
+        con.execute(
+            "INSERT INTO terminy (data,nazwisko,status,zadatek,kanal,rodzaj) "
+            "VALUES ('2030-01-03','Historyczny','potwierdzona',0,'reczna','stolik')"
+        )
+        termin_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("PRAGMA foreign_keys=ON")
+        assert con.execute(
+            "SELECT strategia_zapelniania,priorytet FROM sale_rezerwacyjne WHERE id=?",
+            (room_id,),
+        ).fetchone() == ("preferuj", 7)
+        assert con.execute(
+            "SELECT przydzial_wersja_planu_id,przydzial_kombinacja_planu_id "
+            "FROM terminy WHERE id=?",
+            (termin_id,),
+        ).fetchone() == (None, None)
+        con.execute(
+            "UPDATE terminy SET przydzial_wersja_planu_id=?, "
+            "przydzial_kombinacja_planu_id=? WHERE id=?",
+            (version_id, combination_id, termin_id),
+        )
+        con.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            con.execute(
+                "UPDATE terminy SET przydzial_wersja_planu_id=? WHERE id=?",
+                (other_version_id, termin_id),
+            )
+        con.rollback()
+        with pytest.raises(sqlite3.IntegrityError):
+            con.execute(
+                "UPDATE terminy SET przydzial_wersja_planu_id=999999 WHERE id=?",
+                (termin_id,),
+            )
+        con.rollback()
+        assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        con.close()
+
+    downgraded = _alembic(env, "downgrade", "0057_r22_topologia_planu")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        room_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(sale_rezerwacyjne)")
+        }
+        termin_columns = {row[1] for row in con.execute("PRAGMA table_info(terminy)")}
+        assert not {"strategia_zapelniania", "priorytet"} & room_columns
+        assert not {
+            "przydzial_wersja_planu_id", "przydzial_kombinacja_planu_id",
+        } & termin_columns
+    finally:
+        con.close()
+
+    upgraded_again = _alembic(env, "upgrade", HEAD)
+    assert upgraded_again.returncode == 0, upgraded_again.stderr
+
+
 def test_migracja_0057_downgrade_zachowuje_topologie_niewersjonowanej_sali(tmp_path):
     db_file = tmp_path / "_r22_unversioned_legacy_downgrade.db"
     env = _prepare_r2_0052(db_file)
@@ -878,6 +961,55 @@ def test_adopcja_r22_waliduje_semantyke_topologii_i_prosty_fk_krawedzi(tmp_path)
     assert "klucz obcy R2" in (
         missing_fk_adoption.stdout + missing_fk_adoption.stderr
     )
+
+
+def test_adopcja_r22b_odrzuca_brak_ochrony_proweniencji(tmp_path):
+    base_file = tmp_path / "_r22b_provenance_adoption_base.db"
+    base_env = _prepare_r2_0052(base_file)
+    upgraded = _alembic(base_env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    corruptions = {
+        "missing-trigger": (
+            "DROP TRIGGER fk_terminy_przydzial_kombinacja_wersja_update",
+            "nie chroni pary proweniencji R2.2b",
+        ),
+        "missing-index": (
+            "DROP INDEX ix_terminy_przydzial_kombinacja_planu_id",
+            "nie ma wymaganych indeksów R2",
+        ),
+        "dead-trigger": (
+            "DROP TRIGGER fk_terminy_przydzial_kombinacja_wersja_update; "
+            "CREATE TRIGGER fk_terminy_przydzial_kombinacja_wersja_update "
+            "BEFORE UPDATE OF przydzial_kombinacja_planu_id, "
+            "przydzial_wersja_planu_id ON terminy "
+            "WHEN 0 AND NEW.przydzial_kombinacja_planu_id IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM kombinacje_stolow_planu k "
+            "WHERE k.id = NEW.przydzial_kombinacja_planu_id "
+            "AND k.wersja_id = NEW.przydzial_wersja_planu_id) "
+            "BEGIN SELECT RAISE(ABORT, "
+            "'przydzial combination/version mismatch'); END",
+            "nie chroni pary proweniencji R2.2b",
+        ),
+    }
+    for name, (statement, expected_error) in corruptions.items():
+        db_file = tmp_path / f"_r22b_provenance_adoption_{name}.db"
+        shutil.copy2(base_file, db_file)
+        con = sqlite3.connect(str(db_file))
+        try:
+            con.executescript(statement)
+            con.execute("DROP TABLE alembic_version")
+            con.commit()
+        finally:
+            con.close()
+
+        adoption = subprocess.run(
+            [sys.executable, "-c", "import database; database.init_db()"],
+            cwd=str(BACKEND), env=_env(db_file, f"r22b-{name}"),
+            capture_output=True, text=True,
+        )
+        assert adoption.returncode != 0, name
+        assert expected_error in (adoption.stdout + adoption.stderr), name
 
 
 def test_adopcja_r2_odrzuca_dodatkowa_pozycje_stolika_w_innej_sali(tmp_path):

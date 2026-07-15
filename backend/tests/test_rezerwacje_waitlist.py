@@ -1,8 +1,9 @@
 """Slice v2 S5: waitlist v2 — powiadomienie „stolik gotowy", HOLD stołu (blokada w rdzeniu zajętości),
-publiczny zapis online. HOLD blokuje AUTOMATYCZNY dobór (auto-przydział / online), nie ręczny admina.
-2026-07-13 = poniedziałek w przyszłości (online nie odrzuca jako wstecz)."""
+publiczny zapis online. HOLD blokuje AUTOMATYCZNY dobór (auto-przydział / online), nie ręczny admina."""
 
-DZIEN = "2026-07-13"
+from datetime import date, timedelta
+
+DZIEN = (date.today() + timedelta(days=30)).isoformat()
 
 
 def _stolik(admin_client, nazwa, poj=4):

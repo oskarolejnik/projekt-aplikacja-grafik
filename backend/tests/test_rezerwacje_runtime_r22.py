@@ -439,12 +439,12 @@ def test_versioned_table_direct_edit_allows_only_pos_link(admin_client, db):
     assert blocked.json()["detail"]["code"] == "FLOOR_PLAN_VERSIONING_REQUIRED"
 
 
-def test_frozen_versioned_assignment_survives_combination_retirement(db):
+def test_legacy_assignment_without_provenance_survives_combination_retirement(db):
     setup = _published_room(db)
     table_ids = [table.id for table in setup["tables"]]
 
-    # Termin nie przechowuje jeszcze proweniencji definicji. Wycofanie kombinacji
-    # nie może unieważnić niealokacyjnej edycji już zamrożonego zestawu IDs.
+    # Przydziały utworzone przed R2.2b nie mają wiarygodnej proweniencji.
+    # Zachowujemy je bez zgadywania wersji na podstawie samych identyfikatorów stołów.
     main._waliduj_rozmiar_zachowanej_kombinacji(db, table_ids, 7)
 
 
