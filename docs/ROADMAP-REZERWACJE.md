@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a, R0b, R1a, R1b i R2.1 wdrożone · następny checkpoint R2.2 (sąsiedztwo i kanoniczne kombinacje) · 12 lipca 2026
+> Status: kierunek zatwierdzony · R0a, R0b, R1a, R1b, R2.1 i R2.2a wdrożone · następny checkpoint R2.2b (snap, wyrównywanie i priorytety sal) · 15 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -93,7 +93,8 @@ Projekt ma więcej gotowych fundamentów, niż pokazuje obecny interfejs.
 3. **Częściowo zamknięte w R2.1:** sala jest encją z własnym planem i kolejnością; strategia
    zapełniania oraz limity pozostają w R2.2/R3.
 4. Plan sali nie zaznacza poprawnie wszystkich stołów dodatkowych kombinacji.
-5. Priorytet zapisany na kombinacji nie wpływa dziś na ocenę kandydata.
+5. **Zamknięte w R2.2a:** priorytet jawnej kombinacji jest wersjonowany, edytowalny w planie sali
+   i wpływa na ocenę kandydata (niższa wartość oznacza wcześniejsze rozpatrywanie).
 6. `Stolik.laczy_sie` i graf sąsiedztwa tworzą dwa potencjalne źródła prawdy.
 7. Edycja lub usunięcie stołu może pozostawić niespójne identyfikatory w polach JSON kombinacji.
 8. **Zamknięte w R0b:** sprawdzenie dostępności i zapis są atomowe, a zasoby chroni ledger.
@@ -545,10 +546,23 @@ Stary modal bezpośredniej edycji stolików w planie dnia został zastąpiony je
 Operacyjny plan czyta wyłącznie opublikowane pozycje i opisuje fakty (`bez_rezerwacji`, hold,
 rezerwacja, POS), bez obietnicy dostępności przed R3/R4.
 
-R2 nie jest jeszcze zamknięte. R2.2 ma dodać wersjonowane krawędzie sąsiedztwa i kanoniczne
-kombinacje, właściwości stołów w snapshotach, tryb „Połącz stoły”, sprawdzian grupy 18-osobowej,
-undo/redo, przyciąganie i wyrównywanie oraz strategię/priorytet sal. Nie należy udawać tych
-możliwości na podstawie legacy `lacze_sie`, `sasiedztwo` lub `KombinacjaStolow`.
+**Stan wdrożenia (15 lipca 2026):** R2.2a dodaje migrację 0057, właściwości stołów w snapshotach,
+wersjonowane krawędzie sąsiedztwa oraz relacyjne, jawnie zatwierdzane zestawy z zakresem osób,
+priorytetem i kanałem. Pełny PUT szkicu zapisuje pozycje, właściwości, graf i zestawy atomowo;
+starszy klient R2.1 zachowuje pominiętą topologię, a jawne puste listy ją czyszczą. Runtime czyta
+wyłącznie bieżący opublikowany snapshot i nie tworzy rezerwowalnych podgrafów z samego sąsiedztwa.
+Legacy CRUD jest adapterem tylko poza wersjonowanymi salami, a próba podwójnego zapisu zwraca
+`FLOOR_PLAN_VERSIONING_REQUIRED`. Publikacja ponownie waliduje graf, blokuje stoły i zatrzymuje
+redukcję pojemności kolidującą z przyszłą rezerwacją lub holdem.
+
+Edytor R2.2a oferuje `Ustaw stoły | Połącz stoły`, linie i równoważną listę tekstową sąsiedztwa,
+propozycje spójnych zestawów do czterech stołów, jawne zatwierdzanie i edycję zestawu, właściwości
+stołu, undo/redo oraz strukturalny sprawdzian domyślnie dla 18 osób. Sprawdzian mówi, że układ może
+obsłużyć grupę, ale nie obiecuje dostępności w konkretnym terminie.
+
+R2 nie jest jeszcze zamknięte. R2.2b pozostawia przyciąganie do siatki, wyrównywanie grup,
+strategię/priorytet sal i trwałą proweniencję wersji zestawu na historycznym przydziale. Nie należy
+udawać tych możliwości na podstawie legacy `lacze_sie`, `sasiedztwo` lub `KombinacjaStolow`.
 
 Backend/migracja:
 
@@ -562,7 +576,7 @@ Frontend:
 - Lista sal i przełączanie planu.
 - Dodawanie, pozycjonowanie, obrót, rozmiar i właściwości stolika.
 - Tryb `Połącz stoły`: wskazanie sąsiedztwa i podgląd możliwych grup.
-- Panel sprawdzający: „dla 18 osób dostępne są S1+S2+S3”.
+- Panel sprawdzający: „Ten układ obsłuży 18 osób: S1+S2+S3”, z informacją, że nie sprawdza terminu.
 - Jawne `Zapisz szkic` oraz `Opublikuj plan`.
 - Undo/redo, przyciąganie, wyrównywanie oraz tekstowe statusy niezależne od koloru.
 - Alternatywa dla drag-and-drop: pola X/Y, rozmiar/obrót i przesuwanie strzałkami z ogłoszeniem
@@ -890,8 +904,8 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a, R0b, R1a, R1b i R2.1 są zamkniętymi checkpointami. Następny milestone to `R2.2`:
-wersjonowane sąsiedztwo, kanoniczne kombinacje, właściwości stołów i narzędzia edytora. Nie rozszerzamy jeszcze
-pełnego ewaluatora R3/R4; korzysta on z gotowych granic uprawnień, audytu i atomowości dopiero w
-swoim etapie. Serwerowa blokada stanowiska z sesją operatora i PIN-em pozostaje oddzielnym zadaniem,
-którego nie wolno udawać samą zasłoną frontendu.
+R0a, R0b, R1a, R1b, R2.1 i R2.2a są zamkniętymi checkpointami. Następny milestone to `R2.2b`:
+snap, wyrównywanie, strategia/priorytet sal oraz domknięcie proweniencji historycznego przydziału.
+Nie rozszerzamy jeszcze pełnego ewaluatora R3/R4; korzysta on z gotowych granic uprawnień, audytu
+i atomowości dopiero w swoim etapie. Serwerowa blokada stanowiska z sesją operatora i PIN-em
+pozostaje oddzielnym zadaniem, którego nie wolno udawać samą zasłoną frontendu.

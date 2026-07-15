@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 
 import factories
 import models
+import schemas
 from auth import create_access_token
 from deps import _teraz_lokalnie
 
@@ -36,10 +37,14 @@ def _stolik(admin_client, sala_id, nazwa="S1", db=None, **extra):
     db.add(saved)
     db.commit()
     db.refresh(saved)
-    return next(
-        row for row in admin_client.get("/api/stoliki").json()["stoliki"]
-        if row["id"] == saved.id
+    # Utworzenie sali zakłada od razu PlanSali. Legacy GET jest od R2.2
+    # adapterem published-only, więc migracyjny rekord seedowany bezpośrednio
+    # nie może być widoczny przed pierwszą publikacją.
+    assert all(
+        row["id"] != saved.id
+        for row in admin_client.get("/api/stoliki").json()["stoliki"]
     )
+    return schemas.StolikOut.model_validate(saved).model_dump()
 
 
 def _pozycje(body, overrides=None):
@@ -216,6 +221,55 @@ def test_nowy_stol_jest_atomowa_czescia_szkicu_i_znika_po_odrzuceniu(
     assert db.get(models.Stolik, existing["id"]) is not None
 
 
+def test_kolejne_nowe_stoly_dostaja_wolne_miejsce_bez_przestawiania(
+    admin_client,
+):
+    sala = _sala(admin_client)
+    draft = admin_client.post(
+        f"/api/sale-rezerwacyjne/{sala['id']}/plan/szkic",
+    ).json()
+    previous = {}
+    body = draft
+
+    for revision, name in enumerate(("S1", "S2", "S3")):
+        response = admin_client.post(
+            f"/api/sale-rezerwacyjne/{sala['id']}/plan/szkic/stoliki",
+            json={
+                "expected_revision": revision,
+                "nazwa": name,
+                "pojemnosc": 4,
+            },
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        current = {
+            row["id"]: (
+                row["plan_x"], row["plan_y"],
+                row["szerokosc"], row["wysokosc"],
+            )
+            for row in body["stoliki"]
+        }
+        assert all(current[table_id] == geometry for table_id, geometry in previous.items())
+        previous = current
+
+    tables = body["stoliki"]
+    assert {row["nazwa"] for row in tables} == {"S1", "S2", "S3"}
+    minimum_gap = 4
+    for index, first in enumerate(tables):
+        for second in tables[index + 1:]:
+            horizontal_gap = (
+                abs(first["plan_x"] - second["plan_x"])
+                - (first["szerokosc"] + second["szerokosc"]) / 2
+            )
+            vertical_gap = (
+                abs(first["plan_y"] - second["plan_y"])
+                - (first["wysokosc"] + second["wysokosc"]) / 2
+            )
+            assert horizontal_gap >= minimum_gap or vertical_gap >= minimum_gap, (
+                first, second
+            )
+
+
 def test_pierwszy_szkic_nie_wycieka_do_hosta_przed_publikacja(
     admin_client, client,
 ):
@@ -270,11 +324,14 @@ def test_kombinacja_nie_moze_ochronic_draft_only_stolika_przed_discard(
     sala = _sala(admin_client)
     first = _stolik(admin_client, sala["id"], "S1", db=db)
     second = _stolik(admin_client, sala["id"], "S2", db=db)
-    combination = admin_client.post(
+    rejected_existing = admin_client.post(
         "/api/kombinacje",
         json={"nazwa": "S1+S2", "stoliki": [first["id"], second["id"]]},
     )
-    assert combination.status_code == 201, combination.text
+    assert rejected_existing.status_code == 409
+    assert rejected_existing.json()["detail"]["code"] == (
+        "FLOOR_PLAN_VERSIONING_REQUIRED"
+    )
     draft = admin_client.post(
         f"/api/sale-rezerwacyjne/{sala['id']}/plan/szkic",
     ).json()
@@ -296,19 +353,10 @@ def test_kombinacja_nie_moze_ochronic_draft_only_stolika_przed_discard(
         json={"nazwa": "S1+S3", "stoliki": [first["id"], pending_id]},
     )
     assert rejected_post.status_code == 409
-    assert rejected_post.json()["detail"] == {
-        "code": "TABLE_NOT_OPERATIONAL",
-        "message": "Kombinacja może zawierać wyłącznie aktywne stoliki.",
-        "table_ids": [pending_id],
-    }
-    rejected_put = admin_client.put(
-        f"/api/kombinacje/{combination.json()['id']}",
-        json={"nazwa": "S2+S3", "stoliki": [second["id"], pending_id]},
+    assert rejected_post.json()["detail"]["code"] == (
+        "FLOOR_PLAN_VERSIONING_REQUIRED"
     )
-    assert rejected_put.status_code == 409
-    assert admin_client.get("/api/kombinacje").json()["kombinacje"][0][
-        "stoliki"
-    ] == [first["id"], second["id"]]
+    assert admin_client.get("/api/kombinacje").json()["kombinacje"] == []
 
     discarded = admin_client.delete(
         f"/api/sale-rezerwacyjne/{sala['id']}/plan/szkic?expected_revision=1",

@@ -195,12 +195,15 @@ _R0B_REVISION = "0051_rezerwacje_atomic_ledger"
 _PRE_R0B_REVISION = "0050_rezerwacje_source_identity"
 _R1A_AUDIT_TABLE = "reservation_audit"
 _R1A_REVISION = "0052_reservation_audit"
-_R2_REVISION = "0054_room_name_key"
+_R2_REVISION = "0057_r22_topologia_planu"
 _R2_TABLES = {
     "sale_rezerwacyjne",
     "plany_sali",
     "wersje_planu_sali",
     "pozycje_stolikow_planu",
+    "krawedzie_sasiedztwa_planu",
+    "kombinacje_stolow_planu",
+    "skladniki_kombinacji_planu",
 }
 _R2_COLUMNS = {
     "sale_rezerwacyjne": {
@@ -214,7 +217,19 @@ _R2_COLUMNS = {
     },
     "pozycje_stolikow_planu": {
         "id", "wersja_id", "stolik_id", "plan_x", "plan_y", "szerokosc",
-        "wysokosc", "obrot", "aktywny_w_planie",
+        "wysokosc", "obrot", "aktywny_w_planie", "nazwa", "kolejnosc",
+        "pojemnosc", "pojemnosc_min", "ksztalt", "cechy", "priorytet",
+        "sekcja",
+    },
+    "krawedzie_sasiedztwa_planu": {
+        "id", "wersja_id", "stolik_a_id", "stolik_b_id",
+    },
+    "kombinacje_stolow_planu": {
+        "id", "wersja_id", "nazwa", "sklad_klucz", "pojemnosc_min",
+        "pojemnosc_max", "priorytet", "kanal", "aktywna_w_planie",
+    },
+    "skladniki_kombinacji_planu": {
+        "id", "kombinacja_id", "wersja_id", "stolik_id",
     },
 }
 def _strip_r2_outer_parentheses(sql: str) -> str:
@@ -615,6 +630,102 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     return True
 
 
+def _r2_adoption_topology_is_valid(conn) -> bool:
+    """Waliduje semantyke grafu, ktorej nie da sie wyrazic samymi CHECK/FK."""
+    from sqlalchemy import text
+
+    positions = {
+        (int(row["wersja_id"]), int(row["stolik_id"])): {
+            "pojemnosc": int(row["pojemnosc"]),
+            "aktywny": bool(row["aktywny_w_planie"]),
+        }
+        for row in conn.execute(text(
+            "SELECT wersja_id, stolik_id, pojemnosc, aktywny_w_planie "
+            "FROM pozycje_stolikow_planu"
+        )).mappings()
+        if row["pojemnosc"] is not None
+    }
+
+    adjacency = {}
+    for row in conn.execute(text(
+        "SELECT wersja_id, stolik_a_id, stolik_b_id "
+        "FROM krawedzie_sasiedztwa_planu"
+    )).mappings():
+        version_id = int(row["wersja_id"])
+        a = int(row["stolik_a_id"])
+        b = int(row["stolik_b_id"])
+        if (
+            a >= b
+            or (version_id, a) not in positions
+            or (version_id, b) not in positions
+        ):
+            return False
+        version_adjacency = adjacency.setdefault(version_id, {})
+        version_adjacency.setdefault(a, set()).add(b)
+        version_adjacency.setdefault(b, set()).add(a)
+
+    members_by_combination = {}
+    for row in conn.execute(text(
+        "SELECT kombinacja_id, wersja_id, stolik_id "
+        "FROM skladniki_kombinacji_planu"
+    )).mappings():
+        members_by_combination.setdefault(int(row["kombinacja_id"]), []).append(
+            (int(row["wersja_id"]), int(row["stolik_id"]))
+        )
+
+    seen_combinations = set()
+    for row in conn.execute(text(
+        "SELECT id, wersja_id, sklad_klucz, pojemnosc_min, pojemnosc_max, "
+        "aktywna_w_planie FROM kombinacje_stolow_planu"
+    )).mappings():
+        combination_id = int(row["id"])
+        version_id = int(row["wersja_id"])
+        seen_combinations.add(combination_id)
+        member_rows = members_by_combination.get(combination_id, [])
+        member_ids = sorted(table_id for _, table_id in member_rows)
+        if (
+            len(member_ids) < 2
+            or len(member_ids) != len(set(member_ids))
+            or any(member_version != version_id for member_version, _ in member_rows)
+            or any((version_id, table_id) not in positions for table_id in member_ids)
+            or row["sklad_klucz"] != ",".join(str(value) for value in member_ids)
+        ):
+            return False
+
+        physical_capacity = sum(
+            positions[(version_id, table_id)]["pojemnosc"]
+            for table_id in member_ids
+        )
+        minimum = int(row["pojemnosc_min"])
+        maximum = int(row["pojemnosc_max"])
+        if minimum < 1 or maximum < minimum or maximum > physical_capacity:
+            return False
+        if bool(row["aktywna_w_planie"]) and any(
+            not positions[(version_id, table_id)]["aktywny"]
+            for table_id in member_ids
+        ):
+            return False
+
+        member_set = set(member_ids)
+        visited = {member_ids[0]}
+        pending = [member_ids[0]]
+        version_adjacency = adjacency.get(version_id, {})
+        while pending:
+            current = pending.pop()
+            for neighbour in version_adjacency.get(current, set()) & member_set:
+                if neighbour not in visited:
+                    visited.add(neighbour)
+                    pending.append(neighbour)
+        if visited != member_set:
+            return False
+
+    # FK moze istniec w definicji, ale historyczna baza SQLite mogla miec
+    # ``foreign_keys=OFF`` podczas recznego zapisu. Nie stempluj sierot.
+    if set(members_by_combination) - seen_combinations:
+        return False
+    return True
+
+
 def _validate_r2_adoption_schema(inspector=None) -> bool:
     """Weryfikuje niewersjonowaną bazę R2 przed stemplem bieżącego head.
 
@@ -632,7 +743,7 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             "niewersjonowanej bazy PostgreSQL jest zablokowana, ponieważ sama "
             "introspekcja nazw CHECK nie dowodzi ich działania. Zweryfikuj ręcznie "
             "CHECK/UNIQUE/FK oraz backfill R2, następnie wykonaj "
-            "`alembic stamp 0054_room_name_key` i `alembic upgrade head`."
+            "`alembic stamp 0057_r22_topologia_planu` i `alembic upgrade head`."
         )
 
     def normalized_sql(value) -> str:
@@ -688,6 +799,24 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             "ix_pozycje_stolikow_planu_stolik_id",
             "uq_pozycje_stolikow_wersja_stolik",
         },
+        "krawedzie_sasiedztwa_planu": {
+            "ix_krawedzie_sasiedztwa_planu_id",
+            "ix_krawedzie_sasiedztwa_planu_wersja_id",
+            "uq_krawedzie_sasiedztwa_planu_para",
+        },
+        "kombinacje_stolow_planu": {
+            "ix_kombinacje_stolow_planu_id",
+            "ix_kombinacje_stolow_planu_wersja_id",
+            "uq_kombinacje_stolow_planu_id_wersja",
+            "uq_kombinacje_stolow_planu_wersja_sklad",
+        },
+        "skladniki_kombinacji_planu": {
+            "ix_skladniki_kombinacji_planu_id",
+            "ix_skladniki_kombinacji_planu_kombinacja_id",
+            "ix_skladniki_kombinacji_planu_wersja_id",
+            "ix_skladniki_kombinacji_planu_stolik_id",
+            "uq_skladniki_kombinacji_planu_stolik",
+        },
         "stoliki": {"ix_stoliki_sala_id"},
     }
     for table_name, expected in required_indexes.items():
@@ -725,6 +854,27 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
         "pozycje_stolikow_planu": {
             "ix_pozycje_stolikow_planu_wersja_id": (("wersja_id",), False, None),
             "ix_pozycje_stolikow_planu_stolik_id": (("stolik_id",), False, None),
+        },
+        "krawedzie_sasiedztwa_planu": {
+            "ix_krawedzie_sasiedztwa_planu_wersja_id": (
+                ("wersja_id",), False, None,
+            ),
+        },
+        "kombinacje_stolow_planu": {
+            "ix_kombinacje_stolow_planu_wersja_id": (
+                ("wersja_id",), False, None,
+            ),
+        },
+        "skladniki_kombinacji_planu": {
+            "ix_skladniki_kombinacji_planu_kombinacja_id": (
+                ("kombinacja_id",), False, None,
+            ),
+            "ix_skladniki_kombinacji_planu_wersja_id": (
+                ("wersja_id",), False, None,
+            ),
+            "ix_skladniki_kombinacji_planu_stolik_id": (
+                ("stolik_id",), False, None,
+            ),
         },
         "stoliki": {
             "ix_stoliki_sala_id": (("sala_id",), False, None),
@@ -767,6 +917,22 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
         },
         "pozycje_stolikow_planu": {
             "uq_pozycje_stolikow_wersja_stolik": ("wersja_id", "stolik_id"),
+        },
+        "krawedzie_sasiedztwa_planu": {
+            "uq_krawedzie_sasiedztwa_planu_para": (
+                "wersja_id", "stolik_a_id", "stolik_b_id",
+            ),
+        },
+        "kombinacje_stolow_planu": {
+            "uq_kombinacje_stolow_planu_id_wersja": ("id", "wersja_id"),
+            "uq_kombinacje_stolow_planu_wersja_sklad": (
+                "wersja_id", "sklad_klucz",
+            ),
+        },
+        "skladniki_kombinacji_planu": {
+            "uq_skladniki_kombinacji_planu_stolik": (
+                "kombinacja_id", "stolik_id",
+            ),
         },
     }
     for table_name, expected in expected_uniques.items():
@@ -827,6 +993,26 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             ("wersja_id",): ("wersje_planu_sali", ("id",), "CASCADE"),
             ("stolik_id",): ("stoliki", ("id",), "RESTRICT"),
         },
+        "krawedzie_sasiedztwa_planu": {
+            ("wersja_id",): ("wersje_planu_sali", ("id",), "CASCADE"),
+            ("wersja_id", "stolik_a_id"): (
+                "pozycje_stolikow_planu", ("wersja_id", "stolik_id"), "CASCADE",
+            ),
+            ("wersja_id", "stolik_b_id"): (
+                "pozycje_stolikow_planu", ("wersja_id", "stolik_id"), "CASCADE",
+            ),
+        },
+        "kombinacje_stolow_planu": {
+            ("wersja_id",): ("wersje_planu_sali", ("id",), "CASCADE"),
+        },
+        "skladniki_kombinacji_planu": {
+            ("kombinacja_id", "wersja_id"): (
+                "kombinacje_stolow_planu", ("id", "wersja_id"), "CASCADE",
+            ),
+            ("wersja_id", "stolik_id"): (
+                "pozycje_stolikow_planu", ("wersja_id", "stolik_id"), "CASCADE",
+            ),
+        },
     }
     for table_name, expected in expected_fks.items():
         actual = {}
@@ -878,12 +1064,20 @@ def _validate_r2_adoption_schema(inspector=None) -> bool:
             "JOIN stoliki s ON s.id = pos.stolik_id "
             "WHERE p.sala_id <> s.sala_id"
         )).scalar_one()
+        positions_without_snapshot_properties = conn.execute(text(
+            "SELECT count(*) FROM pozycje_stolikow_planu "
+            "WHERE nazwa IS NULL OR length(trim(nazwa)) = 0 "
+            "OR kolejnosc IS NULL OR pojemnosc IS NULL"
+        )).scalar_one()
+        invalid_topology = not _r2_adoption_topology_is_valid(conn)
     if (
         invalid_room_keys
         or missing_rooms
         or rooms_without_published_plan
         or tables_without_position
         or cross_room_positions
+        or positions_without_snapshot_properties
+        or invalid_topology
     ):
         raise RuntimeError(
             "Backfill R2 jest niekompletny; nie można oznaczyć bieżącej migracji."

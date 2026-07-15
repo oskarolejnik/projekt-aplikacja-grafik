@@ -1563,18 +1563,26 @@ def _stoly_terminu(t) -> set:
 
 def _waliduj_przydzial_rezerwacji(
     db, data, godz_od, godz_do, stoliki, liczba_osob, pomin_id=None, pojemnosc_override=None,
+    zachowaj_nieaktywny_przydzial=False,
 ):
     """Waliduje cały przydział (pojedynczy stół albo zachowaną kombinację) i zwraca godz_do."""
     ids = _ids_stolikow(stoliki)
     if not ids:
         return godz_do
     rekordy = reservation_service.lock_tables(db, ids)
-    if len(rekordy) != len(ids) or any(not stolik.aktywny for stolik in rekordy):
+    runtime_by_id = {stolik["id"]: stolik for stolik in _stoly_do_seating(db)}
+    if zachowaj_nieaktywny_przydzial:
+        # Wyłączenie sali blokuje nowe przydziały, ale nie może uniemożliwić
+        # obsługi istniejącej rezerwacji, która zachowuje dokładnie ten sam zestaw.
+        for stolik in _stoliki_do_odczytu(db):
+            if stolik["id"] in ids and stolik["id"] not in runtime_by_id:
+                runtime_by_id[stolik["id"]] = stolik
+    if len(rekordy) != len(ids) or not ids <= set(runtime_by_id):
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
-    pojemnosc_fizyczna = sum((stolik.pojemnosc or 0) for stolik in rekordy)
+    pojemnosc_fizyczna = sum(runtime_by_id[sid]["pojemnosc"] for sid in ids)
     pojemnosc = pojemnosc_override if pojemnosc_override is not None else pojemnosc_fizyczna
     if liczba_osob and liczba_osob > pojemnosc:
-        nazwa = " + ".join(stolik.nazwa for stolik in rekordy)
+        nazwa = " + ".join(runtime_by_id[sid]["nazwa"] for sid in sorted(ids))
         raise HTTPException(400, f"Przydział „{nazwa}” mieści {pojemnosc} os. (próba: {liczba_osob}).")
     if godz_od is None:
         return godz_do
@@ -1635,6 +1643,7 @@ def _zastap_ledger_terminu(
     enforce_pacing=False,
     candidates=(),
     alternatives=(),
+    zachowaj_nieaktywny_przydzial=False,
 ):
     """Aktualizuje ledger w tej samej transakcji co projekcję ``Termin``."""
     if t.status not in REZ_AKTYWNE:
@@ -1642,7 +1651,10 @@ def _zastap_ledger_terminu(
         return reservation_service.AvailabilityResult(available=True)
     ids = _ids_stolikow(stoliki if stoliki is not None else _stoly_terminu(t))
     locked_tables = reservation_service.lock_tables(db, ids)
-    if len(locked_tables) != len(ids) or any(not stolik.aktywny for stolik in locked_tables):
+    runtime_ids = {stolik["id"] for stolik in _stoly_do_seating(db)}
+    if len(locked_tables) != len(ids) or (
+        not zachowaj_nieaktywny_przydzial and not ids <= runtime_ids
+    ):
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
     pacing = _parametry_pacingu(db, t.data, t.godz_od)
     return reservation_service.replace_termin_allocation(
@@ -1724,8 +1736,10 @@ def _zablokuj_waitliste(db, wid):
 
 def _jawne_kombinacje_dla_zestawu(db, stoliki):
     ids = _ids_stolikow(stoliki)
-    return [k for k in db.query(models.KombinacjaStolow).filter_by(aktywna=True).all()
-            if _ids_stolikow(k.stoliki) == ids]
+    return [
+        combination for combination in _kombinacje_do_seating(db)
+        if _ids_stolikow(combination["stoliki"]) == ids
+    ]
 
 
 def _pojemnosc_zachowanego_zestawu(db, stoliki):
@@ -1733,13 +1747,13 @@ def _pojemnosc_zachowanego_zestawu(db, stoliki):
     jawne = _jawne_kombinacje_dla_zestawu(db, ids)
     if not jawne:
         return None
-    rekordy = [db.get(models.Stolik, sid) for sid in ids]
-    if any(stolik is None for stolik in rekordy):
+    runtime_by_id = {stolik["id"]: stolik for stolik in _stoly_do_seating(db)}
+    if not ids <= set(runtime_by_id):
         # Właściwa walidacja przydziału zwróci czytelne 400; nie wywracaj starego,
         # osieroconego JSON-u wyjątkiem AttributeError przed tą walidacją.
         return None
-    fizyczna = sum((stolik.pojemnosc or 0) for stolik in rekordy)
-    return max((k.pojemnosc_max or fizyczna) for k in jawne)
+    fizyczna = sum(runtime_by_id[sid]["pojemnosc"] for sid in ids)
+    return max((combination["pojemnosc_max"] or fizyczna) for combination in jawne)
 
 
 def _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, liczba_osob):
@@ -1750,12 +1764,24 @@ def _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, liczba_osob):
     osoby = max(1, int(liczba_osob or 1))
     jawne = _jawne_kombinacje_dla_zestawu(db, ids)
     if jawne:
+        runtime_by_id = {stolik["id"]: stolik for stolik in _stoly_do_seating(db)}
         pojemnosc_fizyczna = sum(
-            (db.get(models.Stolik, sid).pojemnosc or 0) for sid in ids)
-        dozwolone = any(
-            (k.pojemnosc_min or 1) <= osoby <= (k.pojemnosc_max or pojemnosc_fizyczna)
-            for k in jawne
+            runtime_by_id[sid]["pojemnosc"] for sid in ids
+            if sid in runtime_by_id
         )
+        dozwolone = any(
+            (combination["pojemnosc_min"] or 1)
+            <= osoby
+            <= (combination["pojemnosc_max"] or pojemnosc_fizyczna)
+            for combination in jawne
+        )
+    elif ids & _wersjonowane_stoliki_ids(db):
+        # Istniejący Termin przechowuje dziś tylko zamrożony zestaw IDs, bez
+        # proweniencji definicji. Wycofanie kombinacji nie może unieważnić jego
+        # niealokacyjnej edycji; fizyczną pojemność i aktywność sprawdził już
+        # _waliduj_przydzial_rezerwacji. Nowe kandydatury nadal wymagają jawnej
+        # published kombinacji. Immutable provenance powstanie w kolejnym slice.
+        dozwolone = True
     else:
         kandydaci = seating.kandydaci(
             osoby, _stoly_do_seating(db), [], sasiedztwo=_sasiedztwo_do_seating(db))
@@ -1959,8 +1985,7 @@ def _wyslij_potwierdzenie_rezerwacji(db, t: models.Termin) -> bool:
 # ── Stoliki ──────────────────────────────────────────────────────────────────
 @app.get("/api/stoliki", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def get_stoliki(db: Session = Depends(get_db)):
-    rows = db.query(models.Stolik).order_by(models.Stolik.kolejnosc, models.Stolik.id).all()
-    return {"stoliki": [schemas.StolikOut.model_validate(s).model_dump() for s in rows]}
+    return {"stoliki": _stoliki_do_odczytu(db)}
 
 
 def _waliduj_parametry_stolika(dane: schemas.StolikIn, db: Session):
@@ -1996,6 +2021,35 @@ def _sala_ma_wersjonowany_plan(db: Session, sala_id: Optional[int]) -> bool:
         sala_id is not None
         and db.query(models.PlanSali.id).filter_by(sala_id=sala_id).first()
     )
+
+
+def _stolik_ma_wersjonowany_plan(db: Session, stolik: models.Stolik) -> bool:
+    """Uwzględnia kontrolowany fallback ``strefa`` dla niezmigrowanych stolików."""
+    if stolik.sala_id is not None:
+        return _sala_ma_wersjonowany_plan(db, stolik.sala_id)
+    nazwa_strefy = (stolik.strefa or "").strip().casefold()
+    if not nazwa_strefy:
+        return False
+    return any(
+        (sala.nazwa or "").strip().casefold() == nazwa_strefy
+        for sala in (
+            db.query(models.SalaRezerwacyjna)
+            .join(models.PlanSali, models.PlanSali.sala_id == models.SalaRezerwacyjna.id)
+            .all()
+        )
+    )
+
+
+def _wymagaj_legacy_stolikow_poza_planem(db: Session, stoliki_ids) -> None:
+    """Legacy CRUD nie może zmieniać konfiguracji należącej do wersjonowanego planu."""
+    ids = _ids_stolikow(stoliki_ids)
+    if not ids:
+        return
+    stoliki = db.query(models.Stolik).filter(models.Stolik.id.in_(ids)).all()
+    if any(_stolik_ma_wersjonowany_plan(db, stolik) for stolik in stoliki):
+        _wymagaj_szkicu_planu(
+            "Sąsiedztwo i kombinacje zmieniaj w szkicu sali, a następnie opublikuj plan."
+        )
 
 
 def _wymagaj_szkicu_planu(message: str):
@@ -2034,6 +2088,23 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
     previous_room_id = s.sala_id
     previous_active = s.aktywny
     _waliduj_parametry_stolika(dane, db)
+    if _stolik_ma_wersjonowany_plan(db, s):
+        canonical = next(
+            (row for row in _stoliki_do_odczytu(db) if row["id"] == sid),
+            schemas.StolikOut.model_validate(s).model_dump(),
+        )
+        guarded_fields = set(schemas.StolikIn.model_fields) - {"rewir_nr"}
+        if any(canonical[field] != getattr(dane, field) for field in guarded_fields):
+            _wymagaj_szkicu_planu(
+                "Właściwości stołu zmieniaj w szkicu sali. Zmiana będzie widoczna po publikacji."
+            )
+        # Powiązanie POS pozostaje celowo poza snapshotem planu. Nie kopiujemy
+        # reszty payloadu do stabilnego rekordu, bo opublikowany snapshot jest
+        # jedynym źródłem właściwości operacyjnych.
+        s.rewir_nr = dane.rewir_nr
+        db.commit()
+        canonical["rewir_nr"] = s.rewir_nr
+        return canonical
     if (
         previous_room_id != dane.sala_id
         and (
@@ -2124,6 +2195,7 @@ def _waliduj_sklad_kombinacji(db, stoliki):
     for sid in ids:
         if not db.get(models.Stolik, sid):
             raise HTTPException(400, f"Nieznany stolik (id={sid}).")
+    _wymagaj_legacy_stolikow_poza_planem(db, ids)
     nieaktywne = [sid for sid in ids if not db.get(models.Stolik, sid).aktywny]
     if nieaktywne:
         raise HTTPException(
@@ -2152,9 +2224,7 @@ def _pojemnosc_kombinacji(db, ids, minimum, maksimum) -> int:
 
 @app.get("/api/kombinacje", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def get_kombinacje(db: Session = Depends(get_db)):
-    rows = db.query(models.KombinacjaStolow).order_by(
-        models.KombinacjaStolow.priorytet, models.KombinacjaStolow.id).all()
-    return {"kombinacje": [schemas.KombinacjaStolowOut.model_validate(k).model_dump() for k in rows]}
+    return {"kombinacje": _kombinacje_do_odczytu(db)}
 
 
 @app.post("/api/kombinacje", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -2175,6 +2245,7 @@ def edytuj_kombinacje(kid: int, dane: schemas.KombinacjaStolowIn, db: Session = 
     k = db.get(models.KombinacjaStolow, kid)
     if not k:
         raise HTTPException(404, "Brak kombinacji.")
+    _wymagaj_legacy_stolikow_poza_planem(db, k.stoliki)
     ids = _waliduj_sklad_kombinacji(db, dane.stoliki)
     pojemnosc_max = _pojemnosc_kombinacji(
         db, ids, dane.pojemnosc_min, dane.pojemnosc_max)
@@ -2189,6 +2260,7 @@ def edytuj_kombinacje(kid: int, dane: schemas.KombinacjaStolowIn, db: Session = 
 def usun_kombinacje(kid: int, db: Session = Depends(get_db)):
     k = db.get(models.KombinacjaStolow, kid)
     if k:
+        _wymagaj_legacy_stolikow_poza_planem(db, k.stoliki)
         db.delete(k); db.commit()
 
 
@@ -2229,8 +2301,7 @@ def usun_wyjatek_kalendarza(wid: int, db: Session = Depends(get_db)):
 # ── Graf sąsiedztwa stołów (auto-kombinacje w silniku) ────────────────────────
 @app.get("/api/sasiedztwo", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def get_sasiedztwo(db: Session = Depends(get_db)):
-    rows = db.query(models.SasiedztwoStolow).order_by(models.SasiedztwoStolow.id).all()
-    return {"krawedzie": [{"id": k.id, "stolik_a": k.stolik_a, "stolik_b": k.stolik_b} for k in rows]}
+    return {"krawedzie": _sasiedztwo_do_odczytu(db)}
 
 
 @app.post("/api/sasiedztwo", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -2240,6 +2311,7 @@ def dodaj_sasiedztwo(dane: schemas.SasiedztwoStolowIn, db: Session = Depends(get
         raise HTTPException(400, "Sąsiedztwo łączy dwa RÓŻNE stoły.")
     if not db.get(models.Stolik, a) or not db.get(models.Stolik, b):
         raise HTTPException(400, "Nieznany stolik.")
+    _wymagaj_legacy_stolikow_poza_planem(db, (a, b))
     if db.query(models.SasiedztwoStolow).filter_by(stolik_a=a, stolik_b=b).first():
         raise HTTPException(409, "Ta para stołów już sąsiaduje.")
     k = models.SasiedztwoStolow(stolik_a=a, stolik_b=b)
@@ -2251,6 +2323,7 @@ def dodaj_sasiedztwo(dane: schemas.SasiedztwoStolowIn, db: Session = Depends(get
 def usun_sasiedztwo(kid: int, db: Session = Depends(get_db)):
     k = db.get(models.SasiedztwoStolow, kid)
     if k:
+        _wymagaj_legacy_stolikow_poza_planem(db, (k.stolik_a, k.stolik_b))
         db.delete(k); db.commit()
 
 
@@ -2264,9 +2337,15 @@ def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), o
     godz_do = _dodaj_minuty(godz_od, _turn_time(serwis, osoby))
     zajete = _zajete_stoly(db, data, godz_od, godz_do)
     pref = {"strefa": strefa} if strefa else None
-    kandydaci = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
-                                zajete=zajete, preferencje=pref, sasiedztwo=_sasiedztwo_do_seating(db),
-                                obciazenie_sekcji=_obciazenie_sekcji(db, data, godz_od, godz_do))
+    kandydaci = seating.dopasuj(
+        osoby,
+        _stoly_do_seating(db),
+        _kombinacje_do_seating(db, kanal="wewnetrzna"),
+        zajete=zajete,
+        preferencje=pref,
+        sasiedztwo=_sasiedztwo_do_seating(db),
+        obciazenie_sekcji=_obciazenie_sekcji(db, data, godz_od, godz_do),
+    )
     return {"data": str(data), "godz_od": _hm(godz_od), "godz_do": _hm(godz_do),
             "osoby": osoby, "kandydaci": kandydaci}
 
@@ -2289,9 +2368,15 @@ def auto_przydziel_stolik(
     serwis = _serwis_dla_godziny(db, t.data, t.godz_od)
     godz_do = t.godz_do or _dodaj_minuty(t.godz_od, _turn_time(serwis, osoby))
     zajete = _zajete_stoly(db, t.data, t.godz_od, godz_do, pomin_id=rid)
-    wynik = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
-                            zajete=zajete, limit=1, sasiedztwo=_sasiedztwo_do_seating(db),
-                            obciazenie_sekcji=_obciazenie_sekcji(db, t.data, t.godz_od, godz_do))
+    wynik = seating.dopasuj(
+        osoby,
+        _stoly_do_seating(db),
+        _kombinacje_do_seating(db, kanal="wewnetrzna"),
+        zajete=zajete,
+        limit=1,
+        sasiedztwo=_sasiedztwo_do_seating(db),
+        obciazenie_sekcji=_obciazenie_sekcji(db, t.data, t.godz_od, godz_do),
+    )
     if not wynik:
         raise reservation_service.ReservationError(
             409,
@@ -2513,14 +2598,31 @@ def host_os_czasu(
     """Oś czasu hosta: stoły × godziny + paski zajętości. Rezerwacje dnia rozbite na stoły składowe
     (kombinacja → osobny pasek na każdym stole), żeby front narysował siatkę obrotu."""
     dzien = data or date.today()
-    stoly = [{"id": s.id, "nazwa": s.nazwa, "sekcja": s.sekcja or s.strefa, "strefa": s.strefa}
-             for s in db.query(models.Stolik).filter_by(aktywny=True)
-             .order_by(models.Stolik.kolejnosc, models.Stolik.id).all()]
-    godziny = [_hm(g) for g, _ in _sloty_dnia(db, dzien)]
-    zajetosci = []
     rez = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == dzien,
         models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).order_by(models.Termin.godz_od).all()
+    przypisane_ids = set().union(*(_stoly_terminu(t) for t in rez)) if rez else set()
+    runtime_stoly = {stolik["id"]: stolik for stolik in _stoly_do_seating(db)}
+    # Wyłączenie sali zatrzymuje nowe przydziały, ale nie może osierocić paska już
+    # przypisanej rezerwacji. Do osi dokładamy więc wyłącznie historycznie użyte
+    # stoły z pełnego published/legacy adaptera odczytowego.
+    for stolik in _stoliki_do_odczytu(db):
+        if stolik["id"] in przypisane_ids and stolik["id"] not in runtime_stoly:
+            runtime_stoly[stolik["id"]] = stolik
+    stoly = [
+        {
+            "id": stolik["id"],
+            "nazwa": stolik["nazwa"],
+            "sekcja": stolik.get("sekcja") or stolik.get("strefa"),
+            "strefa": stolik.get("strefa"),
+        }
+        for stolik in sorted(
+            runtime_stoly.values(),
+            key=lambda row: (row.get("kolejnosc") or 0, row["id"]),
+        )
+    ]
+    godziny = [_hm(g) for g, _ in _sloty_dnia(db, dzien)]
+    zajetosci = []
     for t in rez:
         godz_do = t.godz_do or _dodaj_minuty(t.godz_od, _dlugosc_dla(db, dzien, t.godz_od, t.liczba_osob))
         for sid in sorted(_stoly_terminu(t)):
@@ -2643,7 +2745,7 @@ def host_posadz_rezerwacje(
         wynik = seating.dopasuj(
             osoby,
             _stoly_do_seating(db),
-            _kombinacje_do_seating(db),
+            _kombinacje_do_seating(db, kanal="wewnetrzna"),
             zajete=zajete,
             limit=1,
             sasiedztwo=_sasiedztwo_do_seating(db),
@@ -2872,7 +2974,10 @@ def edytuj_rezerwacje_stolik(
     )
     godz_do = _waliduj_przydzial_rezerwacji(
         db, dane.data, dane.godz_od, dane.godz_do, stoliki, dane.liczba_osob,
-        pomin_id=rid, pojemnosc_override=pojemnosc_override)
+        pomin_id=rid,
+        pojemnosc_override=pojemnosc_override,
+        zachowaj_nieaktywny_przydzial=zachowaj_przydzial,
+    )
     if zachowaj_przydzial and len(stoliki) > 1 and dane.liczba_osob != t.liczba_osob:
         _waliduj_rozmiar_zachowanej_kombinacji(db, stoliki, dane.liczba_osob)
     t.data = dane.data
@@ -2896,7 +3001,12 @@ def edytuj_rezerwacje_stolik(
         override_details = (
             _szczegoly_przekroczenia_pacingu(db, t) if override_limitow else None
         )
-        _zastap_ledger_terminu(db, t, enforce_pacing=not override_limitow)
+        _zastap_ledger_terminu(
+            db,
+            t,
+            enforce_pacing=not override_limitow,
+            zachowaj_nieaktywny_przydzial=zachowaj_przydzial,
+        )
         reservation_audit.add_reservation_audit(
             db,
             termin=t,
@@ -2943,11 +3053,7 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
     # globalnie po rosnącym ID, zanim pierwsza rezerwacja zacznie zmieniać
     # przydział. Kolejne blokady podzbiorów są już wtedy reentrantne w tej
     # samej transakcji. SQLite nadal polega na BEGIN IMMEDIATE powyżej.
-    active_table_ids = [
-        stolik_id
-        for (stolik_id,) in db.query(models.Stolik.id).filter_by(aktywny=True)
-        .order_by(models.Stolik.id).all()
-    ]
+    active_table_ids = sorted(stolik["id"] for stolik in _stoly_do_seating(db))
     reservation_service.lock_tables(db, active_table_ids)
     przesadzone = []
     auto = (db.query(models.Termin).filter(
@@ -2963,9 +3069,15 @@ def _po_zwolnieniu_stolu(db, data, godz_od, godz_do) -> dict:
         osoby = max(1, t.liczba_osob or 1)
         obecne = _stoly_terminu(t)
         zajete = _zajete_stoly(db, data, t.godz_od, t_do, pomin_id=t.id)
-        wynik = seating.dopasuj(osoby, _stoly_do_seating(db), _kombinacje_do_seating(db),
-                                zajete=zajete, limit=0, sasiedztwo=_sasiedztwo_do_seating(db),
-                                obciazenie_sekcji=_obciazenie_sekcji(db, data, t.godz_od, t_do))
+        wynik = seating.dopasuj(
+            osoby,
+            _stoly_do_seating(db),
+            _kombinacje_do_seating(db, kanal="wewnetrzna"),
+            zajete=zajete,
+            limit=0,
+            sasiedztwo=_sasiedztwo_do_seating(db),
+            obciazenie_sekcji=_obciazenie_sekcji(db, data, t.godz_od, t_do),
+        )
         if not wynik:
             continue
         najlepszy = wynik[0]
@@ -3351,7 +3463,8 @@ def hold_lista_oczekujacych(
         raise HTTPException(409, "Wpis nie oczekuje już na stolik.")
     locked_tables = reservation_service.lock_tables(db, [dane.stolik_id])
     stolik = locked_tables[0] if locked_tables else None
-    if not stolik or not stolik.aktywny:
+    runtime_table_ids = {table["id"] for table in _stoly_do_seating(db)}
+    if not stolik or dane.stolik_id not in runtime_table_ids:
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
     if w.godz_od:                                   # gdy znamy porę — sprawdź wolność stołu w oknie gościa
         godz_do = _dodaj_minuty(w.godz_od, _dlugosc_dla(db, w.data, w.godz_od, w.liczba_osob))
@@ -3461,16 +3574,299 @@ def _zajete_stoly(db, data, godz_od, godz_do, pomin_id=None) -> set:
     )
 
 
+def _wersjonowane_stoliki_ids(db) -> set[int]:
+    """Stoły należące do sal, które weszły już do wersjonowanego workflow.
+
+    Brak published nie przywraca legacy fallbacku: pierwszy szkic również nie może
+    domieszać nieopublikowanych danych do działającego serwisu.
+    """
+    rooms = db.query(
+        models.SalaRezerwacyjna.id,
+        models.SalaRezerwacyjna.nazwa,
+    ).join(
+        models.PlanSali,
+        models.PlanSali.sala_id == models.SalaRezerwacyjna.id,
+    ).all()
+    room_ids = {room_id for room_id, _name in rooms}
+    room_names = {(name or "").strip().casefold() for _room_id, name in rooms}
+    return {
+        stolik.id
+        for stolik in db.query(models.Stolik).all()
+        if stolik.sala_id in room_ids
+        or (
+            stolik.sala_id is None
+            and (stolik.strefa or "").strip().casefold() in room_names
+        )
+    }
+
+
+_SNAPSHOT_REQUIRED_FALLBACK_FIELDS = frozenset({"nazwa", "kolejnosc", "pojemnosc"})
+
+
+def _snapshot_value(pozycja, stolik, field):
+    value = getattr(pozycja, field, None)
+    if value is None and field in _SNAPSHOT_REQUIRED_FALLBACK_FIELDS:
+        return getattr(stolik, field, None)
+    return value
+
+
+def _opublikowane_pozycje_stolikow(db):
+    return (
+        db.query(
+            models.PozycjaStolikaPlanu,
+            models.Stolik,
+            models.SalaRezerwacyjna,
+        )
+        .join(
+            models.WersjaPlanuSali,
+            models.WersjaPlanuSali.id == models.PozycjaStolikaPlanu.wersja_id,
+        )
+        .join(models.PlanSali, models.PlanSali.id == models.WersjaPlanuSali.plan_id)
+        .join(
+            models.SalaRezerwacyjna,
+            models.SalaRezerwacyjna.id == models.PlanSali.sala_id,
+        )
+        .join(models.Stolik, models.Stolik.id == models.PozycjaStolikaPlanu.stolik_id)
+        .filter(models.WersjaPlanuSali.status == "published")
+        .all()
+    )
+
+
+def _nieaktywne_sale_runtime(db):
+    """Sale wyłączone z nowych przydziałów, także dla legacy fallbacku ``strefa``.
+
+    ``SalaRezerwacyjna.aktywna`` steruje dostępnością operacyjną całej sali, nie
+    widocznością jej konfiguracji ani historii. Nazwę legacy uznajemy za wyłączoną
+    tylko wtedy, gdy nie istnieje równocześnie aktywna sala o tej samej nazwie.
+    """
+    sale = db.query(
+        models.SalaRezerwacyjna.id,
+        models.SalaRezerwacyjna.nazwa,
+        models.SalaRezerwacyjna.aktywna,
+    ).all()
+    aktywne_nazwy = {
+        (nazwa or "").strip().casefold()
+        for _sala_id, nazwa, aktywna in sale
+        if aktywna
+    }
+    nieaktywne_nazwy = {
+        (nazwa or "").strip().casefold()
+        for _sala_id, nazwa, aktywna in sale
+        if not aktywna
+    } - aktywne_nazwy
+    return (
+        {sala_id for sala_id, _nazwa, aktywna in sale if not aktywna},
+        nieaktywne_nazwy,
+    )
+
+
+def _snapshot_stolika_do_odczytu(pozycja, stolik, sala):
+    """Stary kontrakt ``StolikOut`` zasilony kanonicznym published snapshotem."""
+    return {
+        "id": stolik.id,
+        "nazwa": _snapshot_value(pozycja, stolik, "nazwa"),
+        "sala_id": sala.id,
+        "strefa": sala.nazwa,
+        "pojemnosc": _snapshot_value(pozycja, stolik, "pojemnosc"),
+        # ``laczy_sie`` i ``rewir_nr`` nie są dziś częścią wersji planu.
+        "laczy_sie": stolik.laczy_sie,
+        "aktywny": pozycja.aktywny_w_planie,
+        "kolejnosc": _snapshot_value(pozycja, stolik, "kolejnosc"),
+        "rewir_nr": stolik.rewir_nr,
+        "pojemnosc_min": _snapshot_value(pozycja, stolik, "pojemnosc_min"),
+        "ksztalt": _snapshot_value(pozycja, stolik, "ksztalt"),
+        "cechy": _snapshot_value(pozycja, stolik, "cechy"),
+        "priorytet": _snapshot_value(pozycja, stolik, "priorytet"),
+        "sekcja": _snapshot_value(pozycja, stolik, "sekcja"),
+        "wersja_id": pozycja.wersja_id,
+    }
+
+
+def _stoliki_do_odczytu(db):
+    """Published snapshot dla sal wersjonowanych, pełny legacy odczyt poza nimi.
+
+    Endpoint konfiguracyjny historycznie zwracał również nieaktywne stoły, dlatego
+    nie filtrujemy ``aktywny_w_planie``. Rekord istniejący wyłącznie w draftcie nie
+    pojawia się aż do publikacji.
+    """
+    out = [
+        _snapshot_stolika_do_odczytu(pozycja, stolik, sala)
+        for pozycja, stolik, sala in _opublikowane_pozycje_stolikow(db)
+    ]
+    versioned_ids = _wersjonowane_stoliki_ids(db)
+    out.extend(
+        {
+            **schemas.StolikOut.model_validate(stolik).model_dump(),
+            "wersja_id": None,
+        }
+        for stolik in db.query(models.Stolik).all()
+        if stolik.id not in versioned_ids
+    )
+    out.sort(key=lambda row: (row.get("kolejnosc") or 0, row["id"]))
+    # Nie rozszerzamy publicznego kontraktu o techniczne ``wersja_id``.
+    return [schemas.StolikOut.model_validate(row).model_dump() for row in out]
+
+
 def _stoly_do_seating(db):
-    return [{"id": s.id, "nazwa": s.nazwa, "pojemnosc": s.pojemnosc, "pojemnosc_min": s.pojemnosc_min,
-             "cechy": s.cechy or [], "priorytet": s.priorytet or 0, "strefa": s.strefa,
-             "sekcja": s.sekcja or s.strefa}
-            for s in db.query(models.Stolik).filter_by(aktywny=True).all()]
+    """Kandydaci do nowych przydziałów: aktywne sale i stoły z published snapshotu."""
+    out = []
+    for pozycja, stolik, sala in _opublikowane_pozycje_stolikow(db):
+        if not sala.aktywna or not pozycja.aktywny_w_planie:
+            continue
+        snapshot = _snapshot_stolika_do_odczytu(pozycja, stolik, sala)
+        out.append({
+            **snapshot,
+            "pojemnosc": snapshot["pojemnosc"] or 0,
+            "cechy": snapshot["cechy"] or [],
+            "priorytet": snapshot["priorytet"] or 0,
+            "sekcja": snapshot["sekcja"] or snapshot["strefa"],
+            "kolejnosc": snapshot["kolejnosc"] or 0,
+        })
+
+    versioned_ids = _wersjonowane_stoliki_ids(db)
+    inactive_room_ids, inactive_room_names = _nieaktywne_sale_runtime(db)
+    for stolik in (
+        db.query(models.Stolik)
+        .filter(models.Stolik.aktywny.is_(True))
+        .order_by(models.Stolik.kolejnosc, models.Stolik.id)
+        .all()
+    ):
+        if stolik.id in versioned_ids:
+            continue
+        if stolik.sala_id in inactive_room_ids or (
+            stolik.sala_id is None
+            and (stolik.strefa or "").strip().casefold() in inactive_room_names
+        ):
+            continue
+        out.append({
+            "id": stolik.id,
+            "nazwa": stolik.nazwa,
+            "pojemnosc": stolik.pojemnosc or 0,
+            "pojemnosc_min": stolik.pojemnosc_min,
+            "ksztalt": stolik.ksztalt,
+            "cechy": stolik.cechy or [],
+            "priorytet": stolik.priorytet or 0,
+            "strefa": stolik.strefa,
+            "sekcja": stolik.sekcja or stolik.strefa,
+            "kolejnosc": stolik.kolejnosc or 0,
+            "sala_id": stolik.sala_id,
+            "rewir_nr": stolik.rewir_nr,
+            "wersja_id": None,
+        })
+    return sorted(out, key=lambda row: (row["kolejnosc"], row["id"]))
 
 
 def _sasiedztwo_do_seating(db):
-    """Krawędzie grafu sąsiedztwa dla silnika (auto-kombinacje)."""
-    return [(k.stolik_a, k.stolik_b) for k in db.query(models.SasiedztwoStolow).all()]
+    """Wyłącznie legacy graf dla stołów poza wersjonowanymi planami.
+
+    Published adjacency służy walidacji/edytorowi. Runtime nigdy nie generuje z
+    niego dowolnych podgrafów; dla wersjonowanej sali wymagane są jawne kombinacje.
+    """
+    versioned_ids = _wersjonowane_stoliki_ids(db)
+    return [
+        (k.stolik_a, k.stolik_b)
+        for k in db.query(models.SasiedztwoStolow).all()
+        if k.stolik_a not in versioned_ids and k.stolik_b not in versioned_ids
+    ]
+
+
+def _sasiedztwo_do_odczytu(db):
+    """Bieżące published krawędzie + legacy wyłącznie poza wersjonowanymi salami."""
+    out = [
+        {
+            # Ujemny identyfikator jest tylko namespace'em adaptera legacy.
+            "id": -edge.id,
+            "stolik_a": edge.stolik_a_id,
+            "stolik_b": edge.stolik_b_id,
+        }
+        for edge in (
+            db.query(models.KrawedzSasiedztwaPlanu)
+            .join(
+                models.WersjaPlanuSali,
+                models.WersjaPlanuSali.id == models.KrawedzSasiedztwaPlanu.wersja_id,
+            )
+            .filter(models.WersjaPlanuSali.status == "published")
+            .all()
+        )
+    ]
+    versioned_ids = _wersjonowane_stoliki_ids(db)
+    out.extend(
+        {"id": edge.id, "stolik_a": edge.stolik_a, "stolik_b": edge.stolik_b}
+        for edge in db.query(models.SasiedztwoStolow).all()
+        if edge.stolik_a not in versioned_ids and edge.stolik_b not in versioned_ids
+    )
+    return sorted(out, key=lambda row: row["id"])
+
+
+def _kombinacje_snapshotu_do_odczytu(db):
+    published_ids = {
+        version_id
+        for (version_id,) in db.query(models.WersjaPlanuSali.id).filter_by(
+            status="published",
+        ).all()
+    }
+    if not published_ids:
+        return []
+    combinations = (
+        db.query(models.KombinacjaStolowPlanu)
+        .filter(models.KombinacjaStolowPlanu.wersja_id.in_(published_ids))
+        .all()
+    )
+    members = defaultdict(list)
+    combination_ids = [combination.id for combination in combinations]
+    if combination_ids:
+        for combination_id, table_id in (
+            db.query(
+                models.SkladnikKombinacjiPlanu.kombinacja_id,
+                models.SkladnikKombinacjiPlanu.stolik_id,
+            )
+            .filter(models.SkladnikKombinacjiPlanu.kombinacja_id.in_(combination_ids))
+            .order_by(
+                models.SkladnikKombinacjiPlanu.kombinacja_id,
+                models.SkladnikKombinacjiPlanu.stolik_id,
+            )
+            .all()
+        ):
+            members[combination_id].append(table_id)
+    return [
+        {
+            "id": combination.id,
+            "wersja_id": combination.wersja_id,
+            "nazwa": combination.nazwa,
+            "stoliki": members.get(combination.id, []),
+            "pojemnosc_min": combination.pojemnosc_min,
+            "pojemnosc_max": combination.pojemnosc_max,
+            "aktywna": combination.aktywna_w_planie,
+            "priorytet": combination.priorytet or 0,
+            "kanal": combination.kanal,
+        }
+        for combination in combinations
+    ]
+
+
+def _kombinacje_do_odczytu(db):
+    """Stary kontrakt listy, bez domieszania legacy danych wersjonowanych sal."""
+    out = [
+        {**combination, "id": -combination["id"]}
+        for combination in _kombinacje_snapshotu_do_odczytu(db)
+    ]
+    versioned_ids = _wersjonowane_stoliki_ids(db)
+    out.extend(
+        {
+            **schemas.KombinacjaStolowOut.model_validate(combination).model_dump(),
+            "wersja_id": None,
+            "kanal": "oba",
+        }
+        for combination in db.query(models.KombinacjaStolow).all()
+        if not (_ids_stolikow(combination.stoliki) & versioned_ids)
+    )
+    out.sort(key=lambda row: (row["priorytet"], row["id"]))
+    # Kanał i wersja są danymi technicznymi nowego snapshotu, a legacy endpoint
+    # zachowuje dotychczasowy kształt odpowiedzi.
+    return [
+        schemas.KombinacjaStolowOut.model_validate(row).model_dump()
+        for row in out
+    ]
 
 
 def _obciazenie_sekcji(db, data, godz_od, godz_do, pomin_id=None):
@@ -3479,40 +3875,83 @@ def _obciazenie_sekcji(db, data, godz_od, godz_do, pomin_id=None):
     if not zajete:
         return {}
     obc = {}
-    for s in db.query(models.Stolik).filter(models.Stolik.id.in_(zajete)).all():
-        sek = s.sekcja or s.strefa
+    by_id = {stolik["id"]: stolik for stolik in _stoly_do_seating(db)}
+    for stolik_id in zajete:
+        stolik = by_id.get(stolik_id)
+        if stolik is None:
+            continue
+        sek = stolik["sekcja"] or stolik["strefa"]
         if sek:
             obc[sek] = obc.get(sek, 0) + 1
     return obc
 
 
-def _kombinacje_do_seating(db):
-    return [{"id": k.id, "nazwa": k.nazwa, "stoliki": k.stoliki or [],
-             "pojemnosc_min": k.pojemnosc_min, "pojemnosc_max": k.pojemnosc_max,
-             "priorytet": k.priorytet or 0}
-            for k in db.query(models.KombinacjaStolow).filter_by(aktywna=True).all()]
+def _kombinacje_do_seating(db, kanal=None):
+    """Jawne published kombinacje oraz legacy fallback poza wersjonowanymi salami."""
+    runtime_table_ids = {stolik["id"] for stolik in _stoly_do_seating(db)}
+    out = []
+    for combination in _kombinacje_snapshotu_do_odczytu(db):
+        if not combination["aktywna"]:
+            continue
+        if kanal and combination["kanal"] not in ("oba", kanal):
+            continue
+        table_ids = combination["stoliki"]
+        if len(table_ids) < 2 or not set(table_ids) <= runtime_table_ids:
+            continue
+        out.append({
+            key: value for key, value in combination.items()
+            if key != "aktywna"
+        })
+
+    versioned_ids = _wersjonowane_stoliki_ids(db)
+    for combination in (
+        db.query(models.KombinacjaStolow)
+        .filter_by(aktywna=True)
+        .order_by(models.KombinacjaStolow.priorytet, models.KombinacjaStolow.id)
+        .all()
+    ):
+        table_ids = _ids_stolikow(combination.stoliki)
+        if not table_ids or table_ids & versioned_ids:
+            continue
+        out.append({
+            "id": combination.id,
+            "wersja_id": None,
+            "nazwa": combination.nazwa,
+            "stoliki": combination.stoliki or [],
+            "pojemnosc_min": combination.pojemnosc_min,
+            "pojemnosc_max": combination.pojemnosc_max,
+            "priorytet": combination.priorytet or 0,
+            "kanal": "oba",
+        })
+    return out
 
 
 def _wybierz_wolny_stolik(db, data, godz_od, godz_do, osoby, pomin_id=None):
     """Najmniejszy wolny aktywny stolik mieszczący 'osoby' w oknie [godz_od, godz_do]. None gdy brak.
     pomin_id = id rezerwacji, której NIE wliczać do zajętości (edycja własnej rezerwacji)."""
     zajete = _zajete_stoly(db, data, godz_od, godz_do, pomin_id=pomin_id)
-    kandydaci = sorted([s for s in db.query(models.Stolik).filter_by(aktywny=True).all()
-                        if (s.pojemnosc or 0) >= max(1, osoby or 1)],
-                       key=lambda s: (s.pojemnosc, s.id))
-    for s in kandydaci:
-        if s.id not in zajete:
-            return s
+    kandydaci = sorted(
+        [
+            stolik for stolik in _stoly_do_seating(db)
+            if stolik["pojemnosc"] >= max(1, osoby or 1)
+        ],
+        key=lambda stolik: (stolik["pojemnosc"], stolik["id"]),
+    )
+    for stolik in kandydaci:
+        if stolik["id"] not in zajete:
+            return stolik
     return None
 
 
-def _wybierz_wolny_przydzial(db, data, godz_od, godz_do, osoby, pomin_id=None):
+def _wybierz_wolny_przydzial(
+    db, data, godz_od, godz_do, osoby, pomin_id=None, kanal="wewnetrzna",
+):
     """Najlepszy pojedynczy stół lub dozwolona kombinacja ze wspólnego silnika sadzania."""
     zajete = _zajete_stoly(db, data, godz_od, godz_do, pomin_id=pomin_id)
     wyniki = seating.dopasuj(
         max(1, osoby or 1),
         _stoly_do_seating(db),
-        _kombinacje_do_seating(db),
+        _kombinacje_do_seating(db, kanal=kanal),
         zajete=zajete,
         limit=1,
         sasiedztwo=_sasiedztwo_do_seating(db),
@@ -3531,7 +3970,7 @@ def _pierwszy_wolny_slot(db, data, osoby, cfg, teraz_lok):
         if _pacing_pelny(db, data, g, serwis, osoby):
             continue
         g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
-        if _wybierz_wolny_przydzial(db, data, g, g_do, osoby):
+        if _wybierz_wolny_przydzial(db, data, g, g_do, osoby, kanal="online"):
             return (g, serwis)
     return None
 
@@ -3562,14 +4001,24 @@ def online_dostepnosc(data: date = Query(...), osoby: int = 2, db: Session = Dep
     if cfg.rez_okno_wyprzedzenia_dni and data > teraz_lok.date() + timedelta(days=cfg.rez_okno_wyprzedzenia_dni):
         return {"data": str(data), "osoby": osoby, "sloty": []}       # poza oknem wyprzedzenia
     pary = _sloty_dnia(db, data)                                       # blackout → [] (znika sam)
-    stoliki = [s for s in db.query(models.Stolik).filter_by(aktywny=True).all() if (s.pojemnosc or 0) >= osoby]
+    stoliki = [
+        stolik for stolik in _stoly_do_seating(db)
+        if stolik["pojemnosc"] >= osoby
+    ]
     out = []
     for g, serwis in pary:
         if cfg.rez_cutoff_min and (datetime.combine(data, g) - teraz_lok).total_seconds() < cfg.rez_cutoff_min * 60:
             continue                                                   # slot po cutoffie — nie pokazuj
         g_do = _dodaj_minuty(g, _turn_time(serwis, osoby))
-        wolne_stoly = sum(1 for s in stoliki if not _stolik_zajety(db, data, s.id, g, g_do))
-        ma_przydzial = bool(_wybierz_wolny_przydzial(db, data, g, g_do, osoby))
+        wolne_stoly = sum(
+            1 for stolik in stoliki
+            if not _stolik_zajety(db, data, stolik["id"], g, g_do)
+        )
+        ma_przydzial = bool(
+            _wybierz_wolny_przydzial(
+                db, data, g, g_do, osoby, kanal="online",
+            )
+        )
         pacing_pelny = _pacing_pelny(db, data, g, serwis, osoby)
         # 'wolne' = efektywnie wolne (0 gdy pacing wyczerpany) — zgodne wstecznie z widgetem gościa.
         out.append({"godz_od": _hm(g), "wolne": (0 if pacing_pelny else max(wolne_stoly, int(ma_przydzial))),
@@ -3687,6 +4136,7 @@ def online_rezerwacja(
         godz_do = _dodaj_minuty(dane.godz_od, _turn_time(serwis, dane.liczba_osob))
         przydzial = _wybierz_wolny_przydzial(
             db, dane.data, dane.godz_od, godz_do, dane.liczba_osob,
+            kanal="online",
         )
         if not przydzial:
             raise reservation_service.ReservationError(
@@ -3881,7 +4331,7 @@ def online_rezerwacja_edytuj(token: str, dane: schemas.OnlineEdytujIn, db: Sessi
     serwis = _serwis_dla_godziny(db, data, godz_od)
     godz_do = _dodaj_minuty(godz_od, _turn_time(serwis, osoby))
     przydzial = _wybierz_wolny_przydzial(
-        db, data, godz_od, godz_do, osoby, pomin_id=t.id,
+        db, data, godz_od, godz_do, osoby, pomin_id=t.id, kanal="online",
     )
     if not przydzial:
         raise reservation_service.ReservationError(

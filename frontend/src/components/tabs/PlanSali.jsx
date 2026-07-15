@@ -6,9 +6,26 @@ import { registerReservationLeaveGuard } from '../../lib/reservationLeaveGuard'
 import { Banner } from '../ui/Banner'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
+import { PillSwitch } from '../ui/PillSwitch'
 import { useToast } from '../ui/Toast'
+import {
+  cloneEditorSnapshot,
+  combinationKey,
+  edgeKey,
+  editorSignature,
+  findStructuralSeating,
+  isConnectedSet,
+  neighborIds,
+  normalizeCombinations,
+  normalizeEdges,
+  proposeConnectedCombinations,
+} from './floorPlanEditor'
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0))
+const positiveInteger = (value, fallback = 1) => {
+  const parsed = Math.round(Number(value))
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback
+}
 const polishNoun = (value, one, few, many) => {
   const count = Math.abs(Number(value) || 0)
   const lastTwo = count % 100
@@ -47,6 +64,14 @@ const geometry = (table, index = 0, count = 1) => {
   const fallbackX = Math.round((((index % columns) + 0.5) / columns) * 84 + 8)
   const fallbackY = Math.round(((Math.floor(index / columns) + 0.5) / rows) * 84 + 8)
   return {
+    nazwa: table.nazwa ?? `Stół ${index + 1}`,
+    kolejnosc: table.kolejnosc ?? index,
+    pojemnosc: table.pojemnosc ?? 2,
+    pojemnosc_min: table.pojemnosc_min ?? 1,
+    ksztalt: table.ksztalt ?? null,
+    cechy: Array.isArray(table.cechy) ? [...table.cechy] : [],
+    priorytet: table.priorytet ?? 0,
+    sekcja: table.sekcja ?? null,
     plan_x: table.plan_x ?? fallbackX,
     plan_y: table.plan_y ?? fallbackY,
     szerokosc: table.szerokosc ?? 12,
@@ -58,12 +83,6 @@ const geometry = (table, index = 0, count = 1) => {
 
 const geometryMap = (tables = []) => Object.fromEntries(
   tables.map((table, index) => [table.id, geometry(table, index, tables.length)]),
-)
-
-const signature = (positions) => JSON.stringify(
-  Object.entries(positions)
-    .sort(([first], [second]) => Number(first) - Number(second))
-    .map(([id, value]) => [Number(id), value]),
 )
 
 function RoomsSkeleton() {
@@ -95,6 +114,17 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
   const [planError, setPlanError] = useState(null)
   const [mode, setMode] = useState('published')
   const [positions, setPositions] = useState({})
+  const [edges, setEdges] = useState([])
+  const [combinations, setCombinations] = useState([])
+  const [editorTool, setEditorTool] = useState('layout')
+  const [connectionStartId, setConnectionStartId] = useState(null)
+  const [connectionTargetId, setConnectionTargetId] = useState('')
+  const [connectionFeedback, setConnectionFeedback] = useState(null)
+  const [history, setHistory] = useState({ past: [], future: [] })
+  const [featureDrafts, setFeatureDrafts] = useState({})
+  const [checkerPeople, setCheckerPeople] = useState(18)
+  const [checkerChannel, setCheckerChannel] = useState('wewnetrzna')
+  const [checkerResult, setCheckerResult] = useState(null)
   const [selectedTableId, setSelectedTableId] = useState(null)
   const [busy, setBusy] = useState(null)
   const [conflict, setConflict] = useState(null)
@@ -111,14 +141,20 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
   const selectedRoomIdRef = useRef(selectedRoomId)
   const readControllersRef = useRef(new Set())
   const mutationControllerRef = useRef(null)
-  const baselineRef = useRef('{}')
+  const baselineRef = useRef(editorSignature({}, [], []))
   const positionsRef = useRef(positions)
+  const edgesRef = useRef(edges)
+  const combinationsRef = useRef(combinations)
+  const historyRef = useRef(history)
   const planRef = useRef(plan)
   const modeRef = useRef(mode)
   const busyRef = useRef(busy)
   const canvasRef = useRef(null)
   const dragRef = useRef(null)
   positionsRef.current = positions
+  edgesRef.current = edges
+  combinationsRef.current = combinations
+  historyRef.current = history
   planRef.current = plan
   modeRef.current = mode
   busyRef.current = busy
@@ -133,7 +169,43 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     () => tables.find((table) => table.id === selectedTableId) || null,
     [selectedTableId, tables],
   )
-  const dirty = mode === 'draft' && signature(positions) !== baselineRef.current
+  const selectedProperties = selectedTable
+    ? positions[selectedTable.id] || geometry(selectedTable)
+    : null
+  const selectedNeighborIds = useMemo(
+    () => neighborIds(selectedTableId, edges),
+    [edges, selectedTableId],
+  )
+  const selectedNeighbors = useMemo(
+    () => selectedNeighborIds.map((id) => {
+      const table = tables.find((item) => item.id === id)
+      return table ? { ...table, ...positions[id] } : null
+    }).filter(Boolean),
+    [positions, selectedNeighborIds, tables],
+  )
+  const activeTables = useMemo(
+    () => tables
+      .filter((table) => positions[table.id]?.aktywny_w_planie !== false)
+      .map((table) => ({ ...table, ...positions[table.id] })),
+    [positions, tables],
+  )
+  const proposalFocusTable = useMemo(
+    () => activeTables.find((table) => table.id === selectedTableId) || null,
+    [activeTables, selectedTableId],
+  )
+  const proposedCombinations = useMemo(
+    () => proposalFocusTable
+      ? proposeConnectedCombinations(activeTables, edges, combinations, {
+        focusTableId: proposalFocusTable.id,
+      })
+      : [],
+    [activeTables, combinations, edges, proposalFocusTable],
+  )
+  const dirty = mode === 'draft'
+    && editorSignature(positions, edges, combinations) !== baselineRef.current
+  const invalidTableProperties = mode === 'draft'
+    ? tables.find((table) => !String(positions[table.id]?.nazwa || '').trim()) || null
+    : null
   const tableFormDirty = Boolean(
     mode === 'draft'
     && addingTable
@@ -183,6 +255,22 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     planRef.current = null
     setPlan(null)
     setPositions({})
+    positionsRef.current = {}
+    setEdges([])
+    edgesRef.current = []
+    setCombinations([])
+    combinationsRef.current = []
+    setHistory({ past: [], future: [] })
+    historyRef.current = { past: [], future: [] }
+    setFeatureDrafts({})
+    baselineRef.current = editorSignature({}, [], [])
+    modeRef.current = 'published'
+    setMode('published')
+    setEditorTool('layout')
+    setConnectionStartId(null)
+    setConnectionTargetId('')
+    setConnectionFeedback(null)
+    setCheckerResult(null)
     setSelectedTableId(null)
     setConflict(null)
     setAddingTable(false)
@@ -197,12 +285,24 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
 
   const installPlan = useCallback((response, nextMode) => {
     const nextPositions = geometryMap(response?.stoliki || [])
+    const nextEdges = normalizeEdges(response?.krawedzie || [])
+    const nextCombinations = normalizeCombinations(response?.kombinacje || [])
     planRef.current = response
     modeRef.current = nextMode
     setPlan(response)
     setPositions(nextPositions)
     positionsRef.current = nextPositions
-    baselineRef.current = signature(nextPositions)
+    setEdges(nextEdges)
+    edgesRef.current = nextEdges
+    setCombinations(nextCombinations)
+    combinationsRef.current = nextCombinations
+    setFeatureDrafts(Object.fromEntries(
+      Object.entries(nextPositions).map(([id, value]) => [id, (value.cechy || []).join(', ')]),
+    ))
+    baselineRef.current = editorSignature(nextPositions, nextEdges, nextCombinations)
+    const emptyHistory = { past: [], future: [] }
+    setHistory(emptyHistory)
+    historyRef.current = emptyHistory
     setMode(nextMode)
     setSelectedTableId((current) => (
       response?.stoliki?.some((table) => table.id === current)
@@ -210,6 +310,11 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
         : response?.stoliki?.[0]?.id || null
     ))
     if (nextMode === 'published') setTableFeedback(null)
+    setEditorTool('layout')
+    setConnectionStartId(null)
+    setConnectionTargetId('')
+    setConnectionFeedback(null)
+    setCheckerResult(null)
     setConflict(null)
     setPlanError(null)
   }, [])
@@ -324,7 +429,21 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     modeRef.current = 'published'
     setPlan(null)
     setPositions({})
+    positionsRef.current = {}
+    setEdges([])
+    edgesRef.current = []
+    setCombinations([])
+    combinationsRef.current = []
+    const emptyHistory = { past: [], future: [] }
+    setHistory(emptyHistory)
+    historyRef.current = emptyHistory
+    setFeatureDrafts({})
     setMode('published')
+    setEditorTool('layout')
+    setConnectionStartId(null)
+    setConnectionTargetId('')
+    setConnectionFeedback(null)
+    setCheckerResult(null)
     setSelectedTableId(null)
     setAddingTable(false)
     setNewTableName('')
@@ -336,6 +455,14 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     event.preventDefault()
     const name = newRoomName.trim()
     if (!name || busy) return
+    if (dirty || tableFormDirty) {
+      const discard = await confirm('Dodać nową salę i odrzucić niezapisane zmiany tej sali?', {
+        title: 'Niezapisany szkic',
+        confirmText: 'Dodaj i odrzuć zmiany',
+        cancelText: 'Zostań tutaj',
+      })
+      if (!discard) return
+    }
     const controller = new AbortController()
     mutationControllerRef.current = controller
     setBusy('room')
@@ -365,7 +492,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
   const createTable = async (event) => {
     event.preventDefault()
     const name = newTableName.trim()
-    const capacity = Math.round(clamp(newTableCapacity, 1, 50))
+    const capacity = positiveInteger(newTableCapacity, 2)
     if (!name || !selectedRoomId || mode !== 'draft' || !plan?.wersja || busy) return
     let currentPlan = plan
     if (dirty) {
@@ -446,34 +573,172 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     }
   }
 
-  const setTableGeometry = useCallback((tableId, patch) => {
-    if (busyRef.current) return
-    setPositions((current) => {
-      const previous = current[tableId]
-      if (!previous) return current
-      const merged = { ...previous, ...patch }
-      merged.szerokosc = Math.round(clamp(merged.szerokosc, 8, 32))
-      merged.wysokosc = Math.round(clamp(merged.wysokosc, 8, 32))
-      merged.obrot = ((Math.round(Number(merged.obrot) || 0) % 360) + 360) % 360
-      const halfExtent = rotatedHalfExtents(
-        merged.szerokosc,
-        merged.wysokosc,
-        merged.obrot,
-        canvasRef.current,
-      )
-      merged.plan_x = clamp(
-        Math.round(Number(merged.plan_x) || 0),
-        Math.ceil(halfExtent.x),
-        Math.floor(100 - halfExtent.x),
-      )
-      merged.plan_y = clamp(
-        Math.round(Number(merged.plan_y) || 0),
-        Math.ceil(halfExtent.y),
-        Math.floor(100 - halfExtent.y),
-      )
-      return { ...current, [tableId]: merged }
-    })
+  const currentEditorSnapshot = useCallback(() => cloneEditorSnapshot(
+    positionsRef.current,
+    edgesRef.current,
+    combinationsRef.current,
+  ), [])
+
+  const applyEditorSnapshot = useCallback((snapshot) => {
+    const next = cloneEditorSnapshot(snapshot.positions, snapshot.edges, snapshot.combinations)
+    positionsRef.current = next.positions
+    edgesRef.current = next.edges
+    combinationsRef.current = next.combinations
+    setPositions(next.positions)
+    setEdges(next.edges)
+    setCombinations(next.combinations)
+    setFeatureDrafts(Object.fromEntries(
+      Object.entries(next.positions).map(([id, value]) => [id, (value.cechy || []).join(', ')]),
+    ))
+    setConnectionStartId(null)
+    setConnectionTargetId('')
+    setConnectionFeedback(null)
+    setCheckerResult(null)
   }, [])
+
+  const pushHistory = useCallback((snapshot) => {
+    const nextHistory = {
+      past: [...historyRef.current.past, snapshot].slice(-50),
+      future: [],
+    }
+    historyRef.current = nextHistory
+    setHistory(nextHistory)
+  }, [])
+
+  const undoEditor = useCallback(() => {
+    if (modeRef.current !== 'draft' || busyRef.current || historyRef.current.past.length === 0) return
+    const previous = historyRef.current.past.at(-1)
+    const nextHistory = {
+      past: historyRef.current.past.slice(0, -1),
+      future: [currentEditorSnapshot(), ...historyRef.current.future].slice(0, 50),
+    }
+    historyRef.current = nextHistory
+    setHistory(nextHistory)
+    applyEditorSnapshot(previous)
+    setAnnouncement('Cofnięto ostatnią zmianę planu.')
+  }, [applyEditorSnapshot, currentEditorSnapshot])
+
+  const redoEditor = useCallback(() => {
+    if (modeRef.current !== 'draft' || busyRef.current || historyRef.current.future.length === 0) return
+    const nextSnapshot = historyRef.current.future[0]
+    const nextHistory = {
+      past: [...historyRef.current.past, currentEditorSnapshot()].slice(-50),
+      future: historyRef.current.future.slice(1),
+    }
+    historyRef.current = nextHistory
+    setHistory(nextHistory)
+    applyEditorSnapshot(nextSnapshot)
+    setAnnouncement('Ponowiono ostatnią zmianę planu.')
+  }, [applyEditorSnapshot, currentEditorSnapshot])
+
+  const handleEditorShortcut = (event) => {
+    if (mode !== 'draft' || busy) return
+    if (event.key === 'Escape' && connectionStartId) {
+      event.preventDefault()
+      setConnectionStartId(null)
+      setAnnouncement('Anulowano wybór pierwszego stołu.')
+      return
+    }
+    const textEntry = event.target instanceof HTMLElement
+      && (event.target.matches('input:not([data-editor-history]), textarea, [contenteditable="true"]'))
+    if (textEntry || !(event.ctrlKey || event.metaKey)) return
+    if (event.key.toLowerCase() === 'z' && event.shiftKey) {
+      event.preventDefault()
+      redoEditor()
+    } else if (event.key.toLowerCase() === 'z') {
+      event.preventDefault()
+      undoEditor()
+    } else if (event.key.toLowerCase() === 'y') {
+      event.preventDefault()
+      redoEditor()
+    }
+  }
+
+  const setTableGeometry = useCallback((tableId, patch, { record = true } = {}) => {
+    if (busyRef.current) return
+    if (patch.aktywny_w_planie === false) {
+      const activeCombination = combinationsRef.current.find((combination) => (
+        combination.aktywna_w_planie && combination.stoliki.includes(Number(tableId))
+      ))
+      if (activeCombination) {
+        setPlanError({
+          message: `Stół należy do zestawu „${activeCombination.nazwa}”. Najpierw usuń ten zestaw.`,
+          action: null,
+        })
+        return
+      }
+    }
+    const current = positionsRef.current
+    const previous = current[tableId]
+    if (!previous) return
+    const merged = { ...previous, ...patch }
+    merged.nazwa = String(merged.nazwa ?? '').slice(0, 32)
+    merged.kolejnosc = Math.max(0, Math.round(Number(merged.kolejnosc) || 0))
+    merged.pojemnosc = positiveInteger(
+      merged.pojemnosc,
+      positiveInteger(previous.pojemnosc, 1),
+    )
+    merged.pojemnosc_min = Math.round(clamp(merged.pojemnosc_min, 1, merged.pojemnosc))
+    merged.ksztalt = String(merged.ksztalt || '').trim().slice(0, 16) || null
+    merged.cechy = [...new Set((Array.isArray(merged.cechy) ? merged.cechy : [])
+      .map((item) => String(item).trim())
+      .filter(Boolean))]
+    merged.priorytet = Math.round(Number(merged.priorytet) || 0)
+    merged.sekcja = String(merged.sekcja || '').slice(0, 32) || null
+    merged.szerokosc = Math.round(clamp(merged.szerokosc, 8, 32))
+    merged.wysokosc = Math.round(clamp(merged.wysokosc, 8, 32))
+    merged.obrot = ((Math.round(Number(merged.obrot) || 0) % 360) + 360) % 360
+    const halfExtent = rotatedHalfExtents(
+      merged.szerokosc,
+      merged.wysokosc,
+      merged.obrot,
+      canvasRef.current,
+    )
+    merged.plan_x = clamp(
+      Math.round(Number(merged.plan_x) || 0),
+      Math.ceil(halfExtent.x),
+      Math.floor(100 - halfExtent.x),
+    )
+    merged.plan_y = clamp(
+      Math.round(Number(merged.plan_y) || 0),
+      Math.ceil(halfExtent.y),
+      Math.floor(100 - halfExtent.y),
+    )
+    if (JSON.stringify(previous) === JSON.stringify(merged)) return
+    let nextCombinations = combinationsRef.current
+    let combinationsAdjusted = false
+    if (Object.prototype.hasOwnProperty.call(patch, 'pojemnosc')) {
+      nextCombinations = normalizeCombinations(combinationsRef.current.map((combination) => {
+        if (!combination.stoliki.includes(Number(tableId))) return combination
+        const physicalCapacity = combination.stoliki.reduce((sum, memberId) => (
+          sum + Number(memberId === Number(tableId)
+            ? merged.pojemnosc
+            : current[memberId]?.pojemnosc || 0)
+        ), 0)
+        const maximum = Math.min(combination.pojemnosc_max, physicalCapacity)
+        const minimum = Math.min(combination.pojemnosc_min, maximum)
+        if (maximum !== combination.pojemnosc_max || minimum !== combination.pojemnosc_min) {
+          combinationsAdjusted = true
+        }
+        return {
+          ...combination,
+          pojemnosc_max: maximum,
+          pojemnosc_min: minimum,
+        }
+      }))
+    }
+    if (record) pushHistory(currentEditorSnapshot())
+    const nextPositions = { ...current, [tableId]: merged }
+    positionsRef.current = nextPositions
+    setPositions(nextPositions)
+    setPlanError((currentError) => currentError?.action === null ? null : currentError)
+    if (combinationsAdjusted) {
+      combinationsRef.current = nextCombinations
+      setCombinations(nextCombinations)
+      setTableFeedback({ type: 'success', message: 'Dostosowano zakres zatwierdzonego zestawu do nowej liczby miejsc.' })
+    }
+    setCheckerResult(null)
+  }, [currentEditorSnapshot, pushHistory])
 
   const announcePosition = useCallback((tableId) => {
     const table = tables.find((item) => item.id === tableId)
@@ -481,8 +746,139 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     if (table && next) setAnnouncement(`${table.nazwa}: X ${Math.round(next.plan_x)}%, Y ${Math.round(next.plan_y)}%.`)
   }, [tables])
 
+  const nameForTable = (tableId) => positionsRef.current[Number(tableId)]?.nazwa
+    || tables.find((table) => table.id === Number(tableId))?.nazwa
+    || `Stół ${tableId}`
+
+  const toggleEdge = (firstId, secondId) => {
+    if (mode !== 'draft' || busy) return false
+    const key = edgeKey(firstId, secondId)
+    if (!key) return false
+    const exists = edgesRef.current.some((edge) => edgeKey(edge.stolik_a_id, edge.stolik_b_id) === key)
+    const [stolikA, stolikB] = key.split(':').map(Number)
+    const nextEdges = exists
+      ? edgesRef.current.filter((edge) => edgeKey(edge.stolik_a_id, edge.stolik_b_id) !== key)
+      : normalizeEdges([...edgesRef.current, { stolik_a_id: stolikA, stolik_b_id: stolikB }])
+    if (exists) {
+      const disconnected = combinationsRef.current.find((combination) => (
+        !isConnectedSet(combination.stoliki, nextEdges)
+      ))
+      if (disconnected) {
+        setConnectionFeedback({
+          type: 'error',
+          message: `Połączenie należy do zdefiniowanego zestawu „${disconnected.nazwa}”. Najpierw usuń ten zestaw.`,
+        })
+        return false
+      }
+    }
+    pushHistory(currentEditorSnapshot())
+    edgesRef.current = nextEdges
+    setEdges(nextEdges)
+    setConnectionFeedback({
+      type: 'success',
+      message: exists
+        ? `Usunięto połączenie ${nameForTable(stolikA)} – ${nameForTable(stolikB)}.`
+        : `Połączono ${nameForTable(stolikA)} i ${nameForTable(stolikB)}.`,
+    })
+    setCheckerResult(null)
+    return true
+  }
+
+  const handleTableClick = (tableId) => {
+    setSelectedTableId(tableId)
+    if (mode !== 'draft' || editorTool !== 'connect' || busy) return
+    if (!connectionStartId) {
+      setConnectionStartId(tableId)
+      setConnectionFeedback(null)
+      setAnnouncement(`${nameForTable(tableId)} wybrany. Wybierz sąsiedni stół.`)
+      return
+    }
+    if (connectionStartId === tableId) {
+      setConnectionStartId(null)
+      setAnnouncement('Anulowano wybór pierwszego stołu.')
+      return
+    }
+    if (toggleEdge(connectionStartId, tableId)) setConnectionStartId(null)
+  }
+
+  const addTextConnection = (event) => {
+    event.preventDefault()
+    if (!selectedTableId || !connectionTargetId) return
+    if (toggleEdge(selectedTableId, Number(connectionTargetId))) setConnectionTargetId('')
+  }
+
+  const approveCombination = (proposal) => {
+    if (mode !== 'draft' || busy) return
+    pushHistory(currentEditorSnapshot())
+    const nextCombinations = normalizeCombinations([...combinationsRef.current, proposal])
+    combinationsRef.current = nextCombinations
+    setCombinations(nextCombinations)
+    setConnectionFeedback({ type: 'success', message: `Zatwierdzono zestaw „${proposal.nazwa}”.` })
+    setCheckerResult(null)
+  }
+
+  const updateCombination = (key, patch) => {
+    if (mode !== 'draft' || busy) return
+    const current = combinationsRef.current
+    const index = current.findIndex((combination) => combinationKey(combination) === key)
+    if (index < 0) return
+    const updated = { ...current[index], ...patch }
+    const physicalCapacity = updated.stoliki.reduce((sum, tableId) => (
+      sum + Number(positionsRef.current[tableId]?.pojemnosc || 0)
+    ), 0)
+    if (patch.pojemnosc_min != null) {
+      updated.pojemnosc_min = Math.max(
+        1,
+        Math.min(Number(patch.pojemnosc_min) || 1, updated.pojemnosc_max, physicalCapacity),
+      )
+    }
+    if (patch.pojemnosc_max != null) {
+      updated.pojemnosc_max = Math.max(
+        updated.pojemnosc_min,
+        Math.min(Number(patch.pojemnosc_max) || updated.pojemnosc_min, physicalCapacity),
+      )
+    }
+    const nextCombinations = normalizeCombinations(current.map((combination, itemIndex) => (
+      itemIndex === index ? updated : combination
+    )))
+    if (editorSignature(positionsRef.current, edgesRef.current, current)
+      === editorSignature(positionsRef.current, edgesRef.current, nextCombinations)) return
+    pushHistory(currentEditorSnapshot())
+    combinationsRef.current = nextCombinations
+    setCombinations(nextCombinations)
+    setCheckerResult(null)
+  }
+
+  const removeCombination = (key) => {
+    if (mode !== 'draft' || busy) return
+    const combination = combinationsRef.current.find((item) => combinationKey(item) === key)
+    if (!combination) return
+    pushHistory(currentEditorSnapshot())
+    const nextCombinations = combinationsRef.current.filter((item) => combinationKey(item) !== key)
+    combinationsRef.current = nextCombinations
+    setCombinations(nextCombinations)
+    setConnectionFeedback({ type: 'success', message: `Usunięto zestaw „${combination.nazwa}” ze szkicu.` })
+    setCheckerResult(null)
+  }
+
+  const checkStructure = (event) => {
+    event.preventDefault()
+    const people = positiveInteger(checkerPeople, 18)
+    const activeIds = new Set(activeTables.map((table) => table.id))
+    const activeCombinations = combinations.filter((combination) => (
+      combination.stoliki.every((tableId) => activeIds.has(tableId))
+    ))
+    setCheckerPeople(people)
+    setCheckerResult({
+      people,
+      match: findStructuralSeating(activeTables, activeCombinations, people, {
+        channel: checkerChannel,
+      }),
+    })
+  }
+
   const onTableKeyDown = (event, tableId) => {
-    if (mode !== 'draft' || busy || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+    if (mode !== 'draft' || editorTool !== 'layout' || busy || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
     event.preventDefault()
     const step = event.shiftKey ? 5 : 1
     const current = positionsRef.current[tableId]
@@ -497,7 +893,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
 
   const onPointerDown = (event, tableId) => {
     setSelectedTableId(tableId)
-    if (mode !== 'draft' || busy || !canvasRef.current) return
+    if (mode !== 'draft' || editorTool !== 'layout' || busy || !canvasRef.current) return
     const rect = canvasRef.current.getBoundingClientRect()
     const current = positionsRef.current[tableId]
     if (!current) return
@@ -505,6 +901,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     dragRef.current = {
       tableId,
       pointerId: event.pointerId,
+      snapshot: currentEditorSnapshot(),
       offsetX: ((event.clientX - rect.left) / rect.width) * 100 - current.plan_x,
       offsetY: ((event.clientY - rect.top) / rect.height) * 100 - current.plan_y,
     }
@@ -517,12 +914,19 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
     setTableGeometry(drag.tableId, {
       plan_x: ((event.clientX - rect.left) / rect.width) * 100 - drag.offsetX,
       plan_y: ((event.clientY - rect.top) / rect.height) * 100 - drag.offsetY,
-    })
+    }, { record: false })
   }
 
   const endPointer = (event) => {
-    const tableId = dragRef.current?.tableId
-    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null
+    const drag = dragRef.current
+    const tableId = drag?.tableId
+    if (drag?.pointerId === event.pointerId) {
+      dragRef.current = null
+      if (drag.snapshot && editorSignature(drag.snapshot.positions, drag.snapshot.edges, drag.snapshot.combinations)
+        !== editorSignature(positionsRef.current, edgesRef.current, combinationsRef.current)) {
+        pushHistory(drag.snapshot)
+      }
+    }
     if (tableId) announcePosition(tableId)
   }
 
@@ -532,10 +936,19 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
       stolik_id: table.id,
       ...positionsRef.current[table.id],
     })),
+    krawedzie: normalizeEdges(edgesRef.current),
+    kombinacje: normalizeCombinations(combinationsRef.current),
   })
 
   const persistDraft = async ({ quiet = false } = {}) => {
     if (mode !== 'draft' || !plan?.wersja || busy) return plan
+    if (invalidTableProperties) {
+      setPlanError({
+        message: `Uzupełnij nazwę stołu #${invalidTableProperties.id} przed zapisaniem szkicu.`,
+        action: null,
+      })
+      return null
+    }
     const controller = new AbortController()
     mutationControllerRef.current = controller
     setBusy('save')
@@ -654,7 +1067,20 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
       setPlan(null)
       setPositions({})
       positionsRef.current = {}
-      baselineRef.current = '{}'
+      setEdges([])
+      edgesRef.current = []
+      setCombinations([])
+      combinationsRef.current = []
+      const emptyHistory = { past: [], future: [] }
+      setHistory(emptyHistory)
+      historyRef.current = emptyHistory
+      setFeatureDrafts({})
+      baselineRef.current = editorSignature({}, [], [])
+      setEditorTool('layout')
+      setConnectionStartId(null)
+      setConnectionTargetId('')
+      setConnectionFeedback(null)
+      setCheckerResult(null)
       setSelectedTableId(null)
       setAddingTable(false)
       setTableFeedback(null)
@@ -715,7 +1141,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
   }
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden" onKeyDown={handleEditorShortcut}>
       <div className="lg:grid lg:grid-cols-[14rem_minmax(0,1fr)]">
         <aside className="border-b border-line p-4 lg:border-b-0 lg:border-r lg:p-5" aria-label="Sale">
           <div className="flex items-center justify-between gap-3">
@@ -852,8 +1278,8 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                         {addingTable ? 'Anuluj dodawanie' : 'Dodaj stół'}
                       </Button>
                       <Button variant="ghost" size="sm" onClick={discardDraft} loading={busy === 'discard'} loadingLabel="Odrzucam…" disabled={Boolean(busy)}>Odrzuć</Button>
-                      <Button variant="ghost" size="sm" onClick={() => persistDraft()} loading={busy === 'save'} loadingLabel="Zapisuję…" disabled={Boolean(busy) || !dirty}>Zapisz szkic</Button>
-                      <Button variant="primary" size="sm" onClick={publishDraft} loading={busy === 'publish'} loadingLabel="Publikuję…" disabled={Boolean(busy)}>Opublikuj</Button>
+                      <Button variant="ghost" size="sm" onClick={() => persistDraft()} loading={busy === 'save'} loadingLabel="Zapisuję…" disabled={Boolean(busy) || !dirty || Boolean(invalidTableProperties)}>Zapisz szkic</Button>
+                      <Button variant="primary" size="sm" onClick={publishDraft} loading={busy === 'publish'} loadingLabel="Publikuję…" disabled={Boolean(busy) || Boolean(invalidTableProperties)}>Opublikuj</Button>
                     </>
                   )}
                 </div>
@@ -878,7 +1304,6 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                     <input
                       type="number"
                       min="1"
-                      max="50"
                       value={newTableCapacity}
                       onChange={(event) => setNewTableCapacity(event.target.value)}
                       className="field mt-1.5"
@@ -904,7 +1329,9 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                   <Banner variant="danger">
                     <div className="flex flex-wrap items-center gap-3">
                       <span>{planError.message}</span>
-                      <Button variant="ghost" size="sm" onClick={retryPlanError}>Spróbuj ponownie</Button>
+                      {planError.action ? (
+                        <Button variant="ghost" size="sm" onClick={retryPlanError}>Spróbuj ponownie</Button>
+                      ) : null}
                     </div>
                   </Banner>
                 </div>
@@ -920,6 +1347,61 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                 </div>
               ) : null}
 
+              {mode === 'draft' && tables.length ? (
+                <div className="mt-5 flex flex-col gap-3 border-y border-line py-3 sm:flex-row sm:items-center sm:justify-between" role="toolbar" aria-label="Narzędzia edycji planu">
+                  <PillSwitch
+                    options={[
+                      { value: 'layout', label: 'Ustaw stoły' },
+                      { value: 'connect', label: 'Połącz stoły' },
+                    ]}
+                    value={editorTool}
+                    onChange={(nextTool) => {
+                      setEditorTool(nextTool)
+                      setConnectionStartId(null)
+                      setConnectionTargetId('')
+                      setConnectionFeedback(null)
+                      setAnnouncement(nextTool === 'connect'
+                        ? 'Tryb łączenia. Wybierz pierwszy stół, a potem stół stojący obok.'
+                        : 'Tryb ustawiania stołów.')
+                    }}
+                    label="Tryb edycji planu"
+                    disabled={Boolean(busy)}
+                    className="w-full sm:w-[21rem]"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={undoEditor}
+                      disabled={Boolean(busy) || history.past.length === 0}
+                      aria-keyshortcuts="Control+Z Meta+Z"
+                      className="flex-1 sm:flex-none"
+                    >
+                      Cofnij
+                    </Button>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={redoEditor}
+                      disabled={Boolean(busy) || history.future.length === 0}
+                      aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+                      className="flex-1 sm:flex-none"
+                    >
+                      Ponów
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
+              {connectionFeedback && mode === 'draft' && editorTool === 'connect' ? (
+                <p
+                  className={`mt-3 text-sm ${connectionFeedback.type === 'error' ? 'text-danger' : 'text-success'}`}
+                  role={connectionFeedback.type === 'error' ? 'alert' : 'status'}
+                >
+                  {connectionFeedback.message}
+                </p>
+              ) : null}
+
               <div className="mt-5">
                 {planLoading && !plan ? (
                   <PlanSkeleton />
@@ -933,6 +1415,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                     </div>
                   </div>
                 ) : (
+                  <>
                   <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_18rem]">
                     <div className="min-w-0">
                       <div className="overflow-x-auto pb-2">
@@ -945,32 +1428,63 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                           style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px)', backgroundSize: '24px 24px' }}
                           aria-label={`Plan: ${selectedRoom.nazwa}`}
                         >
+                        <svg
+                          aria-hidden="true"
+                          focusable="false"
+                          className="pointer-events-none absolute inset-0 z-0 h-full w-full"
+                          viewBox="0 0 100 100"
+                          preserveAspectRatio="none"
+                        >
+                          {edges.map((edge) => {
+                            const first = positions[edge.stolik_a_id]
+                            const second = positions[edge.stolik_b_id]
+                            if (!first || !second) return null
+                            const highlighted = connectionStartId === edge.stolik_a_id || connectionStartId === edge.stolik_b_id
+                            return (
+                              <line
+                                key={edgeKey(edge.stolik_a_id, edge.stolik_b_id)}
+                                x1={first.plan_x}
+                                y1={first.plan_y}
+                                x2={second.plan_x}
+                                y2={second.plan_y}
+                                vectorEffect="non-scaling-stroke"
+                                stroke={highlighted ? '#9DC4B1' : 'rgba(244,244,245,0.34)'}
+                                strokeWidth={highlighted ? 3 : 2}
+                                strokeDasharray={highlighted ? undefined : '5 4'}
+                              />
+                            )
+                          })}
+                        </svg>
                         {tables.map((table) => {
                           const value = positions[table.id] || geometry(table)
                           const selected = table.id === selectedTableId
+                          const connectionAnchor = table.id === connectionStartId
+                          const neighbors = neighborIds(table.id, edges)
+                            .map((id) => nameForTable(id))
+                            .join(', ')
                           return (
                             <button
                               key={table.id}
                               type="button"
                               onPointerDown={(event) => onPointerDown(event, table.id)}
                               onKeyDown={(event) => onTableKeyDown(event, table.id)}
-                              onClick={() => setSelectedTableId(table.id)}
+                              onClick={() => handleTableClick(table.id)}
                               disabled={Boolean(busy)}
-                              aria-pressed={selected}
-                              aria-label={`${table.nazwa}, ${table.pojemnosc} ${placesLabel(table.pojemnosc)}, ${value.aktywny_w_planie ? 'aktywny w planie' : 'nieaktywny w planie'}, pozycja X ${Math.round(value.plan_x)}%, Y ${Math.round(value.plan_y)}%`}
-                              className={`absolute grid min-h-11 min-w-11 place-items-center rounded-xl border text-center transition-[border-color,background-color,box-shadow] duration-150 ${value.aktywny_w_planie ? 'border-white/[0.16] bg-surface-2 text-ink' : 'border-line bg-bg/80 text-muted'} ${selected ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : 'hover:border-white/[0.24]'} ${busy ? 'cursor-wait' : mode === 'draft' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
+                              aria-pressed={editorTool === 'connect' && mode === 'draft' ? connectionAnchor : selected}
+                              aria-label={`${value.nazwa}, ${value.pojemnosc} ${placesLabel(value.pojemnosc)}, ${value.aktywny_w_planie ? 'aktywny w planie' : 'nieaktywny w planie'}, pozycja X ${Math.round(value.plan_x)}%, Y ${Math.round(value.plan_y)}%, ${neighbors ? `sąsiaduje z: ${neighbors}` : 'bez zaznaczonego sąsiedztwa'}`}
+                              className={`absolute z-10 grid min-h-11 min-w-11 place-items-center rounded-xl border text-center transition-[border-color,background-color,box-shadow] duration-150 ${value.aktywny_w_planie ? 'border-white/[0.16] bg-surface-2 text-ink' : 'border-line bg-bg/80 text-muted'} ${selected || connectionAnchor ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : 'hover:border-white/[0.24]'} ${busy ? 'cursor-wait' : mode === 'draft' && editorTool === 'layout' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
                               style={{
                                 left: `${value.plan_x}%`,
                                 top: `${value.plan_y}%`,
                                 width: `${value.szerokosc}%`,
                                 height: `${value.wysokosc}%`,
                                 transform: `translate(-50%, -50%) rotate(${value.obrot}deg)`,
-                                touchAction: mode === 'draft' && !busy ? 'none' : 'manipulation',
+                                touchAction: mode === 'draft' && editorTool === 'layout' && !busy ? 'none' : 'manipulation',
                               }}
                             >
                               <span style={{ transform: `rotate(${-value.obrot}deg)` }}>
-                                <span className="block max-w-[8rem] truncate px-1 text-xs font-semibold">{table.nazwa}</span>
-                                <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted"><Icon name="users" className="h-3 w-3" />{table.pojemnosc}</span>
+                                <span className="block max-w-[8rem] truncate px-1 text-xs font-semibold">{value.nazwa}</span>
+                                <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted"><Icon name="users" className="h-3 w-3" />{value.pojemnosc}</span>
                               </span>
                             </button>
                           )
@@ -978,22 +1492,130 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                         </div>
                       </div>
                       <p className="mt-3 text-xs leading-relaxed text-muted">
-                        {mode === 'draft' ? 'Przeciągnij stół albo zaznacz go i użyj strzałek. Shift + strzałka przesuwa o 5%. Na małym ekranie przesuń cały plan w bok.' : 'Wybierz stół, aby zobaczyć jego pozycję i rozmiar. Na małym ekranie przesuń cały plan w bok.'}
+                        {mode === 'draft' && editorTool === 'connect'
+                          ? connectionStartId
+                            ? `${nameForTable(connectionStartId)} wybrany. Wybierz stół stojący obok; Escape anuluje wybór.`
+                            : 'Wybierz pierwszy stół, a potem stół stojący obok. Na telefonie możesz użyć także listy tekstowej.'
+                          : mode === 'draft'
+                            ? 'Przeciągnij stół albo zaznacz go i użyj strzałek. Shift + strzałka przesuwa o 5%. Na małym ekranie przesuń cały plan w bok.'
+                            : 'Wybierz stół, aby zobaczyć jego pozycję, rozmiar i sąsiedztwo. Na małym ekranie przesuń cały plan w bok.'}
                       </p>
                     </div>
 
-                    <aside className="mt-5 border-t border-line pt-5 xl:mt-0 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0" aria-label="Właściwości stołu">
+                    <aside className="mt-5 border-t border-line pt-5 xl:mt-0 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0" aria-label="Szczegóły stołu">
                       {selectedTable ? (
                         <div>
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <h4 className="truncate text-base font-semibold text-ink" title={selectedTable.nazwa}>{selectedTable.nazwa}</h4>
-                              <p className="mt-1 text-xs text-muted">{selectedTable.pojemnosc} {placesLabel(selectedTable.pojemnosc)} · stabilny stół #{selectedTable.id}</p>
+                              <h4 className="truncate text-base font-semibold text-ink" title={selectedProperties.nazwa}>{selectedProperties.nazwa}</h4>
+                              <p className="mt-1 text-xs text-muted">{selectedProperties.pojemnosc} {placesLabel(selectedProperties.pojemnosc)} · stabilny stół #{selectedTable.id}</p>
                             </div>
                             <span className={`rounded-full px-2 py-1 text-[0.68rem] font-semibold ${positions[selectedTable.id]?.aktywny_w_planie ? 'bg-success/10 text-success' : 'bg-white/[0.05] text-muted'}`}>
                               {positions[selectedTable.id]?.aktywny_w_planie ? 'Aktywny' : 'Nieaktywny'}
                             </span>
                           </div>
+
+                          {mode !== 'draft' || editorTool === 'layout' ? <>
+                          <div className="mt-5 grid grid-cols-2 gap-3">
+                            <label className="field-label col-span-2">
+                              Nazwa na planie
+                              <input
+                                data-editor-history
+                                value={selectedProperties.nazwa}
+                                onChange={(event) => setTableGeometry(selectedTable.id, { nazwa: event.target.value })}
+                                maxLength={32}
+                                required
+                                disabled={mode !== 'draft' || Boolean(busy)}
+                                className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                              />
+                              {!selectedProperties.nazwa.trim() ? <span className="mt-1 block text-xs font-normal normal-case tracking-normal text-danger">Nazwa jest wymagana.</span> : null}
+                            </label>
+                            <label className="field-label">
+                              Miejsca przy stole
+                              <input
+                                data-editor-history
+                                type="number"
+                                min="1"
+                                value={selectedProperties.pojemnosc}
+                                onChange={(event) => setTableGeometry(selectedTable.id, { pojemnosc: Number(event.target.value) })}
+                                disabled={mode !== 'draft' || Boolean(busy)}
+                                className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                              />
+                            </label>
+                            <label className="field-label">
+                              Minimum osób
+                              <input
+                                data-editor-history
+                                type="number"
+                                min="1"
+                                max={selectedProperties.pojemnosc}
+                                value={selectedProperties.pojemnosc_min}
+                                onChange={(event) => setTableGeometry(selectedTable.id, { pojemnosc_min: Number(event.target.value) })}
+                                disabled={mode !== 'draft' || Boolean(busy)}
+                                className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                              />
+                            </label>
+                            <label className="field-label col-span-2">
+                              Kształt
+                              <select
+                                data-editor-history
+                                value={selectedProperties.ksztalt || ''}
+                                onChange={(event) => setTableGeometry(selectedTable.id, { ksztalt: event.target.value || null })}
+                                disabled={mode !== 'draft' || Boolean(busy)}
+                                className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                              >
+                                <option value="">Bez oznaczenia</option>
+                                {selectedProperties.ksztalt && !['kwadrat', 'okragly', 'prostokat'].includes(selectedProperties.ksztalt) ? (
+                                  <option value={selectedProperties.ksztalt}>{selectedProperties.ksztalt}</option>
+                                ) : null}
+                                <option value="kwadrat">Kwadratowy</option>
+                                <option value="okragly">Okrągły</option>
+                                <option value="prostokat">Prostokątny</option>
+                              </select>
+                            </label>
+                            <label className="field-label">
+                              Priorytet
+                              <input
+                                data-editor-history
+                                type="number"
+                                value={selectedProperties.priorytet}
+                                onChange={(event) => setTableGeometry(selectedTable.id, { priorytet: Number(event.target.value) })}
+                                disabled={mode !== 'draft' || Boolean(busy)}
+                                className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                              />
+                            </label>
+                            <label className="field-label">
+                              Sekcja
+                              <input
+                                data-editor-history
+                                value={selectedProperties.sekcja || ''}
+                                onChange={(event) => setTableGeometry(selectedTable.id, { sekcja: event.target.value })}
+                                maxLength={32}
+                                disabled={mode !== 'draft' || Boolean(busy)}
+                                className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                                placeholder="np. A"
+                              />
+                            </label>
+                            <label className="field-label col-span-2">
+                              Cechy
+                              <input
+                                data-editor-history
+                                value={featureDrafts[selectedTable.id] ?? (selectedProperties.cechy || []).join(', ')}
+                                onChange={(event) => {
+                                  const raw = event.target.value
+                                  setFeatureDrafts((current) => ({ ...current, [selectedTable.id]: raw }))
+                                  setTableGeometry(selectedTable.id, {
+                                    cechy: raw.split(',').map((item) => item.trim()).filter(Boolean),
+                                  })
+                                }}
+                                disabled={mode !== 'draft' || Boolean(busy)}
+                                className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                                placeholder="np. okno, loża, dostępny dla wózka"
+                              />
+                            </label>
+                          </div>
+
+                          <p className="mt-3 text-xs leading-relaxed text-muted">Niższa liczba zwiększa szansę wyboru przy podobnym dopasowaniu. Silnik nadal uwzględnia liczbę miejsc, łączenie stołów i pozostałe reguły.</p>
 
                           <div className="mt-5 grid grid-cols-2 gap-3">
                             {[
@@ -1012,6 +1634,7 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                                     max={max}
                                     value={Math.round(positions[selectedTable.id]?.[field] ?? 0)}
                                     onChange={(event) => setTableGeometry(selectedTable.id, { [field]: Number(event.target.value) })}
+                                    data-editor-history
                                     disabled={mode !== 'draft' || Boolean(busy)}
                                     className="field pr-8 normal-case tracking-normal"
                                     aria-label={`${label} stołu ${selectedTable.nazwa}`}
@@ -1035,12 +1658,258 @@ export default function PlanSali({ roomId, onRoomChange, active = true } = {}) {
                               className="h-5 w-5 accent-mint"
                             />
                           </label>
+                          </> : null}
+
+                          {mode === 'published' || editorTool === 'connect' ? (
+                            <section className="mt-5 border-t border-line pt-5" aria-labelledby={`connections-${selectedTable.id}`}>
+                              <h5 id={`connections-${selectedTable.id}`} className="text-sm font-semibold text-ink">Sąsiedztwo</h5>
+                              {selectedNeighbors.length ? (
+                                <ul className="mt-3 space-y-2" aria-label={`${selectedTable.nazwa} sąsiaduje z`}>
+                                  {selectedNeighbors.map((neighbor) => (
+                                    <li key={neighbor.id} className="flex min-h-11 items-center justify-between gap-2 border-b border-line pb-2 text-sm">
+                                      <span className="truncate text-ink" title={neighbor.nazwa}>{neighbor.nazwa}</span>
+                                      {mode === 'draft' ? (
+                                        <Button
+                                          variant="subtle"
+                                          size="sm"
+                                          onClick={() => toggleEdge(selectedTable.id, neighbor.id)}
+                                          disabled={Boolean(busy)}
+                                          aria-label={`Usuń połączenie ${selectedTable.nazwa} z ${neighbor.nazwa}`}
+                                        >
+                                          Usuń
+                                        </Button>
+                                      ) : null}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="mt-2 text-sm text-muted">Ten stół nie ma zaznaczonych sąsiadów.</p>
+                              )}
+
+                              {mode === 'draft' ? (
+                                <form className="mt-4 space-y-2" onSubmit={addTextConnection}>
+                                  <label className="field-label" htmlFor={`connection-target-${selectedTable.id}`}>Dodaj sąsiedni stół</label>
+                                  <select
+                                    id={`connection-target-${selectedTable.id}`}
+                                    className="field min-h-11 normal-case tracking-normal"
+                                    value={connectionTargetId}
+                                    onChange={(event) => setConnectionTargetId(event.target.value)}
+                                    disabled={Boolean(busy)}
+                                  >
+                                    <option value="">Wybierz stół</option>
+                                    {activeTables.filter((table) => (
+                                      table.id !== selectedTable.id && !selectedNeighborIds.includes(table.id)
+                                    )).map((table) => (
+                                      <option key={table.id} value={table.id}>{table.nazwa}</option>
+                                    ))}
+                                  </select>
+                                  <Button type="submit" variant="ghost" size="sm" className="w-full" disabled={Boolean(busy) || !connectionTargetId}>
+                                    Połącz stoły
+                                  </Button>
+                                </form>
+                              ) : null}
+                            </section>
+                          ) : null}
                         </div>
                       ) : (
                         <div className="py-8 text-center text-sm text-muted">Wybierz stół na planie.</div>
                       )}
                     </aside>
                   </div>
+
+                  {mode === 'published' || editorTool === 'connect' ? (
+                    <div className="mt-6 border-t border-line pt-6">
+                      <div className={`grid gap-7 ${mode === 'draft' ? 'lg:grid-cols-2' : ''}`}>
+                        {mode === 'draft' ? (
+                          <section aria-labelledby="proposed-combinations-heading">
+                            <h4 id="proposed-combinations-heading" className="text-base font-semibold text-ink">
+                              {proposalFocusTable ? `Proponowane zestawy dla ${proposalFocusTable.nazwa}` : 'Proponowane zestawy'}
+                            </h4>
+                            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Lista dotyczy wybranego stołu i powstaje tylko z jego połączeń. Dzięki temu każda część sali ma własne propozycje. Zestaw zacznie działać dopiero po zatwierdzeniu i publikacji planu.</p>
+                            {proposedCombinations.length ? (
+                              <ul className="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
+                                {proposedCombinations.map((proposal) => (
+                                  <li key={combinationKey(proposal)} className="flex min-h-14 items-center justify-between gap-3 border-b border-line py-2">
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-medium text-ink" title={proposal.nazwa}>{proposal.nazwa}</p>
+                                      <p className="mt-0.5 text-xs text-muted">{proposal.pojemnosc_min}–{proposal.pojemnosc_max} osób · maks. {proposal.stoliki.length} {tablesLabel(proposal.stoliki.length)}</p>
+                                    </div>
+                                    <Button variant="ghost" size="sm" onClick={() => approveCombination(proposal)} disabled={Boolean(busy)}>
+                                      Zatwierdź
+                                    </Button>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="mt-4 text-sm text-muted">
+                                {proposalFocusTable
+                                  ? 'Ten stół nie tworzy jeszcze nowego zestawu. Dodaj połączenie albo wybierz inny stół.'
+                                  : 'Wybierz aktywny stół na planie, aby zobaczyć jego propozycje.'}
+                              </p>
+                            )}
+                          </section>
+                        ) : null}
+
+                        <section aria-labelledby="approved-combinations-heading">
+                          <h4 id="approved-combinations-heading" className="text-base font-semibold text-ink">Zatwierdzone zestawy</h4>
+                          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Silnik może użyć tylko aktywnych zestawów, po zapisaniu i opublikowaniu planu.</p>
+                          {combinations.length ? (
+                            <ul className="mt-4 space-y-4">
+                              {combinations.map((combination) => {
+                                const key = combinationKey(combination)
+                                const physicalCapacity = combination.stoliki.reduce((sum, tableId) => (
+                                  sum + Number(positions[tableId]?.pojemnosc || 0)
+                                ), 0)
+                                const hasInactiveMember = combination.stoliki.some((tableId) => (
+                                  positions[tableId]?.aktywny_w_planie === false
+                                ))
+                                return (
+                                  <li key={key} className={`border-b border-line pb-4 ${combination.aktywna_w_planie ? '' : 'text-muted'}`}>
+                                    <div className="flex min-h-11 items-center justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <p className={`truncate text-sm font-semibold ${combination.aktywna_w_planie ? 'text-ink' : 'text-muted'}`} title={combination.nazwa}>{combination.nazwa}</p>
+                                          <span className={`rounded-full px-2 py-1 text-[0.68rem] font-semibold ${combination.aktywna_w_planie ? 'bg-success/10 text-success' : 'bg-white/[0.05] text-muted'}`}>
+                                            {combination.aktywna_w_planie ? 'Aktywny' : 'Wyłączony'}
+                                          </span>
+                                        </div>
+                                        {mode === 'published' ? (
+                                          <p className="mt-1 text-xs text-muted">{combination.pojemnosc_min}–{combination.pojemnosc_max} osób · {combination.kanal === 'oba' ? 'online i wewnętrznie' : combination.kanal === 'online' ? 'online' : 'wewnętrznie'}</p>
+                                        ) : null}
+                                      </div>
+                                      {mode === 'draft' ? (
+                                        <Button variant="subtle" size="sm" onClick={() => removeCombination(key)} disabled={Boolean(busy)} aria-label={`Usuń zestaw ${combination.nazwa}`}>
+                                          Usuń
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                    {mode === 'draft' ? (
+                                      <>
+                                      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                        <label className="field-label">
+                                          Od osób
+                                          <input
+                                            data-editor-history
+                                            type="number"
+                                            min="1"
+                                            max={combination.pojemnosc_max}
+                                            value={combination.pojemnosc_min}
+                                            onChange={(event) => updateCombination(key, { pojemnosc_min: Number(event.target.value) })}
+                                            className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                                            disabled={Boolean(busy)}
+                                          />
+                                        </label>
+                                        <label className="field-label">
+                                          Do osób
+                                          <input
+                                            data-editor-history
+                                            type="number"
+                                            min={combination.pojemnosc_min}
+                                            max={physicalCapacity}
+                                            value={combination.pojemnosc_max}
+                                            onChange={(event) => updateCombination(key, { pojemnosc_max: Number(event.target.value) })}
+                                            className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                                            disabled={Boolean(busy)}
+                                          />
+                                        </label>
+                                        <label className="field-label">
+                                          Kanał
+                                          <select
+                                            value={combination.kanal}
+                                            onChange={(event) => updateCombination(key, { kanal: event.target.value })}
+                                            className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                                            disabled={Boolean(busy)}
+                                          >
+                                            <option value="oba">Online i wewnętrznie</option>
+                                            <option value="wewnetrzna">Tylko wewnętrznie</option>
+                                            <option value="online">Tylko online</option>
+                                          </select>
+                                        </label>
+                                        <label className="field-label">
+                                          Priorytet obsadzania
+                                          <input
+                                            data-editor-history
+                                            type="number"
+                                            step="1"
+                                            value={combination.priorytet}
+                                            onChange={(event) => updateCombination(key, { priorytet: Number(event.target.value) })}
+                                            className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                                            disabled={Boolean(busy)}
+                                          />
+                                        </label>
+                                        <div>
+                                          <span className="field-label">Status</span>
+                                          <label className="mt-1.5 flex min-h-11 items-center gap-3 rounded-xl border border-line bg-surface-2 px-3 text-sm font-medium normal-case tracking-normal text-ink">
+                                            <input
+                                              type="checkbox"
+                                              checked={Boolean(combination.aktywna_w_planie)}
+                                              onChange={(event) => updateCombination(key, { aktywna_w_planie: event.target.checked })}
+                                              disabled={Boolean(busy) || hasInactiveMember}
+                                              aria-label={`Aktywny zestaw ${combination.nazwa}`}
+                                            />
+                                            {hasInactiveMember
+                                              ? 'Najpierw włącz stoły'
+                                              : combination.aktywna_w_planie ? 'Używany' : 'Wyłączony'}
+                                          </label>
+                                        </div>
+                                      </div>
+                                      <p className="mt-2 text-xs leading-relaxed text-muted">Niższa liczba zwiększa szansę wyboru przy podobnym dopasowaniu. Silnik nadal uwzględnia liczbę miejsc, liczbę łączonych stołów i pozostałe reguły.</p>
+                                      </>
+                                    ) : null}
+                                  </li>
+                                )
+                              })}
+                            </ul>
+                          ) : (
+                            <p className="mt-4 text-sm text-muted">Nie zatwierdzono jeszcze żadnego zestawu.</p>
+                          )}
+                        </section>
+                      </div>
+
+                      <section className="mt-7 border-t border-line pt-6" aria-labelledby="structure-check-heading">
+                        <h4 id="structure-check-heading" className="text-base font-semibold text-ink">Sprawdź układ</h4>
+                        <form className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={checkStructure}>
+                          <label className="field-label sm:w-40">
+                            Liczba osób
+                            <input
+                              type="number"
+                              min="1"
+                              value={checkerPeople}
+                              onChange={(event) => {
+                                setCheckerPeople(event.target.value)
+                                setCheckerResult(null)
+                              }}
+                              className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                            />
+                          </label>
+                          <label className="field-label sm:w-52">
+                            Kanał rezerwacji
+                            <select
+                              value={checkerChannel}
+                              onChange={(event) => {
+                                setCheckerChannel(event.target.value)
+                                setCheckerResult(null)
+                              }}
+                              className="field mt-1.5 min-h-11 normal-case tracking-normal"
+                            >
+                              <option value="wewnetrzna">Wewnętrzna / recepcja</option>
+                              <option value="online">Online</option>
+                            </select>
+                          </label>
+                          <Button type="submit" variant="ghost" size="sm">Sprawdź</Button>
+                        </form>
+                        <p className="mt-3 text-xs leading-relaxed text-muted">Sprawdzamy aktywne stoły i zestawy dostępne w wybranym kanale. Wynik stosuje ten sam podstawowy ranking co silnik, ale nie uwzględnia dostępności w konkretnym terminie ani bieżącego obciążenia sekcji.</p>
+                        {checkerResult ? (
+                          <p className={`mt-3 text-sm font-medium ${checkerResult.match ? 'text-success' : 'text-lemon'}`} role="status">
+                            {checkerResult.match
+                              ? `Ten układ obsłuży ${checkerResult.people} osób: ${checkerResult.match.name}.`
+                              : `Brak zatwierdzonego zestawu lub pojedynczego stołu dla ${checkerResult.people} osób.`}
+                          </p>
+                        ) : null}
+                      </section>
+                    </div>
+                  ) : null}
+                  </>
                 )}
               </div>
             </>

@@ -3,6 +3,7 @@ Ten test buduje bazę PRZEZ Alembic (upgrade head) i porównuje kolumny kluczowy
 to jedyny sposób złapać drift, którego create_all nie pokaże (np. osierocone/brakujące pole)."""
 
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -13,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0056_impreza_sale_min2_neutralny"
+HEAD = "0057_r22_topologia_planu"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -22,7 +23,8 @@ _TABELE = [
     "rezerwacje_idempotencja", "rezerwacje_dni_ledger", "rezerwacje_stoliki_claims",
     "rezerwacje_pacing_ledger", "reservation_audit", "users",
     "sale_rezerwacyjne", "plany_sali", "wersje_planu_sali",
-    "pozycje_stolikow_planu",
+    "pozycje_stolikow_planu", "krawedzie_sasiedztwa_planu",
+    "kombinacje_stolow_planu", "skladniki_kombinacji_planu",
 ]
 
 
@@ -186,6 +188,37 @@ def _prepare_r2_0052(db_file):
     upgraded = _alembic(env, "upgrade", "0052_reservation_audit")
     assert upgraded.returncode == 0, upgraded.stderr
     return env
+
+
+def _insert_valid_r22_topology(con):
+    version_id = con.execute(
+        "SELECT pos.wersja_id FROM pozycje_stolikow_planu pos "
+        "JOIN wersje_planu_sali w ON w.id=pos.wersja_id "
+        "WHERE pos.stolik_id=1 AND w.status='published'"
+    ).fetchone()[0]
+    assert con.execute(
+        "SELECT count(*) FROM pozycje_stolikow_planu "
+        "WHERE wersja_id=? AND stolik_id IN (1,2)",
+        (version_id,),
+    ).fetchone()[0] == 2
+    con.execute(
+        "INSERT INTO krawedzie_sasiedztwa_planu "
+        "(wersja_id,stolik_a_id,stolik_b_id) VALUES (?,?,?)",
+        (version_id, 1, 2),
+    )
+    combination_id = con.execute(
+        "INSERT INTO kombinacje_stolow_planu "
+        "(wersja_id,nazwa,sklad_klucz,pojemnosc_min,pojemnosc_max,"
+        " priorytet,kanal,aktywna_w_planie) VALUES (?,?,?,?,?,?,?,?)",
+        (version_id, "S1 + S2", "1,2", 5, 8, 0, "oba", 1),
+    ).lastrowid
+    con.executemany(
+        "INSERT INTO skladniki_kombinacji_planu "
+        "(kombinacja_id,wersja_id,stolik_id) VALUES (?,?,?)",
+        [(combination_id, version_id, 1), (combination_id, version_id, 2)],
+    )
+    con.commit()
+    return version_id, combination_id
 
 
 def _legacy_r2_snapshot(con):
@@ -384,7 +417,8 @@ def test_migracja_0053_round_trip_zachowuje_legacy_i_historyczne_fk(tmp_path):
         con.close()
     assert not {
         "sale_rezerwacyjne", "plany_sali", "wersje_planu_sali",
-        "pozycje_stolikow_planu",
+        "pozycje_stolikow_planu", "krawedzie_sasiedztwa_planu",
+        "kombinacje_stolow_planu", "skladniki_kombinacji_planu",
     } & downgraded_tables
     assert "sala_id" not in downgraded_columns
 
@@ -402,6 +436,267 @@ def test_migracja_0053_round_trip_zachowuje_legacy_i_historyczne_fk(tmp_path):
     finally:
         con.close()
     assert version == HEAD
+
+
+def test_migracja_0057_backfilluje_topologie_i_round_tripuje_published(tmp_path):
+    db_file = tmp_path / "_r22_topology_round_trip.db"
+    env = _prepare_r2_0052(db_file)
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "UPDATE stoliki SET pojemnosc_min=?, ksztalt=?, cechy=?, priorytet=?, sekcja=? "
+            "WHERE id=1",
+            (2, "okragly", '["okno"]', 4, "A"),
+        )
+        con.execute(
+            "INSERT INTO sasiedztwo_stolow (stolik_a, stolik_b) VALUES (?, ?)",
+            (1, 2),
+        )
+        con.execute(
+            "INSERT INTO kombinacje_stolow "
+            "(nazwa, stoliki, pojemnosc_min, pojemnosc_max, aktywna, priorytet) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("S1 + S2", "[1, 2]", 5, 8, 1, 3),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        properties = con.execute(
+            "SELECT nazwa, kolejnosc, pojemnosc, pojemnosc_min, ksztalt, cechy, "
+            "priorytet, sekcja FROM pozycje_stolikow_planu WHERE stolik_id=1"
+        ).fetchall()
+        edges = con.execute(
+            "SELECT e.stolik_a_id, e.stolik_b_id "
+            "FROM krawedzie_sasiedztwa_planu e "
+            "JOIN wersje_planu_sali w ON w.id=e.wersja_id "
+            "WHERE w.status='published'"
+        ).fetchall()
+        combinations = con.execute(
+            "SELECT k.nazwa, k.sklad_klucz, k.pojemnosc_min, k.pojemnosc_max, "
+            "k.priorytet, k.kanal, k.aktywna_w_planie, "
+            "group_concat(s.stolik_id, ',') "
+            "FROM kombinacje_stolow_planu k "
+            "JOIN wersje_planu_sali w ON w.id=k.wersja_id "
+            "JOIN skladniki_kombinacji_planu s ON s.kombinacja_id=k.id "
+            "WHERE w.status='published' GROUP BY k.id"
+        ).fetchall()
+        fk_errors = con.execute("PRAGMA foreign_key_check").fetchall()
+        con.execute(
+            "UPDATE pozycje_stolikow_planu SET "
+            "nazwa=?, kolejnosc=?, pojemnosc=?, pojemnosc_min=?, ksztalt=?, "
+            "cechy=?, priorytet=?, sekcja=? "
+            "WHERE stolik_id=1 AND wersja_id IN ("
+            "  SELECT id FROM wersje_planu_sali WHERE status='published'"
+            ")",
+            ("S1 VIP", 7, 6, 3, "prostokat", '["okno", "vip"]', 9, "VIP"),
+        )
+        con.commit()
+    finally:
+        con.close()
+    assert properties == [("S1", 0, 4, 2, "okragly", '["okno"]', 4, "A")]
+    assert edges == [(1, 2)]
+    assert combinations == [("S1 + S2", "1,2", 5, 8, 3, "oba", 1, "1,2")]
+    assert fk_errors == []
+
+    downgraded = _alembic(env, "downgrade", "0056_impreza_sale_min2_neutralny")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        position_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(pozycje_stolikow_planu)")
+        }
+        legacy_edges = con.execute(
+            "SELECT stolik_a, stolik_b FROM sasiedztwo_stolow"
+        ).fetchall()
+        legacy_combination = con.execute(
+            "SELECT nazwa, stoliki, pojemnosc_min, pojemnosc_max, aktywna, priorytet "
+            "FROM kombinacje_stolow"
+        ).fetchall()
+        legacy_properties = con.execute(
+            "SELECT nazwa,kolejnosc,pojemnosc,pojemnosc_min,ksztalt,cechy,"
+            "priorytet,sekcja,plan_x,plan_y FROM stoliki WHERE id=1"
+        ).fetchone()
+        version = con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+    finally:
+        con.close()
+    assert not {
+        "nazwa", "kolejnosc", "pojemnosc", "pojemnosc_min", "ksztalt",
+        "cechy", "priorytet", "sekcja",
+    } & position_columns
+    assert legacy_edges == [(1, 2)]
+    assert legacy_combination == [("S1 + S2", "[1, 2]", 5, 8, 1, 3)]
+    assert legacy_properties == (
+        "S1 VIP", 7, 6, 3, "prostokat", '["okno", "vip"]', 9, "VIP", 12, 34,
+    )
+    assert version == "0056_impreza_sale_min2_neutralny"
+
+    upgraded_again = _alembic(env, "upgrade", HEAD)
+    assert upgraded_again.returncode == 0, upgraded_again.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert con.execute(
+            "SELECT count(*) FROM kombinacje_stolow_planu"
+        ).fetchone()[0] == 1
+        assert con.execute(
+            "SELECT nazwa,kolejnosc,pojemnosc,pojemnosc_min,ksztalt,cechy,"
+            "priorytet,sekcja FROM pozycje_stolikow_planu WHERE stolik_id=1"
+        ).fetchone() == (
+            "S1 VIP", 7, 6, 3, "prostokat", '["okno", "vip"]', 9, "VIP",
+        )
+    finally:
+        con.close()
+
+
+def test_migracja_0057_downgrade_zachowuje_topologie_niewersjonowanej_sali(tmp_path):
+    db_file = tmp_path / "_r22_unversioned_legacy_downgrade.db"
+    env = _prepare_r2_0052(db_file)
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO sale_rezerwacyjne "
+            "(id,nazwa,nazwa_klucz,aktywna,kolejnosc) VALUES (?,?,?,?,?)",
+            (901, "Sala legacy", "sala legacy", 1, 99),
+        )
+        con.executemany(
+            "INSERT INTO stoliki "
+            "(id,nazwa,strefa,sala_id,pojemnosc,laczy_sie,aktywny,kolejnosc) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (901, "L1", "Sala legacy", 901, 4, 1, 1, 0),
+                (902, "L2", "Sala legacy", 901, 4, 1, 1, 1),
+            ],
+        )
+        con.execute(
+            "INSERT INTO sasiedztwo_stolow (stolik_a,stolik_b) VALUES (?,?)",
+            (901, 902),
+        )
+        con.execute(
+            "INSERT INTO kombinacje_stolow "
+            "(nazwa,stoliki,pojemnosc_min,pojemnosc_max,aktywna,priorytet) "
+            "VALUES (?,?,?,?,?,?)",
+            ("L1 + L2", "[901, 902]", 5, 8, 1, 7),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    downgraded = _alembic(env, "downgrade", "0056_impreza_sale_min2_neutralny")
+    assert downgraded.returncode == 0, downgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        assert con.execute(
+            "SELECT stolik_a,stolik_b FROM sasiedztwo_stolow "
+            "WHERE stolik_a=901 AND stolik_b=902"
+        ).fetchall() == [(901, 902)]
+        assert con.execute(
+            "SELECT nazwa,stoliki,pojemnosc_min,pojemnosc_max,aktywna,priorytet "
+            "FROM kombinacje_stolow WHERE nazwa='L1 + L2'"
+        ).fetchall() == [("L1 + L2", "[901, 902]", 5, 8, 1, 7)]
+    finally:
+        con.close()
+
+
+def test_migracja_0057_domykaja_graf_minimalnie_i_dezaktywuje_zestaw_per_wersja(
+    tmp_path,
+):
+    db_file = tmp_path / "_r22_legacy_combination_graph.db"
+    env = _prepare_r2_0052(db_file)
+    con = sqlite3.connect(str(db_file))
+    try:
+        room_name = con.execute(
+            "SELECT strefa FROM stoliki WHERE id=2"
+        ).fetchone()[0]
+        con.execute(
+            "INSERT INTO stoliki "
+            "(id,nazwa,strefa,pojemnosc,laczy_sie,aktywny,kolejnosc) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (4, "S4", room_name, 4, 1, 1, 3),
+        )
+        con.execute("UPDATE stoliki SET aktywny=0 WHERE id=2")
+        con.execute(
+            "INSERT INTO sasiedztwo_stolow (stolik_a,stolik_b) VALUES (?,?)",
+            (1, 4),
+        )
+        con.execute(
+            "INSERT INTO kombinacje_stolow "
+            "(nazwa,stoliki,pojemnosc_min,pojemnosc_max,aktywna,priorytet) "
+            "VALUES (?,?,?,?,?,?)",
+            ("S1 + S2 + S4", "[1, 2, 4]", 7, 12, 1, 0),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        edges = con.execute(
+            "SELECT e.stolik_a_id,e.stolik_b_id "
+            "FROM krawedzie_sasiedztwa_planu e "
+            "JOIN wersje_planu_sali w ON w.id=e.wersja_id "
+            "JOIN pozycje_stolikow_planu p ON p.wersja_id=w.id AND p.stolik_id=4 "
+            "WHERE w.status='published' ORDER BY e.stolik_a_id,e.stolik_b_id"
+        ).fetchall()
+        combination = con.execute(
+            "SELECT k.sklad_klucz,k.aktywna_w_planie "
+            "FROM kombinacje_stolow_planu k "
+            "JOIN wersje_planu_sali w ON w.id=k.wersja_id "
+            "WHERE w.status='published' AND k.sklad_klucz='1,2,4'"
+        ).fetchone()
+        assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        con.close()
+
+    # Istniejaca krawedz 1-4 tworzy jedna skladowa; migracja dodaje tylko 1-2.
+    assert edges == [(1, 2), (1, 4)]
+    assert combination == ("1,2,4", 0)
+
+
+def test_migracja_0057_odrzuca_krawedz_miedzy_salami_przed_ddl(tmp_path):
+    db_file = tmp_path / "_r22_cross_room_edge.db"
+    env = _prepare_r2_0052(db_file)
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO sasiedztwo_stolow (stolik_a, stolik_b) VALUES (?, ?)",
+            (1, 3),
+        )
+        con.commit()
+    finally:
+        con.close()
+    base = _alembic(env, "upgrade", "0056_impreza_sale_min2_neutralny")
+    assert base.returncode == 0, base.stderr
+
+    failed = _alembic(env, "upgrade", HEAD)
+    assert failed.returncode != 0
+    assert "R22_MIGRATION_CROSS_ROOM_EDGE" in failed.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        position_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(pozycje_stolikow_planu)")
+        }
+        topology_tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        version = con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+    finally:
+        con.close()
+    assert "nazwa" not in position_columns
+    assert "krawedzie_sasiedztwa_planu" not in topology_tables
+    assert version == "0056_impreza_sale_min2_neutralny"
 
 
 def test_migracja_0054_fail_closed_dla_unicode_duplikatu_nazwy_sali(tmp_path):
@@ -465,6 +760,123 @@ def test_adopcja_r2_odrzuca_partial_unique_zamiast_pelnego_indeksu(tmp_path):
     assert adoption.returncode != 0
     assert "uq_sale_rezerwacyjne_nazwa_klucz" in (
         adoption.stdout + adoption.stderr
+    )
+
+
+def test_adopcja_r22_waliduje_semantyke_topologii_i_prosty_fk_krawedzi(tmp_path):
+    base_file = tmp_path / "_r22_adoption_valid_base.db"
+    base_env = _prepare_r2_0052(base_file)
+    upgraded = _alembic(base_env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(base_file))
+    try:
+        version_id, combination_id = _insert_valid_r22_topology(con)
+    finally:
+        con.close()
+
+    # Kontrola dodatnia: identyczna, kompletna baza bez metryki Alembica ma byc
+    # bezpiecznie adoptowana przed testami celowych uszkodzen.
+    valid_file = tmp_path / "_r22_adoption_valid.db"
+    shutil.copy2(base_file, valid_file)
+    con = sqlite3.connect(str(valid_file))
+    try:
+        con.execute("DROP TABLE alembic_version")
+        con.commit()
+    finally:
+        con.close()
+    valid_adoption = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=_env(valid_file, "r22-valid-adoption"),
+        capture_output=True, text=True,
+    )
+    assert valid_adoption.returncode == 0, valid_adoption.stderr
+
+    corruptions = {
+        "noncanonical-key": (
+            "UPDATE kombinacje_stolow_planu SET sklad_klucz='2,1' WHERE id=?",
+            (combination_id,),
+        ),
+        "disconnected-combination": (
+            "DELETE FROM krawedzie_sasiedztwa_planu WHERE wersja_id=?",
+            (version_id,),
+        ),
+        "capacity-above-physical": (
+            "UPDATE kombinacje_stolow_planu SET pojemnosc_max=99 WHERE id=?",
+            (combination_id,),
+        ),
+        "active-combination-with-inactive-table": (
+            "UPDATE pozycje_stolikow_planu SET aktywny_w_planie=0 "
+            "WHERE wersja_id=? AND stolik_id=2",
+            (version_id,),
+        ),
+    }
+    for name, (statement, params) in corruptions.items():
+        db_file = tmp_path / f"_r22_adoption_{name}.db"
+        shutil.copy2(base_file, db_file)
+        con = sqlite3.connect(str(db_file))
+        try:
+            con.execute(statement, params)
+            con.execute("DROP TABLE alembic_version")
+            con.commit()
+        finally:
+            con.close()
+        adoption = subprocess.run(
+            [sys.executable, "-c", "import database; database.init_db()"],
+            cwd=str(BACKEND), env=_env(db_file, f"r22-{name}"),
+            capture_output=True, text=True,
+        )
+        assert adoption.returncode != 0, name
+        assert "Backfill R2 jest niekompletny" in (
+            adoption.stdout + adoption.stderr
+        ), name
+
+    missing_fk_file = tmp_path / "_r22_adoption_missing_edge_version_fk.db"
+    shutil.copy2(base_file, missing_fk_file)
+    con = sqlite3.connect(str(missing_fk_file))
+    try:
+        con.execute("PRAGMA foreign_keys=OFF")
+        con.execute(
+            """CREATE TABLE krawedzie_sasiedztwa_planu_new (
+                id INTEGER NOT NULL,
+                wersja_id INTEGER NOT NULL,
+                stolik_a_id INTEGER NOT NULL,
+                stolik_b_id INTEGER NOT NULL,
+                PRIMARY KEY (id),
+                CONSTRAINT ck_krawedzie_sasiedztwa_planu_kolejnosc CHECK (stolik_a_id < stolik_b_id),
+                CONSTRAINT fk_krawedzie_sasiedztwa_planu_stolik_a FOREIGN KEY(wersja_id, stolik_a_id) REFERENCES pozycje_stolikow_planu (wersja_id, stolik_id) ON DELETE CASCADE,
+                CONSTRAINT fk_krawedzie_sasiedztwa_planu_stolik_b FOREIGN KEY(wersja_id, stolik_b_id) REFERENCES pozycje_stolikow_planu (wersja_id, stolik_id) ON DELETE CASCADE,
+                CONSTRAINT uq_krawedzie_sasiedztwa_planu_para UNIQUE (wersja_id, stolik_a_id, stolik_b_id)
+            )"""
+        )
+        con.execute(
+            "INSERT INTO krawedzie_sasiedztwa_planu_new "
+            "SELECT * FROM krawedzie_sasiedztwa_planu"
+        )
+        con.execute("DROP TABLE krawedzie_sasiedztwa_planu")
+        con.execute(
+            "ALTER TABLE krawedzie_sasiedztwa_planu_new "
+            "RENAME TO krawedzie_sasiedztwa_planu"
+        )
+        con.execute(
+            "CREATE INDEX ix_krawedzie_sasiedztwa_planu_id "
+            "ON krawedzie_sasiedztwa_planu (id)"
+        )
+        con.execute(
+            "CREATE INDEX ix_krawedzie_sasiedztwa_planu_wersja_id "
+            "ON krawedzie_sasiedztwa_planu (wersja_id)"
+        )
+        con.execute("DROP TABLE alembic_version")
+        con.commit()
+    finally:
+        con.close()
+    missing_fk_adoption = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=_env(missing_fk_file, "r22-missing-edge-fk"),
+        capture_output=True, text=True,
+    )
+    assert missing_fk_adoption.returncode != 0
+    assert "klucz obcy R2" in (
+        missing_fk_adoption.stdout + missing_fk_adoption.stderr
     )
 
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 from datetime import date, time
 from typing import Literal, Optional, List
 
@@ -55,6 +55,17 @@ class PozycjaStolikaPlanuIn(BaseModel):
     wysokosc: int = Field(default=12, ge=1, le=100)
     obrot: int = Field(default=0, ge=0, lt=360)
     aktywny_w_planie: bool = True
+    # R2.2: pola sa opcjonalne w payloadzie dla kompatybilnosci ze starsza PWA.
+    # Brak pola zachowuje poprzedni snapshot. Jawne ``None`` czysci wlasciwosci,
+    # ktore sa nullable w kontrakcie; wymagane nazwa/kolejnosc/pojemnosc dziedzicza.
+    nazwa: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    kolejnosc: Optional[int] = Field(default=None, ge=0)
+    pojemnosc: Optional[int] = Field(default=None, ge=1)
+    pojemnosc_min: Optional[int] = Field(default=None, ge=1)
+    ksztalt: Optional[str] = Field(default=None, max_length=16)
+    cechy: Optional[List[str]] = None
+    priorytet: Optional[int] = None
+    sekcja: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("plan_x", "plan_y", "szerokosc", "wysokosc", "obrot", mode="before")
     @classmethod
@@ -65,10 +76,99 @@ class PozycjaStolikaPlanuIn(BaseModel):
             return value
         return round(float(value))
 
+    @field_validator("nazwa")
+    @classmethod
+    def _oczysc_opcjonalna_nazwe(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Nazwa stolu nie moze byc pusta.")
+        return value
+
+    @field_validator("ksztalt", "sekcja")
+    @classmethod
+    def _oczysc_opcjonalny_tekst(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("cechy")
+    @classmethod
+    def _oczysc_cechy(cls, value):
+        if value is None:
+            return None
+        out = []
+        for raw in value:
+            item = str(raw).strip()
+            if item and item not in out:
+                out.append(item)
+        return out
+
+    @model_validator(mode="after")
+    def _waliduj_zakres_pojemnosci(self):
+        if (
+            self.pojemnosc is not None
+            and self.pojemnosc_min is not None
+            and self.pojemnosc_min > self.pojemnosc
+        ):
+            raise ValueError("Minimalna liczba osĂłb nie moĹĽe przekraczaÄ‡ liczby miejsc stolika.")
+        return self
+
+
+class KrawedzSasiedztwaPlanuIn(BaseModel):
+    stolik_a_id: int = Field(gt=0)
+    stolik_b_id: int = Field(gt=0)
+
+
+class KombinacjaStolowPlanuIn(BaseModel):
+    id: Optional[int] = Field(default=None, gt=0)
+    nazwa: str = Field(min_length=1, max_length=64)
+    stoliki: List[int] = Field(min_length=2, max_length=32)
+    pojemnosc_min: Optional[int] = Field(default=None, ge=1)
+    pojemnosc_max: Optional[int] = Field(default=None, ge=1)
+    priorytet: int = 0
+    kanal: Literal["online", "wewnetrzna", "oba"] = "oba"
+    aktywna_w_planie: bool = True
+
+    @field_validator("nazwa")
+    @classmethod
+    def _oczysc_nazwe(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Nazwa kombinacji nie moĹĽe byÄ‡ pusta.")
+        return value
+
+    @field_validator("stoliki")
+    @classmethod
+    def _kanoniczny_sklad(cls, value):
+        if any(isinstance(item, bool) for item in value):
+            raise ValueError("Id stolika musi byÄ‡ dodatniÄ… liczbÄ… caĹ‚kowitÄ….")
+        ids = [int(item) for item in value]
+        if any(item <= 0 for item in ids):
+            raise ValueError("Id stolika musi byÄ‡ dodatniÄ… liczbÄ… caĹ‚kowitÄ….")
+        if len(ids) != len(set(ids)):
+            raise ValueError("Kombinacja nie moĹĽe zawieraÄ‡ tego samego stolika wiÄ™cej niĹĽ raz.")
+        return sorted(ids)
+
+    @model_validator(mode="after")
+    def _waliduj_zakres(self):
+        if (
+            self.pojemnosc_min is not None
+            and self.pojemnosc_max is not None
+            and self.pojemnosc_min > self.pojemnosc_max
+        ):
+            raise ValueError("Minimalna liczba osĂłb nie moĹĽe przekraczaÄ‡ maksymalnej.")
+        return self
+
 
 class SzkicPlanuSaliIn(BaseModel):
     expected_revision: int = Field(ge=0)
     pozycje: List[PozycjaStolikaPlanuIn]
+    # None = klient R2.1, zachowaj istniejÄ…cy fragment snapshotu; [] = jawnie wyczyĹ›Ä‡.
+    krawedzie: Optional[List[KrawedzSasiedztwaPlanuIn]] = None
+    kombinacje: Optional[List[KombinacjaStolowPlanuIn]] = None
 
 
 class PublikujPlanSaliIn(BaseModel):
@@ -78,7 +178,12 @@ class PublikujPlanSaliIn(BaseModel):
 class NowyStolikSzkicuIn(BaseModel):
     expected_revision: int = Field(ge=0)
     nazwa: str = Field(min_length=1, max_length=32)
-    pojemnosc: int = Field(default=2, ge=1, le=50)
+    pojemnosc: int = Field(default=2, ge=1)
+    pojemnosc_min: Optional[int] = Field(default=None, ge=1)
+    ksztalt: Optional[str] = Field(default=None, max_length=16)
+    cechy: Optional[List[str]] = None
+    priorytet: Optional[int] = None
+    sekcja: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("nazwa")
     @classmethod
@@ -87,6 +192,32 @@ class NowyStolikSzkicuIn(BaseModel):
         if not value:
             raise ValueError("Nazwa stołu nie może być pusta.")
         return value
+
+    @field_validator("ksztalt", "sekcja")
+    @classmethod
+    def _tekst_nowego_stolika(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("cechy")
+    @classmethod
+    def _cechy_nowego_stolika(cls, value):
+        if value is None:
+            return None
+        out = []
+        for raw in value:
+            item = str(raw).strip()
+            if item and item not in out:
+                out.append(item)
+        return out
+
+    @model_validator(mode="after")
+    def _zakres_nowego_stolika(self):
+        if self.pojemnosc_min is not None and self.pojemnosc_min > self.pojemnosc:
+            raise ValueError("Minimalna liczba osĂłb nie moĹĽe przekraczaÄ‡ liczby miejsc stolika.")
+        return self
 
 
 class StanowiskoBase(BaseModel):

@@ -2,7 +2,7 @@
 
 from sqlalchemy import (
     Column, Integer, String, Boolean, Date, Time, DateTime, Float, JSON,
-    ForeignKey, Table, UniqueConstraint, CheckConstraint, Index, text
+    ForeignKey, ForeignKeyConstraint, Table, UniqueConstraint, CheckConstraint, Index, text
 )
 from sqlalchemy.orm import relationship, declarative_base
 
@@ -692,6 +692,20 @@ class WersjaPlanuSali(Base):
     pozycje = relationship(
         "PozycjaStolikaPlanu", back_populates="wersja", cascade="all, delete-orphan",
     )
+    krawedzie = relationship(
+        "KrawedzSasiedztwaPlanu",
+        back_populates="wersja",
+        cascade="all, delete-orphan",
+        order_by="KrawedzSasiedztwaPlanu.id",
+        foreign_keys="KrawedzSasiedztwaPlanu.wersja_id",
+    )
+    kombinacje = relationship(
+        "KombinacjaStolowPlanu",
+        back_populates="wersja",
+        cascade="all, delete-orphan",
+        order_by="KombinacjaStolowPlanu.id",
+        foreign_keys="KombinacjaStolowPlanu.wersja_id",
+    )
 
 
 class PozycjaStolikaPlanu(Base):
@@ -710,6 +724,22 @@ class PozycjaStolikaPlanu(Base):
             "wysokosc >= 1 AND wysokosc <= 100", name="ck_pozycje_stolikow_wysokosc",
         ),
         CheckConstraint("obrot >= 0 AND obrot < 360", name="ck_pozycje_stolikow_obrot"),
+        CheckConstraint(
+            "kolejnosc IS NULL OR kolejnosc >= 0",
+            name="ck_pozycje_stolikow_kolejnosc",
+        ),
+        CheckConstraint(
+            "pojemnosc IS NULL OR pojemnosc >= 1",
+            name="ck_pozycje_stolikow_pojemnosc",
+        ),
+        CheckConstraint(
+            "pojemnosc_min IS NULL OR pojemnosc_min >= 1",
+            name="ck_pozycje_stolikow_pojemnosc_min",
+        ),
+        CheckConstraint(
+            "pojemnosc IS NULL OR pojemnosc_min IS NULL OR pojemnosc_min <= pojemnosc",
+            name="ck_pozycje_stolikow_zakres_pojemnosci",
+        ),
         Index("ix_pozycje_stolikow_planu_wersja_id", "wersja_id"),
         Index("ix_pozycje_stolikow_planu_stolik_id", "stolik_id"),
     )
@@ -728,9 +758,152 @@ class PozycjaStolikaPlanu(Base):
     wysokosc         = Column(Integer, nullable=False, default=12)
     obrot            = Column(Integer, nullable=False, default=0)
     aktywny_w_planie = Column(Boolean, nullable=False, default=True)
+    # WĹ‚aĹ›ciwoĹ›ci operacyjne sÄ… czÄ™Ĺ›ciÄ… snapshotu. NULL pozostaje wyĹ‚Ä…cznie
+    # kompatybilnym znacznikiem starszego klienta/rekordu i przy odczycie dziedziczy
+    # wartoĹ›Ä‡ z poprzedniego snapshotu lub stabilnego rekordu ``Stolik``.
+    nazwa            = Column(String(32), nullable=True)
+    kolejnosc        = Column(Integer, nullable=True)
+    pojemnosc        = Column(Integer, nullable=True)
+    pojemnosc_min    = Column(Integer, nullable=True)
+    ksztalt          = Column(String(16), nullable=True)
+    cechy            = Column(JSON, nullable=True)
+    priorytet        = Column(Integer, nullable=True)
+    sekcja           = Column(String(32), nullable=True)
 
     wersja = relationship("WersjaPlanuSali", back_populates="pozycje")
     stolik = relationship("Stolik")
+
+
+class KrawedzSasiedztwaPlanu(Base):
+    """Nieskierowana, wersjonowana krawÄ™dĹş fizycznego sÄ…siedztwa stolikĂłw."""
+    __tablename__ = "krawedzie_sasiedztwa_planu"
+    __table_args__ = (
+        CheckConstraint(
+            "stolik_a_id < stolik_b_id",
+            name="ck_krawedzie_sasiedztwa_planu_kolejnosc",
+        ),
+        UniqueConstraint(
+            "wersja_id", "stolik_a_id", "stolik_b_id",
+            name="uq_krawedzie_sasiedztwa_planu_para",
+        ),
+        ForeignKeyConstraint(
+            ["wersja_id", "stolik_a_id"],
+            ["pozycje_stolikow_planu.wersja_id", "pozycje_stolikow_planu.stolik_id"],
+            name="fk_krawedzie_sasiedztwa_planu_stolik_a",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["wersja_id", "stolik_b_id"],
+            ["pozycje_stolikow_planu.wersja_id", "pozycje_stolikow_planu.stolik_id"],
+            name="fk_krawedzie_sasiedztwa_planu_stolik_b",
+            ondelete="CASCADE",
+        ),
+        Index("ix_krawedzie_sasiedztwa_planu_wersja_id", "wersja_id"),
+    )
+    id          = Column(Integer, primary_key=True, index=True)
+    wersja_id   = Column(
+        Integer, ForeignKey("wersje_planu_sali.id", ondelete="CASCADE"), nullable=False,
+    )
+    stolik_a_id = Column(Integer, nullable=False)
+    stolik_b_id = Column(Integer, nullable=False)
+
+    wersja = relationship(
+        "WersjaPlanuSali", back_populates="krawedzie", foreign_keys=[wersja_id],
+    )
+
+
+class KombinacjaStolowPlanu(Base):
+    """Jawna kombinacja stoĹ‚Ăłw zatwierdzana razem z wersjÄ… planu."""
+    __tablename__ = "kombinacje_stolow_planu"
+    __table_args__ = (
+        UniqueConstraint(
+            "wersja_id", "sklad_klucz",
+            name="uq_kombinacje_stolow_planu_wersja_sklad",
+        ),
+        # Potrzebne dla kompozytowego FK skĹ‚adnika, ktĂłry pilnuje zgodnoĹ›ci wersji.
+        UniqueConstraint(
+            "id", "wersja_id",
+            name="uq_kombinacje_stolow_planu_id_wersja",
+        ),
+        CheckConstraint(
+            "length(trim(nazwa)) > 0",
+            name="ck_kombinacje_stolow_planu_nazwa",
+        ),
+        CheckConstraint(
+            "length(sklad_klucz) > 0",
+            name="ck_kombinacje_stolow_planu_sklad",
+        ),
+        CheckConstraint(
+            "pojemnosc_min >= 1 AND pojemnosc_max >= pojemnosc_min",
+            name="ck_kombinacje_stolow_planu_pojemnosc",
+        ),
+        CheckConstraint(
+            "kanal IN ('online', 'wewnetrzna', 'oba')",
+            name="ck_kombinacje_stolow_planu_kanal",
+        ),
+        Index("ix_kombinacje_stolow_planu_wersja_id", "wersja_id"),
+    )
+    id                 = Column(Integer, primary_key=True, index=True)
+    wersja_id          = Column(
+        Integer, ForeignKey("wersje_planu_sali.id", ondelete="CASCADE"), nullable=False,
+    )
+    nazwa              = Column(String(64), nullable=False)
+    sklad_klucz        = Column(String(512), nullable=False)
+    pojemnosc_min      = Column(Integer, nullable=False, default=1)
+    pojemnosc_max      = Column(Integer, nullable=False)
+    priorytet          = Column(Integer, nullable=False, default=0)
+    kanal              = Column(String(16), nullable=False, default="oba")
+    aktywna_w_planie   = Column(Boolean, nullable=False, default=True)
+
+    wersja = relationship(
+        "WersjaPlanuSali", back_populates="kombinacje", foreign_keys=[wersja_id],
+    )
+    skladniki = relationship(
+        "SkladnikKombinacjiPlanu",
+        back_populates="kombinacja",
+        cascade="all, delete-orphan",
+        order_by="SkladnikKombinacjiPlanu.stolik_id",
+        foreign_keys=(
+            "[SkladnikKombinacjiPlanu.kombinacja_id, "
+            "SkladnikKombinacjiPlanu.wersja_id]"
+        ),
+    )
+
+
+class SkladnikKombinacjiPlanu(Base):
+    """Relacyjny skĹ‚ad kombinacji, bez JSON-owych i osieroconych identyfikatorĂłw."""
+    __tablename__ = "skladniki_kombinacji_planu"
+    __table_args__ = (
+        UniqueConstraint(
+            "kombinacja_id", "stolik_id",
+            name="uq_skladniki_kombinacji_planu_stolik",
+        ),
+        ForeignKeyConstraint(
+            ["kombinacja_id", "wersja_id"],
+            ["kombinacje_stolow_planu.id", "kombinacje_stolow_planu.wersja_id"],
+            name="fk_skladniki_kombinacji_planu_kombinacja",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["wersja_id", "stolik_id"],
+            ["pozycje_stolikow_planu.wersja_id", "pozycje_stolikow_planu.stolik_id"],
+            name="fk_skladniki_kombinacji_planu_stolik",
+            ondelete="CASCADE",
+        ),
+        Index("ix_skladniki_kombinacji_planu_kombinacja_id", "kombinacja_id"),
+        Index("ix_skladniki_kombinacji_planu_wersja_id", "wersja_id"),
+        Index("ix_skladniki_kombinacji_planu_stolik_id", "stolik_id"),
+    )
+    id             = Column(Integer, primary_key=True, index=True)
+    kombinacja_id  = Column(Integer, nullable=False)
+    wersja_id      = Column(Integer, nullable=False)
+    stolik_id      = Column(Integer, nullable=False)
+
+    kombinacja = relationship(
+        "KombinacjaStolowPlanu",
+        back_populates="skladniki",
+        foreign_keys=[kombinacja_id, wersja_id],
+    )
 
 
 class Stolik(Base):
