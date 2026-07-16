@@ -28,6 +28,7 @@ FLOOR = "rezerwacje.sala"
 RULES = "rezerwacje.reguly"
 ANALYTICS = "rezerwacje.analityka"
 CONTACT = "rezerwacje.dane_kontaktowe"
+FINANCE = "rezerwacje.finanse"
 
 
 _RESERVATION_ITEM = re.compile(
@@ -63,6 +64,12 @@ _RESERVATION_ROOM_PLAN = re.compile(
 _RESERVATION_ROOM_DRAFT_TABLES = re.compile(
     r"^/api/sale-rezerwacyjne/[1-9]\d*/plan/szkic/stoliki$"
 )
+_PAYMENT_ITEM = re.compile(
+    r"^/api/platnosci/[1-9]\d*(?:/(?P<action>checkout|capture|anuluj-autoryzacje|zwrot|retry|reconcile|oplacona))?$"
+)
+_PAYMENT_POLICY_ITEM = re.compile(
+    r"^/api/polityki-platnosci-rezerwacji/[1-9]\d*$"
+)
 
 _PROTECTED_PREFIXES = (
     "/api/rezerwacje-stolik",
@@ -82,6 +89,8 @@ _PROTECTED_PREFIXES = (
     "/api/analityka/rezerwacje",
     "/api/analityka/oblozenie",
     "/api/crm/rezerwacje",
+    "/api/platnosci",
+    "/api/polityki-platnosci-rezerwacji",
 )
 
 
@@ -92,6 +101,26 @@ def _chroniona_przestrzen(path: str) -> bool:
 def requirement_for(method: str, path: str) -> Requirement | None:
     """Zwraca wymagania albo ``None``, gdy trasa nie należy do tej polityki."""
     method = method.upper()
+
+    if path == "/api/platnosci":
+        return Requirement(all_of=(FINANCE,)) if method in {"GET", "POST"} else ADMIN_ONLY
+
+    if _PAYMENT_ITEM.fullmatch(path):
+        return Requirement(all_of=(FINANCE,)) if method in {"GET", "POST"} else ADMIN_ONLY
+
+    if path == "/api/polityki-platnosci-rezerwacji":
+        if method == "GET":
+            return Requirement(all_of=(RULES,))
+        if method == "POST":
+            return Requirement(all_of=(RULES, FINANCE))
+        return ADMIN_ONLY
+
+    if _PAYMENT_POLICY_ITEM.fullmatch(path):
+        return (
+            Requirement(all_of=(RULES, FINANCE))
+            if method in {"PUT", "DELETE"}
+            else ADMIN_ONLY
+        )
 
     if path == "/api/sale-rezerwacyjne":
         if method == "GET":

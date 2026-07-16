@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R5b wdrożone · następny checkpoint R5c (zadatki i preautoryzacja) · 16 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c wdrożone technicznie, brama produkcyjna Stripe pozostaje otwarta · 16 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -815,6 +815,47 @@ bez prawdziwego providera, zweryfikowanych webhooków i E2E płatność–zwrot.
 **Done R5c:** zadatek i zwrot są spójne z rezerwacją, audytowalne i przetestowane na prawdziwym
 środowisku testowym providera.
 
+**Wdrożono technicznie 16 lipca 2026:** migracja `0063` dodaje typowane polityki per dzień, serwis,
+kanał i wielkość grupy, agregat płatności w minor units, trwałe polecenia providerowe oraz minimalny,
+idempotentny inbox podpisanych webhooków. Rezerwacja i utworzenie płatności zapisują się w jednej
+transakcji, natomiast I/O Stripe wykonuje worker poza blokadą bazy. Ponowienie tworzy osobną próbę,
+pełny zwrot i anulowanie preautoryzacji mają stabilne klucze idempotencji, a późny sukces po anulowaniu
+jest uzgadniany do zwrotu zamiast pozostawienia pobranych środków.
+
+Publiczny widget nie uznaje powrotu z Checkout za sukces: pokazuje wyłącznie kanoniczny stan po
+webhooku, bez identyfikatorów providera i danych karty. Powrót przeglądarki korzysta z krótkiego,
+zaszyfrowanego cookie HttpOnly; szeroki token zarządzania nie trafia do Web Storage ani URL. Status
+płatności ma osobny limit i polling z backoffem, więc nie blokuje anulowania, edycji ani operacji RODO.
+Panel operatora rozdziela pobranie preautoryzacji, zwolnienie blokady i pełny zwrot, a konfigurator
+pokazuje ograniczenie sześciodniowego okna preautoryzacji. Ostatnia komenda jest częścią projekcji
+operatora: stany przejściowe odświeżają się automatycznie, błąd odblokowuje ponowienie, a `uncertain`
+zatrzymuje automat i udostępnia jawne, idempotentne uzgodnienie. Panel obsługuje wszystkie agregaty
+rezerwacji, więc wpis `no_show` nie ukrywa wcześniejszej preautoryzacji ani zadatku. Sama opłata
+`no_show` pozostaje lokalnym wpisem księgowym `ledger`, nie udaje płatności Stripe ani sandbox.
+R5c jest obecnie PLN-only.
+
+Jedno uzgodnienie rozstrzyga zależne niepewne polecenia w kolejności przyczynowej: utworzenie Checkout,
+potem pobranie, anulowanie lub zwrot. Każdy krok ponownie używa pierwotnego klucza idempotencji, a
+polecenie operatora pozostaje w kolejce aż do rozstrzygnięcia całego łańcucha. Zwrot, który wygasł przed
+pierwszą próbą I/O, przechodzi do `nieudana`, dzięki czemu nie udaje operacji w toku i może być ponowiony.
+
+Sandbox jest dostępny wyłącznie w `development/test` i jest jawnie oznaczony jako demonstracyjny.
+Produkcja bez kompletnego, spójnego Stripe działa fail-closed. Kontrakt Checkout używa hostowanego
+widoku `ui_mode=hosted`; termin sesji jest korygowany do wymaganego przez Stripe okna 30 minut–24
+godziny. Źródła kontraktu: [Checkout Session API](https://docs.stripe.com/api/checkout/sessions/create)
+oraz [Stripe-hosted Checkout](https://docs.stripe.com/payments/checkout).
+
+Obiekty kanoniczne są wiązane z płatnością przez unikalne `(provider, external_id)`, metadata,
+`client_reference_id`, PLN i dokładną kwotę; refund dodatkowo przez PaymentIntent. Późny capture
+zastąpionej próby oraz capture po anulowaniu tworzą dokładnie jeden pełny zwrot. Wygaśnięcie
+subskrypcji nie blokuje operacji odwracających (`refund`, zwolnienie autoryzacji, anulowanie publiczne),
+ale nadal blokuje nowe obciążenia.
+
+**Brama nadal otwarta:** hermetyczne testy drivera/workera i lokalne E2E sandbox nie zastępują testu
+na prawdziwym koncie Stripe test mode. Przed oznaczeniem `Done R5c` trzeba przejść sieciowy scenariusz
+`Checkout → podpisany webhook → stan opłacona/autoryzowana → anulowanie → refund webhook`, sprawdzić
+uprawnienia restricted key i monitoring kolejki, a następnie osobno wykonać kontrolowany test live.
+
 ### R6 — Tryb stanowiska hosta
 
 **Cel:** ekran żyje wraz z serwisem i ogranicza liczbę decyzji recepcji.
@@ -980,8 +1021,9 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a–R5b są zamkniętymi checkpointami. Następny milestone to `R5c`: zadatki i preautoryzacja oparte
-na zweryfikowanej integracji płatniczej, podpisanych webhookach, idempotencji zdarzeń oraz pełnym
-przepływie płatność–zwrot. Bez wybranego rzeczywistego providera etap może powstać wyłącznie jako
-sandbox, nie jako funkcja gotowa produkcyjnie. Serwerowa blokada stanowiska z sesją operatora i
-PIN-em pozostaje oddzielnym zadaniem R6a, którego nie wolno udawać samą zasłoną frontendu.
+R0a–R5b są zamkniętymi checkpointami. Implementacja techniczna `R5c` jest gotowa do integracyjnego
+testu na prawdziwym koncie Stripe test mode, ale nie spełnia jeszcze bramy produkcyjnej opisanej wyżej.
+Najbliższa decyzja wykonawcza to skonfigurowanie restricted key i podpisanego endpointu webhook,
+przejście pełnego E2E płatność–zwrot oraz zapis dowodu odbioru. Dopiero po tym można oznaczyć `Done R5c`
+i przejść do R6a. Serwerowa blokada stanowiska z sesją operatora i PIN-em pozostaje oddzielnym
+zadaniem R6a, którego nie wolno udawać samą zasłoną frontendu.

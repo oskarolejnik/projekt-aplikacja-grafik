@@ -12,3 +12,4 @@ PyJWT==2.10.1                 # aktualny 2.x (fixy walidacji iss/aud)
 python-dotenv==1.0.1
 tzdata==2026.2                 # IANA Europe/Warsaw także na Windows/minimalnych obrazach
 pywebpush==1.14.1
+stripe==15.3.1                 # R5c: hosted Checkout, podpisane webhooki i zwroty

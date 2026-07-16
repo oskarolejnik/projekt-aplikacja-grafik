@@ -20,6 +20,7 @@ vi.mock('../../lib/reservationPrivacy', () => ({
 }))
 
 import ReservationAvailability from './ReservationAvailability'
+import { localDateIso, shiftDateIso } from '../../lib/reservationRoute'
 
 const RULES = {
   polityka: {
@@ -257,6 +258,96 @@ describe('ReservationAvailability', () => {
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ))
+  })
+
+  it('nie zapisuje pozornie stałej preautoryzacji bez schedulera', async () => {
+    render(<ReservationAvailability />)
+    await screen.findByRole('heading', { name: 'Zadatki i preautoryzacja' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj politykę' }))
+    fireEvent.change(screen.getByLabelText('Wymaganie'), { target: { value: 'preautoryzacja' } })
+
+    const dateInput = screen.getByLabelText(/Konkretny dzień/)
+    expect(dateInput).toHaveAttribute('min', localDateIso())
+    expect(dateInput).toHaveAttribute('max', shiftDateIso(localDateIso(), 6))
+    expect(screen.getByText(/Bez schedulera ta reguła może dotyczyć tylko jednego/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz politykę' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Bez schedulera aktywna preautoryzacja wymaga konkretnego dnia od dziś do 6 dni naprzód.',
+    )
+    expect(apiMock.mock.calls.some(([path, method]) => (
+      path === '/polityki-platnosci-rezerwacji' && method === 'POST'
+    ))).toBe(false)
+
+    fireEvent.change(dateInput, { target: { value: shiftDateIso(localDateIso(), 6) } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz politykę' }))
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/polityki-platnosci-rezerwacji',
+      'POST',
+      expect.objectContaining({
+        rodzaj: 'preautoryzacja',
+        data: shiftDateIso(localDateIso(), 6),
+        waluta: 'PLN',
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ))
+  })
+
+  it('pokazuje starszy zadatek jako aktywny fallback zamiast mylącego pustego stanu', async () => {
+    apiMock.mockImplementation((path, method) => {
+      if (path === '/rezerwacje/reguly' && method === 'GET') return Promise.resolve({
+        ...RULES,
+        polityki_platnosci: [],
+        legacy_zadatek_fallback: {
+          aktywna: true,
+          kwota_minor: 1_999,
+          min_osob: 6,
+          sposob_kwoty: 'od_osoby',
+          waluta: 'PLN',
+        },
+      })
+      return Promise.resolve({})
+    })
+
+    render(<ReservationAvailability />)
+
+    expect(await screen.findByText('Starsza zasada zadatku nadal działa')).toBeInTheDocument()
+    expect(screen.getByText(/dla grup od 6 osób naliczamy 19,99 zł za osobę/)).toBeInTheDocument()
+    expect(screen.getByText('Nie dodano jeszcze nowych reguł.')).toBeInTheDocument()
+    expect(screen.queryByText('Płatność nie jest wymagana przez nowy silnik reguł.')).not.toBeInTheDocument()
+  })
+
+  it('pokazuje pełny zakres osób dla ograniczonej polityki płatności', async () => {
+    apiMock.mockImplementation((path, method) => {
+      if (path === '/rezerwacje/reguly' && method === 'GET') return Promise.resolve({
+        ...RULES,
+        polityki_platnosci: [{
+          id: 41,
+          nazwa: 'Kolacja 4–8',
+          aktywna: true,
+          data: null,
+          serwis_id: 11,
+          kanal: 'online',
+          min_osob: 4,
+          max_osob: 8,
+          rodzaj: 'zadatek',
+          sposob_kwoty: 'od_osoby',
+          kwota_minor: 2_000,
+          waluta: 'PLN',
+          waznosc_min: 30,
+          po_niepowodzeniu: 'ponow',
+          zwrot_przy_anulowaniu: true,
+          priorytet: 20,
+        }],
+      })
+      return Promise.resolve({})
+    })
+
+    render(<ReservationAvailability />)
+
+    expect(await screen.findByText(/4–8 os\./)).toBeInTheDocument()
+    expect(screen.queryByText(/4\+ os\./)).not.toBeInTheDocument()
   })
 
   it('udostępnia pełny typed override dopiero po rozwinięciu dodatkowych reguł', async () => {

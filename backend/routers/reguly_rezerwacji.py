@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import models
+import reservation_payments
 import schemas
+from auth import get_current_user
 from database import get_db
-from deps import get_lokal_config, modul_aktywny
+from deps import _teraz_lokalnie, get_lokal_config, modul_aktywny, utcnow_naive
 
 
 router = APIRouter()
@@ -46,6 +51,68 @@ def _sala_out(sala: models.SalaRezerwacyjna) -> dict:
     }
 
 
+def _polityka_platnosci_out(row: models.PolitykaPlatnosciRezerwacji) -> dict:
+    return schemas.PolitykaPlatnosciRezerwacjiOut.model_validate(row).model_dump(mode="json")
+
+
+def _polityki_platnosci(db: Session) -> list[models.PolitykaPlatnosciRezerwacji]:
+    return db.query(models.PolitykaPlatnosciRezerwacji).order_by(
+        models.PolitykaPlatnosciRezerwacji.priorytet,
+        models.PolitykaPlatnosciRezerwacji.id,
+    ).all()
+
+
+def _waliduj_polityke_platnosci(
+    db: Session,
+    dane: schemas.PolitykaPlatnosciRezerwacjiIn,
+) -> None:
+    if dane.serwis_id is not None and db.get(models.GodzinyOtwarcia, dane.serwis_id) is None:
+        raise HTTPException(400, "Nieznany serwis.")
+    if dane.rodzaj != "brak" and dane.waluta == "PLN" and dane.kwota_minor < 200:
+        raise HTTPException(400, "Minimalna kwota płatności w PLN to 2,00 zł.")
+    if dane.aktywna and dane.rodzaj == "preautoryzacja":
+        today = (_teraz_lokalnie() or datetime.now()).date()
+        if dane.data is None:
+            raise HTTPException(
+                400,
+                "Preautoryzacja bez schedulera wymaga konkretnego dnia wizyty. "
+                "Dla stałej reguły wybierz zadatek.",
+            )
+        if dane.data < today or dane.data > today + timedelta(days=6):
+            raise HTTPException(
+                400,
+                "Aktywną preautoryzację można ustawić tylko na dzień od dziś do 6 dni naprzód.",
+            )
+
+
+def _audyt_polityki_platnosci(
+    db: Session,
+    user: models.User,
+    action: str,
+    row: models.PolitykaPlatnosciRezerwacji,
+    *,
+    before: dict | None,
+    after: dict | None,
+) -> None:
+    details = {
+        "before": before,
+        "after": after,
+    }
+    db.add(models.AuditLog(
+        ts=utcnow_naive(),
+        user_id=user.id,
+        login=user.login,
+        akcja=action,
+        zasob=f"payment_policy:{row.id}",
+        szczegoly=json.dumps(
+            details,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    ))
+
+
 @router.get(
     "/api/rezerwacje/reguly",
     dependencies=[Depends(_wymagaj_modul_rezerwacje)],
@@ -71,6 +138,7 @@ def get_reguly_rezerwacji(db: Session = Depends(get_db)):
         models.SalaRezerwacyjna.kolejnosc,
         models.SalaRezerwacyjna.id,
     ).all()
+    polityki_platnosci = _polityki_platnosci(db)
     return {
         "wersja": 3,
         "polityka": _polityka_out(cfg),
@@ -82,12 +150,126 @@ def get_reguly_rezerwacji(db: Session = Depends(get_db)):
             schemas.RegulaDostepnosciRezerwacjiOut.model_validate(row).model_dump(mode="json")
             for row in nadpisania
         ],
+        "polityki_platnosci": [
+            _polityka_platnosci_out(row) for row in polityki_platnosci
+        ],
+        "legacy_zadatek_fallback": reservation_payments.legacy_fallback_public_dict(cfg),
         "wyjatki": [
             schemas.WyjatekKalendarzaOut.model_validate(row).model_dump(mode="json")
             for row in wyjatki
         ],
         "sale": [_sala_out(row) for row in sale],
     }
+
+
+@router.get(
+    "/api/polityki-platnosci-rezerwacji",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def lista_polityk_platnosci_rezerwacji(db: Session = Depends(get_db)):
+    return [_polityka_platnosci_out(row) for row in _polityki_platnosci(db)]
+
+
+@router.post(
+    "/api/polityki-platnosci-rezerwacji",
+    status_code=201,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def dodaj_polityke_platnosci_rezerwacji(
+    dane: schemas.PolitykaPlatnosciRezerwacjiIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    _waliduj_polityke_platnosci(db, dane)
+    now = utcnow_naive()
+    row = models.PolitykaPlatnosciRezerwacji(
+        **dane.model_dump(),
+        utworzono_at=now,
+        zaktualizowano_at=now,
+    )
+    db.add(row)
+    try:
+        db.flush()
+        _audyt_polityki_platnosci(
+            db,
+            user,
+            "platnosc_policy_create",
+            row,
+            before=None,
+            after=_polityka_platnosci_out(row),
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Nie udało się zapisać polityki płatności.") from exc
+    db.refresh(row)
+    return _polityka_platnosci_out(row)
+
+
+@router.put(
+    "/api/polityki-platnosci-rezerwacji/{polityka_id}",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def edytuj_polityke_platnosci_rezerwacji(
+    polityka_id: int,
+    dane: schemas.PolitykaPlatnosciRezerwacjiIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    row = db.get(models.PolitykaPlatnosciRezerwacji, polityka_id)
+    if row is None:
+        raise HTTPException(404, "Brak polityki płatności.")
+    _waliduj_polityke_platnosci(db, dane)
+    before = _polityka_platnosci_out(row)
+    for key, value in dane.model_dump().items():
+        setattr(row, key, value)
+    row.zaktualizowano_at = utcnow_naive()
+    try:
+        db.flush()
+        _audyt_polityki_platnosci(
+            db,
+            user,
+            "platnosc_policy_update",
+            row,
+            before=before,
+            after=_polityka_platnosci_out(row),
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Nie udało się zapisać polityki płatności.") from exc
+    db.refresh(row)
+    return _polityka_platnosci_out(row)
+
+
+@router.delete(
+    "/api/polityki-platnosci-rezerwacji/{polityka_id}",
+    status_code=204,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def usun_polityke_platnosci_rezerwacji(
+    polityka_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    row = db.get(models.PolitykaPlatnosciRezerwacji, polityka_id)
+    if row is None:
+        raise HTTPException(404, "Brak polityki płatności.")
+    _audyt_polityki_platnosci(
+        db,
+        user,
+        "platnosc_policy_delete",
+        row,
+        before=_polityka_platnosci_out(row),
+        after=None,
+    )
+    db.delete(row)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Polityka jest nadal używana.") from exc
+    return Response(status_code=204)
 
 
 @router.put(

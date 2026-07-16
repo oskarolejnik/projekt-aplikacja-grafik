@@ -64,6 +64,17 @@ def test_no_show_fee_tworzy_naleznosc(admin_client):
     assert admin_client.post(f"/api/rezerwacje-stolik/{rid}/status", json={"status": "no_show"}).status_code == 200
     pl = admin_client.get(f"/api/platnosci?termin_id={rid}").json()
     assert len(pl) == 1 and pl[0]["kwota"] == 50.0
+    assert pl[0]["provider"] == "ledger"
+    assert pl[0]["rodzaj"] == "no_show"
+    assert pl[0]["link"] is None
+
+    settled = admin_client.post(f"/api/platnosci/{pl[0]['id']}/oplacona")
+    assert settled.status_code == 200, settled.text
+    assert settled.json()["status"] == "oplacona"
+    reservation = admin_client.get(
+        f"/api/rezerwacje-stolik?start={PON}&end={PON}"
+    ).json()["rezerwacje"]
+    assert next(row for row in reservation if row["id"] == rid)["zadatek"] == 0
 
 
 def test_no_show_fee_wylaczona_brak(admin_client):

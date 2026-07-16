@@ -52,8 +52,9 @@ DEV_ORIGINS = [
 ]
 
 # Origins aplikacji NATYWNEJ (Capacitor). WebView łączy się cross-origin z adresem
-# instancji, więc te originy muszą być dozwolone ZAWSZE (także w produkcji). Bezpieczne:
-# API autoryzuje bearer-tokenem (nie ciasteczkami), więc CORS nie jest tu granicą bezpieczeństwa.
+# instancji, więc te originy muszą być dozwolone ZAWSZE (także w produkcji).
+# Prywatne API używa bearer-tokenów. Credentialed cookie publicznej rezerwacji jest
+# dodatkowo HostOnly, SameSite i chronione kontrolą Origin przy mutacjach.
 #   iOS         → capacitor://localhost
 #   Android     → https://localhost (Capacitor 6+) oraz http://localhost (starsze / server.androidScheme)
 NATIVE_ORIGINS = [

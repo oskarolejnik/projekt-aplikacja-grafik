@@ -1,5 +1,6 @@
 import { formatReservationDate } from '../../lib/publicReservation'
 import { Icon } from '../../lib/icons'
+import PublicReservationPayment from './PublicReservationPayment'
 
 const ACTIVE_STATUSES = new Set(['rezerwacja', 'potwierdzona'])
 
@@ -9,28 +10,36 @@ export default function PublicReservationResult({
   kind,
   cancelling,
   cancelError,
+  paymentBusy,
+  paymentError,
   onCancel,
+  onRetryPayment,
   onNewReservation,
 }) {
   const reservation = result.rezerwacja || result.wpis || {}
   const status = reservation.status
   const cancelled = status === 'odwolana'
   const waitlist = kind === 'waitlist'
+  const payment = result.platnosc
+  const paymentPending = !waitlist && ['oczekuje', 'nieudana', 'wygasla'].includes(payment?.status)
+  const paymentDone = ['autoryzowana', 'oplacona'].includes(payment?.status)
   const title = cancelled
     ? 'Rezerwacja odwołana'
     : waitlist
       ? 'Jesteś na liście oczekujących'
-      : status === 'potwierdzona'
-        ? 'Rezerwacja potwierdzona'
-        : 'Rezerwacja przyjęta'
+      : paymentPending
+        ? 'Dokończ rezerwację'
+        : status === 'potwierdzona'
+          ? 'Rezerwacja potwierdzona'
+          : 'Rezerwacja przyjęta'
 
   return (
     <section className="text-center" aria-labelledby="public-reservation-result-title">
       <div
-        className={`mx-auto mb-5 grid h-14 w-14 place-items-center rounded-full ${cancelled ? 'bg-danger/10 text-danger' : 'bg-mint/15 text-mint'}`}
+        className={`mx-auto mb-5 grid h-14 w-14 place-items-center rounded-full ${cancelled ? 'bg-danger/10 text-danger' : paymentPending ? 'bg-white/[0.06] text-ink' : 'bg-mint/15 text-mint'}`}
         aria-hidden="true"
       >
-        <Icon name={cancelled ? 'close' : 'check'} className="h-7 w-7" strokeWidth={1.8} />
+        <Icon name={cancelled ? 'close' : paymentPending ? 'clock' : 'check'} className="h-7 w-7" strokeWidth={1.8} />
       </div>
       <h2
         ref={headingRef}
@@ -45,9 +54,13 @@ export default function PublicReservationResult({
           ? 'Lokal skontaktuje się z Tobą, gdy pojawi się miejsce pasujące do zgłoszenia.'
           : cancelled
             ? 'Termin został zwolniony. W każdej chwili możesz wyszukać nowy.'
-            : status === 'rezerwacja'
-              ? 'Lokal potwierdzi rezerwację. Dane wizyty są widoczne poniżej.'
-              : 'Miejsce czeka na Ciebie. Dane wizyty są widoczne poniżej.'}
+            : paymentPending
+              ? 'Termin jest zapisany. Dokończ bezpieczną płatność, aby spełnić politykę lokalu.'
+              : paymentDone
+                ? 'Płatność została potwierdzona. Dane wizyty są widoczne poniżej.'
+                : status === 'rezerwacja'
+                  ? 'Lokal potwierdzi rezerwację. Dane wizyty są widoczne poniżej.'
+                  : 'Miejsce czeka na Ciebie. Dane wizyty są widoczne poniżej.'}
       </p>
 
       <dl className="mt-6 divide-y divide-line border-y border-line text-left text-sm">
@@ -69,13 +82,22 @@ export default function PublicReservationResult({
         ) : null}
       </dl>
 
+      {!waitlist ? (
+        <PublicReservationPayment
+          payment={payment}
+          busy={paymentBusy}
+          error={paymentError}
+          onRetry={onRetryPayment}
+        />
+      ) : null}
+
       {cancelError ? (
         <div className="mt-5 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-left" role="alert">
           <p className="text-sm text-danger">{cancelError}</p>
         </div>
       ) : null}
 
-      {!waitlist && result.management_token && ACTIVE_STATUSES.has(status) ? (
+      {!waitlist && (result.management_available || result.management_token) && ACTIVE_STATUSES.has(status) ? (
         <button
           type="button"
           onClick={onCancel}

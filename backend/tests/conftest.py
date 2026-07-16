@@ -22,6 +22,10 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 # Musi być ustawione PRZED importem `database`/`main` (czytają env przy imporcie).
+os.environ["APP_ENV"] = "test"
+# Testy nigdy nie dziedziczą produkcyjnego providera ani kluczy operatora z powłoki.
+# Scenariusze Stripe ustawiają pełny kontrakt jawnie przez monkeypatch.
+os.environ["PAYMENTS_PROVIDER"] = "sandbox"
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("TOKEN_TTL_MINUTES", "720")
 # WYMUSZAMY (override, nie setdefault): testy ingestu hardkodują nagłówek

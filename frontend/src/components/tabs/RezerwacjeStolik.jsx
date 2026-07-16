@@ -17,6 +17,7 @@ import ReservationAllocationSummary from './ReservationAllocationSummary'
 import ReservationCommunicationPanel from './ReservationCommunicationPanel'
 import ReservationCommunicationStatus from './ReservationCommunicationStatus'
 import ReservationOverridePanel from './ReservationOverridePanel'
+import ReservationPaymentPanel from './ReservationPaymentPanel'
 
 // Zarządzanie rezerwacjami stolików (admin): lista dnia + formularz + zmiana statusu + stoliki.
 // Backend: /api/rezerwacje-stolik, /api/stoliki. Moduł za flagą LokalConfig.modul_rezerwacje.
@@ -211,6 +212,7 @@ export default function RezerwacjeStolik({
   const reservationNameRef = useRef(null)
   const [modalAction, setModalAction] = useState(null)
   const [modalFeedback, setModalFeedback] = useState(null)
+  const [hasManagedPayment, setHasManagedPayment] = useState(false)
   const [modalOverrideDraft, setModalOverrideDraft] = useState(emptyOverrideDraft)
   const [modalAllocationPreview, setModalAllocationPreview] = useState(null)
   const [modalAllocationError, setModalAllocationError] = useState(null)
@@ -341,6 +343,7 @@ export default function RezerwacjeStolik({
     modalInitial.current = null
     probaZapisuRef.current = null
     setModalFeedback(null)
+    setHasManagedPayment(false)
     clearModalAllocation()
     setModal(null)
     if (modal || (selectionControlled && reservationId != null)) onReservationClose?.()
@@ -372,6 +375,7 @@ export default function RezerwacjeStolik({
     modalInitial.current = reservationSnapshot(draft)
     probaZapisuRef.current = null
     setModalFeedback(null)
+    setHasManagedPayment(false)
     setModalOverrideDraft(emptyOverrideDraft())
     clearModalAllocation()
     setModal(draft)
@@ -406,6 +410,7 @@ export default function RezerwacjeStolik({
     modalInitial.current = null
     probaZapisuRef.current = null
     setModalFeedback(null)
+    setHasManagedPayment(false)
     setModalOverrideDraft(emptyOverrideDraft())
     clearModalAllocation()
     setModal(null)
@@ -1150,7 +1155,8 @@ export default function RezerwacjeStolik({
               ) : null}
               {canViewFinances ? (
                 <label className="field-label">Zadatek (zł)
-                  <input type="number" min="0" step="0.01" value={modal.zadatek ?? 0} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, zadatek: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
+                  <input type="number" min="0" step="0.01" value={modal.zadatek ?? 0} disabled={!!modalAction || (Boolean(modal.id) && hasManagedPayment)} onChange={(event) => { setModal((current) => ({ ...current, zadatek: event.target.value })); clearModalConflict() }} className="field mt-1.5" />
+                  {modal.id && hasManagedPayment ? <span className="mt-1.5 block text-xs font-normal leading-relaxed text-muted">Kwotę aktualizuje automatycznie potwierdzona płatność.</span> : null}
                 </label>
               ) : null}
               {canViewNotes ? (
@@ -1160,6 +1166,15 @@ export default function RezerwacjeStolik({
               ) : null}
               </div>
             </div>
+
+            {canViewFinances && modal.id ? (
+              <ReservationPaymentPanel
+                reservationId={modal.id}
+                disabled={reservationDirty || Boolean(modalAction)}
+                confirmAction={confirm}
+                onManagedPaymentChange={setHasManagedPayment}
+              />
+            ) : null}
 
             {canViewContacts && modal.id ? (
               <ReservationCommunicationPanel

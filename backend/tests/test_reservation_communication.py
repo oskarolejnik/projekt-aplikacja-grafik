@@ -518,7 +518,12 @@ def test_uncertain_requires_explicit_reconciliation_before_retry(db, admin):
 def test_table_ready_is_stamped_only_after_confirmed_or_reconciled_delivery(
     db,
     admin,
+    monkeypatch,
 ):
+    # Enqueue and worker must share one deterministic clock. Without freezing
+    # `_now`, this test becomes time-of-day dependent once the wall clock moves
+    # past the fixed `NOW` value used by the worker below.
+    monkeypatch.setattr(communication, "_now", lambda value=None: value or NOW)
     waitlist = models.ListaOczekujacych(
         data=NOW.date(),
         godz_od=time(18, 0),

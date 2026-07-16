@@ -207,6 +207,93 @@ _R2_REVISION = "0058_r22b_strategia_proweniencja"
 _R3_REVISION = "0059_r3_reguly_dostepnosci"
 _R5A_REVISION = "0061_r5a_public_security"
 _R5B_REVISION = "0062_r5b_communication_outbox"
+_R5C_REVISION = "0063_r5c_reservation_payments"
+_R5C_TABLES = {
+    "polityki_platnosci_rezerwacji",
+    "rezerwacje_platnosci_polecenia",
+    "rezerwacje_platnosci_webhooki",
+}
+_R5C_BASE_COLUMNS = {
+    "platnosci": {
+        "polityka_id",
+        "kwota_minor",
+        "przechwycono_minor",
+        "zwrocono_minor",
+        "waluta",
+        "rodzaj",
+        "refund_status",
+        "tryb_przechwycenia",
+        "provider_checkout_session_id",
+        "provider_payment_intent_id",
+        "provider_charge_id",
+        "reservation_ref",
+        "creation_key",
+        "policy_snapshot",
+        "expires_at",
+        "authorization_expires_at",
+        "zaktualizowano_at",
+        "autoryzowano_at",
+        "nieudana_at",
+        "wygasla_at",
+        "anulowano_at",
+        "zwrocono_at",
+        "last_error_code",
+        "version",
+    },
+}
+_R5C_ADOPTION_TABLES = _R5C_TABLES | set(_R5C_BASE_COLUMNS)
+_R5C_MODEL_TABLES = {
+    table_name: Base.metadata.tables[table_name]
+    for table_name in _R5C_ADOPTION_TABLES
+}
+_R5C_COLUMNS = {
+    table_name: (
+        set(_R5C_BASE_COLUMNS[table_name])
+        if table_name in _R5C_BASE_COLUMNS
+        else {column.name for column in model_table.columns}
+    )
+    for table_name, model_table in _R5C_MODEL_TABLES.items()
+}
+_R5C_INDEXES = {
+    table_name: {
+        index.name: (
+            tuple(column.name for column in index.columns),
+            bool(index.unique),
+        )
+        for index in model_table.indexes
+        if index.name
+    }
+    for table_name, model_table in _R5C_MODEL_TABLES.items()
+}
+_R5C_UNIQUES = {
+    table_name: {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in model_table.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name
+    }
+    for table_name, model_table in _R5C_MODEL_TABLES.items()
+}
+_R5C_CHECKS = {
+    table_name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in model_table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    for table_name, model_table in _R5C_MODEL_TABLES.items()
+}
+_R5C_FOREIGN_KEYS = {
+    table_name: {
+        (
+            tuple(element.parent.name for element in constraint.elements),
+            constraint.elements[0].column.table.name,
+            tuple(element.column.name for element in constraint.elements),
+            str(constraint.ondelete or "").upper(),
+        )
+        for constraint in model_table.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    for table_name, model_table in _R5C_MODEL_TABLES.items()
+}
 _R5B_TABLES = {
     "rezerwacje_wiadomosci_outbox",
     "rezerwacje_wiadomosci_proby",
@@ -1066,6 +1153,10 @@ def _r5a_type_signature(column_type):
         return ("json",)
     if isinstance(column_type, sqltypes.Boolean):
         return ("boolean",)
+    if isinstance(column_type, sqltypes.Float):
+        # SQLite reflects FLOAT while PostgreSQL may report DOUBLE PRECISION;
+        # both are the portable SQLAlchemy Float contract used by legacy kwota.
+        return ("float",)
     if isinstance(column_type, sqltypes.SmallInteger):
         return ("smallint",)
     if isinstance(column_type, sqltypes.BigInteger):
@@ -1492,7 +1583,7 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     """
     if not (
         model_tables - {_R1A_AUDIT_TABLE} - _R2_TABLES - _R3_TABLES
-        - _R5A_TABLES - _R5B_TABLES
+        - _R5A_TABLES - _R5B_TABLES - _R5C_TABLES
     ).issubset(tables):
         return False
     for table_name in _R0B_LEDGER_TABLES:
@@ -2718,6 +2809,151 @@ def _validate_r5b_adoption_schema(inspector=None) -> bool:
     return True
 
 
+def _validate_r5c_adoption_schema(inspector=None) -> bool:
+    """Validates an unversioned current-model schema before stamping 0063."""
+    from sqlalchemy import inspect
+
+    inspector = inspector or inspect(engine)
+    bind = getattr(inspector, "bind", None)
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    dialect_name = dialect_name or engine.dialect.name
+    tables = set(inspector.get_table_names())
+    if not _R5C_ADOPTION_TABLES.issubset(tables):
+        raise RuntimeError(
+            "Schemat R5c jest niekompletny; nie mozna oznaczyc migracji 0063."
+        )
+
+    for table_name, expected_columns in _R5C_COLUMNS.items():
+        _validate_r5a_column_contract(
+            inspector,
+            table_name,
+            expected_columns,
+            exact=table_name in _R5C_TABLES,
+        )
+        expected_pk = tuple(
+            column.name
+            for column in _R5C_MODEL_TABLES[table_name].primary_key.columns
+        )
+        actual_pk = tuple(
+            inspector.get_pk_constraint(table_name).get("constrained_columns")
+            or ()
+        )
+        if actual_pk != expected_pk:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowy PRIMARY KEY R5c."
+            )
+
+        expected_indexes = _R5C_INDEXES[table_name]
+        expected_uniques = _R5C_UNIQUES[table_name]
+        semantic_uniques = {}
+        reflected_indexes = {}
+
+        raw_uniques = inspector.get_unique_constraints(table_name)
+        for item in raw_uniques:
+            name = item.get("name")
+            columns = tuple(item.get("column_names") or ())
+            is_constraint = expected_uniques.get(name) == columns
+            is_unique_index = expected_indexes.get(name) == (columns, True)
+            if not name or (not is_constraint and not is_unique_index):
+                raise RuntimeError(
+                    f"Tabela {table_name} ma nadmiarowe lub nienazwane "
+                    "ograniczenie UNIQUE R5c."
+                )
+            semantic_uniques[name] = columns
+
+        raw_indexes = inspector.get_indexes(table_name)
+        for item in raw_indexes:
+            name = item.get("name")
+            columns = tuple(item.get("column_names") or ())
+            unique = bool(item.get("unique"))
+            dialect_options = item.get("dialect_options") or {}
+            has_predicate = any(
+                key.endswith("_where")
+                and value is not None
+                and str(value).strip()
+                for key, value in dialect_options.items()
+            )
+            if not name or has_predicate:
+                raise RuntimeError(
+                    f"Tabela {table_name} ma nieprawidlowy indeks R5c."
+                )
+
+            if expected_uniques.get(name) == columns and unique:
+                # PostgreSQL can mirror a named UNIQUE constraint as an index.
+                semantic_uniques[name] = columns
+                continue
+
+            expected_shape = expected_indexes.get(name)
+            if expected_shape != (columns, unique):
+                raise RuntimeError(
+                    f"Tabela {table_name} ma nadmiarowy lub nieprawidlowy "
+                    f"indeks R5c: {name}."
+                )
+            reflected_indexes[name] = (columns, unique)
+            if unique:
+                semantic_uniques[name] = columns
+
+        for name, expected_columns in expected_uniques.items():
+            if semantic_uniques.get(name) != expected_columns:
+                raise RuntimeError(
+                    f"Ograniczenie {name} ma nieprawidlowa definicje UNIQUE R5c."
+                )
+        for name, expected_shape in expected_indexes.items():
+            if reflected_indexes.get(name) == expected_shape:
+                continue
+            columns, unique = expected_shape
+            if unique and semantic_uniques.get(name) == columns:
+                continue
+            raise RuntimeError(
+                f"Indeks {name} ma nieprawidlowa definicje R5c."
+            )
+
+        raw_fks = inspector.get_foreign_keys(table_name)
+        reflected_fks = {
+            (
+                tuple(item.get("constrained_columns") or ()),
+                item.get("referred_table"),
+                tuple(item.get("referred_columns") or ()),
+                str((item.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for item in raw_fks
+        }
+        if (
+            len(raw_fks) != len(_R5C_FOREIGN_KEYS[table_name])
+            or reflected_fks != _R5C_FOREIGN_KEYS[table_name]
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma dokladnie wymaganych FK R5c."
+            )
+
+        raw_checks = inspector.get_check_constraints(table_name)
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in raw_checks
+            if item.get("name")
+        }
+        if (
+            len(raw_checks) != len(_R5C_CHECKS[table_name])
+            or any(not item.get("name") for item in raw_checks)
+            or set(reflected_checks) != set(_R5C_CHECKS[table_name])
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} ma nadmiarowy, nienazwany lub "
+                "brakujacy CHECK R5c."
+            )
+        for name, expected_sql in _R5C_CHECKS[table_name].items():
+            actual_sql = reflected_checks.get(name)
+            if (
+                actual_sql is None
+                or _r5a_check_signature(actual_sql, dialect_name)
+                != _r5a_check_signature(expected_sql, dialect_name)
+            ):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje R5c."
+                )
+    return True
+
+
 def _invalidate_legacy_public_tokens() -> int:
     """Clears reversible plaintext public tokens on the stamp-only adoption path."""
     from sqlalchemy import inspect, text
@@ -2796,6 +3032,28 @@ def init_db():
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
         complete_current = model_tables.issubset(tables)
+        r5c_tables_present = _R5C_TABLES & tables
+        r5c_base_present = {
+            table_name: expected & {
+                column["name"] for column in insp.get_columns(table_name)
+            }
+            for table_name, expected in _R5C_BASE_COLUMNS.items()
+            if table_name in tables
+        }
+        r5c_base_complete = all(
+            present == _R5C_BASE_COLUMNS[table_name]
+            for table_name, present in r5c_base_present.items()
+        ) and set(r5c_base_present) == set(_R5C_BASE_COLUMNS)
+        if (
+            (r5c_tables_present or any(r5c_base_present.values()))
+            and not (
+                r5c_tables_present == _R5C_TABLES
+                and r5c_base_complete
+            )
+        ):
+            raise RuntimeError(
+                "Schemat R5c jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
+            )
         r5b_tables_present = _R5B_TABLES & tables
         r5b_base_present = {
             table_name: expected & {
@@ -2828,29 +3086,48 @@ def init_db():
             raise RuntimeError(
                 "Schemat R3 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
             )
+        complete_r5b = (
+            (model_tables - _R5C_TABLES).issubset(tables)
+            and _R5B_TABLES.issubset(tables)
+            and r5b_base_complete
+            and not r5c_tables_present
+            and not any(r5c_base_present.values())
+        )
         complete_r5a = (
-            (model_tables - _R5B_TABLES).issubset(tables)
+            (model_tables - _R5B_TABLES - _R5C_TABLES).issubset(tables)
             and _R5A_TABLES.issubset(tables)
             and not r5b_tables_present
             and not any(r5b_base_present.values())
+            and not r5c_tables_present
+            and not any(r5c_base_present.values())
         )
         complete_r3 = (
-            (model_tables - _R5A_TABLES - _R5B_TABLES).issubset(tables)
+            (
+                model_tables - _R5A_TABLES - _R5B_TABLES - _R5C_TABLES
+            ).issubset(tables)
             and _R3_TABLES.issubset(tables)
             and not r5a_tables_present
             and not r5b_tables_present
+            and not r5c_tables_present
+            and not any(r5c_base_present.values())
         )
         complete_r2 = (
-            (model_tables - _R3_TABLES - _R5A_TABLES - _R5B_TABLES).issubset(tables)
+            (
+                model_tables - _R3_TABLES - _R5A_TABLES
+                - _R5B_TABLES - _R5C_TABLES
+            ).issubset(tables)
             and _R2_TABLES.issubset(tables)
             and not r3_tables_present
             and not r5a_tables_present
             and not r5b_tables_present
+            and not r5c_tables_present
+            and not any(r5c_base_present.values())
         )
         complete_r0b = _is_complete_r0b_schema(insp, tables, model_tables)
         pre_r0b_tables = (
             model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE}
-            - _R2_TABLES - _R3_TABLES - _R5A_TABLES - _R5B_TABLES
+            - _R2_TABLES - _R3_TABLES - _R5A_TABLES
+            - _R5B_TABLES - _R5C_TABLES
         )
         termin_columns = (
             {column["name"] for column in insp.get_columns("terminy")}
@@ -2868,6 +3145,7 @@ def init_db():
             _validate_r2_adoption_schema(insp)
             _validate_r5a_adoption_schema(insp)
             _validate_r5b_adoption_schema(insp)
+            _validate_r5c_adoption_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
             _rebuild_rezerwacje_oblozenie_ledger()
@@ -2877,6 +3155,21 @@ def init_db():
             _validate_r3_adoption_schema(refreshed)
             _validate_r5a_adoption_schema(refreshed)
             _validate_r5b_adoption_schema(refreshed)
+            _validate_r5c_adoption_schema(refreshed)
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, _R5C_REVISION)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            return
+        if complete_r5b:
+            # Pełny niewersjonowany schemat 0062 nie może dostać tabel R5c przez
+            # create_all: migracja 0063 musi wykonać walidację i backfill kwot.
+            _validate_r1a_audit_schema(insp)
+            _validate_r2_adoption_schema(insp)
+            _validate_r3_adoption_schema(insp)
+            _validate_r5a_adoption_schema(insp)
+            _validate_r5b_adoption_schema(insp)
+            _invalidate_legacy_public_tokens()
             _require_alembic_run(
                 lambda command, cfg: command.stamp(cfg, _R5B_REVISION)
             )

@@ -29,13 +29,36 @@ def _utworz_u_dostawcy(kwota: float, external_id: str) -> tuple:
     return ("sandbox", f"/?platnosc={external_id}")
 
 
-def utworz_platnosc(db, termin_id, kwota, *, commit: bool = True) -> models.Platnosc:
+def utworz_platnosc(
+    db,
+    termin_id,
+    kwota,
+    *,
+    commit: bool = True,
+    provider_override: str | None = None,
+) -> models.Platnosc:
     """Tworzy płatność zadatku (status ``oczekuje``).
 
     ``commit=False`` pozwala rezerwacji, płatności i wynikowi idempotencji trafić do
     jednej transakcji. Dotychczasowi wywołujący zachowują historyczny auto-commit.
     """
     external_id = secrets.token_urlsafe(24)
+    if provider_override is not None:
+        if provider_override not in {"sandbox", "ledger"}:
+            raise ValueError("Nieobsługiwany provider legacy.")
+        provider = provider_override
+        link = f"/?platnosc={external_id}" if provider == "sandbox" else None
+        p = models.Platnosc(
+            termin_id=termin_id, kwota=float(kwota or 0), status="oczekuje",
+            provider=provider, external_id=external_id, link=link,
+            utworzono_at=utcnow_naive(),
+        )
+        db.add(p)
+        if commit:
+            db.commit(); db.refresh(p)
+        else:
+            db.flush()
+        return p
     try:
         provider, link = _utworz_u_dostawcy(float(kwota or 0), external_id)
     except Exception as e:  # noqa: BLE001 — błąd bramki nie wywraca zapisu

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
-import { localDateIso } from '../../lib/reservationRoute'
+import { localDateIso, shiftDateIso } from '../../lib/reservationRoute'
 import { registerReservationLeaveGuard } from '../../lib/reservationLeaveGuard'
 import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
 import { Icon } from '../../lib/icons'
@@ -20,6 +20,16 @@ const toNumber = (value, fallback = 0) => {
 }
 const optionalNumber = (value) => value === '' || value == null ? null : Math.max(0, Math.round(toNumber(value)))
 const optionalPositiveNumber = (value) => value === '' || value == null ? null : Math.max(1, Math.round(toNumber(value, 1)))
+const formatPlnMinor = (value) => `${(Number(value || 0) / 100).toFixed(2).replace('.', ',')} zł`
+const peopleFromLabel = (value) => {
+  const count = Math.max(1, Math.round(toNumber(value, 1)))
+  return `${count} ${count === 1 ? 'osoby' : 'osób'}`
+}
+const paymentPartyRange = (row = {}) => {
+  const min = Math.max(1, toNumber(row.min_osob, 1))
+  const max = Math.max(0, toNumber(row.max_osob, 0))
+  return max > 0 ? `${min}–${max} os.` : `${min}+ os.`
+}
 
 const policyFrom = (value = {}) => ({
   okno_wyprzedzenia_dni: Math.max(0, Math.round(toNumber(value.okno_wyprzedzenia_dni ?? value.rez_okno_wyprzedzenia_dni, 90))),
@@ -181,6 +191,58 @@ const roomAvailabilityPayload = (draft) => ({
   limit_jednoczesnych_rez: optionalNumber(draft.limit_jednoczesnych_rez),
   limit_jednoczesnych_osob: optionalNumber(draft.limit_jednoczesnych_osob),
   domyslny_bufor_min: optionalNumber(draft.domyslny_bufor_min),
+})
+
+const emptyPaymentPolicy = () => ({
+  nazwa: 'Zadatek online',
+  aktywna: true,
+  data: '',
+  serwis_id: '',
+  kanal: 'online',
+  min_osob: 1,
+  max_osob: 0,
+  rodzaj: 'zadatek',
+  sposob_kwoty: 'od_osoby',
+  kwota: '20.00',
+  waznosc_min: 30,
+  po_niepowodzeniu: 'ponow',
+  zwrot_przy_anulowaniu: true,
+  priorytet: 100,
+})
+
+const paymentPolicyFrom = (row = {}) => ({
+  nazwa: row.nazwa || 'Polityka płatności',
+  aktywna: row.aktywna !== false,
+  data: row.data || '',
+  serwis_id: row.serwis_id ?? '',
+  kanal: row.kanal || 'online',
+  min_osob: Math.max(1, toNumber(row.min_osob, 1)),
+  max_osob: Math.max(0, toNumber(row.max_osob, 0)),
+  rodzaj: row.rodzaj || 'zadatek',
+  sposob_kwoty: row.sposob_kwoty || 'od_osoby',
+  kwota: ((Number(row.kwota_minor) || 0) / 100).toFixed(2),
+  waznosc_min: Math.max(30, toNumber(row.waznosc_min, 30)),
+  po_niepowodzeniu: row.po_niepowodzeniu || 'ponow',
+  zwrot_przy_anulowaniu: row.zwrot_przy_anulowaniu !== false,
+  priorytet: Math.max(0, toNumber(row.priorytet, 100)),
+})
+
+const paymentPolicyPayload = (draft) => ({
+  nazwa: draft.nazwa.trim(),
+  aktywna: Boolean(draft.aktywna),
+  data: draft.data || null,
+  serwis_id: draft.serwis_id === '' ? null : Number(draft.serwis_id),
+  kanal: draft.kanal,
+  min_osob: Math.max(1, Math.round(toNumber(draft.min_osob, 1))),
+  max_osob: Math.max(0, Math.round(toNumber(draft.max_osob, 0))),
+  rodzaj: draft.rodzaj,
+  sposob_kwoty: draft.sposob_kwoty,
+  kwota_minor: draft.rodzaj === 'brak' ? 0 : Math.max(0, Math.round(toNumber(draft.kwota) * 100)),
+  waluta: 'PLN',
+  waznosc_min: Math.max(30, Math.min(1440, Math.round(toNumber(draft.waznosc_min, 30)))),
+  po_niepowodzeniu: draft.po_niepowodzeniu,
+  zwrot_przy_anulowaniu: Boolean(draft.zwrot_przy_anulowaniu),
+  priorytet: Math.max(0, Math.round(toNumber(draft.priorytet, 100))),
 })
 
 const emptyException = () => ({
@@ -365,6 +427,63 @@ function ServiceEditor({ editor, busy, onChange, onCancel, onSave }) {
   )
 }
 
+function PaymentPolicyEditor({ editor, services, busy, onChange, onCancel, onSave }) {
+  const draft = editor.draft
+  const update = (patch) => onChange({ ...editor, draft: { ...draft, ...patch } })
+  const paymentRequired = draft.rodzaj !== 'brak'
+
+  return (
+    <form onSubmit={(event) => { event.preventDefault(); onSave() }} className="mt-5 border-t border-line pt-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h4 className="text-base font-semibold text-ink">{editor.id ? 'Edytuj politykę płatności' : 'Nowa polityka płatności'}</h4>
+          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Najdokładniejsza pasująca reguła wygrywa: konkretny dzień i serwis przed zasadą ogólną.</p>
+        </div>
+        <Button variant="subtle" size="sm" onClick={onCancel} disabled={Boolean(busy)}>Anuluj</Button>
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Nazwa" wide><input value={draft.nazwa} onChange={(event) => update({ nazwa: event.target.value })} className="field mt-1.5 min-h-11" maxLength={96} disabled={Boolean(busy)} required /></Field>
+        <Field label="Serwis" hint="Puste pole oznacza każdy serwis."><select value={draft.serwis_id} onChange={(event) => update({ serwis_id: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)}><option value="">Każdy serwis</option>{services.map((row) => <option key={row.id} value={row.id}>{row.nazwa || 'Serwis'} · {DAY_SHORT[row.dzien_tygodnia]}</option>)}</select></Field>
+        <Field label="Konkretny dzień" hint={draft.rodzaj === 'preautoryzacja' && draft.aktywna ? 'Wymagany: od dziś do 6 dni naprzód.' : 'Opcjonalnie — np. Sylwester albo wydarzenie specjalne.'}><input type="date" value={draft.data} min={draft.rodzaj === 'preautoryzacja' && draft.aktywna ? localDateIso() : undefined} max={draft.rodzaj === 'preautoryzacja' && draft.aktywna ? shiftDateIso(localDateIso(), 6) : undefined} onChange={(event) => update({ data: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)} /></Field>
+        <Field label="Od ilu osób"><input type="number" min="1" value={draft.min_osob} onChange={(event) => update({ min_osob: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)} /></Field>
+        <Field label="Do ilu osób" hint="0 oznacza brak górnej granicy."><input type="number" min="0" value={draft.max_osob} onChange={(event) => update({ max_osob: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)} /></Field>
+        <Field label="Kanał"><select value={draft.kanal} onChange={(event) => update({ kanal: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)}><option value="online">Tylko online</option><option value="wewnetrzna">Telefon / obsługa</option><option value="oba">Wszystkie kanały</option></select></Field>
+        <Field label="Wymaganie"><select value={draft.rodzaj} onChange={(event) => update({ rodzaj: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)}><option value="brak">Bez płatności</option><option value="zadatek">Zadatek</option><option value="preautoryzacja">Preautoryzacja karty</option></select></Field>
+        {paymentRequired ? (
+          <>
+            <Field label="Sposób liczenia"><select value={draft.sposob_kwoty} onChange={(event) => update({ sposob_kwoty: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)}><option value="od_osoby">Za każdą osobę</option><option value="stala">Stała kwota</option></select></Field>
+            <Field label="Kwota"><div className="relative mt-1.5"><input type="number" min="2" step="0.01" value={draft.kwota} onChange={(event) => update({ kwota: event.target.value })} className="field min-h-11 pr-12" disabled={Boolean(busy)} required /><span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted">zł</span></div></Field>
+            <Field label="Gdy płatność się nie uda"><select value={draft.po_niepowodzeniu} onChange={(event) => update({ po_niepowodzeniu: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)}><option value="ponow">Zachowaj termin i pozwól ponowić</option><option value="zwolnij">Zwolnij termin dla innych gości</option></select></Field>
+          </>
+        ) : null}
+      </div>
+
+      {draft.rodzaj === 'preautoryzacja' ? <Banner variant="warn" className="mt-4"><span>Bez schedulera ta reguła może dotyczyć tylko jednego, konkretnego dnia od dziś do 6 dni naprzód. Dla stałych zasad i dalszych terminów wybierz zadatek. BLIK i P24 nie obsługują blokady środków.</span></Banner> : null}
+
+      {paymentRequired ? (
+        <div className="mt-4 flex min-h-14 items-center justify-between gap-4 border-y border-line py-3">
+          <div><p className="text-sm font-medium text-ink">Automatyczny pełny zwrot po anulowaniu</p><p className="mt-0.5 text-xs leading-relaxed text-muted">Zwrot zostanie zlecony providerowi i pokaże się jako zakończony dopiero po webhooku.</p></div>
+          <Toggle checked={draft.zwrot_przy_anulowaniu} onChange={(value) => update({ zwrot_przy_anulowaniu: value })} label="Automatyczny zwrot po anulowaniu" disabled={Boolean(busy)} />
+        </div>
+      ) : null}
+
+      <details className="group mt-4 border-t border-line pt-2">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-2 text-sm font-semibold text-muted outline-none transition hover:bg-white/[0.03] hover:text-ink focus-visible:ring-2 focus-visible:ring-mint/70 [&::-webkit-details-marker]:hidden">Ustawienia techniczne<Icon name="chevronDown" className="h-4 w-4 transition-transform group-open:rotate-180" /></summary>
+        <div className="grid grid-cols-1 gap-4 px-2 pb-2 pt-4 sm:grid-cols-2">
+          <Field label="Ważność linku" hint="Stripe dopuszcza od 30 minut do 24 godzin."><div className="relative mt-1.5"><input type="number" min="30" max="1440" value={draft.waznosc_min} onChange={(event) => update({ waznosc_min: event.target.value })} className="field min-h-11 pr-14" disabled={Boolean(busy)} /><span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted">min</span></div></Field>
+          <Field label="Priorytet" hint="Mniejsza liczba wygrywa przy identycznym zakresie."><input type="number" min="0" value={draft.priorytet} onChange={(event) => update({ priorytet: event.target.value })} className="field mt-1.5 min-h-11" disabled={Boolean(busy)} /></Field>
+        </div>
+      </details>
+
+      <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <Button variant="subtle" size="sm" onClick={onCancel} disabled={Boolean(busy)}>Anuluj</Button>
+        <Button type="submit" variant="ghost" size="sm" loading={busy === 'payment-policy'} loadingLabel="Zapisuję politykę…" disabled={!editorDirty(editor) || !draft.nazwa.trim() || (paymentRequired && toNumber(draft.kwota) < 2) || Boolean(busy)}>Zapisz politykę</Button>
+      </div>
+    </form>
+  )
+}
+
 export default function ReservationAvailability({ active = true } = {}) {
   const { confirm } = useToast()
   const [data, setData] = useState(null)
@@ -378,6 +497,7 @@ export default function ReservationAvailability({ active = true } = {}) {
   const [serviceEditor, setServiceEditor] = useState(null)
   const [overrideEditor, setOverrideEditor] = useState(null)
   const [roomEditor, setRoomEditor] = useState(null)
+  const [paymentPolicyEditor, setPaymentPolicyEditor] = useState(null)
   const [exceptionEditor, setExceptionEditor] = useState(null)
   const [simulator, setSimulator] = useState({ data: localDateIso(), godz_od: '18:00', liczba_osob: 2, kanal: 'wewnetrzna', sala_id: '' })
   const [simulation, setSimulation] = useState(null)
@@ -385,7 +505,7 @@ export default function ReservationAvailability({ active = true } = {}) {
   const readControllerRef = useRef(null)
   const mutationControllerRef = useRef(null)
   const policyDirty = Boolean(policy && policyInitial && JSON.stringify(policy) !== JSON.stringify(policyInitial))
-  const dirty = policyDirty || editorDirty(serviceEditor) || editorDirty(overrideEditor) || editorDirty(roomEditor) || editorDirty(exceptionEditor)
+  const dirty = policyDirty || editorDirty(serviceEditor) || editorDirty(overrideEditor) || editorDirty(roomEditor) || editorDirty(paymentPolicyEditor) || editorDirty(exceptionEditor)
   const dirtyRef = useRef(dirty)
   dirtyRef.current = dirty
 
@@ -394,6 +514,14 @@ export default function ReservationAvailability({ active = true } = {}) {
       polityka: payload.polityka || {},
       serwisy: payload.serwisy || payload.godziny || [],
       nadpisania: payload.nadpisania || [],
+      polityki_platnosci: payload.polityki_platnosci || [],
+      legacy_zadatek_fallback: payload.legacy_zadatek_fallback || {
+        aktywna: false,
+        kwota_minor: 0,
+        min_osob: 1,
+        sposob_kwoty: 'od_osoby',
+        waluta: 'PLN',
+      },
       wyjatki: payload.wyjatki || [],
       sale: payload.sale || [],
     }
@@ -459,6 +587,7 @@ export default function ReservationAvailability({ active = true } = {}) {
     setServiceEditor(null)
     setOverrideEditor(null)
     setRoomEditor(null)
+    setPaymentPolicyEditor(null)
     setExceptionEditor(null)
     setSimulation(null)
     setFeedback(null)
@@ -567,6 +696,52 @@ export default function ReservationAvailability({ active = true } = {}) {
     await mutate('override-delete', (signal) => api(`/nadpisania-regul-rezerwacji/${row.id}`, 'DELETE', null, { signal }), 'Przywrócono zasady ogólne.')
   }
 
+  const savePaymentPolicy = async () => {
+    const editor = paymentPolicyEditor
+    if (!editor) return
+    const payload = paymentPolicyPayload(editor.draft)
+    if (payload.max_osob !== 0 && payload.max_osob < payload.min_osob) {
+      setFeedback({ type: 'error', message: 'Górna granica grupy nie może być mniejsza od dolnej.' })
+      return
+    }
+    if (payload.rodzaj !== 'brak' && payload.kwota_minor < 200) {
+      setFeedback({ type: 'error', message: 'Minimalna kwota płatności w Stripe to 2,00 zł.' })
+      return
+    }
+    if (payload.aktywna && payload.rodzaj === 'preautoryzacja') {
+      const today = localDateIso()
+      const lastSafeDay = shiftDateIso(today, 6)
+      if (!payload.data || payload.data < today || payload.data > lastSafeDay) {
+        setFeedback({
+          type: 'error',
+          message: 'Bez schedulera aktywna preautoryzacja wymaga konkretnego dnia od dziś do 6 dni naprzód. Dla stałej reguły wybierz zadatek.',
+        })
+        return
+      }
+    }
+    const saved = await mutate('payment-policy', (signal) => api(
+      editor.id ? `/polityki-platnosci-rezerwacji/${editor.id}` : '/polityki-platnosci-rezerwacji',
+      editor.id ? 'PUT' : 'POST',
+      payload,
+      { signal },
+    ), 'Polityka płatności została zapisana.')
+    if (saved) setPaymentPolicyEditor(null)
+  }
+
+  const deletePaymentPolicy = async (row) => {
+    const approved = await confirm(
+      `Usunąć politykę „${row.nazwa}”? Nowe rezerwacje wrócą do kolejnej pasującej reguły.`,
+      { title: 'Usuń politykę płatności', confirmText: 'Usuń politykę', cancelText: 'Zostaw' },
+    )
+    if (!approved) return
+    await mutate('payment-policy-delete', (signal) => api(
+      `/polityki-platnosci-rezerwacji/${row.id}`,
+      'DELETE',
+      null,
+      { signal },
+    ), 'Polityka płatności została usunięta.')
+  }
+
   const saveRoomAvailability = async () => {
     const editor = roomEditor
     if (!editor) return
@@ -664,6 +839,7 @@ export default function ReservationAvailability({ active = true } = {}) {
   const simulationOverrideRequired = simulation?.decision === 'override_required' || simulation?.can_override === true
   const simulationIssueCount = Math.max(violations.length, 1)
   const simulationDetails = violations.length ? violations : checks
+  const legacyDeposit = data?.legacy_zadatek_fallback
 
   if (loading && !data) {
     return (
@@ -749,6 +925,54 @@ export default function ReservationAvailability({ active = true } = {}) {
           ))}
         </div>
         {serviceEditor ? <ServiceEditor editor={serviceEditor} busy={busy} onChange={setServiceEditor} onCancel={() => setServiceEditor(null)} onSave={saveService} /> : null}
+      </section>
+
+      <section className="rounded-2xl border border-line bg-white/[0.02] p-5 sm:p-6" aria-labelledby="payment-policies-heading">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 id="payment-policies-heading" className="font-display text-lg font-semibold text-ink">Zadatki i preautoryzacja</h3>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">Ustal płatność dla konkretnego serwisu, dnia lub wielkości grupy. Najdokładniejsza pasująca reguła wygrywa.</p>
+          </div>
+          {!paymentPolicyEditor ? <Button variant="ghost" size="sm" onClick={() => { const draft = emptyPaymentPolicy(); setPaymentPolicyEditor({ id: null, draft, initial: draft }) }} disabled={Boolean(busy)}><Icon name="plus" className="h-4 w-4" /> Dodaj politykę</Button> : null}
+        </div>
+
+        {legacyDeposit?.aktywna ? (
+          <Banner variant="info" className="mt-5">
+            <div>
+              <p className="font-semibold text-ink">Starsza zasada zadatku nadal działa</p>
+              <p className="mt-1 text-muted">Gdy żadna z nowych reguł nie pasuje, dla grup od {peopleFromLabel(legacyDeposit.min_osob)} naliczamy {formatPlnMinor(legacyDeposit.kwota_minor)} za osobę. Aby wyłączyć ją w konkretnym zakresie, dodaj regułę „Bez płatności”.</p>
+            </div>
+          </Banner>
+        ) : null}
+
+        <div className="mt-5 divide-y divide-line border-y border-line">
+          {!data.polityki_platnosci.length ? (
+            <div className="py-6">
+              <p className="text-sm font-medium text-ink">{legacyDeposit?.aktywna ? 'Nie dodano jeszcze nowych reguł.' : 'Płatność nie jest wymagana przez nowy silnik reguł.'}</p>
+              <p className="mt-1 text-sm leading-relaxed text-muted">{legacyDeposit?.aktywna ? 'Do czasu dodania dokładniejszej reguły obowiązuje starsza zasada opisana powyżej.' : 'Dodaj politykę, jeśli wybrane rezerwacje mają wymagać zadatku albo czasowej blokady środków.'}</p>
+            </div>
+          ) : null}
+          {data.polityki_platnosci.map((row) => {
+            const service = data.serwisy.find((item) => Number(item.id) === Number(row.serwis_id))
+            const amount = `${formatPlnMinor(row.kwota_minor)}${row.sposob_kwoty === 'od_osoby' ? ' / os.' : ''}`
+            const scope = [row.data, service ? `${service.nazwa || 'Serwis'} · ${DAY_SHORT[service.dzien_tygodnia]}` : null, paymentPartyRange(row)].filter(Boolean).join(' · ')
+            const kind = row.rodzaj === 'brak' ? 'Bez płatności' : row.rodzaj === 'preautoryzacja' ? 'Preautoryzacja' : 'Zadatek'
+            return (
+              <div key={row.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2"><p className="break-words font-semibold text-ink">{row.nazwa}</p>{row.aktywna === false ? <span className="rounded-full border border-line px-2 py-0.5 text-xs font-medium text-muted">Wyłączona</span> : null}</div>
+                  <p className="mt-1 break-words text-sm text-muted">{kind}{row.rodzaj === 'brak' ? '' : ` · ${amount}`} · {scope}</p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button variant="subtle" size="sm" onClick={() => { const draft = paymentPolicyFrom(row); setPaymentPolicyEditor({ id: row.id, draft, initial: draft }) }} disabled={Boolean(busy)}>Edytuj</Button>
+                  <Button variant="subtle" size="sm" onClick={() => deletePaymentPolicy(row)} disabled={Boolean(busy)} className="text-danger hover:bg-danger/10" aria-label={`Usuń politykę ${row.nazwa}`}><Icon name="trash" className="h-4 w-4" /></Button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {paymentPolicyEditor ? <PaymentPolicyEditor editor={paymentPolicyEditor} services={data.serwisy} busy={busy} onChange={setPaymentPolicyEditor} onCancel={() => setPaymentPolicyEditor(null)} onSave={savePaymentPolicy} /> : null}
       </section>
 
       <details className="group rounded-2xl border border-line bg-white/[0.02]">

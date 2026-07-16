@@ -672,6 +672,115 @@ class PlatnoscIn(BaseModel):
     termin_id: Optional[int] = None
     kwota: float
 
+
+class PolitykaPlatnosciRezerwacjiIn(BaseModel):
+    """R5c: polityka płatności dla dokładnej daty, serwisu i zakresu grupy."""
+    nazwa: str = Field(min_length=1, max_length=96)
+    aktywna: bool = True
+    data: Optional[date] = None
+    serwis_id: Optional[int] = Field(default=None, gt=0)
+    kanal: Literal["oba", "online", "wewnetrzna"] = "oba"
+    min_osob: int = Field(default=1, ge=1)
+    max_osob: int = Field(default=0, ge=0)
+    rodzaj: Literal["brak", "zadatek", "preautoryzacja"] = "brak"
+    sposob_kwoty: Literal["stala", "od_osoby"] = "stala"
+    kwota_minor: int = Field(default=0, ge=0, le=99_999_999)
+    waluta: str = Field(default="PLN", min_length=3, max_length=3)
+    waznosc_min: int = Field(default=30, ge=30, le=1440)
+    po_niepowodzeniu: Literal["ponow", "zwolnij"] = "ponow"
+    zwrot_przy_anulowaniu: bool = True
+    priorytet: int = Field(default=100, ge=0)
+
+    @field_validator("nazwa")
+    @classmethod
+    def _payment_policy_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Nazwa polityki nie może być pusta.")
+        return value
+
+    @field_validator("waluta")
+    @classmethod
+    def _payment_policy_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value != "PLN":
+            raise ValueError("Płatności rezerwacji R5c obsługują wyłącznie PLN.")
+        return value
+
+    @model_validator(mode="after")
+    def _payment_policy_consistency(self):
+        if self.max_osob and self.max_osob < self.min_osob:
+            raise ValueError("Maksymalna grupa nie może być mniejsza od minimalnej.")
+        if self.rodzaj == "brak" and self.kwota_minor != 0:
+            raise ValueError("Polityka bez płatności musi mieć kwotę 0.")
+        if self.rodzaj != "brak" and self.kwota_minor < 200:
+            raise ValueError("Zadatek lub preautoryzacja wymagają co najmniej 2,00 PLN.")
+        return self
+
+
+class PolitykaPlatnosciRezerwacjiOut(PolitykaPlatnosciRezerwacjiIn):
+    id: int
+    utworzono_at: datetime
+    zaktualizowano_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlatnoscR5cOut(BaseModel):
+    id: int
+    termin_id: Optional[int] = None
+    kwota_minor: int = Field(ge=0, le=99_999_999)
+    przechwycono_minor: int = Field(ge=0, le=99_999_999)
+    zwrocono_minor: int = Field(ge=0, le=99_999_999)
+    waluta: str
+    rodzaj: Literal["zadatek", "preautoryzacja", "no_show", "reczna"]
+    status: Literal[
+        "oczekuje", "autoryzowana", "oplacona", "nieudana",
+        "wygasla", "anulowana", "zwrocona",
+    ]
+    refund_status: Literal["brak", "oczekuje", "czesciowy", "zwrocona", "nieudana"]
+    provider: str
+    link: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    authorization_expires_at: Optional[datetime] = None
+    utworzono_at: datetime
+    zaktualizowano_at: Optional[datetime] = None
+
+
+class ZwrotPlatnosciIn(BaseModel):
+    kwota_minor: Optional[int] = Field(default=None, gt=0, le=99_999_999)
+    powod: Literal["duplicate", "fraudulent", "requested_by_customer"] = "requested_by_customer"
+    notatka: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("notatka")
+    @classmethod
+    def _refund_note(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class PrzechwyceniePreautoryzacjiIn(BaseModel):
+    kwota_minor: Optional[int] = Field(default=None, gt=0, le=99_999_999)
+    powod: str = Field(min_length=3, max_length=64)
+    notatka: Optional[str] = Field(default=None, max_length=500)
+
+
+class PoleceniePlatnosciOut(BaseModel):
+    id: int
+    platnosc_id: int
+    typ: Literal["create_checkout", "capture", "cancel_authorization", "refund", "reconcile"]
+    stan: Literal["queued", "processing", "retry", "succeeded", "failed", "uncertain", "cancelled"]
+    kwota_minor: Optional[int] = None
+    liczba_prob: int = Field(ge=0)
+    maks_prob: int = Field(ge=1)
+    available_at: datetime
+    expires_at: datetime
+    last_error_code: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
 class UpgradeIn(BaseModel):
     """Zmiana pakietu subskrypcji (upgrade z dopłatą / downgrade z kredytem)."""
     tier: str

@@ -14,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0062_r5b_communication_outbox"
+HEAD = "0063_r5c_reservation_payments"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -30,6 +30,8 @@ _TABELE = [
     "rezerwacje_publiczne_holdy", "rezerwacje_tokeny_zarzadzania",
     "rezerwacje_zgody_publiczne", "rezerwacje_publiczne_kwoty",
     "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
+    "polityki_platnosci_rezerwacji", "platnosci",
+    "rezerwacje_platnosci_polecenia", "rezerwacje_platnosci_webhooki",
 ]
 
 
@@ -2579,9 +2581,139 @@ def test_migracja_0062_tworzy_outbox_i_ma_pusty_round_trip(tmp_path):
     assert upgraded_again.returncode == 0, upgraded_again.stderr
 
 
-def test_adopcja_pelnego_create_all_r5b_stampuje_0062(tmp_path):
-    db_file = tmp_path / "_r5b_create_all_adoption.db"
-    env = _env(db_file, "r5b-create-all-adoption")
+def test_migracja_0063_backfill_minor_unique_i_bezpieczny_downgrade(tmp_path):
+    db_file = tmp_path / "_r5c_payment_round_trip.db"
+    env = _env(db_file, "r5c-payment-round-trip")
+    upgraded_0062 = _alembic(env, "upgrade", "0062_r5b_communication_outbox")
+    assert upgraded_0062.returncode == 0, upgraded_0062.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.executemany(
+            "INSERT INTO platnosci "
+            "(id,kwota,status,provider,external_id,utworzono_at,oplacono_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                (1, 12.34, "oplacona", "sandbox", "legacy-correlation", "2026-07-16 10:00:00", "2026-07-16 10:01:00"),
+                (2, 0.29, "oczekuje", "sandbox", None, "2026-07-16 10:02:00", None),
+                # Wielokrotne NULL pozostaje legalne także po utworzeniu UNIQUE.
+                (3, 1.00, "oczekuje", "sandbox", None, "2026-07-16 10:03:00", None),
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        amounts = con.execute(
+            "SELECT id,kwota_minor,przechwycono_minor FROM platnosci ORDER BY id"
+        ).fetchall()
+        indexes = {
+            row[1]: bool(row[2])
+            for row in con.execute("PRAGMA index_list(platnosci)")
+        }
+        correlation_columns = tuple(
+            row[2] for row in con.execute(
+                "PRAGMA index_info(uq_platnosci_provider_external_id)"
+            )
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            con.execute(
+                "INSERT INTO platnosci "
+                "(id,kwota,status,provider,external_id,utworzono_at) "
+                "VALUES (4,12.34,'oczekuje','sandbox','legacy-correlation',"
+                "'2026-07-16 10:04:00')"
+            )
+        con.rollback()
+    finally:
+        con.close()
+
+    assert amounts == [(1, 1234, 1234), (2, 29, 0), (3, 100, 0)]
+    assert indexes["uq_platnosci_provider_external_id"] is True
+    assert correlation_columns == ("provider", "external_id")
+
+    downgraded = _alembic(
+        env, "downgrade", "0062_r5b_communication_outbox",
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        payment_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(platnosci)")
+        }
+        preserved = con.execute(
+            "SELECT id,kwota,status,external_id FROM platnosci ORDER BY id"
+        ).fetchall()
+    finally:
+        con.close()
+    assert revision == "0062_r5b_communication_outbox"
+    assert "kwota_minor" not in payment_columns
+    assert preserved == [
+        (1, 12.34, "oplacona", "legacy-correlation"),
+        (2, 0.29, "oczekuje", None),
+        (3, 1.0, "oczekuje", None),
+    ]
+
+
+def test_migracja_0063_odrzuca_zduplikowana_korelacje_legacy(tmp_path):
+    db_file = tmp_path / "_r5c_duplicate_legacy_reference.db"
+    env = _env(db_file, "r5c-duplicate-legacy-reference")
+    upgraded_0062 = _alembic(env, "upgrade", "0062_r5b_communication_outbox")
+    assert upgraded_0062.returncode == 0, upgraded_0062.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.executemany(
+            "INSERT INTO platnosci "
+            "(id,kwota,status,provider,external_id,utworzono_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                (1, 10.0, "oczekuje", "sandbox", "duplicate-reference", "2026-07-16 10:00:00"),
+                (2, 20.0, "oczekuje", "sandbox", "duplicate-reference", "2026-07-16 10:01:00"),
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    failed = _alembic(env, "upgrade", HEAD)
+    output = failed.stdout + failed.stderr
+    assert failed.returncode != 0
+    assert "R5C_LEGACY_PAYMENT_REFERENCE_DUPLICATE" in output
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        payment_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(platnosci)")
+        }
+    finally:
+        con.close()
+    assert revision == "0062_r5b_communication_outbox"
+    assert "kwota_minor" not in payment_columns
+
+
+def test_migracja_0063_castuje_float_do_numeric_przed_round_postgresql():
+    source = (
+        BACKEND / "migrations" / "versions"
+        / "20260716_0063_r5c_reservation_payments.py"
+    ).read_text(encoding="utf-8")
+    assert "ROUND(CAST(kwota AS NUMERIC) * 100, 0)" in source
+    assert "ROUND(kwota * 100, 0)" not in source
+
+
+def test_adopcja_pelnego_create_all_r5c_stampuje_0063(tmp_path):
+    db_file = tmp_path / "_r5c_create_all_adoption.db"
+    env = _env(db_file, "r5c-create-all-adoption")
     created = subprocess.run(
         [
             sys.executable,
@@ -2614,8 +2746,180 @@ def test_adopcja_pelnego_create_all_r5b_stampuje_0062(tmp_path):
     assert revision == HEAD
     assert {
         "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
+        "polityki_platnosci_rezerwacji",
+        "rezerwacje_platnosci_polecenia",
+        "rezerwacje_platnosci_webhooki",
     } <= tables
     assert fk_errors == []
+
+
+def test_adopcja_pelnego_niewersjonowanego_r5b_upgradeuje_przez_0063(tmp_path):
+    db_file = tmp_path / "_r5b_unversioned_to_r5c.db"
+    env = _env(db_file, "r5b-unversioned-to-r5c")
+    upgraded = _alembic(env, "upgrade", "0062_r5b_communication_outbox")
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO platnosci "
+            "(id,kwota,status,provider,utworzono_at,oplacono_at) "
+            "VALUES (1,12.34,'oplacona','sandbox',"
+            "'2026-07-16 10:00:00','2026-07-16 10:01:00')"
+        )
+        con.execute("DROP TABLE alembic_version")
+        con.commit()
+    finally:
+        con.close()
+
+    adopted = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert adopted.returncode == 0, adopted.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        payment = con.execute(
+            "SELECT kwota_minor,przechwycono_minor,zaktualizowano_at "
+            "FROM platnosci WHERE id=1"
+        ).fetchone()
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        fk_errors = con.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        con.close()
+    assert revision == HEAD
+    assert payment == (1234, 1234, "2026-07-16 10:00:00")
+    assert {
+        "polityki_platnosci_rezerwacji",
+        "rezerwacje_platnosci_polecenia",
+        "rezerwacje_platnosci_webhooki",
+    } <= tables
+    assert fk_errors == []
+
+
+def test_adopcja_r5c_odrzuca_czesciowy_schemat(tmp_path):
+    db_file = tmp_path / "_r5c_partial_adoption.db"
+    env = _env(db_file, "r5c-partial-adoption")
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("DROP TABLE rezerwacje_platnosci_webhooki")
+        con.commit()
+    finally:
+        con.close()
+
+    adoption = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    output = adoption.stdout + adoption.stderr
+    assert adoption.returncode != 0
+    assert "Schemat R5c jest czesciowy" in output
+
+
+def test_adopcja_r5c_fail_closed_waliduje_kontrakt_schematu(tmp_path):
+    base_file = tmp_path / "_r5c_adoption_contract_base.db"
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=_env(base_file, "r5c-contract-base"),
+        capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+
+    cases = (
+        (
+            "policy-minimum-check",
+            "polityki_platnosci_rezerwacji",
+            lambda sql: _replace_sql_fragment(
+                sql, "kwota_minor >= 200", "kwota_minor > 0",
+            ),
+            None,
+            "ck_polityki_platnosci_kwota",
+        ),
+        (
+            "policy-currency-check",
+            "polityki_platnosci_rezerwacji",
+            lambda sql: _replace_named_check(
+                sql, "ck_polityki_platnosci_waluta", "length(waluta) = 3",
+            ),
+            None,
+            "ck_polityki_platnosci_waluta",
+        ),
+        (
+            "payment-currency-check",
+            "platnosci",
+            lambda sql: _replace_named_check(
+                sql, "ck_platnosci_waluta", "length(waluta) = 3",
+            ),
+            None,
+            "ck_platnosci_waluta",
+        ),
+        (
+            "payment-column-type",
+            "platnosci",
+            lambda sql: _replace_sql_fragment(
+                sql, "creation_key VARCHAR(64)", "creation_key VARCHAR(32)",
+            ),
+            None,
+            "platnosci.creation_key",
+        ),
+        (
+            "payment-missing-correlation-unique",
+            None,
+            None,
+            "DROP INDEX uq_platnosci_provider_external_id",
+            "Indeks uq_platnosci_provider_external_id",
+        ),
+        (
+            "webhook-extra-unique-index",
+            None,
+            None,
+            "CREATE UNIQUE INDEX uq_r5c_webhook_object_extra "
+            "ON rezerwacje_platnosci_webhooki (object_id)",
+            "nadmiarowy lub nieprawidlowy indeks R5c",
+        ),
+    )
+    for name, table_name, transform, statement, expected_error in cases:
+        db_file = tmp_path / f"_r5c_adoption_contract_{name}.db"
+        shutil.copy2(base_file, db_file)
+        if statement is not None:
+            con = sqlite3.connect(str(db_file))
+            try:
+                con.execute(statement)
+                con.commit()
+            finally:
+                con.close()
+        else:
+            _rewrite_sqlite_table(db_file, table_name, transform)
+
+        adoption = subprocess.run(
+            [sys.executable, "-c", "import database; database.init_db()"],
+            cwd=str(BACKEND), env=_env(db_file, f"r5c-contract-{name}"),
+            capture_output=True, text=True,
+        )
+        output = adoption.stdout + adoption.stderr
+        assert adoption.returncode != 0, name
+        assert expected_error in output, (name, output)
 
 
 def test_adopcja_r5b_odrzuca_czesciowy_schemat(tmp_path):
@@ -2803,7 +3107,7 @@ def test_adopcja_r5b_fail_closed_waliduje_kontrakt_schematu(tmp_path):
 def test_migracja_0062_blokuje_downgrade_z_historia_dostarczenia(tmp_path):
     db_file = tmp_path / "_r5b_unsafe_downgrade.db"
     env = _env(db_file, "r5b-unsafe-downgrade")
-    upgraded = _alembic(env, "upgrade", HEAD)
+    upgraded = _alembic(env, "upgrade", "0062_r5b_communication_outbox")
     assert upgraded.returncode == 0, upgraded.stderr
 
     con = sqlite3.connect(str(db_file))
@@ -2846,7 +3150,7 @@ def test_migracja_0062_blokuje_downgrade_z_historia_dostarczenia(tmp_path):
         ).fetchone()[0]
     finally:
         con.close()
-    assert revision == HEAD
+    assert revision == "0062_r5b_communication_outbox"
     assert history_count == 1
 
 
@@ -2856,7 +3160,7 @@ def test_migracja_0062_blokuje_downgrade_z_niestandardowa_polityka_bez_historii(
 ):
     db_file = tmp_path / f"_r5b_policy_unsafe_downgrade_{setting}.db"
     env = _env(db_file, f"r5b-policy-unsafe-{setting}")
-    upgraded = _alembic(env, "upgrade", HEAD)
+    upgraded = _alembic(env, "upgrade", "0062_r5b_communication_outbox")
     assert upgraded.returncode == 0, upgraded.stderr
 
     con = sqlite3.connect(str(db_file))
@@ -2925,7 +3229,7 @@ def test_migracja_0062_blokuje_downgrade_z_niestandardowa_polityka_bez_historii(
             assert preserved == 24
     finally:
         con.close()
-    assert revision == HEAD
+    assert revision == "0062_r5b_communication_outbox"
     assert {
         "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
     } <= tables

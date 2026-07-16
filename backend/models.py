@@ -1,7 +1,7 @@
 """Modele ORM — tabele SQLite przez SQLAlchemy."""
 
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Date, Time, DateTime, Float, JSON,
+    Column, Integer, BigInteger, String, Boolean, Date, Time, DateTime, Float, JSON,
     ForeignKey, ForeignKeyConstraint, Table, UniqueConstraint, CheckConstraint, Index, text
 )
 from sqlalchemy.orm import relationship, declarative_base
@@ -2177,20 +2177,318 @@ class HistoriaSubskrypcji(Base):
     szczegoly   = Column(String, nullable=True)
 
 
-class Platnosc(Base):
-    """Płatność zadatku online (Rec#7). Bez realnej bramki działa w trybie 'sandbox' (link do
-    lokalnego potwierdzenia/demo); docelowo provider Stripe/Przelewy24. Status:
-    oczekuje → oplacona (webhook bramki albo ręcznie przez admina) / anulowana."""
-    __tablename__ = "platnosci"
-    id           = Column(Integer, primary_key=True, index=True)
-    termin_id    = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True, index=True)
-    kwota        = Column(Float, nullable=False, default=0.0)
-    status       = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|oplacona|anulowana
-    provider     = Column(String(32), nullable=False, default="sandbox")   # sandbox|api(Stripe/P24)
-    external_id  = Column(String, nullable=True, index=True)   # token/id z bramki
-    link         = Column(String, nullable=True)               # URL do zapłaty
+class PolitykaPlatnosciRezerwacji(Base):
+    """Polityka zadatku/preautoryzacji dla dokładnej daty, serwisu i grupy."""
+    __tablename__ = "polityki_platnosci_rezerwacji"
+    __table_args__ = (
+        CheckConstraint(
+            "kanal IN ('oba', 'online', 'wewnetrzna')",
+            name="ck_polityki_platnosci_kanal",
+        ),
+        CheckConstraint(
+            "min_osob >= 1 AND (max_osob = 0 OR max_osob >= min_osob)",
+            name="ck_polityki_platnosci_grupa",
+        ),
+        CheckConstraint(
+            "rodzaj IN ('brak', 'zadatek', 'preautoryzacja')",
+            name="ck_polityki_platnosci_rodzaj",
+        ),
+        CheckConstraint(
+            "sposob_kwoty IN ('stala', 'od_osoby')",
+            name="ck_polityki_platnosci_sposob_kwoty",
+        ),
+        CheckConstraint(
+            "(rodzaj = 'brak' AND kwota_minor = 0) OR "
+            "(rodzaj <> 'brak' AND kwota_minor >= 200 AND kwota_minor <= 99999999)",
+            name="ck_polityki_platnosci_kwota",
+        ),
+        CheckConstraint(
+            "waluta = 'PLN'",
+            name="ck_polityki_platnosci_waluta",
+        ),
+        CheckConstraint(
+            "waznosc_min >= 30 AND waznosc_min <= 1440",
+            name="ck_polityki_platnosci_waznosc",
+        ),
+        CheckConstraint(
+            "po_niepowodzeniu IN ('ponow', 'zwolnij')",
+            name="ck_polityki_platnosci_niepowodzenie",
+        ),
+        CheckConstraint("priorytet >= 0", name="ck_polityki_platnosci_priorytet"),
+        Index(
+            "ix_polityki_platnosci_dopasowanie",
+            "aktywna", "data", "serwis_id", "kanal", "min_osob", "max_osob",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    nazwa = Column(String(96), nullable=False)
+    aktywna = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    data = Column(Date, nullable=True)
+    serwis_id = Column(
+        Integer, ForeignKey("godziny_otwarcia.id", ondelete="CASCADE"), nullable=True,
+    )
+    kanal = Column(String(16), nullable=False, default="oba", server_default="oba")
+    min_osob = Column(Integer, nullable=False, default=1, server_default="1")
+    # 0 oznacza brak górnej granicy.
+    max_osob = Column(Integer, nullable=False, default=0, server_default="0")
+    rodzaj = Column(String(20), nullable=False, default="brak", server_default="brak")
+    sposob_kwoty = Column(String(16), nullable=False, default="stala", server_default="stala")
+    kwota_minor = Column(BigInteger, nullable=False, default=0, server_default="0")
+    waluta = Column(String(3), nullable=False, default="PLN", server_default="PLN")
+    waznosc_min = Column(Integer, nullable=False, default=30, server_default="30")
+    po_niepowodzeniu = Column(
+        String(16), nullable=False, default="ponow", server_default="ponow",
+    )
+    zwrot_przy_anulowaniu = Column(
+        Boolean, nullable=False, default=True, server_default=text("true"),
+    )
+    priorytet = Column(Integer, nullable=False, default=100, server_default="100")
     utworzono_at = Column(DateTime, nullable=False)
-    oplacono_at  = Column(DateTime, nullable=True)
+    zaktualizowano_at = Column(DateTime, nullable=False)
+
+
+class Platnosc(Base):
+    """Agregat finansowy R5c z kompatybilną projekcją legacy ``kwota``."""
+    __tablename__ = "platnosci"
+    __table_args__ = (
+        CheckConstraint(
+            "rodzaj IN ('zadatek', 'preautoryzacja', 'no_show', 'reczna')",
+            name="ck_platnosci_rodzaj",
+        ),
+        CheckConstraint(
+            "status IN ('oczekuje', 'autoryzowana', 'oplacona', 'nieudana', "
+            "'wygasla', 'anulowana', 'zwrocona')",
+            name="ck_platnosci_status_r5c",
+        ),
+        CheckConstraint(
+            "tryb_przechwycenia IN ('automatic', 'manual')",
+            name="ck_platnosci_tryb_przechwycenia",
+        ),
+        CheckConstraint(
+            "refund_status IN ('brak', 'oczekuje', 'czesciowy', 'zwrocona', 'nieudana')",
+            name="ck_platnosci_refund_status",
+        ),
+        CheckConstraint(
+            "kwota_minor >= 0 AND kwota_minor <= 99999999 AND przechwycono_minor >= 0 "
+            "AND zwrocono_minor >= 0 AND przechwycono_minor <= kwota_minor "
+            "AND zwrocono_minor <= przechwycono_minor",
+            name="ck_platnosci_kwoty_minor",
+        ),
+        CheckConstraint(
+            "waluta = 'PLN'",
+            name="ck_platnosci_waluta",
+        ),
+        CheckConstraint(
+            "reservation_ref IS NULL OR length(reservation_ref) = 64",
+            name="ck_platnosci_reservation_ref",
+        ),
+        CheckConstraint(
+            "creation_key IS NULL OR length(creation_key) = 64",
+            name="ck_platnosci_creation_key",
+        ),
+        CheckConstraint("version >= 0", name="ck_platnosci_version"),
+        CheckConstraint(
+            "status <> 'autoryzowana' OR autoryzowano_at IS NOT NULL",
+            name="ck_platnosci_autoryzacja_lifecycle",
+        ),
+        CheckConstraint(
+            "status <> 'oplacona' OR (oplacono_at IS NOT NULL AND "
+            "(przechwycono_minor > 0 OR kwota_minor = 0))",
+            name="ck_platnosci_capture_lifecycle",
+        ),
+        CheckConstraint(
+            "status <> 'zwrocona' OR "
+            "(refund_status = 'zwrocona' AND zwrocono_minor = przechwycono_minor)",
+            name="ck_platnosci_refund_lifecycle",
+        ),
+        Index(
+            "uq_platnosci_provider_payment_intent",
+            "provider", "provider_payment_intent_id", unique=True,
+        ),
+        Index(
+            "uq_platnosci_provider_checkout_session",
+            "provider", "provider_checkout_session_id", unique=True,
+        ),
+        Index(
+            "uq_platnosci_provider_external_id",
+            "provider", "external_id", unique=True,
+        ),
+        Index("ix_platnosci_status_expires", "status", "expires_at"),
+        Index("ix_platnosci_reservation_ref", "reservation_ref"),
+        Index("uq_platnosci_creation_key", "creation_key", unique=True),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    termin_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+    polityka_id = Column(
+        Integer,
+        ForeignKey("polityki_platnosci_rezerwacji.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    kwota = Column(Float, nullable=False, default=0.0)
+    kwota_minor = Column(BigInteger, nullable=False, default=0, server_default="0")
+    przechwycono_minor = Column(BigInteger, nullable=False, default=0, server_default="0")
+    zwrocono_minor = Column(BigInteger, nullable=False, default=0, server_default="0")
+    waluta = Column(String(3), nullable=False, default="PLN", server_default="PLN")
+    rodzaj = Column(String(20), nullable=False, default="zadatek", server_default="zadatek")
+    status = Column(String(16), nullable=False, default="oczekuje")
+    refund_status = Column(String(16), nullable=False, default="brak", server_default="brak")
+    tryb_przechwycenia = Column(
+        String(16), nullable=False, default="automatic", server_default="automatic",
+    )
+    provider = Column(String(32), nullable=False, default="sandbox")
+    external_id = Column(String, nullable=True, index=True)
+    provider_checkout_session_id = Column(String(255), nullable=True)
+    provider_payment_intent_id = Column(String(255), nullable=True)
+    provider_charge_id = Column(String(255), nullable=True)
+    link = Column(String, nullable=True)
+    reservation_ref = Column(String(64), nullable=True)
+    creation_key = Column(String(64), nullable=True)
+    policy_snapshot = Column(JSON, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    authorization_expires_at = Column(DateTime, nullable=True)
+    utworzono_at = Column(DateTime, nullable=False)
+    zaktualizowano_at = Column(DateTime, nullable=True)
+    autoryzowano_at = Column(DateTime, nullable=True)
+    oplacono_at = Column(DateTime, nullable=True)
+    nieudana_at = Column(DateTime, nullable=True)
+    wygasla_at = Column(DateTime, nullable=True)
+    anulowano_at = Column(DateTime, nullable=True)
+    zwrocono_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String(64), nullable=True)
+    version = Column(Integer, nullable=False, default=0, server_default="0")
+
+
+class RezerwacjaPlatnoscPolecenie(Base):
+    """Trwałe polecenie providerowe; worker wykonuje I/O poza transakcją domeny."""
+    __tablename__ = "rezerwacje_platnosci_polecenia"
+    __table_args__ = (
+        UniqueConstraint(
+            "platnosc_id", "operation_key",
+            name="uq_rezerwacje_platnosci_polecenie_operacja",
+        ),
+        UniqueConstraint(
+            "provider_idempotency_key",
+            name="uq_rezerwacje_platnosci_polecenie_provider_key",
+        ),
+        CheckConstraint(
+            "typ IN ('create_checkout', 'capture', 'cancel_authorization', 'refund', 'reconcile')",
+            name="ck_rezerwacje_platnosci_polecenie_typ",
+        ),
+        CheckConstraint(
+            "stan IN ('queued', 'processing', 'retry', 'succeeded', 'failed', 'uncertain', 'cancelled')",
+            name="ck_rezerwacje_platnosci_polecenie_stan",
+        ),
+        CheckConstraint(
+            "kwota_minor IS NULL OR (kwota_minor > 0 AND kwota_minor <= 99999999)",
+            name="ck_rezerwacje_platnosci_polecenie_kwota",
+        ),
+        CheckConstraint(
+            "liczba_prob >= 0 AND maks_prob >= 1",
+            name="ck_rezerwacje_platnosci_polecenie_proby",
+        ),
+        CheckConstraint(
+            "length(provider_idempotency_key) = 64",
+            name="ck_rezerwacje_platnosci_polecenie_provider_key",
+        ),
+        CheckConstraint(
+            "available_at < expires_at",
+            name="ck_rezerwacje_platnosci_polecenie_deadline",
+        ),
+        CheckConstraint(
+            "(stan = 'processing' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(stan <> 'processing' AND lease_token IS NULL AND lease_expires_at IS NULL)",
+            name="ck_rezerwacje_platnosci_polecenie_lease",
+        ),
+        CheckConstraint(
+            "actor_kind IN ('system', 'user', 'guest')",
+            name="ck_rezerwacje_platnosci_polecenie_actor",
+        ),
+        Index(
+            "ix_rezerwacje_platnosci_polecenia_due", "stan", "available_at", "id",
+        ),
+        Index(
+            "ix_rezerwacje_platnosci_polecenia_lease", "stan", "lease_expires_at",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    platnosc_id = Column(
+        Integer, ForeignKey("platnosci.id", ondelete="CASCADE"), nullable=False,
+    )
+    typ = Column(String(24), nullable=False)
+    operation_key = Column(String(96), nullable=False)
+    provider_idempotency_key = Column(String(64), nullable=False)
+    kwota_minor = Column(BigInteger, nullable=True)
+    stan = Column(String(16), nullable=False, default="queued", server_default="queued")
+    liczba_prob = Column(Integer, nullable=False, default=0, server_default="0")
+    maks_prob = Column(Integer, nullable=False, default=5, server_default="5")
+    available_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    lease_token = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String(64), nullable=True)
+    provider_object_id = Column(String(255), nullable=True)
+    actor_kind = Column(String(16), nullable=False, default="system", server_default="system")
+    actor_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reason_code = Column(String(64), nullable=True)
+    note = Column(EncryptedText(), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    uncertain_at = Column(DateTime, nullable=True)
+
+
+class RezerwacjaPlatnoscWebhook(Base):
+    """Minimalny, deduplikowany inbox podpisanych zdarzeń providera."""
+    __tablename__ = "rezerwacje_platnosci_webhooki"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "event_id",
+            name="uq_rezerwacje_platnosci_webhook_provider_event",
+        ),
+        CheckConstraint(
+            "stan IN ('queued', 'processing', 'processed', 'ignored', 'failed')",
+            name="ck_rezerwacje_platnosci_webhook_stan",
+        ),
+        CheckConstraint(
+            "length(payload_sha256) = 64",
+            name="ck_rezerwacje_platnosci_webhook_payload_hash",
+        ),
+        CheckConstraint(
+            "liczba_prob >= 0 AND maks_prob >= 1",
+            name="ck_rezerwacje_platnosci_webhook_proby",
+        ),
+        CheckConstraint(
+            "(stan = 'processing' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(stan <> 'processing' AND lease_token IS NULL AND lease_expires_at IS NULL)",
+            name="ck_rezerwacje_platnosci_webhook_lease",
+        ),
+        Index("ix_rezerwacje_platnosci_webhooki_due", "stan", "available_at", "id"),
+        Index("ix_rezerwacje_platnosci_webhooki_object", "provider", "object_id"),
+    )
+    id = Column(Integer, primary_key=True)
+    platnosc_id = Column(
+        Integer, ForeignKey("platnosci.id", ondelete="SET NULL"), nullable=True,
+    )
+    provider = Column(String(32), nullable=False)
+    event_id = Column(String(255), nullable=False)
+    event_type = Column(String(96), nullable=False)
+    api_version = Column(String(32), nullable=True)
+    livemode = Column(Boolean, nullable=False)
+    object_id = Column(String(255), nullable=False)
+    object_type = Column(String(32), nullable=False)
+    payload_sha256 = Column(String(64), nullable=False)
+    provider_created_at = Column(DateTime, nullable=True)
+    stan = Column(String(16), nullable=False, default="queued", server_default="queued")
+    liczba_prob = Column(Integer, nullable=False, default=0, server_default="0")
+    maks_prob = Column(Integer, nullable=False, default=8, server_default="8")
+    available_at = Column(DateTime, nullable=False)
+    lease_token = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String(64), nullable=True)
+    received_at = Column(DateTime, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
 
 
 class NapiwkiDnia(Base):

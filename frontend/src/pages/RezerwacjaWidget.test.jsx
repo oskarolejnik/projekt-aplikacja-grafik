@@ -65,6 +65,8 @@ const fillRequiredGuestData = () => {
 }
 
 beforeEach(() => {
+  sessionStorage.clear()
+  window.history.replaceState({}, '', '/')
   let key = 0
   idempotencyMock.mockReset()
   idempotencyMock.mockImplementation((scope) => `${scope}-${++key}`)
@@ -101,7 +103,125 @@ afterEach(() => {
 })
 
 describe('RezerwacjaWidget R5a', () => {
-  it('realizuje flow v2 z holdem, wymaganym notice, marketing=false i rotacją tokenu zarządzania', async () => {
+  it('po powrocie bez ważnego cookie zatrzymuje polling i pokazuje drogę odzyskania', async () => {
+    vi.useFakeTimers()
+    window.history.replaceState({}, '', '/?rezerwuj&platnosc=powrot')
+    const expired = Object.assign(new Error('Sesja wygasła'), { status: 400 })
+    apiMock.mockImplementation((path) => {
+      if (path === '/online/widget-config') return Promise.resolve(CONFIG_V2)
+      if (path === '/online/zarzadzanie/platnosc') return Promise.reject(expired)
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+
+    render(<RezerwacjaWidget />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Ta sesja płatności nie jest już dostępna')
+    const statusCalls = () => apiMock.mock.calls.filter(([path]) => (
+      path === '/online/zarzadzanie/platnosc'
+    )).length
+    expect(statusCalls()).toBe(1)
+
+    await act(async () => vi.advanceTimersByTimeAsync(120_000))
+    expect(statusCalls()).toBe(1)
+  })
+
+  it('po powrocie zarządza rezerwacją przez HttpOnly cookie bez tokenu w storage lub nagłówku', async () => {
+    window.history.replaceState({}, '', '/?rezerwuj&platnosc=powrot')
+    sessionStorage.setItem('lokalo:public-payment:v2', JSON.stringify({
+      expiresAt: Date.now() + 60_000,
+      reservation: reservation(),
+      payment: { id: 41, status: 'oczekuje', refund_status: 'brak' },
+    }))
+    let cancelled = false
+    apiMock.mockImplementation((path, method = 'GET') => {
+      if (path === '/online/widget-config') return Promise.resolve(CONFIG_V2)
+      if (path === '/online/zarzadzanie/platnosc' && method === 'GET') {
+        return Promise.resolve({
+          rezerwacja: reservation(),
+          platnosc: {
+            id: 41,
+            status: 'oplacona',
+            refund_status: cancelled ? 'oczekuje' : 'brak',
+            amount_minor: 5000,
+          },
+        })
+      }
+      if (path === '/online/zarzadzanie/odwolaj' && method === 'POST') {
+        cancelled = true
+        return Promise.resolve({
+          ...reservation('odwolana'),
+          platnosc: { id: 41, status: 'oplacona', refund_status: 'oczekuje', amount_minor: 5000 },
+        })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method} ${path}`))
+    })
+
+    render(<RezerwacjaWidget />)
+    expect(await screen.findByRole('heading', { name: 'Zadatek opłacony' })).toBeInTheDocument()
+    expect(JSON.stringify(sessionStorage)).not.toContain('management_token')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Odwołaj rezerwację' }))
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/online/zarzadzanie/odwolaj',
+      'POST',
+      null,
+      expect.objectContaining({
+        credentials: 'include',
+        headers: expect.not.objectContaining({ 'X-Reservation-Token': expect.anything() }),
+      }),
+    ))
+    expect(await screen.findByRole('heading', { name: 'Zwrot jest przetwarzany' })).toBeInTheDocument()
+  })
+
+  it('nie ogłasza sukcesu przed webhookiem i prowadzi do bezpiecznego checkoutu', async () => {
+    const payment = {
+      id: 41,
+      status: 'oczekuje',
+      kind: 'deposit',
+      amount_minor: 10000,
+      currency: 'pln',
+      checkout_url: 'https://checkout.stripe.test/cs_test_41',
+      po_niepowodzeniu: 'ponow',
+    }
+    apiMock.mockImplementation((path, method = 'GET') => {
+      if (path === '/online/widget-config') return Promise.resolve(CONFIG_V2)
+      if (path.startsWith('/online/dostepnosc')) return Promise.resolve({ sloty: [{ godz_od: '18:00', dostepny: true }] })
+      if (path === '/online/hold' && method === 'POST') return Promise.resolve({
+        hold_token: 'hold-payment',
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        rezerwacja: reservation(),
+      })
+      if (path === '/online/hold' && method === 'DELETE') return Promise.resolve(null)
+      if (path === '/online/rezerwacja' && method === 'POST') return Promise.resolve({
+        management_token: 'management-payment',
+        rezerwacja: reservation(),
+        platnosc: payment,
+      })
+      if (path === '/online/zarzadzanie/platnosc' && method === 'GET') return Promise.resolve({ platnosc: payment })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method} ${path}`))
+    })
+
+    await renderReadyWidget()
+    await searchFor()
+    fireEvent.click(await screen.findByRole('button', { name: 'Wybierz godzinę 18:00' }))
+    await screen.findByRole('heading', { name: 'Dokończ rezerwację' })
+    fillRequiredGuestData()
+    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź rezerwację' }))
+
+    expect(await screen.findByRole('heading', { name: 'Opłać zadatek' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Dokończ rezerwację' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Rezerwacja potwierdzona' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Przejdź do bezpiecznej płatności' }))
+      .toHaveAttribute('href', payment.checkout_url)
+    expect(JSON.stringify(sessionStorage)).not.toContain('Jan Kowalski')
+  })
+
+  it('realizuje flow v2 z holdem, wymaganym notice i sesją zarządzania HttpOnly', async () => {
     await renderReadyWidget()
     await searchFor()
     fireEvent.click(await screen.findByRole('button', { name: 'Wybierz godzinę 18:00' }))
@@ -143,9 +263,16 @@ describe('RezerwacjaWidget R5a', () => {
       'POST',
       null,
       expect.objectContaining({
-        headers: expect.objectContaining({ 'X-Reservation-Token': 'management-1' }),
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'X-Reservation-Session': expect.stringMatching(/^reservation-session-/),
+        }),
       }),
     ))
+    const cancelCall = apiMock.mock.calls.find(([path, method]) => (
+      path === '/online/zarzadzanie/odwolaj' && method === 'POST'
+    ))
+    expect(cancelCall[3].headers).not.toHaveProperty('X-Reservation-Token')
     expect(confirmMock).toHaveBeenCalledWith(
       expect.stringContaining('Termin zostanie zwolniony'),
       expect.objectContaining({ title: 'Odwołać rezerwację?' }),
@@ -187,9 +314,13 @@ describe('RezerwacjaWidget R5a', () => {
       'POST',
       null,
       expect.objectContaining({
-        headers: expect.objectContaining({ 'X-Reservation-Token': 'legacy-token' }),
+        credentials: 'include',
       }),
     ))
+    const cancelCall = apiMock.mock.calls.find(([path, method]) => (
+      path === '/online/zarzadzanie/odwolaj' && method === 'POST'
+    ))
+    expect(cancelCall[3].headers).not.toHaveProperty('X-Reservation-Token')
     expect(apiMock.mock.calls.some(([path]) => path.includes('legacy-token'))).toBe(false)
   })
 

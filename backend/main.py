@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional, List
 from collections import defaultdict
 
-from fastapi import FastAPI, Depends, Header, HTTPException, Query, Request
+from fastapi import FastAPI, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -25,6 +25,10 @@ import reservation_audit
 import reservation_rules
 import reservation_service
 import reservation_communication
+import reservation_payments
+import reservation_payment_worker
+import integracje
+import szyfrowanie
 import maintenance
 from crm_identity import (
     hash_key as _hash_klucz_crm,
@@ -147,6 +151,44 @@ async def reservation_error_handler(request: Request, exc: reservation_service.R
         },
         status_code=exc.status_code,
     )
+
+
+@app.exception_handler(reservation_payments.PaymentDomainError)
+async def payment_domain_error_handler(
+    _request: Request,
+    exc: reservation_payments.PaymentDomainError,
+):
+    """Stabilny, nieujawniający danych providera kontrakt błędu R5c."""
+    client_errors = {
+        "PAYMENT_RETRY_NOT_ALLOWED",
+        "PAYMENT_RESERVATION_INACTIVE",
+        "PREAUTH_TOO_EARLY",
+        "PAYMENT_NOT_AUTHORIZED",
+        "PAYMENT_NOT_CAPTURED",
+        "PAYMENT_CANNOT_CANCEL",
+        "PARTIAL_REFUND_UNSUPPORTED",
+        "PAYMENT_OPERATION_KEY_REUSED",
+        "PAYMENT_SETTLEMENT_REQUIRED_BEFORE_EDIT",
+        "PAYMENT_OPERATION_ALREADY_PENDING",
+    }
+    return JSONResponse(
+        status_code=409 if exc.code in client_errors else 400,
+        content={"detail": exc.message, "code": exc.code},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.exception_handler(integracje.PaymentProviderConfigurationError)
+async def payment_provider_configuration_error_handler(
+    _request: Request,
+    exc: integracje.PaymentProviderConfigurationError,
+):
+    """Wymagana płatność nigdy nie degraduje się po cichu do produkcyjnego demo."""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": exc.message, "code": exc.code},
+        headers={"Cache-Control": "no-store"},
+    )
 app.include_router(instancja_router)   # subskrypcja/licencja, audyt, status integracji (Rec#5: dekompozycja main)
 app.include_router(lokal_router)       # konfiguracja lokalu / branding (Rec#5: dekompozycja main)
 app.include_router(platnosci_router)   # płatności zadatków online (Rec#7)
@@ -174,6 +216,9 @@ ALLOWED_ORIGINS = app_settings.cors_origins()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    # Publiczny widget może używać jawnie dozwolonego API_BASE. HttpOnly
+    # capability cookie wymaga credentialed CORS; wildcard jest odrzucany w prod.
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -257,6 +302,8 @@ ONLINE_PUBLIC_ROUTE_TEMPLATES = (
     ("GET", "/api/online/najblizszy-termin"),
     ("POST", "/api/online/rezerwacja"),
     ("GET", "/api/online/zarzadzanie/rezerwacja"),
+    ("GET", "/api/online/zarzadzanie/platnosc"),
+    ("POST", "/api/online/zarzadzanie/platnosc/ponow"),
     ("POST", "/api/online/zarzadzanie/potwierdz"),
     ("POST", "/api/online/zarzadzanie/odwolaj"),
     ("POST", "/api/online/zarzadzanie/edytuj"),
@@ -274,6 +321,7 @@ ONLINE_PUBLIC_ROUTE_TEMPLATES = (
     ("PUT", "/api/online/imprezy/{token}/goscie"),
     ("POST", "/api/online/imprezy/{token}/wiadomosci"),
     ("POST", "/api/online/imprezy/{token}/menu"),
+    ("POST", "/api/online/platnosci/stripe/webhook"),
 )
 
 _PUBLIC_ROUTE_PARAMETER = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$")
@@ -331,7 +379,21 @@ READ_ONLY_POST_ODCZYT = frozenset({
 READ_ONLY_DOKLADNE_WYJATKI = frozenset({
     "/api/rodo/anonimizuj-gosc",
     "/api/rodo/retencja",
+    "/api/online/zarzadzanie/odwolaj",
+    "/api/online/zarzadzanie/dane/usun",
+    "/api/online/platnosci/stripe/webhook",
 })
+_READ_ONLY_OPERATOR_PAYMENT_EXCEPTION = re.compile(
+    r"^/api/platnosci/[1-9]\d*/(?:anuluj-autoryzacje|zwrot|reconcile)$"
+)
+
+
+def _dozwolony_zapis_read_only(method: str, path: str) -> bool:
+    """Wąska allowlista zapisów koniecznych do zamknięcia zobowiązań i praw gościa."""
+    return method == "POST" and (
+        path in READ_ONLY_DOKLADNE_WYJATKI
+        or _READ_ONLY_OPERATOR_PAYMENT_EXCEPTION.fullmatch(path) is not None
+    )
 
 # Odpowiedzi tych przestrzeni mogą zawierać PII gościa. Segmentowe dopasowanie
 # zapobiega przypadkowemu objęciu podobnie nazwanej przyszłej trasy.
@@ -380,7 +442,7 @@ async def role_guard(request: Request, call_next):
     if (
         metoda in ("POST", "PUT", "DELETE", "PATCH")
         and not (metoda == "POST" and path in READ_ONLY_POST_ODCZYT)
-        and path not in READ_ONLY_DOKLADNE_WYJATKI
+        and not _dozwolony_zapis_read_only(metoda, path)
         and not _sciezka_na_whitelist(path, READ_ONLY_WYJATKI)
     ):
         _db = SessionLocal()
@@ -462,8 +524,9 @@ async def security_headers(request: Request, call_next):
     if _sciezka_na_whitelist(request.url.path, PII_NO_STORE_PREFIXES):
         response.headers["Cache-Control"] = "private, no-store"
         vary = [part.strip() for part in response.headers.get("Vary", "").split(",") if part.strip()]
-        if not any(part.casefold() == "authorization" for part in vary):
-            vary.append("Authorization")
+        for credential_header in ("Authorization", "Cookie"):
+            if not any(part.casefold() == credential_header.casefold() for part in vary):
+                vary.append(credential_header)
         response.headers["Vary"] = ", ".join(vary)
     if not app_settings.IS_DEV:
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -557,6 +620,11 @@ def startup():
     init_db()
     maintenance.start_maintenance()
     reservation_communication.start_worker()
+    try:
+        payment_interval = float(os.environ.get("RESERVATION_PAYMENT_INTERVAL_SECONDS", "2"))
+    except (TypeError, ValueError):
+        payment_interval = 2.0
+    reservation_payment_worker.start_worker(interval_seconds=payment_interval)
     # Instancja-matka z włączoną samoobsługą: podnieś instancje floty, których proces
     # nie przeżył restartu hosta (best-effort; provisioning.py, feedback: zero ręcznej pracy).
     if provisioning.wlaczony():
@@ -572,6 +640,7 @@ def startup():
 
 @app.on_event("shutdown")
 def shutdown():
+    reservation_payment_worker.stop_worker(timeout_seconds=2.0)
     reservation_communication.stop_worker()
     maintenance.stop_maintenance()
 
@@ -3483,6 +3552,38 @@ def dodaj_rezerwacje_stolik(
             after=t,
             pii_changed=_utworzone_pii(t),
         )
+        if float(t.zadatek or 0) <= 0:
+            payment_policy = reservation_payments.resolve_policy(
+                db,
+                t.data,
+                evaluation.service_id if evaluation is not None else None,
+                int(t.liczba_osob or 1),
+                "wewnetrzna",
+            )
+            payment_provider = (
+                integracje.provider_platnosci_wymaganej()
+                if payment_policy is not None and payment_policy.required
+                else "sandbox"
+            )
+            payment, payment_command = reservation_payments.create_payment_for_reservation(
+                db,
+                t,
+                payment_policy,
+                provider=payment_provider,
+                now=teraz,
+                business_today=(
+                    (_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)).date()
+                ),
+                service_id=(evaluation.service_id if evaluation is not None else None),
+                operation_key="initial",
+                actor_kind="user",
+                actor_user_id=user.id,
+            )
+            if payment is not None and payment_provider == "sandbox" and payment_command is not None:
+                payment.link = "/?platnosc=sandbox&rezerwuj"
+                payment_command.stan = "succeeded"
+                payment_command.finished_at = teraz
+                payment_command.updated_at = teraz
         if override_details:
             reservation_audit.add_reservation_audit(
                 db,
@@ -3534,6 +3635,21 @@ def edytuj_rezerwacje_stolik(
     if not t or t.rodzaj != "stolik":
         db.rollback()
         raise HTTPException(404, "Brak rezerwacji.")
+    payment_before_edit = _platnosc_rezerwacji(db, t.id)
+    financial_context_changed = (
+        (t.data, t.godz_od, int(t.liczba_osob or 1))
+        != (dane.data, dane.godz_od, int(dane.liczba_osob or 1))
+    )
+    if (
+        financial_context_changed
+        and payment_before_edit is not None
+        and payment_before_edit.status in {"oczekuje", "autoryzowana", "oplacona"}
+    ):
+        db.rollback()
+        raise reservation_payments.PaymentDomainError(
+            "PAYMENT_SETTLEMENT_REQUIRED_BEFORE_EDIT",
+            "Najpierw anuluj, zwolnij lub zwróć aktywną płatność, a potem zmień termin albo liczbę gości.",
+        )
     before = reservation_audit.reservation_snapshot(t)
     before_guest_details = (
         t.data, t.godz_od, t.liczba_osob, t.telefon, t.email,
@@ -3568,7 +3684,10 @@ def edytuj_rezerwacje_stolik(
     t.liczba_osob = dane.liczba_osob
     if _ma_dostep_rezerwacji(user, "rezerwacje.notatki_wewnetrzne"):
         t.notatka = dane.notatka
-    if _ma_dostep_rezerwacji(user, "rezerwacje.finanse"):
+    if (
+        _ma_dostep_rezerwacji(user, "rezerwacje.finanse")
+        and payment_before_edit is None
+    ):
         t.zadatek = float(dane.zadatek or 0)
     t.godz_od = dane.godz_od; t.godz_do = godz_do
     t.stolik_id = dane.stolik_id
@@ -3616,6 +3735,70 @@ def edytuj_rezerwacje_stolik(
             after=t,
             pii_changed=_zmienione_pii(pii_before, t),
         )
+        if (
+            financial_context_changed
+            and payment_before_edit is not None
+            and payment_before_edit.status in {
+                "nieudana", "wygasla", "anulowana", "zwrocona",
+            }
+        ):
+            # Terminalna próba należy do poprzedniego kontekstu finansowego.
+            # Zachowujemy ją w globalnym audycie po ``reservation_ref``, ale nie
+            # pozwalamy, aby była ponawiana lub pokazywana jako bieżąca po edycji.
+            if payment_before_edit.status != "zwrocona":
+                reservation_payments.mark_payment_superseded(
+                    db,
+                    payment_before_edit,
+                    now=utcnow_naive(),
+                    actor_kind="user",
+                    actor_user_id=user.id,
+                )
+            payment_before_edit.termin_id = None
+        if (
+            financial_context_changed
+            and (
+                payment_before_edit is None
+                or payment_before_edit.status in {
+                    "nieudana", "wygasla", "anulowana", "zwrocona",
+                }
+            )
+            and (
+                payment_before_edit is not None
+                or float(t.zadatek or 0) <= 0
+            )
+        ):
+            payment_policy = reservation_payments.resolve_policy(
+                db,
+                t.data,
+                evaluation.service_id if evaluation is not None else None,
+                int(t.liczba_osob or 1),
+                "online" if t.kanal == "online" else "wewnetrzna",
+            )
+            payment_provider = (
+                integracje.provider_platnosci_wymaganej()
+                if payment_policy is not None and payment_policy.required
+                else "sandbox"
+            )
+            previous_ref = payment_before_edit.id if payment_before_edit is not None else 0
+            payment, payment_command = reservation_payments.create_payment_for_reservation(
+                db,
+                t,
+                payment_policy,
+                provider=payment_provider,
+                now=utcnow_naive(),
+                business_today=(
+                    (_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)).date()
+                ),
+                service_id=(evaluation.service_id if evaluation is not None else None),
+                operation_key=f"edit:{previous_ref}:{t.data}:{int(t.liczba_osob or 1)}",
+                actor_kind="user",
+                actor_user_id=user.id,
+            )
+            if payment is not None and payment_provider == "sandbox" and payment_command is not None:
+                payment.link = "/?platnosc=sandbox&rezerwuj"
+                payment_command.stan = "succeeded"
+                payment_command.finished_at = utcnow_naive()
+                payment_command.updated_at = payment_command.finished_at
         if override_details:
             reservation_audit.add_reservation_audit(
                 db,
@@ -3817,11 +4000,19 @@ def zmien_status_rezerwacji_stolik(
         raise HTTPException(400, "Nieznany status.")
     if nowy not in REZ_PRZEJSCIA.get(t.status, set()):
         raise HTTPException(409, f"Niedozwolone przejście {t.status} → {nowy}.")
+    status_now = utcnow_naive()
     t.status = nowy
     if nowy == "potwierdzona":
-        t.potwierdzono_at = utcnow_naive()
+        t.potwierdzono_at = status_now
     elif nowy == "odwolana":
-        t.odwolano_at = utcnow_naive()
+        t.odwolano_at = status_now
+        reservation_payments.request_reservation_cancellation_settlement(
+            db,
+            t,
+            now=status_now,
+            actor_kind="user",
+            actor_user_id=user.id,
+        )
     if nowy not in REZ_AKTYWNE:
         reservation_service.release_termin_allocation(db, t.id)
     if nowy == "no_show":
@@ -3860,6 +4051,14 @@ def usun_rezerwacje_stolik(
         okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
         before = reservation_audit.reservation_snapshot(t)
         reservation_service.release_termin_allocation(db, t.id)
+        reservation_payments.request_reservation_cancellation_settlement(
+            db,
+            t,
+            now=utcnow_naive(),
+            actor_kind="user",
+            actor_user_id=user.id,
+            operation_key=f"reservation-delete:{t.id}",
+        )
         audit = reservation_audit.add_reservation_audit(
             db, termin=t, action="delete", actor=user, before=before,
         )
@@ -4661,6 +4860,8 @@ PUBLIC_HOLD_TTL_SECONDS = 8 * 60
 PUBLIC_PRIVACY_NOTICE_VERSION = "reservation-privacy-2026-07-v1"
 PUBLIC_MARKETING_CONSENT_VERSION = "reservation-marketing-2026-07-v1"
 PUBLIC_SENSITIVE_CONSENT_VERSION = "reservation-sensitive-2026-07-v1"
+PUBLIC_MANAGEMENT_COOKIE = "lokalo_reservation_capability"
+PUBLIC_MANAGEMENT_COOKIE_PATH = "/api/online/zarzadzanie"
 
 
 def _public_client_ip(request: Request) -> str:
@@ -4674,6 +4875,115 @@ def _wymagaj_publiczny_naglowek(value: Optional[str], *, nazwa: str) -> str:
     if len(raw) < 16 or len(raw) > 128 or any(ord(char) < 33 or ord(char) > 126 for char in raw):
         raise HTTPException(400, f"Brak lub niepoprawny nagłówek {nazwa}.")
     return raw
+
+
+def _ustaw_publiczne_cookie_zarzadzania(
+    response: Response,
+    raw_token: str,
+    *,
+    expires_at: datetime,
+) -> None:
+    """Utrwala capability wyłącznie jako zaszyfrowane cookie niedostępne dla JS."""
+    if not szyfrowanie.aktywne():
+        # Produkcja nie startuje bez ENCRYPTION_KEY. W celowo nieutwardzonym dev
+        # zachowujemy nagłówkowy fallback, ale nigdy nie zapisujemy plaintext cookie.
+        return
+    encrypted = szyfrowanie.szyfruj(raw_token)
+    if not isinstance(encrypted, str) or encrypted == raw_token:
+        return
+    expires_utc = expires_at.replace(tzinfo=timezone.utc)
+    max_age = max(0, int((expires_at - utcnow_naive()).total_seconds()))
+    response.set_cookie(
+        key=PUBLIC_MANAGEMENT_COOKIE,
+        value=encrypted,
+        max_age=max_age,
+        expires=expires_utc,
+        path=PUBLIC_MANAGEMENT_COOKIE_PATH,
+        secure=not app_settings.IS_DEV,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _usun_publiczne_cookie_zarzadzania(response: Response) -> None:
+    response.delete_cookie(
+        key=PUBLIC_MANAGEMENT_COOKIE,
+        path=PUBLIC_MANAGEMENT_COOKIE_PATH,
+        secure=not app_settings.IS_DEV,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _wymagaj_cookie_same_origin(
+    request: Request,
+    reservation_session: Optional[str],
+) -> None:
+    """Cookie-auth mutation requires a non-simple header and browser same-origin proof."""
+    _wymagaj_publiczny_naglowek(
+        reservation_session, nazwa="X-Reservation-Session",
+    )
+    expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    configured_origins = {value.rstrip("/") for value in ALLOWED_ORIGINS}
+    # Sec-Fetch-Site jest forbidden/browser-controlled i pozostaje wiarygodne za
+    # reverse proxy, gdzie wewnętrzny request.url może mieć inny scheme niż Origin.
+    if (
+        origin == expected_origin
+        or origin in configured_origins
+        or fetch_site == "same-origin"
+    ):
+        return
+    raise HTTPException(403, "Nie można potwierdzić pochodzenia żądania.")
+
+
+def _publiczny_token_zarzadzania(
+    request: Request,
+    reservation_token: Optional[str],
+    *,
+    mutation: bool = False,
+    reservation_session: Optional[str] = None,
+) -> str:
+    """Nowy klient używa cookie; jawny nagłówek pozostaje fallbackiem R5a."""
+    # Jawnie podany credential zachowuje kontrakt istniejących klientów API.
+    # Frontend przeglądarkowy nie wysyła go po powrocie od providera i wtedy
+    # źródłem prawdy jest zaszyfrowane cookie.
+    if reservation_token:
+        return _wymagaj_publiczny_naglowek(
+            reservation_token, nazwa="X-Reservation-Token",
+        )
+    encrypted = request.cookies.get(PUBLIC_MANAGEMENT_COOKIE)
+    if encrypted:
+        if not encrypted.startswith("enc:v1:") or not szyfrowanie.aktywne():
+            raise HTTPException(400, "Niepoprawna sesja zarządzania rezerwacją.")
+        raw_token = szyfrowanie.odszyfruj(encrypted)
+        if not isinstance(raw_token, str) or raw_token == encrypted:
+            raise HTTPException(400, "Niepoprawna sesja zarządzania rezerwacją.")
+        token = _wymagaj_publiczny_naglowek(
+            raw_token, nazwa="sesji zarządzania rezerwacją",
+        )
+        if mutation:
+            _wymagaj_cookie_same_origin(request, reservation_session)
+        return token
+    return _wymagaj_publiczny_naglowek(None, nazwa="X-Reservation-Token")
+
+
+def _odswiez_publiczne_cookie_z_odpowiedzi(
+    response: Response,
+    payload: dict,
+    db: Session,
+) -> None:
+    raw_token = payload.get("management_token") or payload.get("token")
+    if not raw_token:
+        return
+    record = reservation_service.lookup_management_token(
+        db, raw_token, secret=SECRET_KEY,
+    )
+    if record is not None:
+        _ustaw_publiczne_cookie_zarzadzania(
+            response, raw_token, expires_at=record.expires_at,
+        )
 
 
 def _limit_publiczny(scope: str, limit: int, window_seconds: int):
@@ -4706,6 +5016,8 @@ _limit_hold = _limit_publiczny("hold", 12, 600)
 _limit_create_online = _limit_publiczny("reservation-create", 20, 600)
 _limit_waitlist_online = _limit_publiczny("waitlist-create", 15, 600)
 _limit_management = _limit_publiczny("reservation-management", 30, 600)
+_limit_payment_status = _limit_publiczny("payment-status", 90, 600)
+_limit_payment_action = _limit_publiczny("payment-action", 10, 600)
 
 
 def _wymagaj_rezerwacje_online(db: Session = Depends(get_db)):
@@ -5909,6 +6221,7 @@ def online_najblizszy_termin(osoby: int = 2, od: Optional[date] = None, dni: int
 def online_rezerwacja(
     dane: schemas.OnlineRezerwacjaIn,
     request: Request,
+    http_response: Response,
     reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
     reservation_hold: Optional[str] = Header(None, alias="X-Reservation-Hold"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
@@ -5958,7 +6271,10 @@ def online_rezerwacja(
             issued = reservation_service.create_management_token(
                 db,
                 termin_id=replayed.id,
-                scopes=("view", "confirm", "edit", "cancel", "data:export", "data:delete"),
+                scopes=(
+                    "view", "confirm", "edit", "cancel", "payment:retry",
+                    "data:export", "data:delete",
+                ),
                 secret=SECRET_KEY,
                 now=teraz,
                 expires_at=max(
@@ -5981,12 +6297,16 @@ def online_rezerwacja(
                 .first()
             )
             if payment is not None:
-                response["platnosc"] = {
-                    "kwota": payment.kwota,
-                    "link": payment.link,
-                    "status": payment.status,
-                }
+                response["platnosc"] = _publiczna_platnosc_rezerwacji(
+                    payment, replayed,
+                )
+            cookie_expires_at = issued.record.expires_at
             db.rollback()
+            _ustaw_publiczne_cookie_zarzadzania(
+                http_response,
+                issued.raw_token,
+                expires_at=cookie_expires_at,
+            )
             return response
 
         ip = request.client.host if request.client else "?"
@@ -6126,7 +6446,10 @@ def online_rezerwacja(
         issued = reservation_service.create_management_token(
             db,
             termin_id=t.id,
-            scopes=("view", "confirm", "edit", "cancel", "data:export", "data:delete"),
+            scopes=(
+                "view", "confirm", "edit", "cancel", "payment:retry",
+                "data:export", "data:delete",
+            ),
             secret=SECRET_KEY,
             now=teraz,
             expires_at=max(
@@ -6141,11 +6464,38 @@ def online_rezerwacja(
             "token": issued.raw_token,
             "rezerwacja": _online_rez_out(t, stolik),
         }
-        if cfg.zadatek_wymagany and dane.liczba_osob >= (cfg.zadatek_prog_osob or 0):
-            kwota = round((cfg.zadatek_kwota_os or 0) * dane.liczba_osob, 2)
-            if kwota > 0:
-                p = platnosci.utworz_platnosc(db, t.id, kwota, commit=False)
-                odp["platnosc"] = {"kwota": p.kwota, "link": p.link, "status": p.status}
+        payment_policy = reservation_payments.resolve_policy(
+            db,
+            dane.data,
+            evaluation.service_id,
+            dane.liczba_osob,
+            "online",
+        )
+        payment_provider = (
+            integracje.provider_platnosci_wymaganej()
+            if payment_policy is not None and payment_policy.required
+            else "sandbox"
+        )
+        p, payment_command = reservation_payments.create_payment_for_reservation(
+            db,
+            t,
+            payment_policy,
+            provider=payment_provider,
+            now=teraz,
+            business_today=dzis_lokalnie,
+            service_id=evaluation.service_id,
+            operation_key="initial",
+            actor_kind="guest",
+        )
+        if p is not None:
+            if payment_provider == "sandbox" and payment_command is not None:
+                # Tryb demonstracyjny nie udaje odpowiedzi providera. Udostępnia
+                # jedynie lokalny powrót; opłacenie może potwierdzić operator.
+                p.link = "/?platnosc=sandbox&rezerwuj"
+                payment_command.stan = "succeeded"
+                payment_command.finished_at = teraz
+                payment_command.updated_at = teraz
+            odp["platnosc"] = _publiczna_platnosc_rezerwacji(p, t)
         reservation_communication.enqueue_reservation(
             db,
             t,
@@ -6180,15 +6530,213 @@ def online_rezerwacja(
         f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(),
         url="/",
     )
+    _ustaw_publiczne_cookie_zarzadzania(
+        http_response,
+        issued.raw_token,
+        expires_at=issued.record.expires_at,
+    )
     return odp
 
 
+def _platnosc_rezerwacji(db: Session, termin_id: int) -> Optional[models.Platnosc]:
+    return (
+        db.query(models.Platnosc)
+        .filter(models.Platnosc.termin_id == termin_id)
+        .order_by(models.Platnosc.id.desc())
+        .first()
+    )
+
+
+def _publiczna_platnosc_rezerwacji(
+    payment: Optional[models.Platnosc],
+    reservation: models.Termin,
+) -> dict:
+    return reservation_payments.payment_public_dict(
+        payment,
+        reservation_active=reservation.status in REZ_AKTYWNE,
+    )
+
+
+@app.get(
+    "/api/online/zarzadzanie/platnosc",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_payment_status)],
+)
+def online_zarzadzanie_platnosc(
+    request: Request,
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    db: Session = Depends(get_db),
+):
+    """Status jest projekcją webhooka; powrót z Checkout nigdy nie oznacza sukcesu."""
+    token = _publiczny_token_zarzadzania(request, reservation_token)
+    record = reservation_service.validate_management_token(
+        db,
+        token,
+        scope="view",
+        secret=SECRET_KEY,
+        now=utcnow_naive(),
+    )
+    t = db.get(models.Termin, record.termin_id)
+    if t is None or t.kanal != "online":
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    payment = _platnosc_rezerwacji(db, t.id)
+    return {
+        "rezerwacja": _online_rez_out(
+            t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+        ),
+        "platnosc": _publiczna_platnosc_rezerwacji(payment, t),
+    }
+
+
+@app.post(
+    "/api/online/zarzadzanie/platnosc/ponow",
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_payment_action)],
+)
+def online_zarzadzanie_platnosc_ponow(
+    request: Request,
+    http_response: Response,
+    reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    token = _publiczny_token_zarzadzania(
+        request,
+        reservation_token,
+        mutation=True,
+        reservation_session=reservation_session,
+    )
+    key = _wymagaj_publiczny_naglowek(
+        idempotency_key, nazwa="Idempotency-Key",
+    )
+    t, guards = _zablokuj_rezerwacje_online(db, token)
+    if t is None:
+        raise HTTPException(404, "Nie znaleziono rezerwacji.")
+    now = utcnow_naive()
+    issued = reservation_service.consume_and_rotate_management_token(
+        db,
+        token,
+        operation="payment:retry",
+        idempotency_key=key,
+        payload={},
+        secret=SECRET_KEY,
+        now=now,
+    )
+    if issued.replayed:
+        payment = _platnosc_rezerwacji(db, t.id)
+        cookie_expires_at = issued.record.expires_at
+        db.rollback()
+        response = {
+            "management_token": issued.raw_token,
+            "token": issued.raw_token,
+            "rezerwacja": _online_rez_out(
+                t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+            ),
+            "platnosc": _publiczna_platnosc_rezerwacji(payment, t),
+        }
+        _ustaw_publiczne_cookie_zarzadzania(
+            http_response,
+            issued.raw_token,
+            expires_at=cookie_expires_at,
+        )
+        return response
+    previous = _platnosc_rezerwacji(db, t.id)
+    if previous is None:
+        raise reservation_payments.PaymentDomainError(
+            "PAYMENT_NOT_FOUND", "Ta rezerwacja nie ma płatności do ponowienia.",
+        )
+    retried, command = reservation_payments.retry_payment_for_reservation(
+        db,
+        previous,
+        t,
+        operation_key=key,
+        now=now,
+        business_today=(
+            (_teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)).date()
+        ),
+        actor_kind="guest",
+    )
+    if retried.provider == "sandbox":
+        retried.link = "/?platnosc=sandbox&rezerwuj"
+        command.stan = "succeeded"
+        command.finished_at = now
+        command.updated_at = now
+    _commit_zapis_rezerwacji(db, guards)
+    db.refresh(retried)
+    response = {
+        "management_token": issued.raw_token,
+        "token": issued.raw_token,
+        "rezerwacja": _online_rez_out(
+            t, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
+        ),
+        "platnosc": _publiczna_platnosc_rezerwacji(retried, t),
+    }
+    _ustaw_publiczne_cookie_zarzadzania(
+        http_response,
+        issued.raw_token,
+        expires_at=issued.record.expires_at,
+    )
+    return response
+
+
+@app.post("/api/online/platnosci/stripe/webhook")
+async def stripe_reservation_payment_webhook(
+    request: Request,
+    stripe_signature: Optional[str] = Header(None, alias="Stripe-Signature"),
+):
+    """Weryfikuje podpis na surowym body i zapisuje wyłącznie minimalny inbox."""
+    if not stripe_signature:
+        raise HTTPException(400, "Brak podpisu webhooka.")
+    raw_body = await request.body()
+    if not raw_body or len(raw_body) > 256 * 1024:
+        raise HTTPException(413, "Niepoprawny rozmiar webhooka.")
+    try:
+        result = reservation_payment_worker.ingest_payment_webhook(
+            raw_body,
+            stripe_signature,
+            received_at=utcnow_naive(),
+        )
+    except reservation_payment_worker.PaymentIntegrationDisabled as exc:
+        raise HTTPException(503, "Integracja płatnicza nie jest aktywna.") from exc
+    except reservation_payments.PaymentDomainError:
+        raise
+    except Exception as exc:
+        logger.warning("Odrzucono webhook Stripe R5c: %s", type(exc).__name__)
+        raise HTTPException(400, "Niepoprawny webhook płatniczy.") from exc
+    return {
+        "received": True,
+        "duplicate": result.duplicate,
+        "state": result.state,
+    }
+
+
 def _nalicz_no_show_fee(db, t, *, commit=True):
-    """Opłata za no-show (za flagą no_show_fee) — rekord płatności (sandbox link). Realne obciążenie
-    zapisanej karty dopiero z realną bramką; tu powstaje należność do rozliczenia."""
+    """Opłata za no-show jako należność ledger, bez udawania obciążenia karty."""
     fee = get_lokal_config(db).no_show_fee or 0
     if fee > 0 and t is not None and t.rodzaj == "stolik":
-        return platnosci.utworz_platnosc(db, t.id, fee, commit=commit)
+        # To należność księgowa, nie pozorna transakcja online. Dzięki osobnemu
+        # providerowi produkcja nie pokazuje linku sandbox ani nie uruchamia Stripe.
+        payment = platnosci.utworz_platnosc(
+            db,
+            t.id,
+            fee,
+            commit=False,
+            provider_override="ledger",
+        )
+        amount_minor = int(round(float(fee) * 100))
+        payment.kwota_minor = amount_minor
+        payment.przechwycono_minor = 0
+        payment.zwrocono_minor = 0
+        payment.waluta = "PLN"
+        payment.rodzaj = "no_show"
+        payment.refund_status = "brak"
+        payment.tryb_przechwycenia = "automatic"
+        payment.link = None
+        payment.zaktualizowano_at = utcnow_naive()
+        payment.version = 0
+        if commit:
+            db.commit()
+            db.refresh(payment)
+        return payment
     return None
 
 
@@ -6257,12 +6805,11 @@ def _online_rezerwacja_get_core(token: str, db: Session):
     dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
 )
 def online_zarzadzanie_rezerwacja_get(
+    request: Request,
     reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
     db: Session = Depends(get_db),
 ):
-    token = _wymagaj_publiczny_naglowek(
-        reservation_token, nazwa="X-Reservation-Token",
-    )
+    token = _publiczny_token_zarzadzania(request, reservation_token)
     return _online_rezerwacja_get_core(token, db)
 
 
@@ -6306,14 +6853,22 @@ def _online_rezerwacja_potwierdz_core(
     dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
 )
 def online_zarzadzanie_potwierdz(
+    request: Request,
+    http_response: Response,
     reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
-    token = _wymagaj_publiczny_naglowek(
-        reservation_token, nazwa="X-Reservation-Token",
+    token = _publiczny_token_zarzadzania(
+        request,
+        reservation_token,
+        mutation=True,
+        reservation_session=reservation_session,
     )
-    return _online_rezerwacja_potwierdz_core(token, idempotency_key, db)
+    payload = _online_rezerwacja_potwierdz_core(token, idempotency_key, db)
+    _odswiez_publiczne_cookie_z_odpowiedzi(http_response, payload, db)
+    return payload
 
 
 def _online_rezerwacja_odwolaj_core(
@@ -6335,10 +6890,14 @@ def _online_rezerwacja_odwolaj_core(
         now=now,
     )
     if issued.replayed:
-        db.rollback()
-        return _odpowiedz_z_obroconym_tokenem(
+        payment = _platnosc_rezerwacji(db, t.id)
+        response = _odpowiedz_z_obroconym_tokenem(
             t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
         )
+        if payment is not None:
+            response["platnosc"] = _publiczna_platnosc_rezerwacji(payment, t)
+        db.rollback()
+        return response
     stolik_wolny = set()
     okno = None
     if t.status in REZ_AKTYWNE:
@@ -6349,6 +6908,12 @@ def _online_rezerwacja_odwolaj_core(
         okno = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
         t.status = "odwolana"; t.odwolano_at = now
         reservation_service.release_termin_allocation(db, t.id)
+        reservation_payments.request_reservation_cancellation_settlement(
+            db,
+            t,
+            now=now,
+            actor_kind="guest",
+        )
         reservation_audit.add_reservation_audit(
             db, termin=t, action="cancel", actor_kind="guest", before=before, after=t,
         )
@@ -6359,9 +6924,13 @@ def _online_rezerwacja_odwolaj_core(
     _commit_zapis_rezerwacji(db, guards); db.refresh(t)
     if stolik_wolny and okno:
         _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
-    return _odpowiedz_z_obroconym_tokenem(
+    response = _odpowiedz_z_obroconym_tokenem(
         t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
     )
+    payment = _platnosc_rezerwacji(db, t.id)
+    if payment is not None:
+        response["platnosc"] = _publiczna_platnosc_rezerwacji(payment, t)
+    return response
 
 
 @app.post(
@@ -6369,14 +6938,22 @@ def _online_rezerwacja_odwolaj_core(
     dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
 )
 def online_zarzadzanie_odwolaj(
+    request: Request,
+    http_response: Response,
     reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
-    token = _wymagaj_publiczny_naglowek(
-        reservation_token, nazwa="X-Reservation-Token",
+    token = _publiczny_token_zarzadzania(
+        request,
+        reservation_token,
+        mutation=True,
+        reservation_session=reservation_session,
     )
-    return _online_rezerwacja_odwolaj_core(token, idempotency_key, db)
+    payload = _online_rezerwacja_odwolaj_core(token, idempotency_key, db)
+    _odswiez_publiczne_cookie_z_odpowiedzi(http_response, payload, db)
+    return payload
 
 
 def _online_rezerwacja_edytuj_core(
@@ -6400,10 +6977,14 @@ def _online_rezerwacja_edytuj_core(
         now=now,
     )
     if issued.replayed:
-        db.rollback()
-        return _odpowiedz_z_obroconym_tokenem(
+        payment = _platnosc_rezerwacji(db, t.id)
+        response = _odpowiedz_z_obroconym_tokenem(
             t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
         )
+        if payment is not None:
+            response["platnosc"] = _publiczna_platnosc_rezerwacji(payment, t)
+        db.rollback()
+        return response
     before = reservation_audit.reservation_snapshot(t)
     before_public_details = (t.data, t.godz_od, t.liczba_osob)
     if t.status not in REZ_AKTYWNE:
@@ -6416,6 +6997,21 @@ def _online_rezerwacja_edytuj_core(
     data = dane.data or t.data
     godz_od = dane.godz_od or t.godz_od
     osoby = max(1, dane.liczba_osob or t.liczba_osob or 1)
+    payment_before_edit = _platnosc_rezerwacji(db, t.id)
+    financial_context_changed = (
+        (t.data, t.godz_od, int(t.liczba_osob or 1))
+        != (data, godz_od, osoby)
+    )
+    if (
+        financial_context_changed
+        and payment_before_edit is not None
+        and payment_before_edit.status in {"oczekuje", "autoryzowana", "oplacona"}
+    ):
+        db.rollback()
+        raise reservation_payments.PaymentDomainError(
+            "PAYMENT_SETTLEMENT_REQUIRED_BEFORE_EDIT",
+            "Najpierw dokończ lub rozlicz aktywną płatność. Zmianę terminu albo liczby gości pomoże bezpiecznie wykonać lokal.",
+        )
     if godz_od is None:
         raise HTTPException(400, "Rezerwacja bez godziny — nie można zmienić.")
     if data < teraz_lok.date():
@@ -6459,6 +7055,59 @@ def _online_rezerwacja_edytuj_core(
         reservation_audit.add_reservation_audit(
             db, termin=t, action="edit", actor_kind="guest", before=before, after=t,
         )
+        if (
+            financial_context_changed
+            and payment_before_edit is not None
+            and payment_before_edit.status in {
+                "nieudana", "wygasla", "anulowana", "zwrocona",
+            }
+        ):
+            if payment_before_edit.status != "zwrocona":
+                reservation_payments.mark_payment_superseded(
+                    db,
+                    payment_before_edit,
+                    now=now,
+                    actor_kind="guest",
+                )
+            payment_before_edit.termin_id = None
+        if (
+            financial_context_changed
+            and (
+                payment_before_edit is None
+                or payment_before_edit.status in {
+                    "nieudana", "wygasla", "anulowana", "zwrocona",
+                }
+            )
+        ):
+            payment_policy = reservation_payments.resolve_policy(
+                db,
+                t.data,
+                evaluation.service_id if evaluation is not None else None,
+                int(t.liczba_osob or 1),
+                "online",
+            )
+            payment_provider = (
+                integracje.provider_platnosci_wymaganej()
+                if payment_policy is not None and payment_policy.required
+                else "sandbox"
+            )
+            previous_ref = payment_before_edit.id if payment_before_edit is not None else 0
+            payment, payment_command = reservation_payments.create_payment_for_reservation(
+                db,
+                t,
+                payment_policy,
+                provider=payment_provider,
+                now=now,
+                business_today=teraz_lok.date(),
+                service_id=(evaluation.service_id if evaluation is not None else None),
+                operation_key=f"public-edit:{previous_ref}:{issued.record.id}",
+                actor_kind="guest",
+            )
+            if payment is not None and payment_provider == "sandbox" and payment_command is not None:
+                payment.link = "/?platnosc=sandbox&rezerwuj"
+                payment_command.stan = "succeeded"
+                payment_command.finished_at = now
+                payment_command.updated_at = now
         if before_public_details != (t.data, t.godz_od, t.liczba_osob):
             reservation_communication.cancel_pending(
                 db,
@@ -6481,7 +7130,11 @@ def _online_rezerwacja_edytuj_core(
         or stare_stoliki != set(stoliki)
     ):
         _bezpiecznie_po_zwolnieniu_stolu(db, *stary_okno)            # stary termin zwolniony → re-optymalizacja
-    return _odpowiedz_z_obroconym_tokenem(t, issued.raw_token, stolik)
+    response = _odpowiedz_z_obroconym_tokenem(t, issued.raw_token, stolik)
+    payment = _platnosc_rezerwacji(db, t.id)
+    if payment is not None:
+        response["platnosc"] = _publiczna_platnosc_rezerwacji(payment, t)
+    return response
 
 
 @app.post(
@@ -6490,14 +7143,22 @@ def _online_rezerwacja_edytuj_core(
 )
 def online_zarzadzanie_edytuj(
     dane: schemas.OnlineEdytujIn,
+    request: Request,
+    http_response: Response,
     reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
-    token = _wymagaj_publiczny_naglowek(
-        reservation_token, nazwa="X-Reservation-Token",
+    token = _publiczny_token_zarzadzania(
+        request,
+        reservation_token,
+        mutation=True,
+        reservation_session=reservation_session,
     )
-    return _online_rezerwacja_edytuj_core(token, dane, idempotency_key, db)
+    payload = _online_rezerwacja_edytuj_core(token, dane, idempotency_key, db)
+    _odswiez_publiczne_cookie_z_odpowiedzi(http_response, payload, db)
+    return payload
 
 
 @app.get(
@@ -6505,13 +7166,12 @@ def online_zarzadzanie_edytuj(
     dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_management)],
 )
 def online_zarzadzanie_dane(
+    request: Request,
     reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
     db: Session = Depends(get_db),
 ):
     """Self-service eksportuje wyłącznie dane powiązane z jedną capability rezerwacji."""
-    token = _wymagaj_publiczny_naglowek(
-        reservation_token, nazwa="X-Reservation-Token",
-    )
+    token = _publiczny_token_zarzadzania(request, reservation_token)
     record = reservation_service.validate_management_token(
         db,
         token,
@@ -6569,13 +7229,19 @@ def online_zarzadzanie_dane(
 )
 def online_zarzadzanie_usun_dane(
     dane: schemas.PubliczneUsuniecieDanychIn,
+    request: Request,
+    http_response: Response,
     reservation_token: Optional[str] = Header(None, alias="X-Reservation-Token"),
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ):
     """Anuluje aktywną wizytę i usuwa PII/szczególne dane w jednej transakcji."""
-    token = _wymagaj_publiczny_naglowek(
-        reservation_token, nazwa="X-Reservation-Token",
+    token = _publiczny_token_zarzadzania(
+        request,
+        reservation_token,
+        mutation=True,
+        reservation_session=reservation_session,
     )
     t, guards = _zablokuj_rezerwacje_online(db, token)
     if not t:
@@ -6595,6 +7261,7 @@ def online_zarzadzanie_usun_dane(
     )
     if issued.replayed:
         db.rollback()
+        _usun_publiczne_cookie_zarzadzania(http_response)
         return {"status": "usuniete"}
     before = reservation_audit.reservation_snapshot(t)
     old_window = (t.data, t.godz_od, _koniec_okna(db, t)) if t.godz_od else None
@@ -6603,6 +7270,13 @@ def online_zarzadzanie_usun_dane(
         t.status = "odwolana"
         t.odwolano_at = now
         reservation_service.release_termin_allocation(db, t.id)
+        reservation_payments.request_reservation_cancellation_settlement(
+            db,
+            t,
+            now=now,
+            actor_kind="guest",
+            operation_key=f"reservation-erasure:{t.id}",
+        )
     source_token = reservation_service.lookup_management_token(
         db, token, secret=SECRET_KEY,
     )
@@ -6638,6 +7312,7 @@ def online_zarzadzanie_usun_dane(
     _commit_zapis_rezerwacji(db, guards)
     if had_tables and old_window:
         _bezpiecznie_po_zwolnieniu_stolu(db, *old_window)
+    _usun_publiczne_cookie_zarzadzania(http_response)
     return {"status": "usuniete"}
 
 

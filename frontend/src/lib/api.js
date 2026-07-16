@@ -95,6 +95,7 @@ export async function api(path, method = 'GET', body = null, options = {}) {
     headers: { ...(options.headers || {}) },
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.keepalive ? { keepalive: true } : {}),
+    ...(options.credentials ? { credentials: options.credentials } : {}),
   }
   const token = getToken()
   if (token) opts.headers['Authorization'] = `Bearer ${token}`

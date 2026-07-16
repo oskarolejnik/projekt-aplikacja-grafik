@@ -7,6 +7,15 @@ import PublicReservationSearch from '../components/reservations/PublicReservatio
 import PublicReservationDetails from '../components/reservations/PublicReservationDetails'
 import PublicReservationResult from '../components/reservations/PublicReservationResult'
 import {
+  clearPublicPaymentSession,
+  readPublicPaymentSession,
+  savePublicPaymentSession,
+} from '../lib/publicPaymentSession'
+import {
+  createPublicPaymentPoller,
+  publicPaymentNeedsPolling,
+} from '../lib/publicPaymentPolling'
+import {
   LEGACY_WIDGET_CONFIG,
   availablePublicSlots,
   buildConsentPayload,
@@ -33,6 +42,15 @@ const EMPTY_FORM = {
 
 const isAbortError = (error) => error?.name === 'AbortError'
 const query = (value) => encodeURIComponent(String(value))
+const normalizeCookieManagedResponse = (response) => {
+  const normalized = normalizeManagedReservationResponse(response)
+  const {
+    management_token: _managementToken,
+    token: _legacyToken,
+    ...safe
+  } = normalized
+  return { ...safe, management_available: true }
+}
 
 export default function RezerwacjaWidget() {
   const { nazwa_lokalu } = useBranding()
@@ -63,6 +81,8 @@ export default function RezerwacjaWidget() {
   const [resultKind, setResultKind] = useState('booking')
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState('')
+  const [paymentBusy, setPaymentBusy] = useState(false)
+  const [paymentError, setPaymentError] = useState('')
   const [announcement, setAnnouncement] = useState('')
 
   const searchHeadingRef = useRef(null)
@@ -78,6 +98,7 @@ export default function RezerwacjaWidget() {
   const holdAttemptRef = useRef(null)
   const submitAttemptRef = useRef(null)
   const cancelAttemptRef = useRef(null)
+  const paymentRetryAttemptRef = useRef(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -88,6 +109,76 @@ export default function RezerwacjaWidget() {
       })
     return () => controller.abort()
   }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (!params.has('platnosc')) return
+    const saved = readPublicPaymentSession()
+    setResult({
+      management_available: true,
+      rezerwacja: saved?.reservation || {},
+      platnosc: saved?.payment || { status: 'oczekuje', refund_status: 'brak' },
+    })
+    setResultKind('booking')
+    setStep('result')
+    setAnnouncement('Sprawdzam potwierdzenie płatności.')
+  }, [])
+
+  useEffect(() => {
+    if (!result?.platnosc) return
+    savePublicPaymentSession({
+      reservation: result.rezerwacja,
+      payment: result.platnosc,
+    })
+  }, [result])
+
+  useEffect(() => {
+    const payment = result?.platnosc
+    if (step !== 'result' || resultKind !== 'booking' || !publicPaymentNeedsPolling(payment)) return undefined
+    let active = true
+    const poller = createPublicPaymentPoller({
+      shouldContinue: () => active,
+      onError: (error) => {
+        if ([400, 401, 403, 404, 410].includes(error?.status)) {
+          active = false
+          clearPublicPaymentSession()
+          setPaymentError(
+            'Ta sesja płatności nie jest już dostępna. Otwórz najnowszy link z potwierdzenia rezerwacji lub skontaktuj się z lokalem.',
+          )
+        }
+        // Błąd sieciowy i 429 pozostają best-effort: scheduler zwalnia do
+        // 30 s, a CTA oraz reszta zarządzania rezerwacją pozostają aktywne.
+      },
+      poll: async ({ signal }) => {
+        const response = await api('/online/zarzadzanie/platnosc', 'GET', null, {
+          headers: {
+            'X-Reservation-Session': sessionIdRef.current,
+          },
+          credentials: 'include',
+          signal,
+        })
+        if (!active) return
+        const nextPayment = response?.platnosc || response
+        setResult((current) => current ? {
+          ...current,
+          management_available: true,
+          rezerwacja: response?.rezerwacja || current.rezerwacja,
+          platnosc: nextPayment,
+        } : current)
+        setPaymentError('')
+      },
+    })
+    poller.start()
+    return () => {
+      active = false
+      poller.stop()
+    }
+  }, [
+    step,
+    resultKind,
+    result?.platnosc?.status,
+    result?.platnosc?.refund_status,
+  ])
 
   useEffect(() => {
     if (previousStepRef.current === step) return undefined
@@ -395,6 +486,7 @@ export default function RezerwacjaWidget() {
           ...request.headers,
           'Idempotency-Key': submitAttemptRef.current.key,
         },
+        credentials: 'include',
       })
       submitAttemptRef.current = null
       if (mode === 'booking') {
@@ -402,7 +494,7 @@ export default function RezerwacjaWidget() {
         if (consumedToken) releasedHoldTokensRef.current.add(consumedToken)
         holdRef.current = null
         setHold(null)
-        setResult(normalizeManagedReservationResponse(response))
+        setResult(normalizeCookieManagedResponse(response))
       } else {
         const { token: _unusedToken, ...safeResponse } = response || {}
         setResult({ ...safeResponse, wpis: response?.wpis || response?.rezerwacja || safeResponse })
@@ -428,8 +520,7 @@ export default function RezerwacjaWidget() {
   }
 
   const cancelReservation = async () => {
-    const token = result?.management_token
-    if (!token || cancelling) return
+    if (!result?.management_available || cancelling) return
     const accepted = await confirm(
       'Termin zostanie zwolniony dla innych gości. Tej czynności nie można cofnąć.',
       {
@@ -441,9 +532,9 @@ export default function RezerwacjaWidget() {
     )
     if (!accepted) return
 
-    if (cancelAttemptRef.current?.token !== token) {
+    if (cancelAttemptRef.current?.token !== 'httponly-cookie') {
       cancelAttemptRef.current = {
-        token,
+        token: 'httponly-cookie',
         key: nowyKluczIdempotencji('online-reservation-cancel'),
       }
     }
@@ -453,11 +544,14 @@ export default function RezerwacjaWidget() {
       const response = await api('/online/zarzadzanie/odwolaj', 'POST', null, {
         headers: {
           'X-Reservation-Session': sessionIdRef.current,
-          'X-Reservation-Token': token,
           'Idempotency-Key': cancelAttemptRef.current.key,
         },
+        credentials: 'include',
       })
-      setResult(normalizeManagedReservationResponse(response, token))
+      setResult((current) => ({
+        ...normalizeCookieManagedResponse(response),
+        platnosc: response?.platnosc || current?.platnosc,
+      }))
       cancelAttemptRef.current = null
       setAnnouncement('Rezerwacja została odwołana.')
       toast('Rezerwacja została odwołana.', 'info')
@@ -469,7 +563,44 @@ export default function RezerwacjaWidget() {
     }
   }
 
+  const retryPayment = async () => {
+    if (!result?.management_available || paymentBusy) return
+    const paymentId = result?.platnosc?.id || 'current'
+    if (paymentRetryAttemptRef.current?.paymentId !== paymentId) {
+      paymentRetryAttemptRef.current = {
+        paymentId,
+        key: nowyKluczIdempotencji('online-payment-retry'),
+      }
+    }
+    setPaymentBusy(true)
+    setPaymentError('')
+    try {
+      const response = await api('/online/zarzadzanie/platnosc/ponow', 'POST', null, {
+        headers: {
+          'X-Reservation-Session': sessionIdRef.current,
+          'Idempotency-Key': paymentRetryAttemptRef.current.key,
+        },
+        credentials: 'include',
+      })
+      const nextPayment = response?.platnosc || response
+      setResult((current) => ({
+        ...current,
+        management_available: true,
+        rezerwacja: response?.rezerwacja || current.rezerwacja,
+        platnosc: nextPayment,
+      }))
+      paymentRetryAttemptRef.current = null
+      setAnnouncement('Przygotowuję nowy, bezpieczny link do płatności.')
+    } catch (error) {
+      if (error?.code === 'IDEMPOTENCY_KEY_REUSED') paymentRetryAttemptRef.current = null
+      setPaymentError(error?.message || 'Nie udało się przygotować nowego linku. Spróbuj ponownie.')
+    } finally {
+      setPaymentBusy(false)
+    }
+  }
+
   const newReservation = () => {
+    clearPublicPaymentSession()
     setStep('search')
     setMode('booking')
     setResult(null)
@@ -478,6 +609,8 @@ export default function RezerwacjaWidget() {
     setFormErrors({})
     setSubmitError('')
     setCancelError('')
+    setPaymentError('')
+    setPaymentBusy(false)
     setDate(warsawTodayISO())
     setPeople('2')
     resetAvailability()
@@ -553,7 +686,10 @@ export default function RezerwacjaWidget() {
               kind={resultKind}
               cancelling={cancelling}
               cancelError={cancelError}
+              paymentBusy={paymentBusy}
+              paymentError={paymentError}
               onCancel={cancelReservation}
+              onRetryPayment={retryPayment}
               onNewReservation={newReservation}
             />
           ) : null}

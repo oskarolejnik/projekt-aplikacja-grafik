@@ -59,6 +59,16 @@ describe('api()', () => {
     expect(fetch.mock.calls[0][1].headers['Idempotency-Key']).toBe('create-001')
   })
 
+  it('przekazuje tryb credentials dla publicznej sesji HttpOnly', async () => {
+    mockFetch(odp(200, { ok: true }))
+
+    await api('/online/zarzadzanie/platnosc', 'GET', null, {
+      credentials: 'include',
+    })
+
+    expect(fetch.mock.calls[0][1].credentials).toBe('include')
+  })
+
   it('204 No Content → zwraca null', async () => {
     mockFetch(odp(204, null))
     expect(await api('/x', 'DELETE')).toBeNull()
