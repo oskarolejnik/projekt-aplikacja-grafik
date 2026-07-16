@@ -31,10 +31,13 @@ CONTACT = "rezerwacje.dane_kontaktowe"
 
 
 _RESERVATION_ITEM = re.compile(
-    r"^/api/rezerwacje-stolik/(?P<id>[1-9]\d*)(?:/(?P<action>auto-przydziel|status|wyslij-potwierdzenie))?$"
+    r"^/api/rezerwacje-stolik/(?P<id>[1-9]\d*)(?:/(?P<action>auto-przydziel|status|wyslij-potwierdzenie|komunikacja))?$"
+)
+_COMMUNICATION_ITEM = re.compile(
+    r"^/api/rezerwacje/komunikacja/[1-9]\d*/(?P<action>retry|reconcile)$"
 )
 _WAITLIST_ITEM = re.compile(
-    r"^/api/lista-oczekujacych/(?P<id>[1-9]\d*)(?:/(?P<action>odwolaj|zrealizuj|powiadom|hold|zwolnij-hold))?$"
+    r"^/api/lista-oczekujacych/(?P<id>[1-9]\d*)(?:/(?P<action>odwolaj|zrealizuj|powiadom|hold|zwolnij-hold|komunikacja))?$"
 )
 _CONFIG_ITEM = re.compile(
     r"^/api/(?P<resource>stoliki|kombinacje|sasiedztwo|godziny-otwarcia|wyjatki-kalendarza)/[1-9]\d*$"
@@ -71,6 +74,7 @@ _PROTECTED_PREFIXES = (
     "/api/godziny-otwarcia",
     "/api/wyjatki-kalendarza",
     "/api/rezerwacje/config",
+    "/api/rezerwacje/komunikacja",
     "/api/rezerwacje/reguly",
     "/api/nadpisania-regul-rezerwacji",
     "/api/plan-sali",
@@ -145,8 +149,13 @@ def requirement_for(method: str, path: str) -> Requirement | None:
             return Requirement(all_of=(OPERATIONS,))
         if action == "wyslij-potwierdzenie" and method == "POST":
             return Requirement(all_of=(OPERATIONS, CONTACT))
+        if action == "komunikacja" and method == "GET":
+            return Requirement(all_of=(OPERATIONS, CONTACT))
         # Twarde DELETE pozostaje admin-only. Operator anuluje wpis przez status.
         return ADMIN_ONLY
+
+    if method == "POST" and _COMMUNICATION_ITEM.fullmatch(path):
+        return Requirement(all_of=(CONTACT,), any_of=(OPERATIONS, HOST))
 
     if path == "/api/lista-oczekujacych":
         if method == "GET":
@@ -165,6 +174,8 @@ def requirement_for(method: str, path: str) -> Requirement | None:
         if action == "zrealizuj" and method == "POST":
             return Requirement(any_of=(OPERATIONS, HOST))
         if action == "powiadom" and method == "POST":
+            return Requirement(all_of=(CONTACT,), any_of=(OPERATIONS, HOST))
+        if action == "komunikacja" and method == "GET":
             return Requirement(all_of=(CONTACT,), any_of=(OPERATIONS, HOST))
         return ADMIN_ONLY
 
@@ -231,6 +242,21 @@ def requirement_for(method: str, path: str) -> Requirement | None:
         return Requirement(all_of=(ANALYTICS,)) if method == "GET" else ADMIN_ONLY
 
     return ADMIN_ONLY if _chroniona_przestrzen(path) else None
+
+
+def communication_owner_requirement(owner_kind: str) -> Requirement:
+    """Narrow generic retry/reconcile after the message owner is loaded.
+
+    The URL contains only a message id, so middleware can enforce the common
+    contact-data gate but cannot tell a reservation message from a waitlist
+    message.  The endpoint must apply this owner-specific requirement before
+    exposing or mutating the record.
+    """
+    if owner_kind == "reservation":
+        return Requirement(all_of=(OPERATIONS, CONTACT))
+    if owner_kind == "waitlist":
+        return Requirement(all_of=(CONTACT,), any_of=(OPERATIONS, HOST))
+    raise ValueError("UNKNOWN_COMMUNICATION_OWNER")
 
 
 def user_satisfies(user, requirement: Requirement) -> bool:

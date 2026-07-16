@@ -6,12 +6,13 @@ wiec zestaw nie starzeje sie wraz z kalendarzem.
 """
 
 import json
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from sqlalchemy import text
 
 import main
 import models
+import reservation_communication as communication
 import reservation_service
 from crm_identity import identity_hash
 
@@ -284,9 +285,19 @@ def test_hold_create_transfers_every_table_and_keeps_tokens_hash_only(
     export_body = exported.json()
     assert export_body["rezerwacja"]["telefon"] == "+48 600 700 800"
     assert export_body["rezerwacja"]["email"] == "gosc-r5a@example.test"
+    assert export_body["rezerwacja"]["kanal_komunikacji"] == "auto"
     assert len(export_body["prywatnosc"]) == 1
     assert export_body["prywatnosc"][0]["marketing"] is False
     assert export_body["prywatnosc"][0]["sensitive_data"] == "Silna alergia na orzechy."
+    communication_history = export_body["komunikacja_operacyjna"]
+    assert communication_history
+    assert communication_history[0]["typ"] == "confirmation"
+    assert communication_history[0]["odbiorca"] == "gosc-r5a@example.test"
+    assert communication_history[0]["tresc"]
+    assert all(secret_field not in exported.text for secret_field in (
+        "provider_idempotency_key", "provider_idempotency_header", "lease_token",
+        "subject_phone_ref", "subject_email_ref",
+    ))
 
     db.add_all([
         models.ProfilGoscia(
@@ -368,6 +379,164 @@ def test_hold_create_transfers_every_table_and_keeps_tokens_hash_only(
         "/api/online/zarzadzanie/dane",
         headers={"X-Reservation-Token": rotated_token},
     ).status_code == 410
+
+
+def test_public_self_delete_returns_safe_conflict_while_delivery_is_processing(
+    admin_client,
+    client,
+    db,
+):
+    _enable_v2(admin_client)
+    config = _widget_config(client)
+    booking_date = _booking_date(23)
+    _prepare_multi_table_inventory(admin_client, booking_date)
+    hold_token = _create_hold(
+        client,
+        booking_date,
+        key="r5b-rodo-processing-hold-0001",
+    )["hold_token"]
+    created = client.post(
+        "/api/online/rezerwacja",
+        json=_reservation_payload(booking_date, config),
+        headers={
+            "X-Reservation-Session": SESSION_A,
+            "X-Reservation-Hold": hold_token,
+            "Idempotency-Key": "r5b-rodo-processing-create-0001",
+        },
+    )
+    assert created.status_code == 201, created.text
+    management_token = created.json()["management_token"]
+    message = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        typ_zdarzenia="confirmation",
+    ).one()
+    claim = communication.claim_next(now=main.utcnow_naive())
+    assert claim.id == message.id
+    assert communication.mark_claim_started(
+        claim,
+        now=main.utcnow_naive(),
+    ) is not None
+
+    response = client.post(
+        "/api/online/zarzadzanie/dane/usun",
+        json={"potwierdz": True},
+        headers={
+            "X-Reservation-Token": management_token,
+            "Idempotency-Key": "r5b-rodo-processing-delete-0001",
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "COMMUNICATION_DELIVERY_IN_PROGRESS"
+    assert "gosc-r5a@example.test" not in response.text
+    assert "+48 600 700 800" not in response.text
+    # The failed erasure transaction must not consume/rotate the capability.
+    retry_export = client.get(
+        "/api/online/zarzadzanie/dane",
+        headers={"X-Reservation-Token": management_token},
+    )
+    assert retry_export.status_code == 200, retry_export.text
+    db.expire_all()
+    termin = db.query(models.Termin).filter_by(kanal="online").one()
+    assert termin.nazwisko == "Gosc R5a"
+    assert db.get(models.RezerwacjaWiadomoscOutbox, message.id).stan == "processing"
+
+
+def test_public_data_export_is_capability_and_current_snapshot_scoped(
+    admin_client,
+    client,
+    db,
+):
+    _enable_v2(admin_client)
+    now = main.utcnow_naive()
+    visit_date = _booking_date(24)
+    old_contact = {
+        "telefon": "+48 600 111 222",
+        "email": "old-owner@example.test",
+    }
+    shared_contact = {
+        "telefon": "+48 700 333 444",
+        "email": "shared-owner@example.test",
+    }
+
+    reservation_a = models.Termin(
+        data=visit_date,
+        godz_od=time(18, 0),
+        nazwisko="Capability A",
+        liczba_osob=2,
+        **old_contact,
+        kanal_komunikacji="email",
+        status="potwierdzona",
+        rodzaj="stolik",
+        kanal="online",
+        utworzono_at=now,
+    )
+    reservation_b = models.Termin(
+        data=visit_date + timedelta(days=1),
+        godz_od=time(19, 0),
+        nazwisko="Capability B",
+        liczba_osob=3,
+        **shared_contact,
+        kanal_komunikacji="email",
+        status="potwierdzona",
+        rodzaj="stolik",
+        kanal="online",
+        utworzono_at=now,
+    )
+    db.add_all([reservation_a, reservation_b])
+    db.flush()
+
+    historical_a = communication.enqueue_reservation(
+        db,
+        reservation_a,
+        "confirmation",
+        dedupe_key="capability-export-historical-a",
+        available_at=now + timedelta(hours=1),
+        expires_at=now + timedelta(days=1),
+    )[0]
+    other_owner = communication.enqueue_reservation(
+        db,
+        reservation_b,
+        "confirmation",
+        dedupe_key="capability-export-other-owner",
+        available_at=now + timedelta(hours=1),
+        expires_at=now + timedelta(days=1),
+    )[0]
+
+    reservation_a.telefon = shared_contact["telefon"]
+    reservation_a.email = shared_contact["email"]
+    current_a = communication.enqueue_reservation(
+        db,
+        reservation_a,
+        "change",
+        dedupe_key="capability-export-current-a",
+        available_at=now + timedelta(hours=1),
+        expires_at=now + timedelta(days=1),
+    )[0]
+    issued = reservation_service.create_management_token(
+        db,
+        termin_id=reservation_a.id,
+        scopes=("data:export",),
+        secret=main.SECRET_KEY,
+        now=now,
+        idempotency_key="capability-export-token-a",
+    )
+    db.commit()
+    historical_a_id = historical_a.id
+    other_owner_id = other_owner.id
+    current_a_id = current_a.id
+
+    exported = client.get(
+        "/api/online/zarzadzanie/dane",
+        headers={"X-Reservation-Token": issued.raw_token},
+    )
+
+    assert exported.status_code == 200, exported.text
+    history = exported.json()["komunikacja_operacyjna"]
+    assert {entry["wiadomosc_id"] for entry in history} == {current_a_id}
+    assert {entry["wlasciciel_id"] for entry in history} == {reservation_a.id}
+    assert history[0]["odbiorca"] == shared_contact["email"]
+    assert historical_a_id not in {entry["wiadomosc_id"] for entry in history}
+    assert other_owner_id not in {entry["wiadomosc_id"] for entry in history}
 
 
 def test_admin_delete_public_booking_removes_r5a_secrets_and_idempotency(

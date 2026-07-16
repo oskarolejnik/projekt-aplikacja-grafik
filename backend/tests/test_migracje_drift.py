@@ -14,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0061_r5a_public_security"
+HEAD = "0062_r5b_communication_outbox"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -29,6 +29,7 @@ _TABELE = [
     "reservation_override_context",
     "rezerwacje_publiczne_holdy", "rezerwacje_tokeny_zarzadzania",
     "rezerwacje_zgody_publiczne", "rezerwacje_publiczne_kwoty",
+    "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
 ]
 
 
@@ -153,6 +154,16 @@ def _remove_named_unique(table_sql, constraint_name):
     return table_sql[:comma_index] + table_sql[closing_index + 1:]
 
 
+def _append_table_constraint(table_sql, constraint_sql):
+    closing_index = table_sql.rfind(")")
+    assert closing_index >= 0
+    return (
+        table_sql[:closing_index]
+        + f", {constraint_sql}"
+        + table_sql[closing_index:]
+    )
+
+
 def _replace_sql_fragment(table_sql, old, new):
     assert old in table_sql
     return table_sql.replace(old, new, 1)
@@ -216,6 +227,41 @@ def test_predykat_indeksu_r2_jest_dopasowany_fail_closed(
     actual, expected, matches,
 ):
     assert database._r2_index_predicate_matches(actual, expected) is matches
+
+
+@pytest.mark.parametrize(
+    ("actual", "expected"),
+    [
+        (
+            "(((stan)::text = ANY ((ARRAY['queued'::character varying, "
+            "'sent'::character varying])::text[])))",
+            "stan IN ('queued', 'sent')",
+        ),
+        (
+            "((wynik)::text <> ALL ((ARRAY['claimed'::character varying, "
+            "'processing'::character varying])::text[]))",
+            "wynik NOT IN ('claimed', 'processing')",
+        ),
+        (
+            "(((a = 1) AND (b = 2)) OR ((c = 3) AND (d = 4)))",
+            "(a = 1 AND b = 2) OR (c = 3 AND d = 4)",
+        ),
+    ],
+)
+def test_sygnatura_check_r5a_postgresql_toleruje_tylko_deparser(
+    actual, expected,
+):
+    assert database._r5a_check_signature(
+        actual, "postgresql",
+    ) == database._r5a_check_signature(expected, "postgresql")
+
+
+def test_sygnatura_check_r5a_postgresql_zachowuje_grupowanie_logiczne():
+    left_grouped = "(a = 1 OR b = 2) AND c = 3"
+    right_grouped = "a = 1 OR (b = 2 AND c = 3)"
+    assert database._r5a_check_signature(
+        left_grouped, "postgresql",
+    ) != database._r5a_check_signature(right_grouped, "postgresql")
 
 
 def test_adopcja_r2_postgresql_wymaga_zweryfikowanego_stampu(monkeypatch):
@@ -2299,3 +2345,587 @@ def test_adopcja_r5a_fail_closed_waliduje_typy_defaulty_i_ograniczenia(
         output = adoption.stdout + adoption.stderr
         assert adoption.returncode != 0, name
         assert expected_error in output, (name, output)
+
+
+def test_migracja_0062_tworzy_outbox_i_ma_pusty_round_trip(tmp_path):
+    db_file = tmp_path / "_r5b_communication_outbox.db"
+    env = _env(db_file, "r5b-communication-outbox")
+    upgraded_0061 = _alembic(env, "upgrade", "0061_r5a_public_security")
+    assert upgraded_0061.returncode == 0, upgraded_0061.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO terminy "
+            "(id,data,nazwisko,status,zadatek,kanal,rodzaj) "
+            "VALUES (1,'2035-07-16','Legacy R5b','rezerwacja',0,'reczna','stolik')"
+        )
+        con.execute(
+            "INSERT INTO lista_oczekujacych "
+            "(id,data,nazwisko,status,utworzono_at,kanal) "
+            "VALUES (1,'2035-07-16','Waitlist R5b','oczekuje',"
+            "'2026-07-16 10:00:00','reczna')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    expected_outbox_columns = {
+        "id", "termin_id", "waitlist_id", "subject_phone_ref",
+        "subject_email_ref", "dedupe_key", "typ_zdarzenia",
+        "kanal", "odbiorca", "temat", "tresc", "template_key",
+        "template_version", "provider", "provider_idempotency_key",
+        "provider_supports_idempotency", "provider_idempotency_header",
+        "stan", "liczba_prob", "maks_prob",
+        "available_at", "expires_at", "lease_token", "lease_expires_at",
+        "last_error_code", "actor_kind", "actor_user_id", "created_at",
+        "updated_at", "sent_at", "uncertain_at", "reconciled_at",
+        "reconciled_by_user_id", "reconciliation_note",
+    }
+    expected_attempt_columns = {
+        "id", "wiadomosc_id", "numer", "provider",
+        "provider_idempotency_key", "provider_supports_idempotency",
+        "provider_idempotency_header",
+        "lease_token", "claimed_at", "started_at", "finished_at", "wynik",
+        "error_code", "provider_message_id", "status_code", "retry_at",
+    }
+    expected_outbox_checks = {
+        "ck_rezerwacje_wiadomosci_outbox_owner",
+        "ck_rezerwacje_wiadomosci_outbox_typ",
+        "ck_rezerwacje_wiadomosci_outbox_kanal",
+        "ck_rezerwacje_wiadomosci_outbox_stan",
+        "ck_rezerwacje_wiadomosci_outbox_proby",
+        "ck_rezerwacje_wiadomosci_outbox_provider_key",
+        "ck_rezerwacje_wiadomosci_outbox_dedupe_key",
+        "ck_rezerwacje_wiadomosci_outbox_subject_ref",
+        "ck_rezerwacje_wiadomosci_outbox_subject_phone_ref",
+        "ck_rezerwacje_wiadomosci_outbox_subject_email_ref",
+        "ck_rezerwacje_wiadomosci_outbox_provider_contract",
+        "ck_rezerwacje_wiadomosci_outbox_actor",
+        "ck_rezerwacje_wiadomosci_outbox_deadline",
+        "ck_rezerwacje_wiadomosci_outbox_lease_lifecycle",
+        "ck_rezerwacje_wiadomosci_outbox_sent_lifecycle",
+        "ck_rezerwacje_wiadomosci_outbox_uncertain_lifecycle",
+        "ck_rezerwacje_wiadomosci_outbox_reconciliation",
+    }
+    expected_attempt_checks = {
+        "ck_rezerwacje_wiadomosci_proby_numer",
+        "ck_rezerwacje_wiadomosci_proby_wynik",
+        "ck_rezerwacje_wiadomosci_proby_lifecycle",
+        "ck_rezerwacje_wiadomosci_proby_retry",
+        "ck_rezerwacje_wiadomosci_proby_provider_contract",
+    }
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        term_info = {
+            row[1]: row for row in con.execute("PRAGMA table_info(terminy)")
+        }
+        waitlist_info = {
+            row[1]: row
+            for row in con.execute("PRAGMA table_info(lista_oczekujacych)")
+        }
+        config_info = {
+            row[1]: row for row in con.execute("PRAGMA table_info(lokal_config)")
+        }
+        outbox_info = {
+            row[1]: row
+            for row in con.execute(
+                "PRAGMA table_info(rezerwacje_wiadomosci_outbox)"
+            )
+        }
+        attempt_info = {
+            row[1]: row
+            for row in con.execute(
+                "PRAGMA table_info(rezerwacje_wiadomosci_proby)"
+            )
+        }
+        outbox_fks = {
+            (row[3], row[2], row[4], row[6].upper())
+            for row in con.execute(
+                "PRAGMA foreign_key_list(rezerwacje_wiadomosci_outbox)"
+            )
+        }
+        attempt_fks = {
+            (row[3], row[2], row[4], row[6].upper())
+            for row in con.execute(
+                "PRAGMA foreign_key_list(rezerwacje_wiadomosci_proby)"
+            )
+        }
+        outbox_indexes = {
+            row[1] for row in con.execute(
+                "PRAGMA index_list(rezerwacje_wiadomosci_outbox)"
+            )
+        }
+        attempt_indexes = {
+            row[1] for row in con.execute(
+                "PRAGMA index_list(rezerwacje_wiadomosci_proby)"
+            )
+        }
+        outbox_sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='rezerwacje_wiadomosci_outbox'"
+        ).fetchone()[0]
+        attempt_sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='rezerwacje_wiadomosci_proby'"
+        ).fetchone()[0]
+        legacy_channels = (
+            con.execute(
+                "SELECT kanal_komunikacji FROM terminy WHERE id=1"
+            ).fetchone()[0],
+            con.execute(
+                "SELECT kanal_komunikacji FROM lista_oczekujacych WHERE id=1"
+            ).fetchone()[0],
+        )
+        version = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    finally:
+        con.close()
+
+    assert {
+        "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
+    } <= tables
+    assert set(outbox_info) == expected_outbox_columns
+    assert set(attempt_info) == expected_attempt_columns
+    assert {"kanal_komunikacji"} <= set(term_info) & set(waitlist_info)
+    assert "rezerwacje_przypomnienie_h" in config_info
+    assert legacy_channels == ("auto", "auto")
+    assert str(term_info["kanal_komunikacji"][4]).strip("'()\"") == "auto"
+    assert str(waitlist_info["kanal_komunikacji"][4]).strip("'()\"") == "auto"
+    assert str(config_info["rezerwacje_przypomnienie_h"][4]).strip("'()\"") == "0"
+    assert str(outbox_info["stan"][4]).strip("'()\"") == "queued"
+    assert str(outbox_info["liczba_prob"][4]).strip("'()\"") == "0"
+    assert str(outbox_info["maks_prob"][4]).strip("'()\"") == "5"
+    assert str(outbox_info["actor_kind"][4]).strip("'()\"") == "system"
+    assert str(attempt_info["wynik"][4]).strip("'()\"") == "claimed"
+    assert {
+        ("termin_id", "terminy", "id", "CASCADE"),
+        ("waitlist_id", "lista_oczekujacych", "id", "CASCADE"),
+        ("actor_user_id", "users", "id", "SET NULL"),
+        ("reconciled_by_user_id", "users", "id", "SET NULL"),
+    } <= outbox_fks
+    assert {
+        ("wiadomosc_id", "rezerwacje_wiadomosci_outbox", "id", "CASCADE"),
+    } <= attempt_fks
+    assert {
+        "ix_rezerwacje_wiadomosci_outbox_termin_id",
+        "ix_rezerwacje_wiadomosci_outbox_waitlist_id",
+        "ix_rezerwacje_wiadomosci_outbox_due",
+        "ix_rezerwacje_wiadomosci_outbox_lease",
+        "ix_rezerwacje_wiadomosci_outbox_subject_phone_ref",
+        "ix_rezerwacje_wiadomosci_outbox_subject_email_ref",
+    } <= outbox_indexes
+    assert {
+        "ix_rezerwacje_wiadomosci_proby_wiadomosc_started",
+    } <= attempt_indexes
+    assert expected_outbox_checks <= {
+        name for name in expected_outbox_checks if name in outbox_sql
+    }
+    assert expected_attempt_checks <= {
+        name for name in expected_attempt_checks if name in attempt_sql
+    }
+    assert {
+        "uq_rezerwacje_wiadomosci_outbox_dedupe_kanal",
+        "uq_rezerwacje_wiadomosci_outbox_provider_idempotency_key",
+    } <= {name for name in (
+        "uq_rezerwacje_wiadomosci_outbox_dedupe_kanal",
+        "uq_rezerwacje_wiadomosci_outbox_provider_idempotency_key",
+    ) if name in outbox_sql}
+    assert "uq_rezerwacje_wiadomosci_proby_numer" in attempt_sql
+    assert version == HEAD
+
+    downgraded = _alembic(env, "downgrade", "0061_r5a_public_security")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        downgraded_tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        term_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(terminy)")
+        }
+        waitlist_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(lista_oczekujacych)")
+        }
+        config_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(lokal_config)")
+        }
+        downgraded_version = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert not {
+        "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
+    } & downgraded_tables
+    assert "kanal_komunikacji" not in term_columns
+    assert "kanal_komunikacji" not in waitlist_columns
+    assert "rezerwacje_przypomnienie_h" not in config_columns
+    assert downgraded_version == "0061_r5a_public_security"
+
+    upgraded_again = _alembic(env, "upgrade", HEAD)
+    assert upgraded_again.returncode == 0, upgraded_again.stderr
+
+
+def test_adopcja_pelnego_create_all_r5b_stampuje_0062(tmp_path):
+    db_file = tmp_path / "_r5b_create_all_adoption.db"
+    env = _env(db_file, "r5b-create-all-adoption")
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+
+    adopted = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert adopted.returncode == 0, adopted.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        fk_errors = con.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        con.close()
+    assert revision == HEAD
+    assert {
+        "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
+    } <= tables
+    assert fk_errors == []
+
+
+def test_adopcja_r5b_odrzuca_czesciowy_schemat(tmp_path):
+    db_file = tmp_path / "_r5b_partial_adoption.db"
+    env = _env(db_file, "r5b-partial-adoption")
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("DROP TABLE rezerwacje_wiadomosci_proby")
+        con.commit()
+    finally:
+        con.close()
+
+    adoption = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    output = adoption.stdout + adoption.stderr
+    assert adoption.returncode != 0
+    assert "Schemat R5b jest czesciowy" in output
+
+
+def test_adopcja_r5b_fail_closed_waliduje_kontrakt_schematu(tmp_path):
+    base_file = tmp_path / "_r5b_adoption_contract_base.db"
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=_env(base_file, "r5b-contract-base"),
+        capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+
+    cases = (
+        (
+            "outbox-column-type",
+            "rezerwacje_wiadomosci_outbox",
+            lambda sql: _replace_sql_fragment(
+                sql, "dedupe_key VARCHAR(64)", "dedupe_key VARCHAR(32)",
+            ),
+            None,
+            "rezerwacje_wiadomosci_outbox.dedupe_key",
+        ),
+        (
+            "outbox-column-default",
+            "rezerwacje_wiadomosci_outbox",
+            lambda sql: _replace_sql_fragment(
+                sql,
+                "stan VARCHAR(16) DEFAULT 'queued'",
+                "stan VARCHAR(16) DEFAULT 'failed'",
+            ),
+            None,
+            "rezerwacje_wiadomosci_outbox.stan",
+        ),
+        (
+            "outbox-unique",
+            "rezerwacje_wiadomosci_outbox",
+            lambda sql: _remove_named_unique(
+                sql, "uq_rezerwacje_wiadomosci_outbox_dedupe_kanal",
+            ),
+            None,
+            "uq_rezerwacje_wiadomosci_outbox_dedupe_kanal",
+        ),
+        (
+            "outbox-owner-check",
+            "rezerwacje_wiadomosci_outbox",
+            lambda sql: _replace_named_check(
+                sql, "ck_rezerwacje_wiadomosci_outbox_owner", "1",
+            ),
+            None,
+            "ck_rezerwacje_wiadomosci_outbox_owner",
+        ),
+        (
+            "outbox-extra-unnamed-unique",
+            "rezerwacje_wiadomosci_outbox",
+            lambda sql: _append_table_constraint(
+                sql, "UNIQUE (subject_phone_ref)",
+            ),
+            None,
+            "nienazwane ograniczenie UNIQUE R5b",
+        ),
+        (
+            "outbox-extra-unique-index",
+            None,
+            None,
+            "CREATE UNIQUE INDEX uq_r5b_subject_phone_ref_extra "
+            "ON rezerwacje_wiadomosci_outbox (subject_phone_ref)",
+            "nadmiarowy indeks UNIQUE R5b",
+        ),
+        (
+            "outbox-extra-fk",
+            "rezerwacje_wiadomosci_outbox",
+            lambda sql: _append_table_constraint(
+                sql,
+                "FOREIGN KEY(subject_phone_ref) REFERENCES users (id)",
+            ),
+            None,
+            "dokladnie wymaganych FK R5b",
+        ),
+        (
+            "outbox-extra-check",
+            "rezerwacje_wiadomosci_outbox",
+            lambda sql: _append_table_constraint(
+                sql,
+                "CONSTRAINT ck_r5b_subject_phone_extra "
+                "CHECK (subject_phone_ref IS NULL OR length(subject_phone_ref) >= 1)",
+            ),
+            None,
+            "nadmiarowy, nienazwany lub brakujacy CHECK R5b",
+        ),
+        (
+            "attempt-owner-fk",
+            "rezerwacje_wiadomosci_proby",
+            lambda sql: _replace_sql_fragment(
+                sql,
+                "FOREIGN KEY(wiadomosc_id) REFERENCES "
+                "rezerwacje_wiadomosci_outbox (id) ON DELETE CASCADE",
+                "FOREIGN KEY(wiadomosc_id) REFERENCES "
+                "rezerwacje_wiadomosci_outbox (id) ON DELETE SET NULL",
+            ),
+            None,
+            "wymaganych FK R5b",
+        ),
+        (
+            "outbox-due-index",
+            None,
+            None,
+            "DROP INDEX ix_rezerwacje_wiadomosci_outbox_due",
+            "ix_rezerwacje_wiadomosci_outbox_due",
+        ),
+        (
+            "reminder-default",
+            "lokal_config",
+            lambda sql: _replace_sql_fragment(
+                sql,
+                "rezerwacje_przypomnienie_h INTEGER DEFAULT '0'",
+                "rezerwacje_przypomnienie_h INTEGER DEFAULT '24'",
+            ),
+            None,
+            "lokal_config.rezerwacje_przypomnienie_h",
+        ),
+        (
+            "base-channel-check",
+            "terminy",
+            lambda sql: _replace_named_check(
+                sql, "ck_terminy_kanal_komunikacji", "1",
+            ),
+            None,
+            "ck_terminy_kanal_komunikacji",
+        ),
+    )
+    for name, table_name, transform, statement, expected_error in cases:
+        db_file = tmp_path / f"_r5b_adoption_contract_{name}.db"
+        shutil.copy2(base_file, db_file)
+        if statement is not None:
+            con = sqlite3.connect(str(db_file))
+            try:
+                con.execute(statement)
+                con.commit()
+            finally:
+                con.close()
+        else:
+            _rewrite_sqlite_table(db_file, table_name, transform)
+
+        adoption = subprocess.run(
+            [sys.executable, "-c", "import database; database.init_db()"],
+            cwd=str(BACKEND), env=_env(db_file, f"r5b-contract-{name}"),
+            capture_output=True, text=True,
+        )
+        output = adoption.stdout + adoption.stderr
+        assert adoption.returncode != 0, name
+        assert expected_error in output, (name, output)
+
+
+def test_migracja_0062_blokuje_downgrade_z_historia_dostarczenia(tmp_path):
+    db_file = tmp_path / "_r5b_unsafe_downgrade.db"
+    env = _env(db_file, "r5b-unsafe-downgrade")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO terminy "
+            "(id,data,nazwisko,status,zadatek,kanal,rodzaj,kanal_komunikacji) "
+            "VALUES (1,'2035-07-16','Historia R5b','rezerwacja',0,"
+            "'reczna','stolik','email')"
+        )
+        con.execute(
+            "INSERT INTO rezerwacje_wiadomosci_outbox "
+            "(id,termin_id,subject_phone_ref,subject_email_ref,dedupe_key,"
+            "typ_zdarzenia,kanal,odbiorca,temat,tresc,"
+            "template_key,template_version,provider,provider_idempotency_key,"
+            "provider_supports_idempotency,stan,liczba_prob,maks_prob,"
+            "available_at,expires_at,actor_kind,created_at,updated_at) "
+            "VALUES (1,1,?,?,?,'confirmation','email','encrypted-recipient',"
+            "'encrypted-subject','encrypted-body','confirmation','v1','smtp',?,"
+            "0,'queued',0,5,'2026-07-16 10:00:00','2035-07-16 17:00:00',"
+            "'system','2026-07-16 10:00:00','2026-07-16 10:00:00')",
+            ("t" * 64, "e" * 64, "d" * 64, "p" * 64),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    downgraded = _alembic(env, "downgrade", "0061_r5a_public_security")
+    output = downgraded.stdout + downgraded.stderr
+    assert downgraded.returncode != 0
+    assert "R5B_DOWNGRADE_DELIVERY_HISTORY_LOSS" in output
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        history_count = con.execute(
+            "SELECT count(*) FROM rezerwacje_wiadomosci_outbox"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert revision == HEAD
+    assert history_count == 1
+
+
+@pytest.mark.parametrize("setting", ["termin", "waitlist", "reminder"])
+def test_migracja_0062_blokuje_downgrade_z_niestandardowa_polityka_bez_historii(
+    tmp_path, setting,
+):
+    db_file = tmp_path / f"_r5b_policy_unsafe_downgrade_{setting}.db"
+    env = _env(db_file, f"r5b-policy-unsafe-{setting}")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        if setting == "termin":
+            con.execute(
+                "INSERT INTO terminy "
+                "(id,data,nazwisko,status,zadatek,kanal,rodzaj,kanal_komunikacji) "
+                "VALUES (1,'2035-07-16','Polityka R5b','rezerwacja',0,"
+                "'reczna','stolik','brak')"
+            )
+        elif setting == "waitlist":
+            con.execute(
+                "INSERT INTO lista_oczekujacych "
+                "(id,data,nazwisko,status,utworzono_at,kanal,kanal_komunikacji) "
+                "VALUES (1,'2035-07-16','Polityka R5b','oczekuje',"
+                "'2026-07-16 10:00:00','reczna','sms')"
+            )
+        else:
+            con.execute(
+                "INSERT INTO lokal_config "
+                "(id,nazwa_lokalu,poczatek_tygodnia,modul_rozliczenia,"
+                "modul_imprezy,modul_pos,modul_sprzatanie,"
+                "rezerwacje_przypomnienie_h) "
+                "VALUES (1,'Lokalo',2,1,1,1,1,24)"
+            )
+        con.commit()
+        assert con.execute(
+            "SELECT count(*) FROM rezerwacje_wiadomosci_outbox"
+        ).fetchone()[0] == 0
+        assert con.execute(
+            "SELECT count(*) FROM rezerwacje_wiadomosci_proby"
+        ).fetchone()[0] == 0
+    finally:
+        con.close()
+
+    downgraded = _alembic(env, "downgrade", "0061_r5a_public_security")
+    output = downgraded.stdout + downgraded.stderr
+    assert downgraded.returncode != 0
+    assert "R5B_DOWNGRADE_DATA_LOSS" in output
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if setting == "termin":
+            preserved = con.execute(
+                "SELECT kanal_komunikacji FROM terminy WHERE id=1"
+            ).fetchone()[0]
+            assert preserved == "brak"
+        elif setting == "waitlist":
+            preserved = con.execute(
+                "SELECT kanal_komunikacji FROM lista_oczekujacych WHERE id=1"
+            ).fetchone()[0]
+            assert preserved == "sms"
+        else:
+            preserved = con.execute(
+                "SELECT rezerwacje_przypomnienie_h FROM lokal_config WHERE id=1"
+            ).fetchone()[0]
+            assert preserved == 24
+    finally:
+        con.close()
+    assert revision == HEAD
+    assert {
+        "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
+    } <= tables

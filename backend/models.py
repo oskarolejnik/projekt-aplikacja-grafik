@@ -320,6 +320,10 @@ class Termin(Base):
             "OR przydzial_wersja_planu_id IS NOT NULL",
             name="ck_terminy_przydzial_kombinacja_wymaga_wersji",
         ),
+        CheckConstraint(
+            "kanal_komunikacji IN ('auto', 'email', 'sms', 'oba', 'brak')",
+            name="ck_terminy_kanal_komunikacji",
+        ),
         Index("ix_terminy_przydzial_wersja_planu_id", "przydzial_wersja_planu_id"),
         Index(
             "ix_terminy_przydzial_kombinacja_planu_id",
@@ -356,6 +360,11 @@ class Termin(Base):
     rodzaj       = Column(String(16), nullable=False, default="impreza")  # stolik|sala|impreza
     stolik_id    = Column(Integer, ForeignKey("stoliki.id", ondelete="SET NULL"), nullable=True)
     email        = Column(EncryptedString(512), nullable=True)  # PII gościa — szyfrowane at-rest (potwierdzenia/przypomnienia)
+    # Preferencja wiadomości operacyjnych jest niezależna od zgody marketingowej.
+    # auto = e-mail, gdy jest dostępny, w przeciwnym razie SMS.
+    kanal_komunikacji = Column(
+        String(8), nullable=False, default="auto", server_default="auto",
+    )
     token_potwierdzenia = Column(String, nullable=True, index=True)  # link gościa (potwierdź/odwołaj) bez logowania
     potwierdzono_at     = Column(DateTime, nullable=True)
     odwolano_at         = Column(DateTime, nullable=True)
@@ -547,6 +556,10 @@ class LokalConfig(Base):
             "rezerwacje_retencja_dni >= 30 AND rezerwacje_retencja_dni <= 3650",
             name="ck_lokal_config_rezerwacje_retencja_dni",
         ),
+        CheckConstraint(
+            "rezerwacje_przypomnienie_h >= 0 AND rezerwacje_przypomnienie_h <= 168",
+            name="ck_lokal_config_rezerwacje_przypomnienie_h",
+        ),
     )
     id                = Column(Integer, primary_key=True)
     # --- Branding (white-label) ---
@@ -574,6 +587,10 @@ class LokalConfig(Base):
     )
     rezerwacje_rodo_kontakt = Column(String(254), nullable=True)
     rezerwacje_rodo_adres = Column(String(256), nullable=True)
+    # 0 wyłącza przypomnienia; wartość oznacza ile godzin przed wizytą je zaplanować.
+    rezerwacje_przypomnienie_h = Column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     # --- Polityka rezerwacji (v2). Defaulty = polityka wyłączona (zachowanie historyczne). ---
     rez_okno_wyprzedzenia_dni = Column(Integer, nullable=False, default=0)   # max dni w przód (0 = bez limitu)
     rez_cutoff_min            = Column(Integer, nullable=False, default=0)   # min. minut przed slotem (0 = wyłączone)
@@ -1255,6 +1272,12 @@ class ListaOczekujacych(Base):
     """Lista oczekujących (waitlist) — gość bez wolnego stolika. Po zwolnieniu miejsca
     (odwołanie / no-show) admin REALIZUJE wpis → tworzy rezerwację (Termin rodzaj=stolik)."""
     __tablename__ = "lista_oczekujacych"
+    __table_args__ = (
+        CheckConstraint(
+            "kanal_komunikacji IN ('auto', 'email', 'sms', 'oba', 'brak')",
+            name="ck_lista_oczekujacych_kanal_komunikacji",
+        ),
+    )
     id              = Column(Integer, primary_key=True, index=True)
     data            = Column(Date, nullable=False, index=True)
     godz_od         = Column(Time, nullable=True)
@@ -1262,6 +1285,9 @@ class ListaOczekujacych(Base):
     nazwisko        = Column(String(128), nullable=False)
     telefon         = Column(EncryptedString(512), nullable=True)   # PII gościa — szyfrowane at-rest
     email           = Column(EncryptedString(512), nullable=True)   # PII gościa — szyfrowane at-rest
+    kanal_komunikacji = Column(
+        String(8), nullable=False, default="auto", server_default="auto",
+    )
     notatka         = Column(String, nullable=True)
     status          = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|zrealizowany|odwolany
     utworzono_at    = Column(DateTime, nullable=False)
@@ -1277,6 +1303,234 @@ class ListaOczekujacych(Base):
     hold_do         = Column(DateTime, nullable=True)                                         # do kiedy trzymany
     token           = Column(String(64), nullable=True, index=True)                          # magic-link gościa (potwierdzenie holdu)
     kanal           = Column(String(16), nullable=False, default="reczna")                    # reczna|online
+
+
+class RezerwacjaWiadomoscOutbox(Base):
+    """Niezmienny snapshot wiadomości operacyjnej oczekującej na dostarczenie.
+
+    Odbiorca i treść są szyfrowane at-rest. ``provider_idempotency_key`` pozostaje
+    stabilny we wszystkich próbach; provider bez takiego kontraktu przechodzi po
+    niejednoznacznej awarii do ``uncertain`` i czeka na decyzję operatora.
+    """
+    __tablename__ = "rezerwacje_wiadomosci_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "dedupe_key", "kanal",
+            name="uq_rezerwacje_wiadomosci_outbox_dedupe_kanal",
+        ),
+        UniqueConstraint(
+            "provider_idempotency_key",
+            name="uq_rezerwacje_wiadomosci_outbox_provider_idempotency_key",
+        ),
+        CheckConstraint(
+            "(termin_id IS NOT NULL AND waitlist_id IS NULL) OR "
+            "(termin_id IS NULL AND waitlist_id IS NOT NULL)",
+            name="ck_rezerwacje_wiadomosci_outbox_owner",
+        ),
+        CheckConstraint(
+            "typ_zdarzenia IN ('confirmation', 'reminder', 'change', "
+            "'cancellation', 'table_ready')",
+            name="ck_rezerwacje_wiadomosci_outbox_typ",
+        ),
+        CheckConstraint(
+            "kanal IN ('email', 'sms')",
+            name="ck_rezerwacje_wiadomosci_outbox_kanal",
+        ),
+        CheckConstraint(
+            "stan IN ('queued', 'processing', 'retry', 'sent', 'failed', "
+            "'uncertain', 'cancelled', 'expired')",
+            name="ck_rezerwacje_wiadomosci_outbox_stan",
+        ),
+        CheckConstraint(
+            "liczba_prob >= 0 AND maks_prob >= 1",
+            name="ck_rezerwacje_wiadomosci_outbox_proby",
+        ),
+        CheckConstraint(
+            "length(provider_idempotency_key) = 64",
+            name="ck_rezerwacje_wiadomosci_outbox_provider_key",
+        ),
+        CheckConstraint(
+            "length(dedupe_key) = 64",
+            name="ck_rezerwacje_wiadomosci_outbox_dedupe_key",
+        ),
+        CheckConstraint(
+            "subject_phone_ref IS NOT NULL OR subject_email_ref IS NOT NULL",
+            name="ck_rezerwacje_wiadomosci_outbox_subject_ref",
+        ),
+        CheckConstraint(
+            "subject_phone_ref IS NULL OR length(subject_phone_ref) = 64",
+            name="ck_rezerwacje_wiadomosci_outbox_subject_phone_ref",
+        ),
+        CheckConstraint(
+            "subject_email_ref IS NULL OR length(subject_email_ref) = 64",
+            name="ck_rezerwacje_wiadomosci_outbox_subject_email_ref",
+        ),
+        CheckConstraint(
+            "(provider_supports_idempotency = false AND "
+            "provider_idempotency_header IS NULL) OR "
+            "(provider_supports_idempotency = true AND "
+            "provider_idempotency_header IS NOT NULL)",
+            name="ck_rezerwacje_wiadomosci_outbox_provider_contract",
+        ),
+        CheckConstraint(
+            "actor_kind IN ('system', 'user', 'guest')",
+            name="ck_rezerwacje_wiadomosci_outbox_actor",
+        ),
+        CheckConstraint(
+            "available_at < expires_at",
+            name="ck_rezerwacje_wiadomosci_outbox_deadline",
+        ),
+        CheckConstraint(
+            "(stan = 'processing' AND lease_token IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL) OR "
+            "(stan <> 'processing' AND lease_token IS NULL "
+            "AND lease_expires_at IS NULL)",
+            name="ck_rezerwacje_wiadomosci_outbox_lease_lifecycle",
+        ),
+        CheckConstraint(
+            "stan <> 'sent' OR sent_at IS NOT NULL",
+            name="ck_rezerwacje_wiadomosci_outbox_sent_lifecycle",
+        ),
+        CheckConstraint(
+            "stan <> 'uncertain' OR uncertain_at IS NOT NULL",
+            name="ck_rezerwacje_wiadomosci_outbox_uncertain_lifecycle",
+        ),
+        CheckConstraint(
+            "(reconciled_at IS NULL AND reconciled_by_user_id IS NULL "
+            "AND reconciliation_note IS NULL) OR "
+            "(reconciled_at IS NOT NULL AND reconciliation_note IS NOT NULL)",
+            name="ck_rezerwacje_wiadomosci_outbox_reconciliation",
+        ),
+        Index(
+            "ix_rezerwacje_wiadomosci_outbox_due",
+            "stan", "available_at", "id",
+        ),
+        Index(
+            "ix_rezerwacje_wiadomosci_outbox_lease",
+            "stan", "lease_expires_at",
+        ),
+        Index(
+            "ix_rezerwacje_wiadomosci_outbox_subject_phone_ref",
+            "subject_phone_ref", "id",
+        ),
+        Index(
+            "ix_rezerwacje_wiadomosci_outbox_subject_email_ref",
+            "subject_email_ref", "id",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    termin_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="CASCADE"), nullable=True,
+        index=True,
+    )
+    waitlist_id = Column(
+        Integer, ForeignKey("lista_oczekujacych.id", ondelete="CASCADE"),
+        nullable=True, index=True,
+    )
+    # Oba HMAC-y tożsamości w chwili renderowania trafiają na każdy wiersz grupy.
+    # Lookup po telefonie lub e-mailu zwraca więc komplet kanałów, ale nigdy obcą
+    # historię po późniejszej zmianie kontaktu A→B.
+    subject_phone_ref = Column(String(64), nullable=True)
+    subject_email_ref = Column(String(64), nullable=True)
+    dedupe_key = Column(String(64), nullable=False)
+    typ_zdarzenia = Column(String(24), nullable=False)
+    kanal = Column(String(8), nullable=False)
+    odbiorca = Column(EncryptedString(1024), nullable=False)
+    temat = Column(EncryptedText(), nullable=True)
+    tresc = Column(EncryptedText(), nullable=False)
+    template_key = Column(String(32), nullable=False)
+    template_version = Column(String(16), nullable=False)
+    provider = Column(String(32), nullable=False)
+    provider_idempotency_key = Column(String(64), nullable=False)
+    provider_supports_idempotency = Column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
+    provider_idempotency_header = Column(String(128), nullable=True)
+    stan = Column(String(16), nullable=False, default="queued", server_default="queued")
+    liczba_prob = Column(Integer, nullable=False, default=0, server_default="0")
+    maks_prob = Column(Integer, nullable=False, default=5, server_default="5")
+    available_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    lease_token = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String(64), nullable=True)
+    actor_kind = Column(String(16), nullable=False, default="system", server_default="system")
+    actor_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    sent_at = Column(DateTime, nullable=True)
+    uncertain_at = Column(DateTime, nullable=True)
+    reconciled_at = Column(DateTime, nullable=True)
+    reconciled_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    reconciliation_note = Column(EncryptedText(), nullable=True)
+
+
+class RezerwacjaWiadomoscProba(Base):
+    """Jedna odtwarzalna próba dostarczenia wiadomości z outboxa."""
+    __tablename__ = "rezerwacje_wiadomosci_proby"
+    __table_args__ = (
+        UniqueConstraint(
+            "wiadomosc_id", "numer",
+            name="uq_rezerwacje_wiadomosci_proby_numer",
+        ),
+        CheckConstraint(
+            "numer >= 1",
+            name="ck_rezerwacje_wiadomosci_proby_numer",
+        ),
+        CheckConstraint(
+            "wynik IN ('claimed', 'processing', 'sent', 'retry', 'failed', "
+            "'uncertain')",
+            name="ck_rezerwacje_wiadomosci_proby_wynik",
+        ),
+        CheckConstraint(
+            "(wynik = 'claimed' AND started_at IS NULL AND finished_at IS NULL) OR "
+            "(wynik = 'processing' AND started_at IS NOT NULL AND finished_at IS NULL) OR "
+            "(wynik NOT IN ('claimed', 'processing') AND finished_at IS NOT NULL)",
+            name="ck_rezerwacje_wiadomosci_proby_lifecycle",
+        ),
+        CheckConstraint(
+            "(wynik = 'retry' AND retry_at IS NOT NULL) OR "
+            "(wynik <> 'retry' AND retry_at IS NULL)",
+            name="ck_rezerwacje_wiadomosci_proby_retry",
+        ),
+        CheckConstraint(
+            "(provider_supports_idempotency = false AND "
+            "provider_idempotency_header IS NULL) OR "
+            "(provider_supports_idempotency = true AND "
+            "provider_idempotency_header IS NOT NULL)",
+            name="ck_rezerwacje_wiadomosci_proby_provider_contract",
+        ),
+        Index(
+            "ix_rezerwacje_wiadomosci_proby_wiadomosc_started",
+            "wiadomosc_id", "started_at",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    wiadomosc_id = Column(
+        Integer,
+        ForeignKey("rezerwacje_wiadomosci_outbox.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    numer = Column(Integer, nullable=False)
+    provider = Column(String(32), nullable=False)
+    provider_idempotency_key = Column(String(64), nullable=False)
+    provider_supports_idempotency = Column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
+    provider_idempotency_header = Column(String(128), nullable=True)
+    lease_token = Column(String(64), nullable=False)
+    claimed_at = Column(DateTime, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    wynik = Column(String(24), nullable=False, default="claimed", server_default="claimed")
+    error_code = Column(String(64), nullable=True)
+    provider_message_id = Column(EncryptedString(512), nullable=True)
+    status_code = Column(Integer, nullable=True)
+    retry_at = Column(DateTime, nullable=True)
 
 
 class RezerwacjaIdempotencja(Base):

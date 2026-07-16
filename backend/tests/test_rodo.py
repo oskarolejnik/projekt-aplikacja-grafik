@@ -2,13 +2,17 @@
 Admin-only; dopasowanie gościa po odszyfrowanym telefonie (jak CRM)."""
 
 from datetime import date, datetime, time, timedelta
+import hashlib
+import hmac
 import json
+import os
 import threading
 from time import monotonic
 
 import maintenance
 import main
 import models
+import reservation_communication as communication
 import reservation_service
 from crm_identity import hash_key, reservation_fallback_hash
 from deps import get_lokal_config, utcnow_naive
@@ -697,6 +701,560 @@ def test_automatyczna_retencja_nie_zasmieca_audytu_pustym_przebiegiem(db):
 
     assert result["status"] == "no_changes"
     assert result["liczba_zmian"] == 0
+    assert db.query(models.AuditLog).filter_by(
+        akcja="rodo_retencja_automatyczna",
+    ).count() == 0
+
+
+def test_admin_rodo_export_is_complete_but_erasure_conflicts_after_io_started(
+    admin_client,
+    db,
+):
+    now = utcnow_naive()
+    termin = _termin(db, data=date.today(), status="rezerwacja")
+    messages = communication.enqueue_reservation(
+        db,
+        termin,
+        "confirmation",
+        dedupe_key="rodo-admin-processing-export",
+        available_at=now - timedelta(seconds=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    db.commit()
+    message_id = messages[0].id
+    provider_key = messages[0].provider_idempotency_key
+    claim = communication.claim_next(now=now)
+    assert claim.id == message_id
+    assert communication.mark_claim_started(claim, now=now) is not None
+
+    exported = admin_client.post(
+        "/api/rodo/eksport-gosc",
+        json={"klucz": KLUCZ},
+    )
+
+    assert exported.status_code == 200, exported.text
+    body = exported.json()
+    assert body["rezerwacje"][0]["kanal_komunikacji"] == "auto"
+    history = body["prywatnosc"]["komunikacja_operacyjna"]
+    assert len(history) == 1
+    assert history[0]["odbiorca"] == TEL
+    assert history[0]["stan"] == "processing"
+    assert history[0]["proby"][0]["stan"] == "processing"
+    assert history[0]["tresc"]
+    assert provider_key not in exported.text
+    assert all(secret_field not in exported.text for secret_field in (
+        "provider_idempotency_key", "provider_idempotency_header",
+        "lease_token", "actor_user_id", "reconciled_by_user_id",
+        "subject_phone_ref", "subject_email_ref",
+    ))
+
+    erased = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": KLUCZ},
+    )
+
+    assert erased.status_code == 409, erased.text
+    assert erased.json()["code"] == "COMMUNICATION_DELIVERY_IN_PROGRESS"
+    assert TEL not in erased.text
+    hard_delete = admin_client.delete(f"/api/rezerwacje-stolik/{termin.id}")
+    assert hard_delete.status_code == 409, hard_delete.text
+    assert hard_delete.json()["code"] == "COMMUNICATION_DELIVERY_IN_PROGRESS"
+    assert TEL not in hard_delete.text
+    db.expire_all()
+    assert db.get(models.Termin, termin.id).nazwisko == "Kowalski"
+    assert db.get(models.RezerwacjaWiadomoscOutbox, message_id).stan == "processing"
+
+
+def test_rodo_subject_refs_isolate_history_and_erasure_after_contact_change(
+    admin_client,
+    db,
+):
+    now = utcnow_naive()
+    phone_a = "600100211"
+    email_a = "subject-a@example.test"
+    phone_b = "700200311"
+    email_b = "subject-b@example.test"
+    key_a = _normalizuj_numer(phone_a)
+    key_b = _normalizuj_numer(phone_b)
+    termin = _termin(db, data=date.today(), telefon=phone_a)
+    termin.email = email_a
+    termin.kanal_komunikacji = "oba"
+    messages_a = communication.enqueue_reservation(
+        db,
+        termin,
+        "confirmation",
+        dedupe_key="rodo-subject-a-confirmation",
+        available_at=now - timedelta(seconds=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    db.commit()
+    ids_a = {message.id for message in messages_a}
+    refs_a = {
+        (message.subject_phone_ref, message.subject_email_ref)
+        for message in messages_a
+    }
+    assert len(refs_a) == 1
+    phone_ref_a, email_ref_a = refs_a.pop()
+    assert len(phone_ref_a) == len(email_ref_a) == 64
+    assert phone_a not in phone_ref_a and email_a not in email_ref_a
+    assert phone_ref_a != hashlib.sha256(phone_a.encode("utf-8")).hexdigest()
+    assert email_ref_a != hashlib.sha256(email_a.encode("utf-8")).hexdigest()
+    encryption_key = os.environ["ENCRYPTION_KEY"].encode("utf-8")
+    index_key = hmac.new(
+        encryption_key,
+        communication._SUBJECT_INDEX_KEY_DOMAIN,
+        hashlib.sha256,
+    ).digest()
+    assert phone_ref_a == hmac.new(
+        index_key,
+        communication._SUBJECT_PHONE_DOMAIN + key_a.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    assert email_ref_a == hmac.new(
+        index_key,
+        communication._SUBJECT_EMAIL_DOMAIN + email_a.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    termin.telefon = phone_b
+    termin.email = email_b
+    messages_b = communication.enqueue_reservation(
+        db,
+        termin,
+        "change",
+        dedupe_key="rodo-subject-b-change",
+        available_at=now - timedelta(seconds=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    db.commit()
+    ids_b = {message.id for message in messages_b}
+
+    export_b = admin_client.post(
+        "/api/rodo/eksport-gosc",
+        json={"klucz": key_b},
+    )
+    assert export_b.status_code == 200, export_b.text
+    history_b = export_b.json()["prywatnosc"]["komunikacja_operacyjna"]
+    assert {entry["wiadomosc_id"] for entry in history_b} == ids_b
+    assert phone_a not in export_b.text and email_a not in export_b.text
+
+    export_a = admin_client.post(
+        "/api/rodo/eksport-gosc",
+        json={"klucz": key_a},
+    )
+    assert export_a.status_code == 200, export_a.text
+    assert export_a.json()["liczba_rekordow"] == 0
+    history_a = export_a.json()["prywatnosc"]["komunikacja_operacyjna"]
+    assert {entry["wiadomosc_id"] for entry in history_a} == ids_a
+    assert {entry["odbiorca"] for entry in history_a} == {phone_a, email_a}
+    export_a_by_email = admin_client.post(
+        "/api/rodo/eksport-gosc",
+        json={"klucz": email_a},
+    )
+    assert {
+        entry["wiadomosc_id"]
+        for entry in export_a_by_email.json()["prywatnosc"]["komunikacja_operacyjna"]
+    } == ids_a
+
+    erased_a = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": key_a},
+    )
+    assert erased_a.status_code == 200, erased_a.text
+    assert erased_a.json()["zanonimizowano_lacznie"] == 0
+    assert erased_a.json()["usunieto_komunikacja"] == 2
+    db.expire_all()
+    current = db.get(models.Termin, termin.id)
+    assert current.telefon == phone_b and current.email == email_b
+    assert db.query(models.RezerwacjaWiadomoscOutbox).filter(
+        models.RezerwacjaWiadomoscOutbox.id.in_(ids_a),
+    ).count() == 0
+    assert db.query(models.RezerwacjaWiadomoscOutbox).filter(
+        models.RezerwacjaWiadomoscOutbox.id.in_(ids_b),
+    ).count() == 2
+
+    erased_b = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": key_b},
+    )
+    assert erased_b.status_code == 200, erased_b.text
+    assert erased_b.json()["zanonimizowano"] == 1
+    db.expire_all()
+    assert db.get(models.Termin, termin.id).nazwisko == "[anonimizacja RODO]"
+    assert db.query(models.RezerwacjaWiadomoscOutbox).filter(
+        models.RezerwacjaWiadomoscOutbox.id.in_(ids_b),
+    ).count() == 0
+
+
+def test_rodo_current_owner_with_phone_and_email_matches_by_email(admin_client, db):
+    now = utcnow_naive()
+    email = "  ＧＯＳＣ@Example.TEST  "
+    canonical_email = "gosc@example.test"
+    termin = _termin(db, data=date.today(), telefon="600100213")
+    termin.email = email
+    termin.kanal_komunikacji = "oba"
+    messages = communication.enqueue_reservation(
+        db,
+        termin,
+        "confirmation",
+        dedupe_key="rodo-current-owner-email-lookup",
+        available_at=now + timedelta(hours=1),
+        expires_at=now + timedelta(hours=2),
+    )
+    db.commit()
+    message_ids = {message.id for message in messages}
+
+    exported = admin_client.post(
+        "/api/rodo/eksport-gosc",
+        json={"klucz": canonical_email.upper()},
+    )
+
+    assert exported.status_code == 200, exported.text
+    assert exported.json()["liczba_rezerwacji"] == 1
+    assert exported.json()["rezerwacje"][0]["id"] == termin.id
+    assert {
+        entry["wiadomosc_id"]
+        for entry in exported.json()["prywatnosc"]["komunikacja_operacyjna"]
+    } == message_ids
+
+    erased = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": canonical_email},
+    )
+
+    assert erased.status_code == 200, erased.text
+    assert erased.json()["zanonimizowano"] == 1
+    assert erased.json()["usunieto_komunikacja"] == len(message_ids)
+    db.expire_all()
+    assert db.get(models.Termin, termin.id).nazwisko == "[anonimizacja RODO]"
+    assert db.query(models.RezerwacjaWiadomoscOutbox).filter(
+        models.RezerwacjaWiadomoscOutbox.id.in_(message_ids),
+    ).count() == 0
+
+
+def test_subject_a_erasure_does_not_block_on_subject_b_processing_message(
+    admin_client,
+    db,
+):
+    now = utcnow_naive()
+    phone_a = "600100212"
+    phone_b = "700200312"
+    termin = _termin(db, data=date.today(), telefon=phone_a)
+    termin.kanal_komunikacji = "sms"
+    message_a = communication.enqueue_reservation(
+        db,
+        termin,
+        "confirmation",
+        dedupe_key="rodo-processing-isolation-a",
+        available_at=now + timedelta(hours=1),
+        expires_at=now + timedelta(hours=2),
+    )[0]
+    termin.telefon = phone_b
+    message_b = communication.enqueue_reservation(
+        db,
+        termin,
+        "change",
+        dedupe_key="rodo-processing-isolation-b",
+        available_at=now - timedelta(seconds=1),
+        expires_at=now + timedelta(hours=2),
+    )[0]
+    db.commit()
+    message_a_id = message_a.id
+    message_b_id = message_b.id
+    claim = communication.claim_next(now=now)
+    assert claim.id == message_b_id
+    assert communication.mark_claim_started(claim, now=now) is not None
+
+    erased_a = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": _normalizuj_numer(phone_a)},
+    )
+
+    assert erased_a.status_code == 200, erased_a.text
+    assert erased_a.json()["zanonimizowano_lacznie"] == 0
+    db.expire_all()
+    assert db.get(models.Termin, termin.id).telefon == phone_b
+    assert db.get(models.RezerwacjaWiadomoscOutbox, message_a_id) is None
+    assert db.get(models.RezerwacjaWiadomoscOutbox, message_b_id).stan == "processing"
+
+
+def test_waitlist_claimed_before_io_is_erased_and_cannot_start(admin_client, db):
+    now = utcnow_naive()
+    wpis = models.ListaOczekujacych(
+        data=date.today(),
+        godz_od=time(18, 0),
+        liczba_osob=2,
+        nazwisko="Kowalski",
+        telefon=TEL,
+        kanal_komunikacji="sms",
+        status="oczekuje",
+        utworzono_at=now,
+        kanal="reczna",
+        hold_do=now + timedelta(minutes=15),
+    )
+    db.add(wpis)
+    db.flush()
+    messages = communication.enqueue_table_ready(
+        db,
+        wpis,
+        dedupe_key="rodo-waitlist-claimed-race",
+    )
+    messages[0].available_at = now - timedelta(seconds=1)
+    db.commit()
+    message_id = messages[0].id
+    claim = communication.claim_next(now=now)
+    assert claim.id == message_id
+
+    erased = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": KLUCZ},
+    )
+
+    assert erased.status_code == 200, erased.text
+    assert erased.json()["zanonimizowano_waitlista"] == 1
+    assert communication.mark_claim_started(claim, now=now) is None
+    db.expire_all()
+    assert db.get(models.ListaOczekujacych, wpis.id).nazwisko == "[anonimizacja RODO]"
+    assert db.get(models.RezerwacjaWiadomoscOutbox, message_id) is None
+
+
+def test_admin_rodo_relocks_all_owner_days_after_concurrent_move(
+    monkeypatch,
+    admin_client,
+    db,
+):
+    now = utcnow_naive()
+    original_day = date.today()
+    moved_day = original_day - timedelta(days=2)
+    waitlist_day = original_day + timedelta(days=1)
+    termin = _termin(db, data=original_day)
+    wpis = models.ListaOczekujacych(
+        data=waitlist_day,
+        godz_od=time(18, 0),
+        liczba_osob=2,
+        nazwisko="Kowalski",
+        telefon=TEL,
+        kanal_komunikacji="sms",
+        status="oczekuje",
+        utworzono_at=now,
+        kanal="reczna",
+    )
+    db.add(wpis)
+    db.commit()
+    termin_id = termin.id
+    wpis_id = wpis.id
+    real_begin = reservation_service.begin_locked_write
+    real_planner_lock = communication.acquire_erasure_planner_lock
+    lock_calls = []
+    lock_events = []
+    moved = False
+    inserted_message_id = None
+
+    def move_owner_before_first_lock(session, dates):
+        nonlocal moved, inserted_message_id
+        ordered = tuple(dates)
+        assert ordered == tuple(sorted(ordered))
+        lock_calls.append(ordered)
+        lock_events.append(("days", ordered))
+        if not moved:
+            moved = True
+            # Deterministyczna granica synchronizacji: producent kończy zmianę
+            # po pierwszym skanie RODO, lecz przed przejęciem starego dnia.
+            session.rollback()
+            concurrent = communication.SessionLocal()
+            try:
+                owner = concurrent.get(models.Termin, termin_id)
+                owner.data = moved_day
+                messages = communication.enqueue_reservation(
+                    concurrent,
+                    owner,
+                    "change",
+                    dedupe_key="rodo-concurrent-owner-move",
+                    available_at=now - timedelta(seconds=1),
+                    expires_at=now + timedelta(hours=1),
+                )
+                concurrent.commit()
+                inserted_message_id = messages[0].id
+            finally:
+                concurrent.close()
+        return real_begin(session, ordered)
+
+    def record_planner_after_days(session):
+        lock_events.append(("planner", None))
+        return real_planner_lock(session)
+
+    monkeypatch.setattr(
+        reservation_service,
+        "begin_locked_write",
+        move_owner_before_first_lock,
+    )
+    monkeypatch.setattr(
+        communication,
+        "acquire_erasure_planner_lock",
+        record_planner_after_days,
+    )
+
+    response = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": KLUCZ},
+    )
+
+    assert response.status_code == 200, response.text
+    assert lock_calls == [
+        (original_day, waitlist_day),
+        (moved_day, original_day, waitlist_day),
+    ]
+    assert [event for event, _payload in lock_events] == [
+        "days", "days", "planner", "planner",
+    ]
+    db.expire_all()
+    assert db.get(models.Termin, termin_id).nazwisko == "[anonimizacja RODO]"
+    assert db.get(models.ListaOczekujacych, wpis_id).nazwisko == "[anonimizacja RODO]"
+    assert db.get(models.RezerwacjaWiadomoscOutbox, inserted_message_id) is None
+
+
+def test_hard_waitlist_delete_fences_claimed_and_processing_delivery(admin_client, db):
+    now = utcnow_naive()
+
+    def queued_waitlist(suffix):
+        wpis = models.ListaOczekujacych(
+            data=date.today(),
+            godz_od=time(18, 0),
+            liczba_osob=2,
+            nazwisko=f"Waitlist {suffix}",
+            telefon=f"7005006{suffix}",
+            kanal_komunikacji="sms",
+            status="oczekuje",
+            utworzono_at=now,
+            kanal="reczna",
+            hold_do=now + timedelta(minutes=15),
+        )
+        db.add(wpis)
+        db.flush()
+        messages = communication.enqueue_table_ready(
+            db,
+            wpis,
+            dedupe_key=f"waitlist-hard-delete-{suffix}",
+        )
+        messages[0].available_at = now - timedelta(seconds=1)
+        db.commit()
+        return wpis.id, messages[0].id
+
+    claimed_owner_id, claimed_message_id = queued_waitlist("11")
+    claimed = communication.claim_next(now=now)
+    assert claimed.id == claimed_message_id
+
+    deleted = admin_client.delete(f"/api/lista-oczekujacych/{claimed_owner_id}")
+
+    assert deleted.status_code == 204, deleted.text
+    assert communication.mark_claim_started(claimed, now=now) is None
+    db.expire_all()
+    assert db.get(models.ListaOczekujacych, claimed_owner_id) is None
+    assert db.get(models.RezerwacjaWiadomoscOutbox, claimed_message_id) is None
+
+    processing_owner_id, processing_message_id = queued_waitlist("12")
+    processing_claim = communication.claim_next(now=now)
+    assert processing_claim.id == processing_message_id
+    assert communication.mark_claim_started(processing_claim, now=now) is not None
+
+    conflict = admin_client.delete(f"/api/lista-oczekujacych/{processing_owner_id}")
+
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["code"] == "COMMUNICATION_DELIVERY_IN_PROGRESS"
+    assert "Waitlist 12" not in conflict.text
+    assert "700500612" not in conflict.text
+    db.expire_all()
+    assert db.get(models.ListaOczekujacych, processing_owner_id) is not None
+    assert db.get(models.RezerwacjaWiadomoscOutbox, processing_message_id).stan == "processing"
+
+
+def test_maintenance_defers_only_owner_with_processing_delivery(db):
+    now = utcnow_naive()
+    processing = _termin(
+        db,
+        data=now.date() + timedelta(days=1),
+        nazwisko="Processing RODO",
+        telefon="700500601",
+        status="rezerwacja",
+    )
+    messages = communication.enqueue_reservation(
+        db,
+        processing,
+        "confirmation",
+        dedupe_key="rodo-maintenance-processing",
+        available_at=now - timedelta(seconds=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    db.commit()
+    message_id = messages[0].id
+    claim = communication.claim_next(now=now)
+    assert claim.id == message_id
+    assert communication.mark_claim_started(claim, now=now) is not None
+    db.expire_all()
+    processing = db.get(models.Termin, processing.id)
+    processing.data = now.date() - timedelta(days=800)
+    processing.status = "odbyla"
+    db.commit()
+    safe = _termin(
+        db,
+        data=now.date() - timedelta(days=800),
+        nazwisko="Safe RODO",
+        telefon="700500602",
+        status="odbyla",
+    )
+
+    result = maintenance.run_retention_maintenance_once(now=now)
+
+    assert result["status"] == "executed"
+    assert result["odroczono_komunikacja"] == 1
+    assert result["odroczono_rezerwacje"] == 1
+    db.expire_all()
+    assert db.get(models.Termin, processing.id).nazwisko == "Processing RODO"
+    assert db.get(models.Termin, safe.id).nazwisko == "[anonimizacja RODO]"
+    assert db.get(models.RezerwacjaWiadomoscOutbox, message_id).stan == "processing"
+    audit = db.query(models.AuditLog).filter_by(
+        akcja="rodo_retencja_automatyczna",
+    ).one()
+    assert "Processing RODO" not in audit.szczegoly
+    assert "700500601" not in audit.szczegoly
+
+
+def test_maintenance_without_other_changes_defers_and_leaves_no_daily_marker(db):
+    now = utcnow_naive()
+    processing = _termin(
+        db,
+        data=now.date() + timedelta(days=1),
+        nazwisko="Only Processing RODO",
+        telefon="700500603",
+        status="rezerwacja",
+    )
+    messages = communication.enqueue_reservation(
+        db,
+        processing,
+        "confirmation",
+        dedupe_key="rodo-maintenance-only-processing",
+        available_at=now - timedelta(seconds=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    db.commit()
+    message_id = messages[0].id
+    claim = communication.claim_next(now=now)
+    assert claim.id == message_id
+    assert communication.mark_claim_started(claim, now=now) is not None
+    db.expire_all()
+    processing = db.get(models.Termin, processing.id)
+    processing.data = now.date() - timedelta(days=800)
+    processing.status = "odbyla"
+    db.commit()
+
+    result = maintenance.run_retention_maintenance_once(now=now)
+
+    assert result["status"] == "deferred"
+    assert result["liczba_zmian"] == 0
+    assert result["odroczono_komunikacja"] == 1
+    db.expire_all()
+    assert db.get(models.Termin, processing.id).nazwisko == "Only Processing RODO"
+    assert db.get(models.RezerwacjaWiadomoscOutbox, message_id).stan == "processing"
     assert db.query(models.AuditLog).filter_by(
         akcja="rodo_retencja_automatyczna",
     ).count() == 0

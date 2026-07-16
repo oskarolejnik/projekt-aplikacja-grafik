@@ -22,6 +22,15 @@ const MODULY = [
 ]
 const ETYKIETA_PLANU = { free: 'Darmowy', basic: 'Basic', pro: 'Pro', premium: 'Premium', enterprise: 'Enterprise' }
 const fld = 'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-mint'
+const reminderHoursError = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return 'Wpisz liczbę godzin od 0 do 168.'
+  const numeric = Number(raw)
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 168) {
+    return 'Liczba godzin musi być całkowita i mieścić się w zakresie 0–168.'
+  }
+  return null
+}
 
 function Toggle({ on, onChange, label, disabled = false }) {
   return (
@@ -52,6 +61,7 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
   const [subError, setSubError] = useState(false)
   const [busy, setBusy] = useState(false)
   const [widok, setWidok] = useState(initialSection)
+  const [reminderError, setReminderError] = useState(null)
 
   useEffect(() => {
     setWidok(initialSection)
@@ -84,6 +94,7 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
     try {
       const c = await api('/lokal/config')
       setCfg(c)
+      setReminderError(null)
       setKasyText((c.rozliczenia_nazwy_kas || []).join(', '))
       setTerminaleText((c.rozliczenia_nazwy_terminali || []).join(', '))
       setSaleText((c.sale || []).join(', '))
@@ -201,6 +212,13 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
   }
 
   const zapisz = async () => {
+    const reminderValidation = reminderHoursError(cfg.rezerwacje_przypomnienie_h ?? 24)
+    if (reminderValidation) {
+      setReminderError(reminderValidation)
+      setWidok('goscie')
+      requestAnimationFrame(() => document.getElementById('reservation-reminder-hours')?.focus())
+      return
+    }
     setBusy(true)
     try {
       await api('/lokal/config', 'PUT', {
@@ -213,6 +231,7 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
         rezerwacje_online: cfg.rezerwacje_online,
         rezerwacje_widget_v2: cfg.rezerwacje_widget_v2,
         rezerwacje_auto_potwierdzenie: cfg.rezerwacje_auto_potwierdzenie,
+        rezerwacje_przypomnienie_h: Number(cfg.rezerwacje_przypomnienie_h ?? 0),
         rezerwacje_retencja_dni: Number(cfg.rezerwacje_retencja_dni || 365),
         rezerwacje_rodo_kontakt: cfg.rezerwacje_rodo_kontakt?.trim() || null,
         rezerwacje_rodo_adres: cfg.rezerwacje_rodo_adres?.trim() || null,
@@ -516,6 +535,29 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
                 className={fld}
               />
             </label>
+            <div className="sm:max-w-xs">
+              <label className="text-xs font-semibold text-muted">Przypomnienie przed wizytą (h)
+                <input
+                  type="number"
+                  min="0"
+                  max="168"
+                  step="1"
+                  value={cfg.rezerwacje_przypomnienie_h ?? 0}
+                  id="reservation-reminder-hours"
+                  onChange={(e) => {
+                    set('rezerwacje_przypomnienie_h', e.target.value)
+                    setReminderError(reminderHoursError(e.target.value))
+                  }}
+                  aria-invalid={reminderError ? 'true' : undefined}
+                  aria-describedby={`reservation-reminder-help${reminderError ? ' reservation-reminder-error' : ''}`}
+                  className={`${fld} min-h-11`}
+                />
+              </label>
+              <p id="reservation-reminder-help" className="mt-1.5 text-xs leading-relaxed text-muted">
+                Wpisz 0, aby wyłączyć automatyczne przypomnienia.
+              </p>
+              {reminderError ? <p id="reservation-reminder-error" role="alert" className="mt-1.5 text-xs text-danger">{reminderError}</p> : null}
+            </div>
             <div className="flex items-end sm:justify-end">
               <a
                 href="/?rezerwuj"

@@ -42,11 +42,11 @@ def test_wyslij_sms_sukces(monkeypatch):
     monkeypatch.setenv("SMS_API_URL", "https://bramka.example/send")
     monkeypatch.setenv("SMS_API_TOKEN", "tajny-token")
     wyslane = {}
-    def fake_urlopen(req, timeout=10):
+    def fake_open_no_redirect(req, timeout=10):
         wyslane["url"] = req.full_url
         wyslane["auth"] = req.headers.get("Authorization")
         return FakeResp(200)
-    monkeypatch.setattr(sms.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sms, "_open_no_redirect", fake_open_no_redirect)
     assert sms.wyslij_sms("600 100 200", "Przypomnienie o rezerwacji") is True
     assert wyslane["url"] == "https://bramka.example/send"
     assert wyslane["auth"] == "Bearer tajny-token"
@@ -57,12 +57,12 @@ def test_blad_sieci_nie_rzuca(monkeypatch):
     monkeypatch.setenv("SMS_API_URL", "https://bramka.example/send")
     def boom(*a, **k):
         raise OSError("brak sieci")
-    monkeypatch.setattr(sms.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(sms, "_open_no_redirect", boom)
     assert sms.wyslij_sms("600100200", "x") is False                   # błąd → False, bez wyjątku
 
 
 def test_status_5xx_false(monkeypatch):
     monkeypatch.setattr(integracje, "skonfigurowane", lambda k: True)
     monkeypatch.setenv("SMS_API_URL", "https://bramka.example/send")
-    monkeypatch.setattr(sms.urllib.request, "urlopen", lambda *a, **k: FakeResp(500))
+    monkeypatch.setattr(sms, "_open_no_redirect", lambda *a, **k: FakeResp(500))
     assert sms.wyslij_sms("600100200", "x") is False

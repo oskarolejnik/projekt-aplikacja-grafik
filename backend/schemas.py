@@ -1,8 +1,10 @@
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
-from datetime import date, time
-from typing import Literal, Optional, List
+from datetime import date, datetime, time
+from typing import Any, Literal, Optional, List
 
 from reservation_names import normalize_room_name
+
+KanalKomunikacji = Literal["auto", "email", "sms", "oba", "brak"]
 
 class OfertaZmianyIn(BaseModel):
     """Wystawienie przydziału na giełdę wymiany zmian."""
@@ -527,6 +529,7 @@ class LokalConfigOut(LokalBrandingOut):
     rezerwacje_retencja_dni: int = 365
     rezerwacje_rodo_kontakt: Optional[str] = None
     rezerwacje_rodo_adres: Optional[str] = None
+    rezerwacje_przypomnienie_h: int = 0
     rez_okno_wyprzedzenia_dni: int = 0
     rez_cutoff_min: int = 0
     rez_min_grupa_online: int = 1
@@ -581,6 +584,7 @@ class LokalConfigIn(BaseModel):
     rezerwacje_retencja_dni: Optional[int] = Field(default=None, ge=30, le=3650)
     rezerwacje_rodo_kontakt: Optional[str] = Field(default=None, max_length=254)
     rezerwacje_rodo_adres: Optional[str] = Field(default=None, max_length=256)
+    rezerwacje_przypomnienie_h: Optional[int] = Field(default=None, ge=0, le=168)
     rez_okno_wyprzedzenia_dni: Optional[int] = None
     rez_cutoff_min: Optional[int] = None
     rez_min_grupa_online: Optional[int] = None
@@ -928,6 +932,7 @@ class RezerwacjaIn(BaseModel):
     nazwisko: str                  # klient
     telefon: Optional[str] = None
     email: Optional[str] = None
+    kanal_komunikacji: KanalKomunikacji = "auto"
     notatka: Optional[str] = None
     zadatek: float = 0.0
     kanal: Optional[Literal["reczna", "walk_in"]] = None
@@ -965,6 +970,99 @@ class RezerwacjeWyszukajIn(BaseModel):
 
 class RezerwacjaStatusIn(BaseModel):
     status: str                    # potwierdzona | odbyla | no_show | odwolana
+
+
+class RezerwacjaWiadomoscReconcileIn(BaseModel):
+    wynik: Literal["sent", "failed", "retry"]
+    notatka: str = Field(min_length=3, max_length=500)
+
+    @field_validator("notatka")
+    @classmethod
+    def strip_note(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError("Notatka musi zawierać co najmniej 3 znaki.")
+        return value
+
+
+class RezerwacjaWiadomoscProbaOut(BaseModel):
+    number: int = Field(ge=1)
+    state: Literal["claimed", "processing", "sent", "retry", "failed", "uncertain"]
+    claimed_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    retry_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    status_code: Optional[int] = None
+
+
+class RezerwacjaWiadomoscOut(BaseModel):
+    id: int = Field(gt=0)
+    event: Literal["confirmation", "reminder", "change", "cancellation", "table_ready"]
+    event_label: str
+    channel: Literal["email", "sms"]
+    recipient: str
+    state: Literal[
+        "queued", "processing", "retry", "sent", "failed", "uncertain", "cancelled", "expired",
+    ]
+    attention_required: bool
+    attempt_count: int = Field(ge=0)
+    max_attempts: int = Field(ge=1)
+    available_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None
+    uncertain_at: Optional[datetime] = None
+    reconciled_at: Optional[datetime] = None
+    reconciled_by_user_id: Optional[int] = None
+    reconciliation_note: Optional[str] = None
+    last_error_code: Optional[str] = None
+    retry_allowed: bool = False
+    attempts: List[RezerwacjaWiadomoscProbaOut] = Field(default_factory=list)
+
+
+class RezerwacjaKomunikacjaSummaryOut(BaseModel):
+    message_id: Optional[int] = None
+    state: Literal["queued", "processing", "retry", "sent", "failed", "uncertain", "expired"]
+    attention_required: bool
+    attention_count: int = Field(default=0, ge=0)
+    pending_count: int = Field(default=0, ge=0)
+    channel: Optional[Literal["email", "sms", "oba"]] = None
+    event: Literal["confirmation", "reminder", "change", "cancellation", "table_ready"]
+    last_event_at: Optional[datetime] = None
+    next_attempt_at: Optional[datetime] = None
+    legacy_delivery: bool = False
+
+
+class RezerwacjaKomunikacjaHistoriaOut(BaseModel):
+    reservation_id: int = Field(gt=0)
+    summary: Optional[RezerwacjaKomunikacjaSummaryOut] = None
+    manual_confirmation_state: Optional[Literal[
+        "queued", "processing", "retry", "sent", "failed", "uncertain", "expired",
+    ]] = None
+    manual_confirmation_resend_required: bool = False
+    messages: List[RezerwacjaWiadomoscOut] = Field(default_factory=list)
+
+
+class WaitlistKomunikacjaHistoriaOut(BaseModel):
+    waitlist_id: int = Field(gt=0)
+    summary: Optional[RezerwacjaKomunikacjaSummaryOut] = None
+    legacy_delivery: bool = False
+    messages: List[RezerwacjaWiadomoscOut] = Field(default_factory=list)
+
+
+class RezerwacjaKomunikacjaQueueOut(BaseModel):
+    queued: int = Field(ge=1, le=2)
+    messages: List[RezerwacjaWiadomoscOut] = Field(min_length=1, max_length=2)
+
+
+class WaitlistPowiadomOut(BaseModel):
+    queued: bool
+    juz_powiadomiony: bool = False
+    legacy_delivery: bool = False
+    messages: List[RezerwacjaWiadomoscOut] = Field(default_factory=list, max_length=2)
+    wpis: dict[str, Any]
 
 class HostFazaIn(BaseModel):
     faza: str                      # przybyl | posadzony | rachunek | oplacony | wyszedl
@@ -1033,6 +1131,7 @@ class ListaOczekujacychIn(PublicznaPrywatnoscIn):
     nazwisko: str = Field(min_length=1, max_length=128)
     telefon: Optional[str] = Field(default=None, max_length=64)
     email: Optional[str] = Field(default=None, max_length=254)
+    kanal_komunikacji: KanalKomunikacji = "auto"
     notatka: Optional[str] = Field(default=None, max_length=1000)
 
 class ZrealizujIn(BaseModel):
@@ -1066,6 +1165,7 @@ class OnlineRezerwacjaIn(PublicznaPrywatnoscIn):
     nazwisko: str = Field(min_length=1, max_length=128)
     telefon: Optional[str] = Field(default=None, max_length=64)
     email: Optional[str] = Field(default=None, max_length=254)
+    kanal_komunikacji: KanalKomunikacji = "auto"
     notatka: Optional[str] = Field(default=None, max_length=1000)
 
 

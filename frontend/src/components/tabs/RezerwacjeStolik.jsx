@@ -4,6 +4,7 @@ import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
 import { Spinner } from '../ui/Spinner'
 import { DialogFrame } from '../ui/DialogFrame'
+import { InlineFeedback } from '../ui/InlineFeedback'
 import { PillSwitch } from '../ui/PillSwitch'
 import { Icon } from '../../lib/icons'
 import { api, nowyKluczIdempotencji } from '../../lib/api'
@@ -13,6 +14,8 @@ import { useToast } from '../ui/Toast'
 import { warsawDateISO } from '../../lib/date'
 import { shiftDateIso } from '../../lib/reservationRoute'
 import ReservationAllocationSummary from './ReservationAllocationSummary'
+import ReservationCommunicationPanel from './ReservationCommunicationPanel'
+import ReservationCommunicationStatus from './ReservationCommunicationStatus'
 import ReservationOverridePanel from './ReservationOverridePanel'
 
 // Zarządzanie rezerwacjami stolików (admin): lista dnia + formularz + zmiana statusu + stoliki.
@@ -53,7 +56,14 @@ const STATUS_FEEDBACK = {
   odwolana: 'Odwołano rezerwację.',
 }
 
-const emptyWaitlist = () => ({ godz_od: '', liczba_osob: '', nazwisko: '', telefon: '' })
+const emptyWaitlist = () => ({
+  godz_od: '',
+  liczba_osob: '',
+  nazwisko: '',
+  telefon: '',
+  email: '',
+  kanal_komunikacji: 'auto',
+})
 const RESERVATION_CREATE_MODES = [
   { value: 'reczna', label: 'Rezerwacja' },
   { value: 'walk_in', label: 'Walk-in (gość na miejscu)' },
@@ -67,6 +77,7 @@ const newReservation = (data) => ({
   nazwisko: '',
   telefon: '',
   email: '',
+  kanal_komunikacji: 'auto',
   notatka: '',
   zadatek: 0,
 })
@@ -83,6 +94,13 @@ const replaceById = (rows, next, sorter = (value) => value) => {
   const exists = rows.some((row) => row.id === next.id)
   return sorter(exists ? rows.map((row) => row.id === next.id ? next : row) : [...rows, next])
 }
+
+const canQueueCommunication = (owner) => Boolean(
+  (owner?.kanal_komunikacji === 'email' && owner?.email?.trim())
+  || (owner?.kanal_komunikacji === 'sms' && owner?.telefon?.trim())
+  || (owner?.kanal_komunikacji === 'oba' && (owner?.email?.trim() || owner?.telefon?.trim()))
+  || ((!owner?.kanal_komunikacji || owner?.kanal_komunikacji === 'auto') && (owner?.email?.trim() || owner?.telefon?.trim()))
+)
 
 const allocationFromDraft = (draft, tables) => {
   const ids = [...new Set([
@@ -123,6 +141,7 @@ const reservationSnapshot = (draft) => JSON.stringify([
   draft?.nazwisko || '',
   draft?.telefon || '',
   draft?.email || '',
+  draft?.kanal_komunikacji || 'auto',
   draft?.notatka || '',
   String(draft?.zadatek ?? 0),
 ])
@@ -141,20 +160,6 @@ function ReservationSkeleton() {
         </div>
       ))}
       <span className="sr-only">Ładowanie rezerwacji…</span>
-    </div>
-  )
-}
-
-function InlineFeedback({ pending, feedback, className = '' }) {
-  const isError = feedback?.type === 'error'
-  const isWarning = feedback?.type === 'warning'
-  return (
-    <div
-      role={isError ? 'alert' : 'status'}
-      aria-live="polite"
-      className={`min-h-5 text-xs ${isError ? 'text-danger' : isWarning ? 'text-lemon' : feedback?.type === 'success' ? 'text-success' : 'text-muted'} ${className}`}
-    >
-      {pending || feedback?.message || ''}
     </div>
   )
 }
@@ -236,6 +241,7 @@ export default function RezerwacjeStolik({
   const [waitRowFeedback, setWaitRowFeedback] = useState({})
   const [waitOverrides, setWaitOverrides] = useState({})
   const [waitOverrideDrafts, setWaitOverrideDrafts] = useState({})
+  const [waitCommunicationId, setWaitCommunicationId] = useState(null)
 
   const cancelReadRequests = useCallback(() => {
     requestId.current += 1
@@ -321,6 +327,7 @@ export default function RezerwacjeStolik({
     setPageFeedback(null)
     setRowFeedback({})
     setPosadzStolik({})
+    setWaitCommunicationId(null)
   }, [cancelReadRequests, data])
 
   useEffect(() => { load() }, [load])
@@ -339,7 +346,14 @@ export default function RezerwacjeStolik({
     if (modal || (selectionControlled && reservationId != null)) onReservationClose?.()
   }, [cancelMutationContinuations, clearModalAllocation, piiVisibility])
   const reservationDirty = !!modal && reservationSnapshot(modal) !== modalInitial.current
-  const waitDraftDirty = !!(nowyOcz.nazwisko.trim() || nowyOcz.godz_od || nowyOcz.liczba_osob || nowyOcz.telefon.trim())
+  const waitDraftDirty = !!(
+    nowyOcz.nazwisko.trim()
+    || nowyOcz.godz_od
+    || nowyOcz.liczba_osob
+    || nowyOcz.telefon.trim()
+    || nowyOcz.email.trim()
+    || nowyOcz.kanal_komunikacji !== 'auto'
+  )
 
   useEffect(() => {
     if (!(reservationDirty || waitDraftDirty)) return undefined
@@ -353,7 +367,7 @@ export default function RezerwacjeStolik({
 
   const openReservation = useCallback((value, trigger = null, { notify = true } = {}) => {
     if (!canViewContacts) return
-    const draft = { ...value }
+    const draft = { ...value, kanal_komunikacji: value.kanal_komunikacji || 'auto' }
     reservationTriggerRef.current = trigger
     modalInitial.current = reservationSnapshot(draft)
     probaZapisuRef.current = null
@@ -363,6 +377,21 @@ export default function RezerwacjeStolik({
     setModal(draft)
     if (notify && draft.id != null) onReservationOpen?.(draft.id)
   }, [canViewContacts, clearModalAllocation, onReservationOpen])
+
+  const updateCommunicationSummary = useCallback((summary, owner) => {
+    if (owner?.type === 'waitlist') {
+      setLista((current) => current.map((entry) => entry.id === owner.id
+        ? { ...entry, communication_summary: summary }
+        : entry))
+      return
+    }
+    setRez((current) => current.map((reservation) => reservation.id === owner?.id
+      ? { ...reservation, communication_summary: summary }
+      : reservation))
+    setModal((current) => current?.id === owner?.id
+      ? { ...current, communication_summary: summary }
+      : current)
+  }, [])
 
   const closeReservation = async ({ force = false } = {}) => {
     if (modalAction) return
@@ -450,6 +479,7 @@ export default function RezerwacjeStolik({
     setWaitFeedback(null)
     setWaitOverrides({})
     setWaitOverrideDrafts({})
+    setWaitCommunicationId(null)
     setListaModal(false)
   }
 
@@ -467,6 +497,7 @@ export default function RezerwacjeStolik({
     setPageFeedback(null)
     setRowFeedback({})
     setPosadzStolik({})
+    setWaitCommunicationId(null)
     setLocalDate(nextDay)
   }
 
@@ -540,6 +571,7 @@ export default function RezerwacjeStolik({
         ...(canViewContacts ? {
           telefon: modal.telefon?.trim() || null,
           email: modal.email?.trim() || null,
+          kanal_komunikacji: modal.kanal_komunikacji || 'auto',
         } : {}),
         ...(canViewNotes ? { notatka: modal.notatka?.trim() || null } : {}),
         ...(canViewFinances ? { zadatek: parseFloat(modal.zadatek) || 0 } : {}),
@@ -663,27 +695,6 @@ export default function RezerwacjeStolik({
     }
   }
 
-  const wyslijPotwierdzenie = async () => {
-    if (!canViewContacts || !modal?.id || modalAction) return
-    setModalAction('email')
-    setModalFeedback(null)
-    const mutation = startMutation()
-    try {
-      const result = await api(`/rezerwacje-stolik/${modal.id}/wyslij-potwierdzenie`, 'POST', null, { signal: mutation.controller.signal })
-      if (!mutationIsCurrent(mutation)) return
-      setModalFeedback({
-        type: result.wyslano ? 'success' : 'error',
-        message: result.wyslano ? 'Wysłano e-mail z potwierdzeniem.' : (result.powod || 'Nie udało się wysłać e-maila.'),
-      })
-    } catch (error) {
-      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
-      setModalFeedback({ type: 'error', message: error.message || 'Nie udało się wysłać e-maila.' })
-    } finally {
-      finishMutation(mutation)
-      if (mutationIsCurrent(mutation)) setModalAction(null)
-    }
-  }
-
   const dodajOczekujacego = async () => {
     if (!canViewContacts || waitAdding) return
     if (!nowyOcz.nazwisko.trim()) {
@@ -699,7 +710,11 @@ export default function RezerwacjeStolik({
         godz_od: nowyOcz.godz_od || null,
         liczba_osob: num(nowyOcz.liczba_osob),
         nazwisko: nowyOcz.nazwisko.trim(),
-        ...(canViewContacts ? { telefon: nowyOcz.telefon.trim() || null } : {}),
+        ...(canViewContacts ? {
+          telefon: nowyOcz.telefon.trim() || null,
+          email: nowyOcz.email.trim() || null,
+          kanal_komunikacji: nowyOcz.kanal_komunikacji || 'auto',
+        } : {}),
       }, { signal: mutation.controller.signal })
       if (!mutationIsCurrent(mutation)) return
       setLista((current) => replaceById(current, created, sortWaitlist))
@@ -989,6 +1004,9 @@ export default function RezerwacjeStolik({
                     </div>
                   </div>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${meta.className}`}>{meta.label}</span>
+                  {reservation.communication_summary ? (
+                    <ReservationCommunicationStatus summary={reservation.communication_summary} />
+                  ) : null}
                   <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {meta.actions.map((action) => (
                       <Button
@@ -1109,6 +1127,25 @@ export default function RezerwacjeStolik({
                   <label className="field-label">E-mail
                     <input type="email" value={modal.email || ''} disabled={!!modalAction} onChange={(event) => { setModal((current) => ({ ...current, email: event.target.value })); clearModalConflict() }} className="field mt-1.5" autoComplete="email" />
                   </label>
+                  <div className="sm:col-span-2">
+                    <label className="field-label">Kanał komunikacji
+                      <select
+                        value={modal.kanal_komunikacji || 'auto'}
+                        disabled={!!modalAction}
+                        onChange={(event) => { setModal((current) => ({ ...current, kanal_komunikacji: event.target.value })); clearModalConflict() }}
+                        className="field mt-1.5"
+                      >
+                        <option value="auto">Automatycznie — e-mail lub SMS</option>
+                        <option value="email">Tylko e-mail</option>
+                        <option value="sms">Tylko SMS</option>
+                        <option value="oba">E-mail i SMS</option>
+                        <option value="brak">Bez wiadomości operacyjnych</option>
+                      </select>
+                    </label>
+                    <p className="mt-1.5 text-xs font-normal leading-relaxed text-muted">
+                      Dotyczy potwierdzeń, zmian i przypomnień. Nie zmienia zgód marketingowych.
+                    </p>
+                  </div>
                 </>
               ) : null}
               {canViewFinances ? (
@@ -1124,19 +1161,17 @@ export default function RezerwacjeStolik({
               </div>
             </div>
 
-            {canViewContacts && modal.id && modal.email ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={wyslijPotwierdzenie}
-                disabled={!!modalAction}
-                loading={modalAction === 'email'}
-                loadingLabel="Wysyłam e-mail…"
-                className="mt-4"
-              >
-                <Icon name="bell" className="h-4 w-4" />
-                Wyślij potwierdzenie
-              </Button>
+            {canViewContacts && modal.id ? (
+              <ReservationCommunicationPanel
+                ownerType="reservation"
+                ownerId={modal.id}
+                initialSummary={modal.communication_summary}
+                communicationPreference={modal.kanal_komunikacji || 'auto'}
+                actionsDisabled={reservationDirty || Boolean(modalAction)}
+                canQueue={canQueueCommunication(modal)}
+                confirmAction={confirm}
+                onSummaryChange={updateCommunicationSummary}
+              />
             ) : null}
 
             <InlineFeedback
@@ -1213,11 +1248,27 @@ export default function RezerwacjeStolik({
                       {entry.liczba_osob ? ` · ${entry.liczba_osob} os.` : ''}
                       {canViewContacts && entry.telefon ? ` · ${entry.telefon}` : ''}
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
+                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                      {entry.communication_summary ? (
+                        <ReservationCommunicationStatus summary={entry.communication_summary} />
+                      ) : null}
                       {entry.status !== 'oczekuje' ? (
                         <span className={`rounded-full px-2 py-1 text-xs ${entry.status === 'zrealizowany' ? 'bg-mint/15 text-mint' : 'bg-white/10 text-muted'}`}>
                           {entry.status === 'zrealizowany' ? 'Posadzony' : 'Odwołany'}
                         </span>
+                      ) : null}
+                      {canViewContacts ? (
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          onClick={() => setWaitCommunicationId((current) => current === entry.id ? null : entry.id)}
+                          disabled={!!action}
+                          aria-expanded={waitCommunicationId === entry.id}
+                          aria-controls={`waitlist-communication-${entry.id}`}
+                        >
+                          <Icon name="bell" className="h-4 w-4" />
+                          {waitCommunicationId === entry.id ? 'Zwiń komunikację' : 'Stolik gotowy'}
+                        </Button>
                       ) : null}
                       {isAdmin ? (
                         <Button
@@ -1297,6 +1348,21 @@ export default function RezerwacjeStolik({
                       actionLabel="Posadź mimo limitu"
                     />
                   ) : null}
+                  {canViewContacts && waitCommunicationId === entry.id ? (
+                    <div id={`waitlist-communication-${entry.id}`}>
+                      <ReservationCommunicationPanel
+                        ownerType="waitlist"
+                        ownerId={entry.id}
+                        initialSummary={entry.communication_summary}
+                        communicationPreference={entry.kanal_komunikacji || 'auto'}
+                        canQueue={canQueueCommunication(entry)}
+                        actionsDisabled={Boolean(action) || entry.status !== 'oczekuje'}
+                        manualAlreadyHandled={Boolean(entry.powiadomiono_at || entry.communication_summary?.legacy_delivery)}
+                        confirmAction={confirm}
+                        onSummaryChange={updateCommunicationSummary}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               )
             })}
@@ -1315,9 +1381,29 @@ export default function RezerwacjeStolik({
               <label className="field-label">Liczba osób
                 <input type="number" min="1" value={nowyOcz.liczba_osob} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, liczba_osob: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" />
               </label>
-                <label className="field-label sm:col-span-2">Telefon
+                <label className="field-label">Telefon
                   <input type="tel" value={nowyOcz.telefon} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, telefon: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="tel" />
                 </label>
+                <label className="field-label">E-mail
+                  <input type="email" value={nowyOcz.email} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, email: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="email" />
+                </label>
+                <div className="sm:col-span-2">
+                  <label className="field-label">Kanał komunikacji
+                    <select
+                      value={nowyOcz.kanal_komunikacji}
+                      disabled={waitAdding}
+                      onChange={(event) => { setNowyOcz((current) => ({ ...current, kanal_komunikacji: event.target.value })); setWaitFeedback(null) }}
+                      className="field mt-1.5"
+                    >
+                      <option value="auto">Automatycznie — e-mail lub SMS</option>
+                      <option value="email">Tylko e-mail</option>
+                      <option value="sms">Tylko SMS</option>
+                      <option value="oba">E-mail i SMS</option>
+                      <option value="brak">Bez wiadomości operacyjnych</option>
+                    </select>
+                  </label>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted">Używany m.in. do powiadomienia „stolik gotowy”.</p>
+                </div>
               </div>
               <InlineFeedback pending={waitAdding ? 'Dodaję do listy…' : null} feedback={waitFeedback} className="mt-3" />
               <div className="mt-4 flex justify-end">

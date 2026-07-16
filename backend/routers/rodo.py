@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import hashlib
 import hmac
 import json
+import unicodedata
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 
 import models
 import reservation_audit
+import reservation_communication
 import reservation_service
 from auth import SECRET_KEY, require_admin
 from crm_identity import hash_key as _profile_hash_key
@@ -41,28 +43,133 @@ RETENTION_AUDIT_ACTION = "rodo_retencja_automatyczna"
 _PUBLIC_HOLD_CLEANUP_GRACE = timedelta(days=1)
 
 
+def _kanoniczny_tekst(value: str) -> str:
+    return unicodedata.normalize("NFKC", value or "").strip().casefold()
+
+
 def _klucz(t) -> str:
-    """Klucz gościa (jak w crm.py): znormalizowany telefon → e-mail → nazwisko (po odszyfrowaniu)."""
-    email = getattr(t, "email", None) or ""
-    return _normalizuj_numer(t.telefon or "") or email.strip().lower() or (t.nazwisko or "").strip().lower()
+    """Preferowany klucz profilu: telefon → e-mail → nazwisko."""
+    email = _kanoniczny_tekst(getattr(t, "email", None) or "")
+    return (
+        _normalizuj_numer(t.telefon or "")
+        or email
+        or _kanoniczny_tekst(t.nazwisko or "")
+    )
 
 
-def _terminy_goscia(db, klucz: str):
-    k = (klucz or "").strip().lower()
-    if not k:
+def _pasuje_do_klucza(owner, klucz: str) -> bool:
+    """Dopasowuje każdy kontakt ownera, bez fallbacku nazwiska dla kontaktowych.
+
+    Telefon i e-mail są równorzędnymi identyfikatorami podmiotu. Nazwisko może
+    służyć jako historyczny fallback wyłącznie wtedy, gdy rekord nie ma żadnego
+    kontaktu — inaczej wspólne nazwisko mogłoby ujawnić dane obcej osoby.
+    """
+    raw = (klucz or "").strip()
+    if not raw:
+        return False
+    lookup_phone = _normalizuj_numer(raw)
+    lookup_email = _kanoniczny_tekst(raw)
+    owner_phone = _normalizuj_numer(getattr(owner, "telefon", None) or "")
+    owner_email = _kanoniczny_tekst(getattr(owner, "email", None) or "")
+    if owner_phone or owner_email:
+        return bool(
+            (lookup_phone and owner_phone == lookup_phone)
+            or (lookup_email and owner_email == lookup_email)
+        )
+    return _kanoniczny_tekst(getattr(owner, "nazwisko", None) or "") == lookup_email
+
+
+def _terminy_goscia(db, klucz: str, *, refresh: bool = False):
+    if not (klucz or "").strip():
         return []
-    return [t for t in db.query(models.Termin).all() if _klucz(t) == k]
+    query = db.query(models.Termin)
+    if refresh:
+        query = query.populate_existing()
+    return [t for t in query.all() if _pasuje_do_klucza(t, klucz)]
 
 
-def _waitlista_goscia(db, klucz: str):
-    k = (klucz or "").strip().lower()
-    if not k:
+def _waitlista_goscia(db, klucz: str, *, refresh: bool = False):
+    if not (klucz or "").strip():
         return []
+    query = db.query(models.ListaOczekujacych)
+    if refresh:
+        query = query.populate_existing()
     return [
         wpis
-        for wpis in db.query(models.ListaOczekujacych).all()
-        if _klucz(wpis) == k
+        for wpis in query.all()
+        if _pasuje_do_klucza(wpis, klucz)
     ]
+
+
+class RodoOwnerLockScopeChanged(RuntimeError):
+    """Maintenance musi rozpocząć transakcję od nowa z odświeżonym zakresem dni."""
+
+
+def _dni_wlascicieli(terminy, waitlista) -> set:
+    return {
+        owner.data
+        for owner in (*terminy, *waitlista)
+        if getattr(owner, "data", None) is not None
+    }
+
+
+def _zablokuj_i_odswiez_wlascicieli(
+    db,
+    loader,
+    *,
+    lock_scope_loader=None,
+    current_transaction: bool = False,
+):
+    """Serializuje producentów snapshotów, a potem ponownie wyznacza ownerów.
+
+    Producenci rezerwacji i waitlisty blokują anchory dnia przed zmianą danych i
+    utworzeniem outboxa. RODO przejmuje te same anchory w porządku rosnącym, a
+    następnie wymusza ``populate_existing``. Jeśli właściciel zmienił dzień w
+    czasie oczekiwania, zwykłe żądanie restartuje transakcję i przejmuje sumę dni
+    od początku. Maintenance sygnalizuje restart do swojej zewnętrznej pętli, aby
+    nie utracić ochrony pojedynczego przebiegu.
+    """
+    terminy, waitlista = loader(False)
+    lock_terminy, lock_waitlista = (
+        lock_scope_loader(False) if lock_scope_loader is not None else ([], [])
+    )
+    required_dates = _dni_wlascicieli(
+        [*terminy, *lock_terminy],
+        [*waitlista, *lock_waitlista],
+    )
+    if not required_dates:
+        return terminy, waitlista, ()
+
+    for _attempt in range(8):
+        ordered_dates = tuple(sorted(required_dates))
+        if current_transaction:
+            guards = reservation_service.lock_days_in_current_transaction(
+                db, ordered_dates,
+            )
+        else:
+            guards = reservation_service.begin_locked_write(db, ordered_dates)
+
+        terminy, waitlista = loader(True)
+        lock_terminy, lock_waitlista = (
+            lock_scope_loader(True)
+            if lock_scope_loader is not None else ([], [])
+        )
+        refreshed_dates = _dni_wlascicieli(
+            [*terminy, *lock_terminy],
+            [*waitlista, *lock_waitlista],
+        )
+        if refreshed_dates.issubset(required_dates):
+            return terminy, waitlista, guards
+        if current_transaction:
+            raise RodoOwnerLockScopeChanged()
+        required_dates.update(refreshed_dates)
+
+    raise reservation_service.ReservationError(
+        503,
+        "RESERVATION_BUSY",
+        "Zakres danych rezerwacji zmieniał się w trakcie operacji. Spróbuj ponownie.",
+        rule="transaction",
+    )
 
 
 def _referencja_goscia(klucz: str) -> str:
@@ -83,6 +190,7 @@ def _wpis(t) -> dict:
     return {"id": t.id, "data": str(t.data), "rodzaj": getattr(t, "rodzaj", None), "typ": t.typ,
             "status": t.status, "nazwisko": t.nazwisko, "telefon": t.telefon,
             "email": getattr(t, "email", None), "notatka": t.notatka,
+            "kanal_komunikacji": getattr(t, "kanal_komunikacji", None),
             "liczba_osob": t.liczba_osob, "sala": t.sala, "zadatek": t.zadatek}
 
 
@@ -100,6 +208,7 @@ def _wpis_waitlisty(wpis) -> dict:
         "nazwisko": wpis.nazwisko,
         "telefon": wpis.telefon,
         "email": wpis.email,
+        "kanal_komunikacji": wpis.kanal_komunikacji,
         "notatka": wpis.notatka,
         "status": wpis.status,
         "kanal": wpis.kanal,
@@ -131,7 +240,187 @@ def _zgoda_wpis(zgoda) -> dict:
     }
 
 
-def _metadane_prywatnosci(db, termin_ids, waitlist_ids) -> dict:
+def _refy_komunikacji_podmiotu(klucz: str):
+    phone_ref, email_ref = reservation_communication.subject_refs_for_key(klucz)
+    conditions = []
+    if phone_ref:
+        conditions.append(
+            models.RezerwacjaWiadomoscOutbox.subject_phone_ref == phone_ref,
+        )
+    if email_ref:
+        conditions.append(
+            models.RezerwacjaWiadomoscOutbox.subject_email_ref == email_ref,
+        )
+    return phone_ref, email_ref, conditions
+
+
+def _wiadomosci_podmiotu(db, klucz: str):
+    _phone_ref, _email_ref, conditions = _refy_komunikacji_podmiotu(klucz)
+    if not conditions:
+        return []
+    return db.query(models.RezerwacjaWiadomoscOutbox).filter(
+        or_(*conditions),
+    ).order_by(models.RezerwacjaWiadomoscOutbox.id).all()
+
+
+def _wlasciciele_wiadomosci_podmiotu(db, klucz: str, *, refresh: bool = False):
+    _phone_ref, _email_ref, conditions = _refy_komunikacji_podmiotu(klucz)
+    owner_rows = (
+        db.query(
+            models.RezerwacjaWiadomoscOutbox.termin_id,
+            models.RezerwacjaWiadomoscOutbox.waitlist_id,
+        ).filter(or_(*conditions)).all()
+        if conditions else []
+    )
+    termin_ids = {row[0] for row in owner_rows if row[0] is not None}
+    waitlist_ids = {row[1] for row in owner_rows if row[1] is not None}
+    terminy_query = db.query(models.Termin).filter(models.Termin.id.in_(termin_ids))
+    waitlist_query = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.id.in_(waitlist_ids),
+    )
+    if refresh:
+        terminy_query = terminy_query.populate_existing()
+        waitlist_query = waitlist_query.populate_existing()
+    return terminy_query.all(), waitlist_query.all()
+
+
+def eksport_komunikacji_operacyjnej(
+    db,
+    *,
+    subject_phone_refs=(),
+    subject_email_refs=(),
+    termin_ids=(),
+    waitlist_ids=(),
+    require_owner_scope: bool = False,
+) -> list[dict]:
+    """Returns a complete subject-facing delivery history without system secrets.
+
+    Recipient and rendered content belong to the data subject and are therefore
+    included.  Provider credentials, idempotency keys/headers, lease tokens and
+    staff identifiers are operational secrets and intentionally stay internal.
+    Provider/error values are stable codes only; no raw provider response or
+    exception text can enter the export (or an audit log built from it).
+    """
+    subject_phone_refs = {str(value) for value in subject_phone_refs if value}
+    subject_email_refs = {str(value) for value in subject_email_refs if value}
+    termin_ids = {int(value) for value in termin_ids if value is not None}
+    waitlist_ids = {int(value) for value in waitlist_ids if value is not None}
+    subject_conditions = []
+    owner_conditions = []
+    if subject_phone_refs:
+        subject_conditions.append(
+            models.RezerwacjaWiadomoscOutbox.subject_phone_ref.in_(
+                subject_phone_refs,
+            ),
+        )
+    if subject_email_refs:
+        subject_conditions.append(
+            models.RezerwacjaWiadomoscOutbox.subject_email_ref.in_(
+                subject_email_refs,
+            ),
+        )
+    if termin_ids:
+        owner_conditions.append(
+            models.RezerwacjaWiadomoscOutbox.termin_id.in_(termin_ids),
+        )
+    if waitlist_ids:
+        owner_conditions.append(
+            models.RezerwacjaWiadomoscOutbox.waitlist_id.in_(waitlist_ids),
+        )
+
+    if require_owner_scope:
+        # Capability samoobsługowa daje dostęp do jednego ownera, nie do całego
+        # podmiotu. Oba warunki są obowiązkowe: rekord musi należeć do ownera z
+        # tokena ORAZ przedstawiać snapshot jego bieżącego kontaktu.
+        if not subject_conditions or not owner_conditions:
+            return []
+        message_filter = and_(
+            or_(*owner_conditions),
+            or_(*subject_conditions),
+        )
+    elif subject_conditions:
+        # Tożsamość snapshotu ma pierwszeństwo przed bieżącym owner ID. Po
+        # zmianie kontaktu A→B rekord Termin należy do B, ale historia A nie może
+        # zostać ujawniona B ani stać się dla A nieosiągalna.
+        message_filter = or_(*subject_conditions)
+    else:
+        if not owner_conditions:
+            return []
+        message_filter = or_(*owner_conditions)
+
+    messages = db.query(models.RezerwacjaWiadomoscOutbox).filter(
+        message_filter,
+    ).order_by(
+        models.RezerwacjaWiadomoscOutbox.created_at,
+        models.RezerwacjaWiadomoscOutbox.id,
+    ).all()
+    attempts_by_message = {}
+    if messages:
+        attempts = db.query(models.RezerwacjaWiadomoscProba).filter(
+            models.RezerwacjaWiadomoscProba.wiadomosc_id.in_(
+                [message.id for message in messages],
+            ),
+        ).order_by(
+            models.RezerwacjaWiadomoscProba.wiadomosc_id,
+            models.RezerwacjaWiadomoscProba.numer,
+        ).all()
+        for attempt in attempts:
+            attempts_by_message.setdefault(attempt.wiadomosc_id, []).append(attempt)
+
+    result = []
+    for message in messages:
+        owner_is_reservation = message.termin_id is not None
+        result.append({
+            "wiadomosc_id": message.id,
+            "wlasciciel_typ": "rezerwacja" if owner_is_reservation else "waitlista",
+            "wlasciciel_id": message.termin_id if owner_is_reservation else message.waitlist_id,
+            "typ": message.typ_zdarzenia,
+            "kanal": message.kanal,
+            "odbiorca": message.odbiorca,
+            "temat": message.temat,
+            "tresc": message.tresc,
+            "szablon": message.template_key,
+            "wersja_szablonu": message.template_version,
+            "provider": message.provider,
+            "stan": message.stan,
+            "liczba_prob": message.liczba_prob,
+            "maks_prob": message.maks_prob,
+            "dostepna_od": _iso(message.available_at),
+            "wygasa_at": _iso(message.expires_at),
+            "ostatni_kod_bledu": message.last_error_code,
+            "aktor_typ": message.actor_kind,
+            "utworzono_at": _iso(message.created_at),
+            "zaktualizowano_at": _iso(message.updated_at),
+            "przyjeto_at": _iso(message.sent_at),
+            "wynik_niepewny_at": _iso(message.uncertain_at),
+            "uzgodniono_at": _iso(message.reconciled_at),
+            "notatka_uzgodnienia": message.reconciliation_note,
+            "proby": [
+                {
+                    "numer": attempt.numer,
+                    "provider": attempt.provider,
+                    "stan": attempt.wynik,
+                    "zajeto_at": _iso(attempt.claimed_at),
+                    "rozpoczeto_at": _iso(attempt.started_at),
+                    "zakonczono_at": _iso(attempt.finished_at),
+                    "ponowienie_at": _iso(attempt.retry_at),
+                    "kod_bledu": attempt.error_code,
+                    "status_http": attempt.status_code,
+                }
+                for attempt in attempts_by_message.get(message.id, ())
+            ],
+        })
+    return result
+
+
+def _metadane_prywatnosci(
+    db,
+    termin_ids,
+    waitlist_ids,
+    *,
+    communication_subject_phone_refs=(),
+    communication_subject_email_refs=(),
+) -> dict:
     consents_query = db.query(models.RezerwacjaZgodaPubliczna)
     conditions = []
     if termin_ids:
@@ -190,6 +479,13 @@ def _metadane_prywatnosci(db, termin_ids, waitlist_ids) -> dict:
         # opuszczają warstwy uwierzytelnienia.
         "dostepy_zarzadzania": tokens,
         "holdy_publiczne": holds,
+        "komunikacja_operacyjna": eksport_komunikacji_operacyjnej(
+            db,
+            subject_phone_refs=communication_subject_phone_refs,
+            subject_email_refs=communication_subject_email_refs,
+            termin_ids=termin_ids,
+            waitlist_ids=waitlist_ids,
+        ),
     }
 
 
@@ -231,28 +527,86 @@ def usun_powiazane_publiczne_sekrety(
     ).delete(synchronize_session=False)
 
 
-def usun_powiazane_pii_rezerwacji(db, terminy) -> None:
+def _usun_zablokowane_wiadomosci(db, message_ids) -> None:
+    message_ids = tuple(message_ids or ())
+    if not message_ids:
+        return
+    db.query(models.RezerwacjaWiadomoscProba).filter(
+        models.RezerwacjaWiadomoscProba.wiadomosc_id.in_(message_ids),
+    ).delete(synchronize_session=False)
+    db.query(models.RezerwacjaWiadomoscOutbox).filter(
+        models.RezerwacjaWiadomoscOutbox.id.in_(message_ids),
+    ).delete(synchronize_session=False)
+
+
+def usun_outbox_przed_usunieciem_pii(
+    db,
+    *,
+    message_ids=(),
+    reservation_ids=(),
+    waitlist_ids=(),
+    defer_in_flight: bool = False,
+):
+    """Fences the worker and explicitly removes safe encrypted snapshots."""
+    preparation = reservation_communication.prepare_outboxes_for_pii_erasure(
+        db,
+        message_ids=message_ids,
+        reservation_ids=reservation_ids,
+        waitlist_ids=waitlist_ids,
+        defer_started=defer_in_flight,
+    )
+    _usun_zablokowane_wiadomosci(db, preparation.message_ids)
+    return preparation
+
+
+def usun_powiazane_pii_rezerwacji(
+    db,
+    terminy,
+    *,
+    defer_in_flight: bool = False,
+    outbox_prepared: bool = False,
+) -> set[int]:
     """Usuwa PII poza samym ``Termin`` dla retencji i samoobsługi gościa.
 
     Profil CRM może być współdzielony przez kilka wizyt tego samego gościa, dlatego
     znika tylko wtedy, gdy po anonimizacji nie zostaje żaden inny właściciel tego
     klucza. Wątki oraz wolny tekst KP są przypisane bezpośrednio do rezerwacji.
     """
+    terminy = list(terminy)
     termin_ids = {termin.id for termin in terminy if termin.id is not None}
     if not termin_ids:
-        return
+        return set()
+
+    # Snapshoty outboxa zawierają zaszyfrowany adres i pełną treść. Przy żądaniu
+    # usunięcia/retencji kasujemy je razem z próbami, zanim owner zostanie
+    # zanonimizowany. Worker nie może później wysłać wiadomości.
+    # Próby usuwamy jawnie przed outboxem: prywatność nie może zależeć od
+    # włączonego PRAGMA foreign_keys w konkretnej instalacji SQLite.
+    if outbox_prepared:
+        blocked_ids = set()
+    else:
+        preparation = usun_outbox_przed_usunieciem_pii(
+            db,
+            reservation_ids=termin_ids,
+            defer_in_flight=defer_in_flight,
+        )
+        blocked_ids = set(preparation.deferred_reservation_ids)
+    safe_terminy = [termin for termin in terminy if termin.id not in blocked_ids]
+    safe_ids = {termin.id for termin in safe_terminy if termin.id is not None}
+    if not safe_ids:
+        return blocked_ids
 
     def profile_hashes(termin):
         keys = {_profile_identity_key(termin), _klucz(termin)}
         return {_profile_hash_key(key) for key in keys if key}
 
     candidate_hashes = set().union(
-        *(profile_hashes(termin) for termin in terminy)
-    ) if terminy else set()
+        *(profile_hashes(termin) for termin in safe_terminy)
+    ) if safe_terminy else set()
     if candidate_hashes:
         remaining_hashes = set()
         for other in db.query(models.Termin).all():
-            if other.id not in termin_ids:
+            if other.id not in safe_ids:
                 remaining_hashes.update(profile_hashes(other))
         delete_hashes = candidate_hashes - remaining_hashes
         if delete_hashes:
@@ -261,23 +615,39 @@ def usun_powiazane_pii_rezerwacji(db, terminy) -> None:
             ).delete(synchronize_session=False)
 
     db.query(models.WiadomoscImprezy).filter(
-        models.WiadomoscImprezy.termin_id.in_(termin_ids)
+        models.WiadomoscImprezy.termin_id.in_(safe_ids)
     ).delete(synchronize_session=False)
     for zadatek in db.query(models.KpZadatek).filter(
-        models.KpZadatek.termin_id.in_(termin_ids)
+        models.KpZadatek.termin_id.in_(safe_ids)
     ).all():
         zadatek.nazwisko = None
         zadatek.opis = _ANON
+    return blocked_ids
 
 
-def _anonimizuj(db, terminy, *, actor, reason: str) -> int:
-    termin_ids = [t.id for t in terminy if t.id is not None]
+def _anonimizuj(
+    db,
+    terminy,
+    *,
+    actor,
+    reason: str,
+    defer_in_flight: bool = False,
+    outbox_prepared: bool = False,
+) -> tuple[int, int]:
+    terminy = list(terminy)
+    blocked_ids = usun_powiazane_pii_rezerwacji(
+        db,
+        terminy,
+        defer_in_flight=defer_in_flight,
+        outbox_prepared=outbox_prepared,
+    )
+    safe_terminy = [termin for termin in terminy if termin.id not in blocked_ids]
+    termin_ids = [termin.id for termin in safe_terminy if termin.id is not None]
     # Zgody, capability tokeny, zużyte holdy oraz zaszyfrowany wynik idempotencji
     # mogą odtwarzać historię publicznego przepływu. Usuwamy je atomowo z PII.
     usun_powiazane_publiczne_sekrety(db, termin_ids)
-    usun_powiazane_pii_rezerwacji(db, terminy)
     n = 0
-    for t in terminy:
+    for t in safe_terminy:
         audit_before = (
             reservation_audit.reservation_snapshot(t)
             if t.rodzaj == "stolik" else None
@@ -312,22 +682,39 @@ def _anonimizuj(db, terminy, *, actor, reason: str) -> int:
                 pii_changed=pii_changed,
             )
         n += 1
-    return n
+    return n, len(blocked_ids)
 
 
-def _anonimizuj_waitliste(db, wpisy) -> int:
-    waitlist_ids = [wpis.id for wpis in wpisy if wpis.id is not None]
+def _anonimizuj_waitliste(
+    db,
+    wpisy,
+    *,
+    defer_in_flight: bool = False,
+    outbox_prepared: bool = False,
+) -> tuple[int, int]:
+    wpisy = list(wpisy)
+    waitlist_ids = {wpis.id for wpis in wpisy if wpis.id is not None}
+    blocked_ids = set()
+    if waitlist_ids and not outbox_prepared:
+        preparation = usun_outbox_przed_usunieciem_pii(
+            db,
+            waitlist_ids=waitlist_ids,
+            defer_in_flight=defer_in_flight,
+        )
+        blocked_ids = set(preparation.deferred_waitlist_ids)
     if waitlist_ids:
+        safe_ids = waitlist_ids - blocked_ids
         db.query(models.RezerwacjaZgodaPubliczna).filter(
-            models.RezerwacjaZgodaPubliczna.waitlist_id.in_(waitlist_ids)
+            models.RezerwacjaZgodaPubliczna.waitlist_id.in_(safe_ids)
         ).delete(synchronize_session=False)
-    for wpis in wpisy:
+    safe_wpisy = [wpis for wpis in wpisy if wpis.id not in blocked_ids]
+    for wpis in safe_wpisy:
         wpis.nazwisko = _ANON
         wpis.telefon = None
         wpis.email = None
         wpis.notatka = None
         wpis.token = None
-    return len(wpisy)
+    return len(safe_wpisy), len(blocked_ids)
 
 
 def _wyczysc_wygasle_publiczne_rekordy(db, *, now: datetime) -> dict:
@@ -378,6 +765,62 @@ def _wyczysc_wygasle_publiczne_rekordy(db, *, now: datetime) -> dict:
     }
 
 
+def _wlasciciele_retencji(
+    db,
+    *,
+    effective_now: datetime,
+    prog,
+    refresh: bool = False,
+):
+    """Ponownie wyznacza cały zakres retencji po przejęciu blokad dni."""
+    expired_termin_ids = [
+        row[0] for row in db.query(models.RezerwacjaZgodaPubliczna.termin_id).filter(
+            models.RezerwacjaZgodaPubliczna.termin_id.isnot(None),
+            models.RezerwacjaZgodaPubliczna.retention_until <= effective_now,
+        ).all()
+    ]
+    expired_waitlist_ids = [
+        row[0] for row in db.query(models.RezerwacjaZgodaPubliczna.waitlist_id).filter(
+            models.RezerwacjaZgodaPubliczna.waitlist_id.isnot(None),
+            models.RezerwacjaZgodaPubliczna.retention_until <= effective_now,
+        ).all()
+    ]
+    termin_deadline = models.Termin.data < prog
+    if expired_termin_ids:
+        termin_deadline = or_(
+            termin_deadline,
+            models.Termin.id.in_(expired_termin_ids),
+        )
+    terminy_query = db.query(models.Termin).filter(
+        termin_deadline,
+        models.Termin.status.in_(_ZAMKNIETE),
+    )
+    if refresh:
+        terminy_query = terminy_query.populate_existing()
+    terminy = [
+        termin for termin in terminy_query.all()
+        if termin.nazwisko != _ANON
+    ]
+
+    waitlist_deadline = models.ListaOczekujacych.data < prog
+    if expired_waitlist_ids:
+        waitlist_deadline = or_(
+            waitlist_deadline,
+            models.ListaOczekujacych.id.in_(expired_waitlist_ids),
+        )
+    waitlista_query = db.query(models.ListaOczekujacych).filter(
+        waitlist_deadline,
+        models.ListaOczekujacych.status.in_(_WAITLIST_RETENTION_STATUSES),
+    )
+    if refresh:
+        waitlista_query = waitlista_query.populate_existing()
+    waitlista = [
+        wpis for wpis in waitlista_query.all()
+        if wpis.nazwisko != _ANON
+    ]
+    return terminy, waitlista
+
+
 def wykonaj_retencje_rodo(
     db,
     *,
@@ -388,6 +831,8 @@ def wykonaj_retencje_rodo(
     zrodlo: str = "lokal_config",
     audit_action: str = "rodo_retencja",
     audituj_pusty: bool = True,
+    defer_in_flight: bool = False,
+    owner_lock_in_current_transaction: bool = False,
 ) -> dict:
     """Wykonuje jeden atomowy przebieg retencji bez zarządzania transakcją.
 
@@ -408,49 +853,40 @@ def wykonaj_retencje_rodo(
     # Dla publicznego przepływu zapisany dowód jest wiążącym, nieprzedłużalnym
     # terminem. Bieżąca polityka może okres skrócić, lecz późniejsza zmiana z 30
     # na 365 dni nie może retroaktywnie zatrzymać danych przez kolejny rok.
-    expired_termin_ids = [
-        row[0] for row in db.query(models.RezerwacjaZgodaPubliczna.termin_id).filter(
-            models.RezerwacjaZgodaPubliczna.termin_id.isnot(None),
-            models.RezerwacjaZgodaPubliczna.retention_until <= effective_now,
-        ).all()
-    ]
-    expired_waitlist_ids = [
-        row[0] for row in db.query(models.RezerwacjaZgodaPubliczna.waitlist_id).filter(
-            models.RezerwacjaZgodaPubliczna.waitlist_id.isnot(None),
-            models.RezerwacjaZgodaPubliczna.retention_until <= effective_now,
-        ).all()
-    ]
-    termin_deadline = models.Termin.data < prog
-    if expired_termin_ids:
-        termin_deadline = or_(
-            termin_deadline,
-            models.Termin.id.in_(expired_termin_ids),
-        )
-    terminy = db.query(models.Termin).filter(
-        termin_deadline,
-        models.Termin.status.in_(_ZAMKNIETE),
-    ).all()
-    terminy = [termin for termin in terminy if termin.nazwisko != _ANON]
-    waitlist_deadline = models.ListaOczekujacych.data < prog
-    if expired_waitlist_ids:
-        waitlist_deadline = or_(
-            waitlist_deadline,
-            models.ListaOczekujacych.id.in_(expired_waitlist_ids),
-        )
-    waitlista = db.query(models.ListaOczekujacych).filter(
-        waitlist_deadline,
-        models.ListaOczekujacych.status.in_(_WAITLIST_RETENTION_STATUSES),
-    ).all()
-    waitlista = [wpis for wpis in waitlista if wpis.nazwisko != _ANON]
+    terminy, waitlista, owner_guards = _zablokuj_i_odswiez_wlascicieli(
+        db,
+        lambda refresh: _wlasciciele_retencji(
+            db,
+            effective_now=effective_now,
+            prog=prog,
+            refresh=refresh,
+        ),
+        current_transaction=owner_lock_in_current_transaction,
+    )
 
-    n = _anonimizuj(db, terminy, actor=actor, reason="system_automation")
-    n_waitlist = _anonimizuj_waitliste(db, waitlista)
+    n, deferred_reservations = _anonimizuj(
+        db,
+        terminy,
+        actor=actor,
+        reason="system_automation",
+        defer_in_flight=defer_in_flight,
+    )
+    n_waitlist, deferred_waitlists = _anonimizuj_waitliste(
+        db,
+        waitlista,
+        defer_in_flight=defer_in_flight,
+    )
+    if n or n_waitlist:
+        reservation_service.touch_days(owner_guards)
     cleanup = _wyczysc_wygasle_publiczne_rekordy(db, now=effective_now)
     liczba_zmian = n + n_waitlist + sum(int(value or 0) for value in cleanup.values())
     wynik = {
         "zanonimizowano": n,
         "zanonimizowano_waitlista": n_waitlist,
         "zanonimizowano_lacznie": n + n_waitlist,
+        "odroczono_komunikacja": deferred_reservations + deferred_waitlists,
+        "odroczono_rezerwacje": deferred_reservations,
+        "odroczono_waitlista": deferred_waitlists,
         "prog": str(prog),
         "dni": retention_days,
         "zrodlo": zrodlo,
@@ -484,11 +920,19 @@ def eksport_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_db),
     klucz = dane.klucz
     terminy = _terminy_goscia(db, klucz)
     waitlista = _waitlista_goscia(db, klucz)
-    if not terminy and not waitlista:
+    messages = _wiadomosci_podmiotu(db, klucz)
+    if not terminy and not waitlista and not messages:
         raise HTTPException(404, "Nie znaleziono danych dla podanego klucza.")
     termin_ids = [t.id for t in terminy if t.id is not None]
     waitlist_ids = [wpis.id for wpis in waitlista if wpis.id is not None]
-    privacy = _metadane_prywatnosci(db, termin_ids, waitlist_ids)
+    phone_ref, email_ref, _conditions = _refy_komunikacji_podmiotu(klucz)
+    privacy = _metadane_prywatnosci(
+        db,
+        termin_ids,
+        waitlist_ids,
+        communication_subject_phone_refs=[phone_ref] if phone_ref else (),
+        communication_subject_email_refs=[email_ref] if email_ref else (),
+    )
     _audyt(db, admin, "rodo_eksport_gosc", _referencja_goscia(klucz), request)
     db.commit()
     return {
@@ -508,12 +952,66 @@ def eksport_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_db),
 def anonimizuj_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_db),
                     admin: models.User = Depends(require_admin)):
     """Art. 17: anonimizacja PII rezerwacji i waitlisty wraz z sekretami/zgodami."""
-    terminy = _terminy_goscia(db, dane.klucz)
-    waitlista = _waitlista_goscia(db, dane.klucz)
-    if not terminy and not waitlista:
+    terminy, waitlista, guards = _zablokuj_i_odswiez_wlascicieli(
+        db,
+        lambda refresh: (
+            _terminy_goscia(db, dane.klucz, refresh=refresh),
+            _waitlista_goscia(db, dane.klucz, refresh=refresh),
+        ),
+        lock_scope_loader=lambda refresh: _wlasciciele_wiadomosci_podmiotu(
+            db, dane.klucz, refresh=refresh,
+        ),
+    )
+    # Day -> planner -> exact subject message rows. Scheduler nie może dopisać
+    # snapshotu pomiędzy wyborem refów a fence/delete.
+    reservation_communication.acquire_erasure_planner_lock(db)
+    messages = _wiadomosci_podmiotu(db, dane.klucz)
+    if not terminy and not waitlista and not messages:
         raise HTTPException(404, "Nie znaleziono danych dla podanego klucza.")
-    n = _anonimizuj(db, terminy, actor=admin, reason="guest_request")
-    n_waitlist = _anonimizuj_waitliste(db, waitlista)
+    current_termin_ids = {termin.id for termin in terminy if termin.id is not None}
+    current_waitlist_ids = {wpis.id for wpis in waitlista if wpis.id is not None}
+    historical_message_ids = {
+        message.id
+        for message in messages
+        if message.termin_id not in current_termin_ids
+        and message.waitlist_id not in current_waitlist_ids
+    }
+    current_message_query = db.query(models.RezerwacjaWiadomoscOutbox.id)
+    current_conditions = []
+    if current_termin_ids:
+        current_conditions.append(
+            models.RezerwacjaWiadomoscOutbox.termin_id.in_(current_termin_ids),
+        )
+    if current_waitlist_ids:
+        current_conditions.append(
+            models.RezerwacjaWiadomoscOutbox.waitlist_id.in_(current_waitlist_ids),
+        )
+    current_message_ids = {
+        row[0] for row in (
+            current_message_query.filter(or_(*current_conditions)).all()
+            if current_conditions else []
+        )
+    }
+    selected_message_ids = historical_message_ids | current_message_ids
+    usun_outbox_przed_usunieciem_pii(
+        db,
+        message_ids=historical_message_ids,
+        reservation_ids=current_termin_ids,
+        waitlist_ids=current_waitlist_ids,
+    )
+    n, _ = _anonimizuj(
+        db,
+        terminy,
+        actor=admin,
+        reason="guest_request",
+        outbox_prepared=True,
+    )
+    n_waitlist, _ = _anonimizuj_waitliste(
+        db,
+        waitlista,
+        outbox_prepared=True,
+    )
+    reservation_service.touch_days(guards)
     _audyt(
         db, admin, "rodo_anonimizuj_gosc", _referencja_goscia(dane.klucz), request,
     )
@@ -522,6 +1020,7 @@ def anonimizuj_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_d
         "zanonimizowano": n,
         "zanonimizowano_waitlista": n_waitlist,
         "zanonimizowano_lacznie": n + n_waitlist,
+        "usunieto_komunikacja": len(selected_message_ids),
     }
 
 

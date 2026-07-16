@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R5a wdrożone · następny checkpoint R5b (komunikacja i outbox) · 15 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R5b wdrożone · następny checkpoint R5c (zadatki i preautoryzacja) · 16 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -777,6 +777,28 @@ a zwykłe usunięcie rezerwacji nie pozostawia osieroconych holdów ani zaszyfro
 **Done R5b:** każda wiadomość ma odtwarzalny stan; provider z idempotencją nie dostaje duplikatu,
 a dla kanału co-najmniej-raz system wykrywa niepewny wynik i pozwala go uzgodnić bez ślepego retry.
 
+**Wdrożono 16 lipca 2026:** migracja `0062` dodaje szyfrowany outbox, osobne próby dostarczenia,
+stabilny kontrakt idempotencji providera, deadline, lease, backoff oraz jawny stan `uncertain`.
+Adopcja istniejącego schematu jest fail-closed wobec dodatkowych ograniczeń, a downgrade odmawia
+utraty historii lub niestandardowych preferencji kanału i przypomnień.
+Potwierdzenie, przypomnienie, zmiana, anulowanie i „stolik gotowy” są kolejkowane w tej samej
+transakcji co operacja domenowa; żądanie HTTP nigdy nie czeka na SMTP/SMS. Przypomnienia są
+bezpiecznie wyłączone przy wdrożeniu (`0`) i administrator może ustawić `0–168` godzin, a zmiana
+polityki atomowo przebudowuje przyszły plan.
+
+Operator widzi status oraz historię dla rezerwacji i waitlisty, może ponowić błąd terminalny lub
+uzgodnić niepewny wynik bez ślepego duplikatu. Ręczny resend ma wymagany klucz idempotencji,
+jawne potwierdzenie po wcześniejszym sukcesie oraz kanoniczny stan backendu odporny na dwie otwarte
+karty. Preferencja `auto/e-mail/SMS/oba/brak` jest niezależna od marketingu. Każda grupa wiadomości
+utrwala nieodwracalne referencje obu dostępnych kontaktów podmiotu, więc administracyjny eksport i
+usunięcie RODO pozostają subject-scoped także po zmianie właściciela kontaktu; samoobsługa z tokenem
+capability jest dodatkowo ograniczona do jednej rezerwacji i jej bieżącego snapshotu. Hard delete i
+retencja pozostają owner-scoped. Usunięcie PII obejmuje zaszyfrowane snapshoty, zachowuje kolejność
+blokad `dzień → planner → outbox` i nie może ścigać się z rozpoczętym I/O. Eksport nie ujawnia sekretów
+providera. Produkcyjne wysyłanie nadal wymaga skonfigurowania i
+zweryfikowania rzeczywistego SMTP/SMS; brak integracji pozostaje widocznym błędem dostarczenia i nie
+cofa poprawnie zapisanej rezerwacji.
+
 #### R5c — Zadatki i preautoryzacja
 
 - Etap zależy od zweryfikowanej integracji płatniczej opisanej w `docs/ROADMAP-MONETYZACJA.md`.
@@ -958,7 +980,8 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a–R5a są zamkniętymi checkpointami. Następny milestone to `R5b`: transakcyjny outbox komunikacji,
-odtwarzalny stan dostarczenia, kontrolowane retry/reconciliation oraz operacyjne szablony wiadomości.
-Serwerowa blokada stanowiska z sesją operatora i PIN-em pozostaje oddzielnym zadaniem R6a, którego
-nie wolno udawać samą zasłoną frontendu.
+R0a–R5b są zamkniętymi checkpointami. Następny milestone to `R5c`: zadatki i preautoryzacja oparte
+na zweryfikowanej integracji płatniczej, podpisanych webhookach, idempotencji zdarzeń oraz pełnym
+przepływie płatność–zwrot. Bez wybranego rzeczywistego providera etap może powstać wyłącznie jako
+sandbox, nie jako funkcja gotowa produkcyjnie. Serwerowa blokada stanowiska z sesją operatora i
+PIN-em pozostaje oddzielnym zadaniem R6a, którego nie wolno udawać samą zasłoną frontendu.

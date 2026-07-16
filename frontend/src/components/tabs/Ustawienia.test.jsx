@@ -32,6 +32,7 @@ const CONFIG = {
   modul_sprzatanie: true,
   rezerwacje_online: false,
   rezerwacje_auto_potwierdzenie: false,
+  rezerwacje_przypomnienie_h: 24,
   impreza_osoby_na_obsluge: 15,
   impreza_wyprzedzenie_min: 120,
   impreza_najwczesniej: '10:00',
@@ -191,5 +192,50 @@ describe('Ustawienia', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Usuń ofertę Menu Klasyczne' }))
     await waitFor(() => expect(confirmMock).toHaveBeenCalled())
     expect(apiMock.mock.calls.some(([path, method]) => path === '/oferty-menu/7' && method === 'DELETE')).toBe(false)
+  })
+
+  it('ustawia godziny przypomnienia w sekcji Goście, a 0 wyłącza wysyłkę', async () => {
+    render(<Ustawienia />)
+
+    await screen.findByRole('heading', { name: /Marka \(white-label\)/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Goście' }))
+
+    const reminder = screen.getByLabelText('Przypomnienie przed wizytą (h)')
+    const help = screen.getByText('Wpisz 0, aby wyłączyć automatyczne przypomnienia.')
+    expect(reminder).toHaveValue(24)
+    expect(reminder).toHaveAttribute('min', '0')
+    expect(reminder).toHaveAttribute('max', '168')
+    expect(reminder).toHaveAttribute('aria-describedby', help.id)
+    expect(reminder).toHaveClass('min-h-11')
+    expect(reminder.closest('.grid')).toHaveClass('grid-cols-1')
+
+    fireEvent.change(reminder, { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz ustawienia' }))
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/lokal/config',
+      'PUT',
+      expect.objectContaining({ rezerwacje_przypomnienie_h: 0 }),
+    ))
+  })
+
+  it('nie zapisuje pustej, ułamkowej ani zbyt dużej wartości przypomnienia', async () => {
+    render(<Ustawienia />)
+
+    await screen.findByRole('heading', { name: /Marka \(white-label\)/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Goście' }))
+    const reminder = screen.getByLabelText('Przypomnienie przed wizytą (h)')
+
+    for (const value of ['', '1.5', '169']) {
+      fireEvent.change(reminder, { target: { value } })
+      fireEvent.click(screen.getByRole('button', { name: 'Zapisz ustawienia' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent(value === ''
+        ? 'Wpisz liczbę godzin od 0 do 168.'
+        : 'Liczba godzin musi być całkowita i mieścić się w zakresie 0–168.')
+      expect(reminder).toHaveAttribute('aria-invalid', 'true')
+      await waitFor(() => expect(reminder).toHaveFocus())
+    }
+
+    expect(apiMock.mock.calls.filter(([path, method]) => path === '/lokal/config' && method === 'PUT')).toHaveLength(0)
   })
 })

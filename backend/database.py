@@ -206,6 +206,84 @@ _R1A_REVISION = "0052_reservation_audit"
 _R2_REVISION = "0058_r22b_strategia_proweniencja"
 _R3_REVISION = "0059_r3_reguly_dostepnosci"
 _R5A_REVISION = "0061_r5a_public_security"
+_R5B_REVISION = "0062_r5b_communication_outbox"
+_R5B_TABLES = {
+    "rezerwacje_wiadomosci_outbox",
+    "rezerwacje_wiadomosci_proby",
+}
+_R5B_BASE_COLUMNS = {
+    "terminy": {"kanal_komunikacji"},
+    "lista_oczekujacych": {"kanal_komunikacji"},
+    "lokal_config": {"rezerwacje_przypomnienie_h"},
+}
+_R5B_BASE_CHECK_NAMES = {
+    "terminy": {"ck_terminy_kanal_komunikacji"},
+    "lista_oczekujacych": {"ck_lista_oczekujacych_kanal_komunikacji"},
+    "lokal_config": {"ck_lokal_config_rezerwacje_przypomnienie_h"},
+}
+_R5B_MODEL_TABLES = {
+    table_name: Base.metadata.tables[table_name]
+    for table_name in _R5B_TABLES
+}
+_R5B_COLUMNS = {
+    table_name: {column.name for column in model_table.columns}
+    for table_name, model_table in _R5B_MODEL_TABLES.items()
+}
+_R5B_INDEXES = {
+    table_name: {
+        index.name: (
+            tuple(column.name for column in index.columns),
+            bool(index.unique),
+        )
+        for index in model_table.indexes
+        if index.name
+    }
+    for table_name, model_table in _R5B_MODEL_TABLES.items()
+}
+_R5B_UNIQUES = {
+    table_name: {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in model_table.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name
+    }
+    for table_name, model_table in _R5B_MODEL_TABLES.items()
+}
+_R5B_CHECKS = {
+    table_name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in model_table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    for table_name, model_table in _R5B_MODEL_TABLES.items()
+}
+_R5B_FOREIGN_KEYS = {
+    table_name: {
+        (
+            tuple(element.parent.name for element in constraint.elements),
+            constraint.elements[0].column.table.name,
+            tuple(element.column.name for element in constraint.elements),
+            str(constraint.ondelete or "").upper(),
+        )
+        for constraint in model_table.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    for table_name, model_table in _R5B_MODEL_TABLES.items()
+}
+_R5B_BASE_MODEL_TABLES = {
+    table_name: Base.metadata.tables[table_name]
+    for table_name in _R5B_BASE_COLUMNS
+}
+_R5B_BASE_CHECKS = {
+    table_name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in _R5B_BASE_MODEL_TABLES[table_name].constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name in _R5B_BASE_CHECK_NAMES[table_name]
+        )
+    }
+    for table_name in _R5B_BASE_COLUMNS
+}
 _R5A_TABLES = {
     "rezerwacje_publiczne_holdy",
     "rezerwacje_tokeny_zarzadzania",
@@ -1091,15 +1169,168 @@ def _r5a_check_signature(value, dialect_name: str) -> str:
         return _strip_r2_outer_parentheses(_normalise_check_sql(value))
 
     sql = str(value or "").casefold().replace('"', "").replace("`", "")
-    sql = re.sub(r"\s+", "", sql)
-    sql = re.sub(
-        r"::[a-z_][a-z0-9_]*(?:\(\d+\))?(?:\[\])?",
-        "",
-        sql,
+    sql = re.sub(r"\s+", " ", sql).strip()
+    # Remove only PostgreSQL type casts outside string literals.  Keeping the
+    # remaining parentheses is security-relevant: ``(a OR b) AND c`` must not
+    # be accepted as the same constraint as ``a OR (b AND c)``.
+    cast_pattern = re.compile(
+        r"::\s*(?:character\s+varying|timestamp(?:\s+(?:with|without)\s+"
+        r"time\s+zone)?|time(?:\s+(?:with|without)\s+time\s+zone)?|"
+        r"double\s+precision|[a-z_][a-z0-9_.]*)"
+        r"(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?(?:\s*\[\s*\])?",
     )
-    # pg_get_constraintdef deparses VARCHAR IN (...) as = ANY (ARRAY[...]).
-    sql = sql.replace("=any", "in").replace("array[", "(").replace("]", ")")
-    return sql.replace("(", "").replace(")", "")
+    parts = []
+    index = 0
+    in_literal = False
+    while index < len(sql):
+        if sql[index] == "'":
+            parts.append(sql[index])
+            if in_literal and index + 1 < len(sql) and sql[index + 1] == "'":
+                parts.append("'")
+                index += 2
+                continue
+            in_literal = not in_literal
+            index += 1
+            continue
+        if not in_literal and sql.startswith("::", index):
+            match = cast_pattern.match(sql, index)
+            if match:
+                index = match.end()
+                continue
+        parts.append(sql[index])
+        index += 1
+    sql = "".join(parts)
+
+    def _matching_parenthesis(expression: str, opening: int):
+        depth = 0
+        quoted = False
+        cursor = opening
+        while cursor < len(expression):
+            char = expression[cursor]
+            if char == "'":
+                if quoted and cursor + 1 < len(expression) and expression[cursor + 1] == "'":
+                    cursor += 2
+                    continue
+                quoted = not quoted
+            elif not quoted and char == "(":
+                depth += 1
+            elif not quoted and char == ")":
+                depth -= 1
+                if depth == 0:
+                    return cursor
+            cursor += 1
+        return None
+
+    def _strip_outer(expression: str) -> str:
+        expression = expression.strip()
+        while expression.startswith("("):
+            closing = _matching_parenthesis(expression, 0)
+            if closing != len(expression) - 1:
+                break
+            expression = expression[1:-1].strip()
+        return expression
+
+    # pg_get_constraintdef deparses IN as = ANY (ARRAY[...]) and NOT IN as
+    # <> ALL (ARRAY[...]).  Convert only that balanced, literal-aware shape.
+    membership_pattern = re.compile(r"(?:=\s*any|(?:<>|!=)\s*all)\s*\(")
+    cursor = 0
+    while True:
+        match = membership_pattern.search(sql, cursor)
+        if match is None:
+            break
+        # Ignore a marker occurring inside a SQL string literal.
+        prefix = sql[:match.start()]
+        quoted = False
+        prefix_index = 0
+        while prefix_index < len(prefix):
+            if prefix[prefix_index] == "'":
+                if quoted and prefix_index + 1 < len(prefix) and prefix[prefix_index + 1] == "'":
+                    prefix_index += 2
+                    continue
+                quoted = not quoted
+            prefix_index += 1
+        if quoted:
+            cursor = match.end()
+            continue
+        opening = match.end() - 1
+        closing = _matching_parenthesis(sql, opening)
+        if closing is None:
+            break
+        payload = _strip_outer(sql[opening + 1:closing])
+        compact_payload = re.sub(r"\s+", "", payload)
+        if not compact_payload.startswith("array[") or not compact_payload.endswith("]"):
+            cursor = match.end()
+            continue
+        values = compact_payload[len("array["):-1]
+        operator = " not in (" if "all" in match.group(0) else " in ("
+        replacement = operator + values + ")"
+        sql = sql[:match.start()] + replacement + sql[closing + 1:]
+        cursor = match.start() + len(replacement)
+
+    def _split_boolean(expression: str, operator: str) -> list[str]:
+        chunks = []
+        start = 0
+        depth = 0
+        bracket_depth = 0
+        quoted = False
+        cursor = 0
+        while cursor < len(expression):
+            char = expression[cursor]
+            if char == "'":
+                if quoted and cursor + 1 < len(expression) and expression[cursor + 1] == "'":
+                    cursor += 2
+                    continue
+                quoted = not quoted
+                cursor += 1
+                continue
+            if not quoted:
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                elif char == "[":
+                    bracket_depth += 1
+                elif char == "]":
+                    bracket_depth -= 1
+                elif depth == 0 and bracket_depth == 0 and expression.startswith(operator, cursor):
+                    before = expression[cursor - 1] if cursor else " "
+                    after_index = cursor + len(operator)
+                    after = expression[after_index] if after_index < len(expression) else " "
+                    if not (before.isalnum() or before == "_") and not (
+                        after.isalnum() or after == "_"
+                    ):
+                        chunks.append(expression[start:cursor])
+                        start = after_index
+                        cursor = after_index
+                        continue
+            cursor += 1
+        if not chunks:
+            return [expression]
+        chunks.append(expression[start:])
+        return chunks
+
+    def _boolean_signature(expression: str) -> str:
+        expression = _strip_outer(expression)
+        alternatives = _split_boolean(expression, "or")
+        if len(alternatives) > 1:
+            return "or(" + ",".join(
+                _boolean_signature(item) for item in alternatives
+            ) + ")"
+        conjunctions = _split_boolean(expression, "and")
+        if len(conjunctions) > 1:
+            return "and(" + ",".join(
+                _boolean_signature(item) for item in conjunctions
+            ) + ")"
+        # PostgreSQL commonly wraps a casted identifier as ``(column)::text``.
+        # Removing that one atomic wrapper does not alter logical grouping.
+        expression = re.sub(
+            r"(?<![a-z0-9_])\(\s*([a-z_][a-z0-9_.]*)\s*\)",
+            r"\1",
+            expression,
+        )
+        return re.sub(r"\s+", "", _strip_outer(expression))
+
+    return _boolean_signature(sql)
 
 
 def _assert_r1a_constraints_enforced() -> None:
@@ -1261,7 +1492,7 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     """
     if not (
         model_tables - {_R1A_AUDIT_TABLE} - _R2_TABLES - _R3_TABLES
-        - _R5A_TABLES
+        - _R5A_TABLES - _R5B_TABLES
     ).issubset(tables):
         return False
     for table_name in _R0B_LEDGER_TABLES:
@@ -2328,6 +2559,165 @@ def _validate_r5a_adoption_schema(inspector=None) -> bool:
     return True
 
 
+def _validate_r5b_adoption_schema(inspector=None) -> bool:
+    """Fail-closed validation before adopting an unversioned create_all R5b schema."""
+    from sqlalchemy import inspect
+
+    inspector = inspector or inspect(engine)
+    bind = getattr(inspector, "bind", None)
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    dialect_name = dialect_name or engine.dialect.name
+    tables = set(inspector.get_table_names())
+    if not _R5B_TABLES.issubset(tables):
+        raise RuntimeError(
+            "Schemat R5b jest niekompletny; nie mozna oznaczyc migracji 0062."
+        )
+
+    for table_name, expected_columns in _R5B_COLUMNS.items():
+        _validate_r5a_column_contract(
+            inspector, table_name, expected_columns, exact=True,
+        )
+        expected_pk = tuple(
+            column.name for column in _R5B_MODEL_TABLES[table_name].primary_key.columns
+        )
+        actual_pk = tuple(
+            inspector.get_pk_constraint(table_name).get("constrained_columns") or ()
+        )
+        if actual_pk != expected_pk:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowy PRIMARY KEY R5b."
+            )
+
+        raw_indexes = inspector.get_indexes(table_name)
+        reflected_indexes = {
+            item.get("name"): (
+                tuple(item.get("column_names") or ()),
+                bool(item.get("unique")),
+            )
+            for item in raw_indexes
+            if item.get("name")
+        }
+        for name, expected_shape in _R5B_INDEXES[table_name].items():
+            if reflected_indexes.get(name) != expected_shape:
+                raise RuntimeError(
+                    f"Indeks {name} ma nieprawidlowa definicje R5b."
+                )
+
+        raw_uniques = inspector.get_unique_constraints(table_name)
+        reflected_uniques = {
+            item.get("name"): tuple(item.get("column_names") or ())
+            for item in raw_uniques
+            if item.get("name")
+        }
+        expected_uniques = _R5B_UNIQUES[table_name]
+        for item in raw_uniques:
+            name = item.get("name")
+            columns = tuple(item.get("column_names") or ())
+            if not name or expected_uniques.get(name) != columns:
+                raise RuntimeError(
+                    f"Tabela {table_name} ma nadmiarowe lub nienazwane "
+                    "ograniczenie UNIQUE R5b."
+                )
+        for name, (columns, unique) in reflected_indexes.items():
+            if unique:
+                reflected_uniques.setdefault(name, columns)
+        for item in raw_indexes:
+            if not bool(item.get("unique")):
+                continue
+            name = item.get("name")
+            columns = tuple(item.get("column_names") or ())
+            expected_index = _R5B_INDEXES[table_name].get(name)
+            mirrors_constraint = expected_uniques.get(name) == columns
+            is_model_index = expected_index == (columns, True)
+            if not mirrors_constraint and not is_model_index:
+                raise RuntimeError(
+                    f"Tabela {table_name} ma nadmiarowy indeks UNIQUE R5b."
+                )
+        for name, expected in expected_uniques.items():
+            if reflected_uniques.get(name) != expected:
+                raise RuntimeError(
+                    f"Ograniczenie {name} ma nieprawidlowa definicje UNIQUE R5b."
+                )
+
+        raw_fks = inspector.get_foreign_keys(table_name)
+        reflected_fks = {
+            (
+                tuple(item.get("constrained_columns") or ()),
+                item.get("referred_table"),
+                tuple(item.get("referred_columns") or ()),
+                str((item.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for item in raw_fks
+        }
+        if (
+            len(raw_fks) != len(_R5B_FOREIGN_KEYS[table_name])
+            or reflected_fks != _R5B_FOREIGN_KEYS[table_name]
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma dokladnie wymaganych FK R5b."
+            )
+
+        raw_checks = inspector.get_check_constraints(table_name)
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in raw_checks
+            if item.get("name")
+        }
+        if (
+            len(raw_checks) != len(_R5B_CHECKS[table_name])
+            or any(not item.get("name") for item in raw_checks)
+            or set(reflected_checks) != set(_R5B_CHECKS[table_name])
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} ma nadmiarowy, nienazwany lub brakujacy CHECK R5b."
+            )
+        for name, expected_sql in _R5B_CHECKS[table_name].items():
+            actual_sql = reflected_checks.get(name)
+            if (
+                actual_sql is None
+                or _r5a_check_signature(actual_sql, dialect_name)
+                != _r5a_check_signature(expected_sql, dialect_name)
+            ):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje R5b."
+                )
+
+    for table_name, expected_columns in _R5B_BASE_COLUMNS.items():
+        if table_name not in tables:
+            raise RuntimeError(f"Brak tabeli bazowej R5b: {table_name}.")
+        _validate_r5a_column_contract(
+            inspector, table_name, expected_columns, exact=False,
+        )
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in inspector.get_check_constraints(table_name)
+            if item.get("name")
+        }
+        for name, expected_sql in _R5B_BASE_CHECKS[table_name].items():
+            actual_sql = reflected_checks.get(name)
+            if actual_sql is None and dialect_name == "sqlite":
+                # SQLite's SQLAlchemy reflector can absorb preceding inline FK
+                # text into a CHECK name on legacy ``terminy`` DDL.  Match the
+                # unambiguous suffix, while still validating the full CHECK
+                # expression below (a weakened/replaced constraint is rejected).
+                suffix_matches = [
+                    sql
+                    for reflected_name, sql in reflected_checks.items()
+                    if reflected_name and reflected_name.endswith(name)
+                ]
+                if len(suffix_matches) == 1:
+                    actual_sql = suffix_matches[0]
+            if (
+                actual_sql is None
+                or _r5a_check_signature(actual_sql, dialect_name)
+                != _r5a_check_signature(expected_sql, dialect_name)
+            ):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje R5b."
+                )
+    return True
+
+
 def _invalidate_legacy_public_tokens() -> int:
     """Clears reversible plaintext public tokens on the stamp-only adoption path."""
     from sqlalchemy import inspect, text
@@ -2406,6 +2796,28 @@ def init_db():
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
         complete_current = model_tables.issubset(tables)
+        r5b_tables_present = _R5B_TABLES & tables
+        r5b_base_present = {
+            table_name: expected & {
+                column["name"] for column in insp.get_columns(table_name)
+            }
+            for table_name, expected in _R5B_BASE_COLUMNS.items()
+            if table_name in tables
+        }
+        r5b_base_complete = all(
+            present == _R5B_BASE_COLUMNS[table_name]
+            for table_name, present in r5b_base_present.items()
+        ) and set(r5b_base_present) == set(_R5B_BASE_COLUMNS)
+        if (
+            (r5b_tables_present or any(r5b_base_present.values()))
+            and not (
+                r5b_tables_present == _R5B_TABLES
+                and r5b_base_complete
+            )
+        ):
+            raise RuntimeError(
+                "Schemat R5b jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
+            )
         r5a_tables_present = _R5A_TABLES & tables
         if r5a_tables_present and r5a_tables_present != _R5A_TABLES:
             raise RuntimeError(
@@ -2416,21 +2828,29 @@ def init_db():
             raise RuntimeError(
                 "Schemat R3 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
             )
+        complete_r5a = (
+            (model_tables - _R5B_TABLES).issubset(tables)
+            and _R5A_TABLES.issubset(tables)
+            and not r5b_tables_present
+            and not any(r5b_base_present.values())
+        )
         complete_r3 = (
-            (model_tables - _R5A_TABLES).issubset(tables)
+            (model_tables - _R5A_TABLES - _R5B_TABLES).issubset(tables)
             and _R3_TABLES.issubset(tables)
             and not r5a_tables_present
+            and not r5b_tables_present
         )
         complete_r2 = (
-            (model_tables - _R3_TABLES - _R5A_TABLES).issubset(tables)
+            (model_tables - _R3_TABLES - _R5A_TABLES - _R5B_TABLES).issubset(tables)
             and _R2_TABLES.issubset(tables)
             and not r3_tables_present
             and not r5a_tables_present
+            and not r5b_tables_present
         )
         complete_r0b = _is_complete_r0b_schema(insp, tables, model_tables)
         pre_r0b_tables = (
             model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE}
-            - _R2_TABLES - _R3_TABLES - _R5A_TABLES
+            - _R2_TABLES - _R3_TABLES - _R5A_TABLES - _R5B_TABLES
         )
         termin_columns = (
             {column["name"] for column in insp.get_columns("terminy")}
@@ -2447,6 +2867,7 @@ def init_db():
             _validate_r3_adoption_schema(insp, validate_data=False)
             _validate_r2_adoption_schema(insp)
             _validate_r5a_adoption_schema(insp)
+            _validate_r5b_adoption_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
             _rebuild_rezerwacje_oblozenie_ledger()
@@ -2455,6 +2876,17 @@ def init_db():
             refreshed = inspect(engine)
             _validate_r3_adoption_schema(refreshed)
             _validate_r5a_adoption_schema(refreshed)
+            _validate_r5b_adoption_schema(refreshed)
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, _R5B_REVISION)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            return
+        if complete_r5a:
+            _validate_r1a_audit_schema(insp)
+            _validate_r2_adoption_schema(insp)
+            _validate_r3_adoption_schema(insp)
+            _validate_r5a_adoption_schema(insp)
             _require_alembic_run(
                 lambda command, cfg: command.stamp(cfg, _R5A_REVISION)
             )

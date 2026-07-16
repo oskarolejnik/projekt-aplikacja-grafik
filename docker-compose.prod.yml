@@ -42,6 +42,17 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMS_API_URL: ${SMS_API_URL:-}
+      SMS_API_TOKEN: ${SMS_API_TOKEN:-}
+      SMS_SENDER: ${SMS_SENDER:-}
+      SMS_SUPPORTS_IDEMPOTENCY: ${SMS_SUPPORTS_IDEMPOTENCY:-false}
+      SMS_IDEMPOTENCY_HEADER: ${SMS_IDEMPOTENCY_HEADER:-Idempotency-Key}
+      RESERVATION_DELIVERY_INTERVAL_SECONDS: ${RESERVATION_DELIVERY_INTERVAL_SECONDS:-5}
     volumes:
       # Opcjonalne: dla legacy/shadow umieść konto serwisowe w ./secrets/google_sa.json.
       - ./secrets:/run/secrets/lokalo:ro

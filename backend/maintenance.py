@@ -17,7 +17,11 @@ from sqlalchemy import text
 import models
 from database import SessionLocal
 from deps import utcnow_naive
-from routers.rodo import RETENTION_AUDIT_ACTION, wykonaj_retencje_rodo
+from routers.rodo import (
+    RETENTION_AUDIT_ACTION,
+    RodoOwnerLockScopeChanged,
+    wykonaj_retencje_rodo,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -63,37 +67,60 @@ def run_retention_maintenance_once(*, now: Optional[datetime] = None) -> dict:
     effective_now = now or utcnow_naive()
     db = SessionLocal()
     try:
-        if not _try_acquire_retention_lock(db):
+        for scope_attempt in range(4):
+            if not _try_acquire_retention_lock(db):
+                db.rollback()
+                return {"status": "locked", "liczba_zmian": 0}
+
+            day_start = datetime.combine(effective_now.date(), time.min)
+            day_end = day_start + timedelta(days=1)
+            already_ran = db.query(models.AuditLog.id).filter(
+                models.AuditLog.akcja == RETENTION_AUDIT_ACTION,
+                models.AuditLog.ts >= day_start,
+                models.AuditLog.ts < day_end,
+            ).first()
+            if already_ran is not None:
+                db.rollback()
+                return {"status": "already_run", "liczba_zmian": 0}
+
+            try:
+                wynik = wykonaj_retencje_rodo(
+                    db,
+                    now=effective_now,
+                    actor=None,
+                    zrodlo="maintenance",
+                    audit_action=RETENTION_AUDIT_ACTION,
+                    audituj_pusty=False,
+                    defer_in_flight=True,
+                    owner_lock_in_current_transaction=True,
+                )
+            except RodoOwnerLockScopeChanged:
+                # Owner zmienił dzień pomiędzy skanem i przejęciem anchora.
+                # Restart zwalnia częściowy zakres i ponownie bierze wszystkie
+                # dni rosnąco; nigdy nie dokładamy niższego dnia do już trzymanego.
+                db.rollback()
+                if scope_attempt == 3:
+                    return {
+                        "status": "deferred",
+                        "reason": "owner_scope_changed",
+                        "liczba_zmian": 0,
+                    }
+                continue
+
+            if wynik["liczba_zmian"]:
+                db.commit()
+                return {"status": "executed", **wynik}
+
+            if wynik.get("odroczono_komunikacja"):
+                # No mutation is committed while provider I/O is in flight.  By not
+                # writing the daily audit marker, a later pass can retry this owner.
+                db.rollback()
+                return {"status": "deferred", **wynik}
+
+            # Cleanup używa tej samej transakcji; przy braku zmian rollback zwalnia lock
+            # i nie tworzy codziennych pustych wpisów w dzienniku audytu.
             db.rollback()
-            return {"status": "locked", "liczba_zmian": 0}
-
-        day_start = datetime.combine(effective_now.date(), time.min)
-        day_end = day_start + timedelta(days=1)
-        already_ran = db.query(models.AuditLog.id).filter(
-            models.AuditLog.akcja == RETENTION_AUDIT_ACTION,
-            models.AuditLog.ts >= day_start,
-            models.AuditLog.ts < day_end,
-        ).first()
-        if already_ran is not None:
-            db.rollback()
-            return {"status": "already_run", "liczba_zmian": 0}
-
-        wynik = wykonaj_retencje_rodo(
-            db,
-            now=effective_now,
-            actor=None,
-            zrodlo="maintenance",
-            audit_action=RETENTION_AUDIT_ACTION,
-            audituj_pusty=False,
-        )
-        if wynik["liczba_zmian"]:
-            db.commit()
-            return {"status": "executed", **wynik}
-
-        # Cleanup używa tej samej transakcji; przy braku zmian rollback zwalnia lock
-        # i nie tworzy codziennych pustych wpisów w dzienniku audytu.
-        db.rollback()
-        return {"status": "no_changes", **wynik}
+            return {"status": "no_changes", **wynik}
     except Exception:
         db.rollback()
         raise

@@ -792,23 +792,22 @@ def lock_tables(db, table_ids: Iterable[int]) -> tuple[models.Stolik, ...]:
     return tuple(db.execute(statement).scalars().all())
 
 
-def begin_locked_write(db, dates: Iterable[date]) -> tuple[models.RezerwacjaDzienLedger, ...]:
-    """Rozpoczyna świeżą transakcję zapisu i blokuje dni w kolejności rosnącej.
+def lock_days_in_current_transaction(
+    db,
+    dates: Iterable[date],
+) -> tuple[models.RezerwacjaDzienLedger, ...]:
+    """Blokuje dni rosnąco bez restartowania bieżącej transakcji.
 
-    SQLite nie implementuje ``FOR UPDATE``; ``BEGIN IMMEDIATE`` zdobywa jedyną
-    blokadę zapisu przed pierwszym odczytem walidacyjnym. PostgreSQL blokuje trwałe
-    wiersze-anchor przez ``SELECT FOR UPDATE``. Wywołujący wykonuje commit/rollback.
+    Na SQLite wywołujący musi wcześniej wejść w ``BEGIN IMMEDIATE``. PostgreSQL
+    używa tych samych trwałych anchorów ``RezerwacjaDzienLedger`` i tej samej
+    globalnej kolejności co zwykli producenci zmian rezerwacji.
     """
 
     ordered = tuple(sorted(set(dates)))
     if not ordered:
         raise ValueError("at least one reservation date is required")
-    db.rollback()
     dialect = _dialect_name(db)
     try:
-        if dialect == "sqlite":
-            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
-
         table = models.RezerwacjaDzienLedger.__table__
         locked_at = _utcnow_naive()
         if dialect == "postgresql":
@@ -862,6 +861,31 @@ def begin_locked_write(db, dates: Iterable[date]) -> tuple[models.RezerwacjaDzie
             rule="transaction",
         )
     return guards
+
+
+def begin_locked_write(db, dates: Iterable[date]) -> tuple[models.RezerwacjaDzienLedger, ...]:
+    """Rozpoczyna świeżą transakcję zapisu i blokuje dni w kolejności rosnącej.
+
+    SQLite nie implementuje ``FOR UPDATE``; ``BEGIN IMMEDIATE`` zdobywa jedyną
+    blokadę zapisu przed pierwszym odczytem walidacyjnym. PostgreSQL blokuje trwałe
+    wiersze-anchor przez ``SELECT FOR UPDATE``. Wywołujący wykonuje commit/rollback.
+    """
+    ordered = tuple(sorted(set(dates)))
+    if not ordered:
+        raise ValueError("at least one reservation date is required")
+    db.rollback()
+    try:
+        if _dialect_name(db) == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    except OperationalError as exc:
+        db.rollback()
+        raise ReservationError(
+            503,
+            "RESERVATION_BUSY",
+            "Inny zapis rezerwacji jest w toku. Spróbuj ponownie za chwilę.",
+            rule="transaction",
+        ) from exc
+    return lock_days_in_current_transaction(db, ordered)
 
 
 def touch_days(guards: Iterable[models.RezerwacjaDzienLedger]) -> None:

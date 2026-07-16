@@ -18,12 +18,13 @@ from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, integracje, mailer, sms, ratelimit, prawo_pracy, seating, platnosci, uprawnienia
+import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_import, ratelimit, prawo_pracy, seating, platnosci, uprawnienia
 import reservation_access
 import reservation_allocator
 import reservation_audit
 import reservation_rules
 import reservation_service
+import reservation_communication
 import maintenance
 from crm_identity import (
     hash_key as _hash_klucz_crm,
@@ -70,7 +71,9 @@ from routers.zaproszenia import router as zaproszenia_router
 from routers.flota import router as flota_router
 from routers.pos import router as pos_router
 from routers.rodo import (
+    eksport_komunikacji_operacyjnej,
     router as rodo_router,
+    usun_outbox_przed_usunieciem_pii,
     usun_powiazane_pii_rezerwacji,
     usun_powiazane_publiczne_sekrety,
 )
@@ -89,6 +92,25 @@ app = FastAPI(
     redoc_url="/redoc" if app_settings.IS_DEV else None,
     openapi_url="/openapi.json" if app_settings.IS_DEV else None,
 )
+
+
+@app.exception_handler(reservation_communication.CommunicationDeliveryInProgress)
+async def communication_erasure_conflict_handler(
+    _request: Request,
+    _exc: reservation_communication.CommunicationDeliveryInProgress,
+):
+    """Fail closed without exposing recipient, content or provider diagnostics."""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": (
+                "Trwa dostarczanie wiadomości związanej z tymi danymi. "
+                "Ponów usunięcie za chwilę."
+            ),
+            "code": reservation_communication.CommunicationDeliveryInProgress.code,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.exception_handler(reservation_service.ReservationError)
@@ -534,6 +556,7 @@ def startup():
     app_settings.validate_critical_secrets()
     init_db()
     maintenance.start_maintenance()
+    reservation_communication.start_worker()
     # Instancja-matka z włączoną samoobsługą: podnieś instancje floty, których proces
     # nie przeżył restartu hosta (best-effort; provisioning.py, feedback: zero ręcznej pracy).
     if provisioning.wlaczony():
@@ -549,6 +572,7 @@ def startup():
 
 @app.on_event("shutdown")
 def shutdown():
+    reservation_communication.stop_worker()
     maintenance.stop_maintenance()
 
 
@@ -2194,6 +2218,7 @@ def _rezerwacja_out(t: models.Termin, user=None) -> dict:
         "nazwisko": t.nazwisko if kontakt else "Gość",
         "telefon": t.telefon if kontakt else None,
         "email": t.email if kontakt else None,
+        "kanal_komunikacji": t.kanal_komunikacji if kontakt else None,
         "liczba_osob": t.liczba_osob,
         "notatka": t.notatka if notatki else None,
         "status": t.status,
@@ -2202,6 +2227,18 @@ def _rezerwacja_out(t: models.Termin, user=None) -> dict:
         "kanal": t.kanal,
         "ukryte_pola": ukryte,
     }
+
+
+def _rezerwacje_out_z_komunikacja(db, rows, user) -> list[dict]:
+    summaries = reservation_communication.summaries_for_reservations(
+        db, (row.id for row in rows),
+    )
+    output = []
+    for row in rows:
+        item = _rezerwacja_out(row, user)
+        item["communication_summary"] = summaries.get(row.id)
+        output.append(item)
+    return output
 
 
 def _waliduj_zakres_bazy_rezerwacji(start: date, end: date) -> None:
@@ -2243,33 +2280,6 @@ def _sortuj_baze_rezerwacji(rows, sort: str):
             key=lambda t: ((t.nazwisko or "").casefold(), t.data, t.godz_od or time.min, t.id),
         )
     return sorted(rows, key=chronologicznie)
-
-
-def _tresc_potwierdzenia(t: models.Termin, cfg) -> str:
-    nazwa = cfg.nazwa_lokalu or "Lokal"
-    czesci = [f"dzień {t.data}"]
-    if t.godz_od:
-        czesci.append(f"godz. {_hm(t.godz_od)}")
-    if t.liczba_osob:
-        czesci.append(f"{t.liczba_osob} os.")
-    return (f"Dzień dobry,\n\n"
-            f"Twoja rezerwacja w {nazwa} ({', '.join(czesci)}) została przyjęta.\n\n"
-            f"Do zobaczenia!\n{nazwa}")
-
-
-def _wyslij_potwierdzenie_rezerwacji(db, t: models.Termin) -> bool:
-    """Best-effort powiadomienie do gościa: e-mail (gdy ma adres + integracja e-mail aktywna)
-    ORAZ SMS (gdy ma telefon + integracja SMS aktywna). Żaden kanał nie wywraca żądania —
-    to tylko dodatkowe powiadomienia. Zwraca, czy udało się wysłać e-mail (dla kompatybilności)."""
-    cfg = get_lokal_config(db)
-    wyslano_mail = False
-    if t.email:
-        wyslano_mail = mailer.wyslij_email(t.email, f"Potwierdzenie rezerwacji — {cfg.nazwa_lokalu}",
-                                           _tresc_potwierdzenia(t, cfg))
-    if t.telefon:
-        godz = _hm(t.godz_od) if t.godz_od else ""
-        sms.wyslij_sms(t.telefon, f"{cfg.nazwa_lokalu}: rezerwacja {t.data} {godz}. Do zobaczenia!")
-    return wyslano_mail
 
 
 # ── Stoliki ──────────────────────────────────────────────────────────────────
@@ -3041,6 +3051,7 @@ def host_zmien_faze(
         if t.status in REZ_AKTYWNE:
             t.status = "odbyla"
         reservation_service.release_termin_allocation(db, t.id)
+        reservation_communication.cancel_pending(db, t.id)
     reservation_audit.add_reservation_audit(
         db, termin=t, action="host", actor=user, before=before, after=t,
     )
@@ -3298,7 +3309,7 @@ def get_rezerwacje_stolik(start: date = Query(...), end: date = Query(...),
     rows = q.order_by(models.Termin.data, models.Termin.godz_od).all()
     if stolik_id:
         rows = [t for t in rows if stolik_id in _stoly_terminu(t)]
-    return {"rezerwacje": [_rezerwacja_out(t, user) for t in rows]}
+    return {"rezerwacje": _rezerwacje_out_z_komunikacja(db, rows, user)}
 
 
 @app.post("/api/rezerwacje-stolik/wyszukaj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -3325,7 +3336,7 @@ def wyszukaj_rezerwacje_stolik(
     total = len(rows)
     page = rows[dane.offset:dane.offset + dane.limit]
     return {
-        "rezerwacje": [_rezerwacja_out(t, user) for t in page],
+        "rezerwacje": _rezerwacje_out_z_komunikacja(db, page, user),
         "total": total,
         "offset": dane.offset,
         "limit": dane.limit,
@@ -3341,7 +3352,7 @@ def get_rezerwacja_stolik(
     t = db.get(models.Termin, rid)
     if not t or t.rodzaj != "stolik":
         raise HTTPException(404, "Brak rezerwacji.")
-    return _rezerwacja_out(t, user)
+    return _rezerwacje_out_z_komunikacja(db, [t], user)[0]
 
 
 @app.post("/api/rezerwacje-stolik", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -3415,6 +3426,7 @@ def dodaj_rezerwacje_stolik(
             evaluation = None
         t = models.Termin(
             data=dane.data, nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
+            kanal_komunikacji=dane.kanal_komunikacji,
             liczba_osob=dane.liczba_osob,
             notatka=(dane.notatka if _ma_dostep_rezerwacji(
                 user, "rezerwacje.notatki_wewnetrzne") else None),
@@ -3483,6 +3495,18 @@ def dodaj_rezerwacje_stolik(
                 override_reason_code=override_context["reason_code"],
                 override_note=override_context["note"],
             )
+        if kanal != "walk_in":
+            reservation_communication.enqueue_reservation(
+                db,
+                t,
+                "confirmation",
+                dedupe_key=(
+                    f"reservation:{t.id}:confirmation:create:"
+                    f"{secrets.token_hex(16)}"
+                ),
+                actor=user,
+            )
+            reservation_communication.schedule_reminder(db, t, actor=user)
         reservation_service.complete_idempotency(
             idem.record, response=odpowiedz, http_status=201, termin_id=t.id, now=teraz,
         )
@@ -3493,7 +3517,6 @@ def dodaj_rezerwacje_stolik(
     db.refresh(t)
     wyslij_push_do_adminow(db, "Nowa rezerwacja",
                            f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(), url="/")
-    _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort (no-op gdy brak SMTP/adresu)
     return odpowiedz
 
 
@@ -3512,6 +3535,10 @@ def edytuj_rezerwacje_stolik(
         db.rollback()
         raise HTTPException(404, "Brak rezerwacji.")
     before = reservation_audit.reservation_snapshot(t)
+    before_guest_details = (
+        t.data, t.godz_od, t.liczba_osob, t.telefon, t.email,
+        t.kanal_komunikacji,
+    )
     pii_before = _wartosci_pii_rezerwacji(t)
     crm_identity_before = _identity_key_crm(t)
     zachowaj_przydzial = bool(
@@ -3536,6 +3563,8 @@ def edytuj_rezerwacje_stolik(
     t.data = dane.data
     if _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
         t.nazwisko = dane.nazwisko.strip(); t.telefon = dane.telefon; t.email = dane.email
+        if "kanal_komunikacji" in dane.model_fields_set:
+            t.kanal_komunikacji = dane.kanal_komunikacji
     t.liczba_osob = dane.liczba_osob
     if _ma_dostep_rezerwacji(user, "rezerwacje.notatki_wewnetrzne"):
         t.notatka = dane.notatka
@@ -3599,6 +3628,25 @@ def edytuj_rezerwacje_stolik(
                 override_details=override_details,
                 override_reason_code=override_context["reason_code"],
                 override_note=override_context["note"],
+            )
+        after_guest_details = (
+            t.data, t.godz_od, t.liczba_osob, t.telefon, t.email,
+            t.kanal_komunikacji,
+        )
+        if before_guest_details != after_guest_details:
+            reservation_communication.cancel_pending(
+                db,
+                t.id,
+                # Reminder jest mutowany dopiero wewnątrz schedule_reminder,
+                # już pod planner lockiem (globalnie: day -> planner -> outbox).
+                event_types=("confirmation", "change"),
+            )
+            if t.status in REZ_AKTYWNE:
+                reservation_communication.enqueue_reservation(
+                    db, t, "change", actor=user,
+                )
+            reservation_communication.schedule_reminder(
+                db, t, actor=user, force_new=True,
             )
         _commit_zapis_rezerwacji(db, guards)
     except IntegrityError as exc:
@@ -3738,6 +3786,7 @@ def host_auto_no_show(
             before = reservation_audit.reservation_snapshot(t)
             t.status = "no_show"
             reservation_service.release_termin_allocation(db, t.id)
+            reservation_communication.cancel_pending(db, t.id)
             _nalicz_no_show_fee(db, t, commit=False)
             reservation_audit.add_reservation_audit(
                 db, termin=t, action="status", actor=user, before=before, after=t,
@@ -3785,6 +3834,15 @@ def zmien_status_rezerwacji_stolik(
         before=before,
         after=t,
     )
+    if nowy == "odwolana":
+        reservation_communication.cancel_pending(db, t.id)
+        reservation_communication.enqueue_reservation(
+            db, t, "cancellation", actor=user,
+        )
+    elif nowy not in REZ_AKTYWNE:
+        reservation_communication.cancel_pending(db, t.id)
+    elif nowy == "potwierdzona":
+        reservation_communication.schedule_reminder(db, t, actor=user)
     _commit_zapis_rezerwacji(db, guards); db.refresh(t)
     if nowy not in REZ_AKTYWNE and t.godz_od:                # stół się zwolnił → re-optymalizacja
         _bezpiecznie_po_zwolnieniu_stolu(db, t.data, t.godz_od, _koniec_okna(db, t))
@@ -3813,26 +3871,257 @@ def usun_rezerwacje_stolik(
         audit.termin_id = None
         _usun_profil_fallbacku_rezerwacji(db, t.id)
         usun_powiazane_publiczne_sekrety(db, [t.id])
+        usun_outbox_przed_usunieciem_pii(db, reservation_ids=[t.id])
         db.delete(t); _commit_zapis_rezerwacji(db, guards)
         if okno:
             _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
 
 
-@app.post("/api/rezerwacje-stolik/{rid}/wyslij-potwierdzenie", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+@app.post(
+    "/api/rezerwacje-stolik/{rid}/wyslij-potwierdzenie",
+    response_model=schemas.RezerwacjaKomunikacjaQueueOut,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
 def wyslij_potwierdzenie_stolik(
+    rid: int,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    confirm_resend: bool = Header(False, alias="X-Confirm-Resend"),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Kolejkuje nowe potwierdzenie bez wykonywania sieci w żądaniu HTTP."""
+    t, _guards = _zablokuj_termin(db, rid)
+    if not t or t.rodzaj != "stolik":
+        raise HTTPException(404, "Brak rezerwacji.")
+    if t.status not in REZ_AKTYWNE:
+        raise HTTPException(409, "Nie można wysłać potwierdzenia zakończonej rezerwacji.")
+    if not idempotency_key.strip():
+        raise HTTPException(400, "Niepoprawny nagłówek Idempotency-Key.")
+    now = utcnow_naive()
+    idem = reservation_service.begin_idempotency(
+        db,
+        operation="reservation.confirmation.manual:v1",
+        raw_key=idempotency_key,
+        payload={
+            "reservation_id": rid,
+            "confirm_resend": bool(confirm_resend),
+        },
+        secret=SECRET_KEY,
+        now=now,
+    )
+    if idem.replayed:
+        db.rollback()
+        return JSONResponse(idem.response, headers={"Cache-Control": "no-store"})
+
+    current_state = reservation_communication.current_confirmation_state(db, rid)
+    if current_state in {"queued", "processing", "retry"}:
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "COMMUNICATION_ALREADY_PENDING",
+            "Potwierdzenie jest już w kolejce albo trwa jego wysyłanie.",
+            rule="communication",
+        )
+    if current_state == "uncertain":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "COMMUNICATION_RECONCILIATION_REQUIRED",
+            "Najpierw uzgodnij niepewny wynik poprzedniej wysyłki.",
+            rule="communication",
+        )
+    if current_state == "failed":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "COMMUNICATION_RETRY_REQUIRED",
+            "Poprzednia wysyłka nie powiodła się. Użyj akcji Ponów przy wiadomości.",
+            rule="communication",
+        )
+    if current_state == "sent" and not confirm_resend:
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "COMMUNICATION_RESEND_CONFIRMATION_REQUIRED",
+            "Ponowna wysyłka wymaga jawnego potwierdzenia operatora.",
+            rule="communication",
+        )
+    dedupe_key = f"reservation:{rid}:confirmation:manual:{idem.record.key_hash}"
+    messages = reservation_communication.enqueue_reservation(
+        db, t, "confirmation", dedupe_key=dedupe_key, actor=user,
+    )
+    if not messages:
+        db.rollback()
+        raise HTTPException(
+            400,
+            "Brak dostępnego kanału kontaktu albo komunikacja operacyjna jest wyłączona.",
+        )
+    # Together with actor_user_id this is the durable, PII-free audit of the
+    # operator action.  The resend variant can only be produced after the
+    # explicit acknowledgement checked above.
+    template_key = (
+        "confirmation_manual_resend"
+        if current_state == "sent"
+        else "confirmation_manual_initial"
+    )
+    for message in messages:
+        message.template_key = template_key
+    db.flush()
+    response_body = {
+        "queued": len(messages),
+        "messages": [reservation_communication.message_dict(row) for row in messages],
+    }
+    reservation_service.complete_idempotency(
+        idem.record,
+        response=response_body,
+        http_status=200,
+        termin_id=t.id,
+        now=now,
+    )
+    db.commit()
+    return JSONResponse(response_body, headers={"Cache-Control": "no-store"})
+
+
+@app.get(
+    "/api/rezerwacje-stolik/{rid}/komunikacja",
+    response_model=schemas.RezerwacjaKomunikacjaHistoriaOut,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def historia_komunikacji_rezerwacji(
     rid: int,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    """Ponowna wysyłka e-maila z potwierdzeniem rezerwacji. Zwraca {wyslano, powod?}."""
-    t = db.get(models.Termin, rid)
-    if not t or t.rodzaj != "stolik":
+    if not _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
+        raise HTTPException(403, "Brak uprawnienia do danych kontaktowych gości.")
+    reservation = db.get(models.Termin, rid)
+    if reservation is None or reservation.rodzaj != "stolik":
         raise HTTPException(404, "Brak rezerwacji.")
-    if not t.email:
-        raise HTTPException(400, "Rezerwacja nie ma adresu e-mail.")
-    if not integracje.skonfigurowane("email"):
-        return {"wyslano": False, "powod": "Integracja e-mail nieskonfigurowana."}
-    return {"wyslano": _wyslij_potwierdzenie_rezerwacji(db, t)}
+    summaries = reservation_communication.summaries_for_reservations(db, [rid])
+    manual_state = reservation_communication.current_confirmation_state(db, rid)
+    return JSONResponse(
+        {
+            "reservation_id": rid,
+            "summary": summaries.get(rid),
+            "manual_confirmation_state": manual_state,
+            "manual_confirmation_resend_required": manual_state == "sent",
+            "messages": reservation_communication.reservation_history(db, rid),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _wymagaj_dostepu_do_wiadomosci(user, message) -> None:
+    if message.termin_id is not None and message.waitlist_id is None:
+        owner_kind = "reservation"
+    elif message.waitlist_id is not None and message.termin_id is None:
+        owner_kind = "waitlist"
+    else:
+        raise HTTPException(404, "Brak wiadomości.")
+    requirement = reservation_access.communication_owner_requirement(owner_kind)
+    if not reservation_access.user_satisfies(user, requirement):
+        raise HTTPException(403, "Brak uprawnień.")
+
+
+@app.post(
+    "/api/rezerwacje/komunikacja/{message_id}/retry",
+    response_model=schemas.RezerwacjaWiadomoscOut,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def ponow_komunikacje_rezerwacji(
+    message_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    message = reservation_communication.lock_message(db, message_id)
+    if message is None:
+        raise HTTPException(404, "Brak wiadomości.")
+    _wymagaj_dostepu_do_wiadomosci(user, message)
+    try:
+        reservation_communication.retry_failed(db, message, actor=user)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "UNCERTAIN_REQUIRES_RECONCILIATION":
+            raise HTTPException(
+                409,
+                "Wynik jest niepewny. Najpierw uzgodnij go, aby uniknąć duplikatu.",
+            ) from exc
+        if code == "MESSAGE_EXPIRED":
+            raise HTTPException(
+                409, "Termin ważności wiadomości minął; nie można jej już wysłać.",
+            ) from exc
+        if code in {
+            "MESSAGE_SUPERSEDED", "MESSAGE_OWNER_MISSING", "MESSAGE_OWNER_NOT_CURRENT",
+        }:
+            raise HTTPException(
+                409, "Wiadomość nie dotyczy już bieżącego stanu rezerwacji.",
+            ) from exc
+        raise HTTPException(409, "Tylko niedostarczoną wiadomość można ponowić.") from exc
+    db.add(models.AuditLog(
+        ts=utcnow_naive(),
+        user_id=user.id,
+        login=user.login,
+        akcja="rezerwacje_komunikacja_retry",
+        zasob=f"message:{message.id}",
+    ))
+    db.commit(); db.refresh(message)
+    return JSONResponse(
+        reservation_communication.message_dict(message),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post(
+    "/api/rezerwacje/komunikacja/{message_id}/reconcile",
+    response_model=schemas.RezerwacjaWiadomoscOut,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def uzgodnij_komunikacje_rezerwacji(
+    message_id: int,
+    dane: schemas.RezerwacjaWiadomoscReconcileIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    message = reservation_communication.lock_message(db, message_id)
+    if message is None:
+        raise HTTPException(404, "Brak wiadomości.")
+    _wymagaj_dostepu_do_wiadomosci(user, message)
+    try:
+        reservation_communication.reconcile_uncertain(
+            db,
+            message,
+            outcome=dane.wynik,
+            note=dane.notatka,
+            actor=user,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        if code == "MESSAGE_EXPIRED":
+            raise HTTPException(
+                409, "Termin ważności wiadomości minął; nie można jej już wysłać.",
+            ) from exc
+        if code in {
+            "MESSAGE_SUPERSEDED", "MESSAGE_OWNER_MISSING", "MESSAGE_OWNER_NOT_CURRENT",
+        }:
+            raise HTTPException(
+                409, "Wiadomość nie dotyczy już bieżącego stanu rezerwacji.",
+            ) from exc
+        raise HTTPException(
+            409, "Tylko wiadomość z niepewnym wynikiem można uzgodnić.",
+        ) from exc
+    db.add(models.AuditLog(
+        ts=utcnow_naive(),
+        user_id=user.id,
+        login=user.login,
+        akcja="rezerwacje_komunikacja_reconcile",
+        zasob=f"message:{message.id}",
+        szczegoly=dane.wynik,
+    ))
+    db.commit(); db.refresh(message)
+    return JSONResponse(
+        reservation_communication.message_dict(message),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ── Lista oczekujących (waitlist) ────────────────────────────────────────────
@@ -3875,7 +4164,7 @@ def _wyczysc_hold_waitlisty(w):
     w.hold_do = None
 
 
-def _lista_out(w: models.ListaOczekujacych, user=None) -> dict:
+def _lista_out(w: models.ListaOczekujacych, user=None, communication_summary=None) -> dict:
     kontakt = _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe")
     notatki = _ma_dostep_rezerwacji(user, "rezerwacje.notatki_wewnetrzne")
     ukryte = []
@@ -3891,11 +4180,13 @@ def _lista_out(w: models.ListaOczekujacych, user=None) -> dict:
         "nazwisko": w.nazwisko if kontakt else "Gość",
         "telefon": w.telefon if kontakt else None,
         "email": w.email if kontakt else None,
+        "kanal_komunikacji": w.kanal_komunikacji if kontakt else None,
         "notatka": w.notatka if notatki else None,
         "status": w.status,
         "termin_id": w.termin_id,
         "kanal": w.kanal,
         "powiadomiono_at": w.powiadomiono_at.isoformat() if w.powiadomiono_at else None,
+        "communication_summary": communication_summary,
         "hold_stolik_id": w.hold_stolik_id,
         "hold_stoliki_dodatkowe": list(w.hold_stoliki_dodatkowe or []),
         "hold_godz_od": _hm(w.hold_godz_od),
@@ -3916,7 +4207,14 @@ def get_lista_oczekujacych(
             .filter(models.ListaOczekujacych.data == data)
             .order_by(models.ListaOczekujacych.status, models.ListaOczekujacych.godz_od,
                       models.ListaOczekujacych.id).all())
-    return {"lista": [_lista_out(w, user) for w in rows]}
+    summaries = reservation_communication.summaries_for_waitlists(
+        db, (row.id for row in rows),
+    )
+    return {
+        "lista": [
+            _lista_out(row, user, summaries.get(row.id)) for row in rows
+        ],
+    }
 
 
 @app.post("/api/lista-oczekujacych", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -3930,6 +4228,7 @@ def dodaj_lista_oczekujacych(
     w = models.ListaOczekujacych(
         data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
         nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
+        kanal_komunikacji=dane.kanal_komunikacji,
         notatka=(dane.notatka if _ma_dostep_rezerwacji(
             user, "rezerwacje.notatki_wewnetrzne") else None),
         status="oczekuje", utworzono_at=utcnow_naive())
@@ -3946,6 +4245,7 @@ def usun_lista_oczekujacych(
     w, guards = _zablokuj_waitliste(db, wid)
     if w:
         reservation_service.release_waitlist_hold(db, w.id)
+        usun_outbox_przed_usunieciem_pii(db, waitlist_ids=[w.id])
         db.delete(w); _commit_zapis_rezerwacji(db, guards)
 
 
@@ -3961,6 +4261,7 @@ def odwolaj_lista_oczekujacych(
     reservation_service.release_waitlist_hold(db, w.id)
     _wyczysc_hold_waitlisty(w)
     w.status = "odwolany"
+    reservation_communication.cancel_waitlist_pending(db, w.id)
     _commit_zapis_rezerwacji(db, guards); db.refresh(w)
     return _lista_out(w, user)
 
@@ -4079,6 +4380,7 @@ def zrealizuj_lista_oczekujacych(
         raise HTTPException(400, "Nie udało się wyznaczyć końca wizyty.")
     t = models.Termin(
         data=w.data, nazwisko=w.nazwisko, telefon=w.telefon, email=w.email,
+        kanal_komunikacji=w.kanal_komunikacji,
         liczba_osob=w.liczba_osob, notatka=w.notatka, status="potwierdzona", zadatek=0.0,
         utworzono_at=teraz, godz_od=godz, godz_do=godz_do, stolik_id=table_ids[0],
         stoliki_dodatkowe=(table_ids[1:] or None),
@@ -4109,6 +4411,7 @@ def zrealizuj_lista_oczekujacych(
             alternatives=result.to_dict(expose_exact=True).get("alternatives") or (),
         )
         w.status = "zrealizowany"; w.zrealizowano_at = teraz; w.termin_id = t.id
+        reservation_communication.cancel_waitlist_pending(db, w.id, now=teraz)
         odpowiedz = {"rezerwacja": _rezerwacja_out(t, user), "wpis": _lista_out(w, user)}
         reservation_audit.add_reservation_audit(
             db,
@@ -4130,6 +4433,18 @@ def zrealizuj_lista_oczekujacych(
                 override_reason_code=override_context["reason_code"],
                 override_note=override_context["note"],
             )
+        if not is_walk_in:
+            reservation_communication.enqueue_reservation(
+                db,
+                t,
+                "confirmation",
+                dedupe_key=(
+                    f"reservation:{t.id}:confirmation:waitlist:"
+                    f"{secrets.token_hex(16)}"
+                ),
+                actor=user,
+            )
+            reservation_communication.schedule_reminder(db, t, actor=user)
         reservation_service.complete_idempotency(
             idem.record, response=odpowiedz, http_status=200, termin_id=t.id, now=teraz,
         )
@@ -4138,40 +4453,99 @@ def zrealizuj_lista_oczekujacych(
         db.rollback()
         raise reservation_service.translate_integrity_error(exc) from exc
     db.refresh(t)
-    _wyslij_potwierdzenie_rezerwacji(db, t)   # best-effort
     return odpowiedz
 
 
-def _powiadom_waitlist(db, w: models.ListaOczekujacych) -> bool:
-    """Best-effort „stolik gotowy" do gościa (e-mail + SMS gdy integracje aktywne). Nie wywraca żądania."""
-    cfg = get_lokal_config(db)
-    wyslano = False
-    if w.email:
-        wyslano = mailer.wyslij_email(w.email, f"Stolik gotowy — {cfg.nazwa_lokalu}",
-                                      f"Dzień dobry, Twój stolik w {cfg.nazwa_lokalu} jest gotowy. Zapraszamy!")
-    if w.telefon:
-        sms.wyslij_sms(w.telefon, f"{cfg.nazwa_lokalu}: Twój stolik jest gotowy. Zapraszamy!")
-    return wyslano
-
-
-@app.post("/api/lista-oczekujacych/{wid}/powiadom", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+@app.post(
+    "/api/lista-oczekujacych/{wid}/powiadom",
+    response_model=schemas.WaitlistPowiadomOut,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
 def powiadom_lista_oczekujacych(
     wid: int,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    """Wysyła gościowi „stolik gotowy" i stempluje powiadomiono_at (dowód + wskaźnik w widoku hosta)."""
-    w = db.get(models.ListaOczekujacych, wid)
+    """Atomowo kolejkuje „stolik gotowy”; worker stempluje dopiero przyjęcie przez provider."""
+    w, _guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
     if w.status != "oczekuje":
         raise HTTPException(409, "Wpis nie oczekuje już na stolik.")
-    if w.powiadomiono_at:                          # nie spamuj — gość już dostał „stolik gotowy"
-        return {"wyslano": False, "juz_powiadomiony": True, "wpis": _lista_out(w, user)}
-    wyslano = _powiadom_waitlist(db, w)
-    w.powiadomiono_at = utcnow_naive()
-    db.commit(); db.refresh(w)
-    return {"wyslano": wyslano, "wpis": _lista_out(w, user)}
+    if w.powiadomiono_at is not None:
+        existing_count = db.query(models.RezerwacjaWiadomoscOutbox.id).filter_by(
+            waitlist_id=w.id,
+            typ_zdarzenia="table_ready",
+        ).count()
+        if existing_count == 0:
+            summary = reservation_communication.summaries_for_waitlists(db, [w.id]).get(w.id)
+            return {
+                "queued": False,
+                "juz_powiadomiony": True,
+                "legacy_delivery": True,
+                "messages": [],
+                "wpis": _lista_out(w, user, summary),
+            }
+    existing = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        waitlist_id=w.id,
+        typ_zdarzenia="table_ready",
+    ).order_by(models.RezerwacjaWiadomoscOutbox.id.desc()).first()
+    if existing is not None:
+        group = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+            waitlist_id=w.id,
+            typ_zdarzenia="table_ready",
+            dedupe_key=existing.dedupe_key,
+        ).order_by(models.RezerwacjaWiadomoscOutbox.id).all()
+        summary = reservation_communication.summaries_for_waitlists(db, [w.id]).get(w.id)
+        return {
+            "queued": any(row.stan in {"queued", "processing", "retry"} for row in group),
+            "juz_powiadomiony": bool(group) and all(row.stan == "sent" for row in group),
+            "legacy_delivery": False,
+            "messages": [reservation_communication.message_dict(row) for row in group],
+            "wpis": _lista_out(w, user, summary),
+        }
+    messages = reservation_communication.enqueue_table_ready(db, w, actor=user)
+    if not messages:
+        raise HTTPException(
+            400,
+            "Brak dostępnego kanału kontaktu albo komunikacja operacyjna jest wyłączona.",
+        )
+    db.commit()
+    summary = reservation_communication.summaries_for_waitlists(db, [w.id]).get(w.id)
+    return {
+        "queued": True,
+        "juz_powiadomiony": False,
+        "legacy_delivery": False,
+        "messages": [reservation_communication.message_dict(row) for row in messages],
+        "wpis": _lista_out(w, user, summary),
+    }
+
+
+@app.get(
+    "/api/lista-oczekujacych/{wid}/komunikacja",
+    response_model=schemas.WaitlistKomunikacjaHistoriaOut,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def historia_komunikacji_waitlisty(
+    wid: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if not _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
+        raise HTTPException(403, "Brak uprawnienia do danych kontaktowych gości.")
+    waitlist = db.get(models.ListaOczekujacych, wid)
+    if waitlist is None:
+        raise HTTPException(404, "Brak wpisu.")
+    summary = reservation_communication.summaries_for_waitlists(db, [wid]).get(wid)
+    return JSONResponse(
+        {
+            "waitlist_id": wid,
+            "summary": summary,
+            "legacy_delivery": bool(summary and summary.get("legacy_delivery")),
+            "messages": reservation_communication.waitlist_history(db, wid),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/lista-oczekujacych/{wid}/hold", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
@@ -5697,6 +6071,7 @@ def online_rezerwacja(
             nazwisko=dane.nazwisko.strip(),
             telefon=dane.telefon,
             email=dane.email,
+            kanal_komunikacji=dane.kanal_komunikacji,
             liczba_osob=dane.liczba_osob,
             notatka=dane.notatka,
             status=status,
@@ -5771,6 +6146,20 @@ def online_rezerwacja(
             if kwota > 0:
                 p = platnosci.utworz_platnosc(db, t.id, kwota, commit=False)
                 odp["platnosc"] = {"kwota": p.kwota, "link": p.link, "status": p.status}
+        reservation_communication.enqueue_reservation(
+            db,
+            t,
+            "confirmation",
+            cfg=cfg,
+            dedupe_key=(
+                f"reservation:{t.id}:confirmation:online:"
+                f"{secrets.token_hex(16)}"
+            ),
+            actor_kind="guest",
+        )
+        reservation_communication.schedule_reminder(
+            db, t, actor_kind="guest",
+        )
         reservation_service.complete_idempotency(
             idem.record,
             # Raw management token nigdy nie trafia nawet do szyfrowanego replay cache.
@@ -5791,7 +6180,6 @@ def online_rezerwacja(
         f"{t.nazwisko} — {t.data} {_hm(t.godz_od) or ''}".strip(),
         url="/",
     )
-    _wyslij_potwierdzenie_rezerwacji(db, t)
     return odp
 
 
@@ -5838,6 +6226,7 @@ def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Reques
     w = models.ListaOczekujacych(
         data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
         nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email, notatka=dane.notatka,
+        kanal_komunikacji=dane.kanal_komunikacji,
         status="oczekuje", kanal="online", token=None, utworzono_at=utcnow_naive())
     db.add(w); db.flush()
     if v2:
@@ -5963,6 +6352,10 @@ def _online_rezerwacja_odwolaj_core(
         reservation_audit.add_reservation_audit(
             db, termin=t, action="cancel", actor_kind="guest", before=before, after=t,
         )
+        reservation_communication.cancel_pending(db, t.id)
+        reservation_communication.enqueue_reservation(
+            db, t, "cancellation", actor_kind="guest",
+        )
     _commit_zapis_rezerwacji(db, guards); db.refresh(t)
     if stolik_wolny and okno:
         _bezpiecznie_po_zwolnieniu_stolu(db, *okno)
@@ -6012,6 +6405,7 @@ def _online_rezerwacja_edytuj_core(
             t, issued.raw_token, db.get(models.Stolik, t.stolik_id) if t.stolik_id else None,
         )
     before = reservation_audit.reservation_snapshot(t)
+    before_public_details = (t.data, t.godz_od, t.liczba_osob)
     if t.status not in REZ_AKTYWNE:
         raise HTTPException(409, "Tej rezerwacji nie można już zmienić.")
     if t.faza_hosta is not None:
@@ -6065,6 +6459,18 @@ def _online_rezerwacja_edytuj_core(
         reservation_audit.add_reservation_audit(
             db, termin=t, action="edit", actor_kind="guest", before=before, after=t,
         )
+        if before_public_details != (t.data, t.godz_od, t.liczba_osob):
+            reservation_communication.cancel_pending(
+                db,
+                t.id,
+                event_types=("confirmation", "change"),
+            )
+            reservation_communication.enqueue_reservation(
+                db, t, "change", actor_kind="guest",
+            )
+            reservation_communication.schedule_reminder(
+                db, t, actor_kind="guest", force_new=True,
+            )
         _commit_zapis_rezerwacji(db, guards)
     except IntegrityError as exc:
         db.rollback()
@@ -6122,12 +6528,16 @@ def online_zarzadzanie_dane(
         .order_by(models.RezerwacjaZgodaPubliczna.created_at)
         .all()
     )
+    subject_phone_ref, subject_email_ref = (
+        reservation_communication.subject_refs_for_owner(t)
+    )
     return {
         "rezerwacja": {
             **_online_rez_out(t),
             "telefon": t.telefon,
             "email": t.email,
             "notatka": t.notatka,
+            "kanal_komunikacji": t.kanal_komunikacji,
         },
         "prywatnosc": [
             {
@@ -6143,6 +6553,13 @@ def online_zarzadzanie_dane(
             }
             for consent in consents
         ],
+        "komunikacja_operacyjna": eksport_komunikacji_operacyjnej(
+            db,
+            subject_phone_refs=(subject_phone_ref,) if subject_phone_ref else (),
+            subject_email_refs=(subject_email_ref,) if subject_email_ref else (),
+            termin_ids=(t.id,),
+            require_owner_scope=True,
+        ),
     }
 
 

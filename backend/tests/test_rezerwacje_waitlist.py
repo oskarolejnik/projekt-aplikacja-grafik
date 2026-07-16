@@ -230,12 +230,22 @@ def test_override_required_przy_realizacji_zachowuje_pelny_wielostolowy_hold(
     assert claims_after == claims_before
 
 
-def test_powiadom_stempluje_i_nie_dubluje(admin_client):
+def test_powiadom_kolejkuje_bez_stempla_i_nie_dubluje(admin_client, db):
     e = _wait(admin_client, DZIEN, "18:00", 2, email="g@x.pl")
     r1 = admin_client.post(f"/api/lista-oczekujacych/{e}/powiadom")
-    assert r1.status_code == 200 and r1.json()["wpis"]["powiadomiono_at"] is not None
+    assert r1.status_code == 200
+    assert r1.json()["queued"] is True
+    assert r1.json()["wpis"]["powiadomiono_at"] is None
+    assert r1.json()["messages"][0]["state"] == "queued"
+    message_id = r1.json()["messages"][0]["id"]
     r2 = admin_client.post(f"/api/lista-oczekujacych/{e}/powiadom")
-    assert r2.json().get("juz_powiadomiony") is True
+    assert r2.json()["queued"] is True
+    assert r2.json()["juz_powiadomiony"] is False
+    assert r2.json()["messages"][0]["id"] == message_id
+    assert db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        waitlist_id=e,
+        typ_zdarzenia="table_ready",
+    ).count() == 1
 
 
 def test_online_zapis_na_liste_oczekujacych(admin_client, client):
