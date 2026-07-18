@@ -38,7 +38,9 @@ _ANON = "[anonimizacja RODO]"
 _ZAMKNIETE = ("odbyla", "no_show", "odwolana")
 # ``oczekuje`` jest bezpieczne dopiero po przekroczeniu progu: wpis dotyczy wtedy
 # historycznej daty, więc nie może już reprezentować aktywnego przyszłego oczekiwania.
-_WAITLIST_RETENTION_STATUSES = ("zrealizowany", "odwolany", "oczekuje")
+_WAITLIST_RETENTION_STATUSES = (
+    "zaakceptowano", "wygasla", "anulowano", "oczekuje", "zaoferowano",
+)
 RETENTION_AUDIT_ACTION = "rodo_retencja_automatyczna"
 _PUBLIC_HOLD_CLEANUP_GRACE = timedelta(days=1)
 
@@ -210,10 +212,19 @@ def _wpis_waitlisty(wpis) -> dict:
         "email": wpis.email,
         "kanal_komunikacji": wpis.kanal_komunikacji,
         "notatka": wpis.notatka,
+        "notatka_nadpisania_oferty": wpis.offer_override_note,
         "status": wpis.status,
+        "priorytet": int(wpis.priorytet or 0),
+        "offer_auto_przydzielony": wpis.offer_auto_przydzielony,
+        "offer_override_authorized": wpis.offer_override_authorized,
         "kanal": wpis.kanal,
         "utworzono_at": _iso(wpis.utworzono_at),
         "zrealizowano_at": _iso(wpis.zrealizowano_at),
+        "zaoferowano_at": _iso(wpis.zaoferowano_at),
+        "oferta_wygasa_at": _iso(wpis.oferta_wygasa_at),
+        "zaakceptowano_at": _iso(wpis.zaakceptowano_at),
+        "wygasla_at": _iso(wpis.wygasla_at),
+        "anulowano_at": _iso(wpis.anulowano_at),
         "powiadomiono_at": _iso(wpis.powiadomiono_at),
         "hold_wygasa_at": _iso(wpis.hold_do),
     }
@@ -473,12 +484,64 @@ def _metadane_prywatnosci(
                 "liczba_claimow": claim_count,
             })
 
+    reservation_audits = []
+    if termin_ids:
+        audit_rows = db.query(models.ReservationAudit).filter(
+            models.ReservationAudit.termin_id.in_(termin_ids),
+        ).order_by(
+            models.ReservationAudit.created_at,
+            models.ReservationAudit.id,
+        ).all()
+        contexts = {
+            row.audit_id: row
+            for row in db.query(models.ReservationOverrideContext).filter(
+                models.ReservationOverrideContext.audit_id.in_(
+                    [audit.id for audit in audit_rows],
+                ),
+            ).all()
+        } if audit_rows else {}
+        for audit in audit_rows:
+            context = contexts.get(audit.id)
+            reservation_audits.append({
+                "rezerwacja_id": audit.termin_id,
+                "utworzono_at": _iso(audit.created_at),
+                "akcja": audit.action,
+                "powod": audit.reason,
+                "zmiany": audit.diff,
+                "kod_powodu_nadpisania": (
+                    context.reason_code if context is not None else None
+                ),
+                "notatka_nadpisania": (
+                    context.note if context is not None else None
+                ),
+            })
+
+    waitlist_override_history = []
+    if waitlist_ids:
+        for context in db.query(
+            models.WaitlistOfferOverrideContext,
+        ).filter(
+            models.WaitlistOfferOverrideContext.waitlist_id.in_(waitlist_ids),
+        ).order_by(
+            models.WaitlistOfferOverrideContext.created_at,
+            models.WaitlistOfferOverrideContext.id,
+        ).all():
+            waitlist_override_history.append({
+                "wpis_waitlisty_id": context.waitlist_id,
+                "offer_version": context.offer_version,
+                "kod_powodu": context.reason_code,
+                "notatka": context.note,
+                "utworzono_at": _iso(context.created_at),
+            })
+
     return {
         "zgody": [_zgoda_wpis(consent) for consent in consents],
         # Wyłącznie metadane cyklu życia. Hash i surowy capability token nigdy nie
         # opuszczają warstwy uwierzytelnienia.
         "dostepy_zarzadzania": tokens,
         "holdy_publiczne": holds,
+        "audyty_rezerwacji": reservation_audits,
+        "historia_nadpisan_ofert_waitlisty": waitlist_override_history,
         "komunikacja_operacyjna": eksport_komunikacji_operacyjnej(
             db,
             subject_phone_refs=communication_subject_phone_refs,
@@ -487,6 +550,27 @@ def _metadane_prywatnosci(
             waitlist_ids=waitlist_ids,
         ),
     }
+
+
+def wyczysc_notatki_kontekstu_nadpisan(db, termin_ids) -> int:
+    """Erase encrypted free text before audit FK is detached from Termin."""
+    ids = {int(value) for value in termin_ids if value is not None}
+    if not ids:
+        return 0
+    audit_ids = [
+        row[0] for row in db.query(models.ReservationAudit.id).filter(
+            models.ReservationAudit.termin_id.in_(ids),
+        ).all()
+    ]
+    if not audit_ids:
+        return 0
+    return db.query(models.ReservationOverrideContext).filter(
+        models.ReservationOverrideContext.audit_id.in_(audit_ids),
+        models.ReservationOverrideContext.note.isnot(None),
+    ).update(
+        {models.ReservationOverrideContext.note: None},
+        synchronize_session=False,
+    )
 
 
 def usun_powiazane_publiczne_sekrety(
@@ -595,6 +679,8 @@ def usun_powiazane_pii_rezerwacji(
     safe_ids = {termin.id for termin in safe_terminy if termin.id is not None}
     if not safe_ids:
         return blocked_ids
+
+    wyczysc_notatki_kontekstu_nadpisan(db, safe_ids)
 
     def profile_hashes(termin):
         keys = {_profile_identity_key(termin), _klucz(termin)}
@@ -707,24 +793,36 @@ def _anonimizuj_waitliste(
         db.query(models.RezerwacjaZgodaPubliczna).filter(
             models.RezerwacjaZgodaPubliczna.waitlist_id.in_(safe_ids)
         ).delete(synchronize_session=False)
+        db.query(models.WaitlistOfferOverrideContext).filter(
+            models.WaitlistOfferOverrideContext.waitlist_id.in_(safe_ids),
+            models.WaitlistOfferOverrideContext.note.isnot(None),
+        ).update(
+            {models.WaitlistOfferOverrideContext.note: None},
+            synchronize_session=False,
+        )
     safe_wpisy = [wpis for wpis in wpisy if wpis.id not in blocked_ids]
     for wpis in safe_wpisy:
         wpis.nazwisko = _ANON
         wpis.telefon = None
         wpis.email = None
         wpis.notatka = None
+        wpis.offer_override_note = None
         wpis.token = None
     return len(safe_wpisy), len(blocked_ids)
 
 
-def _wyczysc_wygasle_publiczne_rekordy(db, *, now: datetime) -> dict:
+def _wyczysc_wygasle_publiczne_rekordy(
+    db, *, now: datetime, locked_dates=(),
+) -> dict:
     # Wspólny cleanup zwalnia zarówno publiczne holdy, jak i starsze holdy waitlisty.
     # Aktywny hold z przyszłym TTL nie spełnia żadnego z poniższych warunków.
     waitlist_holds = db.query(models.ListaOczekujacych.id).filter(
         models.ListaOczekujacych.hold_do.isnot(None),
         models.ListaOczekujacych.hold_do <= now,
     ).count()
-    wygaszone_holdy = reservation_service.cleanup_expired_holds(db, now)
+    wygaszone_holdy = reservation_service.cleanup_expired_holds(
+        db, now, dates=locked_dates,
+    )
     cleanup_before = now - _PUBLIC_HOLD_CLEANUP_GRACE
     inactive_hold_ids = [
         row[0]
@@ -763,6 +861,36 @@ def _wyczysc_wygasle_publiczne_rekordy(db, *, now: datetime) -> dict:
         "usunieto_idempotencje_wygasla": int(usuniete_idempotencje or 0),
         "usunieto_kwoty_wygasle": int(usuniete_kwoty or 0),
     }
+
+
+def _wlasciciele_cleanup_holdow(db, *, now: datetime, refresh: bool = False):
+    cleanup_before = now - _PUBLIC_HOLD_CLEANUP_GRACE
+    public_query = db.query(models.RezerwacjaPublicznyHold).filter(
+        or_(
+            and_(
+                models.RezerwacjaPublicznyHold.state == "active",
+                models.RezerwacjaPublicznyHold.expires_at <= now,
+            ),
+            and_(
+                models.RezerwacjaPublicznyHold.state.in_(("released", "expired")),
+                or_(
+                    models.RezerwacjaPublicznyHold.released_at <= cleanup_before,
+                    and_(
+                        models.RezerwacjaPublicznyHold.released_at.is_(None),
+                        models.RezerwacjaPublicznyHold.expires_at <= cleanup_before,
+                    ),
+                ),
+            ),
+        ),
+    )
+    waitlist_query = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.hold_do.isnot(None),
+        models.ListaOczekujacych.hold_do <= now,
+    )
+    if refresh:
+        public_query = public_query.populate_existing()
+        waitlist_query = waitlist_query.populate_existing()
+    return public_query.all(), waitlist_query.all()
 
 
 def _wlasciciele_retencji(
@@ -861,6 +989,9 @@ def wykonaj_retencje_rodo(
             prog=prog,
             refresh=refresh,
         ),
+        lock_scope_loader=lambda refresh: _wlasciciele_cleanup_holdow(
+            db, now=effective_now, refresh=refresh,
+        ),
         current_transaction=owner_lock_in_current_transaction,
     )
 
@@ -876,9 +1007,13 @@ def wykonaj_retencje_rodo(
         waitlista,
         defer_in_flight=defer_in_flight,
     )
-    if n or n_waitlist:
+    cleanup = _wyczysc_wygasle_publiczne_rekordy(
+        db,
+        now=effective_now,
+        locked_dates=tuple(guard.data for guard in owner_guards),
+    )
+    if n or n_waitlist or cleanup.get("wygaszono_holdy_i_claimy"):
         reservation_service.touch_days(owner_guards)
-    cleanup = _wyczysc_wygasle_publiczne_rekordy(db, now=effective_now)
     liczba_zmian = n + n_waitlist + sum(int(value or 0) for value in cleanup.values())
     wynik = {
         "zanonimizowano": n,

@@ -1359,6 +1359,38 @@ class HoldIn(BaseModel):
     godz_od: Optional[time] = None
     minuty: int = Field(default=15, ge=1, le=120)  # jak długo trzymać zestaw
 
+
+class WaitlistOfertaIn(HoldIn):
+    """Atomowa oferta: pełna konfiguracja stołów i czas ważności."""
+    expected_offer_version: int = Field(ge=0)
+    przekrocz_limity: bool = False
+    nadpisanie_limitow: Optional["NadpisanieLimitowIn"] = None
+
+
+class WaitlistZaakceptujIn(ZrealizujIn):
+    tryb: Literal["rezerwacja"] = "rezerwacja"
+    """Akceptacja dokładnej, nadal ważnej generacji oferty."""
+    offer_version: int = Field(ge=1)
+
+
+class WaitlistOfferVersionIn(BaseModel):
+    offer_version: int = Field(ge=1)
+
+
+class WaitlistPriorytetIn(BaseModel):
+    priorytet: int = Field(ge=0, le=9)
+    expected_offer_version: int = Field(ge=0)
+
+
+class WaitlistAnulujIn(BaseModel):
+    expected_offer_version: int = Field(ge=0)
+
+
+class WaitlistOfertaOut(BaseModel):
+    queued: bool
+    messages: List[RezerwacjaWiadomoscOut] = Field(default_factory=list, max_length=2)
+    wpis: dict[str, Any]
+
 class PublicznyHoldIn(BaseModel):
     """Krótki hold zasobu po wyborze terminu w nowym widgecie."""
     data: date

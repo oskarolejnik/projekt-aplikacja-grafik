@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from sqlalchemy import delete, func, insert, or_, select, text, update
+from sqlalchemy import and_, delete, func, insert, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import models
@@ -25,6 +25,8 @@ import models
 
 ACTIVE_STATUSES = frozenset({"rezerwacja", "potwierdzona"})
 LIVE_HOST_PHASES = frozenset({"posadzony", "rachunek", "oplacony"})
+WAITLIST_ACTIVE_STATUSES = frozenset({"oczekuje", "zaoferowano"})
+WAITLIST_TERMINAL_STATUSES = frozenset({"zaakceptowano", "wygasla", "anulowano"})
 IDEMPOTENCY_TTL_DAYS = 30
 PUBLIC_HOLD_SESSION_LIMIT = 2
 PUBLIC_HOLD_IP_LIMIT = 10
@@ -142,6 +144,13 @@ class IdempotencyDecision:
 
 
 @dataclass(frozen=True)
+class IdempotencyIdentity:
+    """Hash-only identity for domain-owned replay without a persisted response."""
+    key_hash: str
+    request_fingerprint: str
+
+
+@dataclass(frozen=True)
 class IssuedManagementToken:
     record: models.RezerwacjaTokenZarzadzania
     raw_token: str
@@ -190,6 +199,35 @@ def _normalise_idempotency_key(raw_key: str | None) -> str | None:
             rule="idempotency",
         )
     return key
+
+
+def required_idempotency_identity(
+    *,
+    operation: str,
+    raw_key: str | None,
+    payload: Any,
+    secret: str,
+) -> IdempotencyIdentity:
+    """Validate a mandatory key and return only non-reversible hashes.
+
+    Used by waitlist offers, whose replay is rebuilt from the current owner row
+    under the current operator permissions. No PII response is persisted.
+    """
+    key = _normalise_idempotency_key(raw_key)
+    if key is None:
+        raise ReservationError(
+            400,
+            "IDEMPOTENCY_KEY_REQUIRED",
+            "Operacja wymaga naglowka Idempotency-Key.",
+            rule="idempotency",
+        )
+    operation = operation.strip()
+    if not operation or len(operation) > 64:
+        raise ValueError("idempotency operation must have 1-64 characters")
+    return IdempotencyIdentity(
+        key_hash=hashlib.sha256(key.encode("utf-8")).hexdigest(),
+        request_fingerprint=request_fingerprint(operation, payload, secret),
+    )
 
 
 def begin_idempotency(
@@ -919,6 +957,12 @@ def _interval(start: time, end: time) -> tuple[int, int]:
     return start_minute, end_minute
 
 
+def claim_minute_window(start: time, end: time, buffer_min: int = 0) -> tuple[int, int]:
+    """Return the exact half-open minute window used by table-claim writers."""
+    start_minute, end_minute = _interval(start, end)
+    return start_minute, min(1440, end_minute + max(0, int(buffer_min or 0)))
+
+
 def _active_hold_filter(now: datetime):
     claim = models.RezerwacjaStolikClaim
     return or_(claim.expires_at.is_(None), claim.expires_at > now)
@@ -1075,12 +1119,26 @@ def lookup_public_hold(
     ).scalar_one_or_none()
 
 
-def expire_public_holds(db, now: datetime) -> int:
+def expire_public_holds(
+    db,
+    now: datetime,
+    *,
+    dates: Iterable[date] | None = None,
+) -> int:
     now = _lifecycle_utc_naive(now, field_name="now")
+    scope_provided = dates is not None
+    scoped_dates = tuple(sorted(set(dates or ())))
+    if scope_provided and not scoped_dates:
+        return 0
     statement = select(models.RezerwacjaPublicznyHold).where(
         models.RezerwacjaPublicznyHold.state == "active",
         models.RezerwacjaPublicznyHold.expires_at <= now,
-    ).with_for_update()
+    )
+    if scoped_dates:
+        statement = statement.where(
+            models.RezerwacjaPublicznyHold.data.in_(scoped_dates),
+        )
+    statement = statement.with_for_update()
     holds = tuple(db.execute(statement).scalars().all())
     if not holds:
         return 0
@@ -1196,7 +1254,7 @@ def create_public_hold(
     # An expired waitlist claim is ignored by availability reads, but still occupies
     # the unique (table, date, minute) key. Remove both kinds of stale hold before the
     # new public claim is inserted, otherwise a harmless expiry becomes a 409/500.
-    cleanup_expired_holds(db, now)
+    cleanup_expired_holds(db, now, dates=[data])
     session_hash = hash_public_client(
         raw_session, secret=secret, purpose="public-hold-session",
     )
@@ -1449,7 +1507,7 @@ def replace_public_hold_claims(
     now = _lifecycle_utc_naive(now, field_name="now")
     expires_at = _lifecycle_utc_naive(expires_at, field_name="expires_at")
     if cleanup_holds:
-        cleanup_expired_holds(db, now)
+        cleanup_expired_holds(db, now, dates=[data])
     db.execute(
         delete(models.RezerwacjaStolikClaim).where(
             models.RezerwacjaStolikClaim.public_hold_id == int(public_hold_id),
@@ -1568,28 +1626,69 @@ def consume_public_hold(
     return record
 
 
-def cleanup_expired_holds(db, now: datetime) -> int:
-    """Release public and waitlist inventory using one naive-UTC clock."""
+def cleanup_expired_holds(
+    db,
+    now: datetime,
+    *,
+    dates: Iterable[date] | None = None,
+) -> int:
+    """Release public and waitlist inventory using one naive-UTC clock.
+
+    An offered waitlist owner is moved to ``wygasla`` in the same transaction
+    that removes every table claim. ``dates`` lets a caller holding day-ledger
+    locks keep the cleanup inside exactly that protected scope.
+    """
     now = _lifecycle_utc_naive(now, field_name="now")
-    expired_public = expire_public_holds(db, now)
-    expired_waitlist_ids = tuple(db.execute(
-        select(models.ListaOczekujacych.id)
-        .where(models.ListaOczekujacych.hold_do <= now)
-        .with_for_update()
-    ).scalars().all())
-    if expired_waitlist_ids:
-        db.execute(
-            update(models.ListaOczekujacych)
-            .where(models.ListaOczekujacych.id.in_(expired_waitlist_ids))
-            .values(
-                hold_stolik_id=None,
-                hold_stoliki_dodatkowe=None,
-                hold_godz_od=None,
-                hold_godz_do=None,
-                hold_bufor_min=None,
-                hold_do=None,
-            )
+    scope_provided = dates is not None
+    scoped_dates = tuple(sorted(set(dates or ())))
+    if scope_provided and not scoped_dates:
+        return 0
+    expired_public = expire_public_holds(
+        db, now, dates=(scoped_dates if scope_provided else None),
+    )
+    waitlist_statement = select(models.ListaOczekujacych).where(
+        models.ListaOczekujacych.hold_do <= now,
+    )
+    if scoped_dates:
+        waitlist_statement = waitlist_statement.where(
+            models.ListaOczekujacych.data.in_(scoped_dates),
         )
+    expired_waitlists = tuple(db.execute(
+        waitlist_statement.with_for_update()
+    ).scalars().all())
+    expired_waitlist_ids = tuple(row.id for row in expired_waitlists)
+    for row in expired_waitlists:
+        if row.status == "zaoferowano":
+            previous_version = int(row.offer_version or 0)
+            row.status = "wygasla"
+            row.wygasla_at = now
+            row.offer_version = previous_version + 1
+            db.add(models.AuditLog(
+                ts=now,
+                user_id=None,
+                login=None,
+                akcja="waitlist_offer_expired",
+                zasob=f"waitlist:{row.id}",
+                szczegoly=canonical_json({
+                    "offer_version": previous_version,
+                    "next_offer_version": row.offer_version,
+                    "deadline": (
+                        row.oferta_wygasa_at.isoformat()
+                        if row.oferta_wygasa_at else None
+                    ),
+                }),
+            ))
+        row.hold_stolik_id = None
+        row.hold_stoliki_dodatkowe = None
+        row.hold_godz_od = None
+        row.hold_godz_do = None
+        row.hold_bufor_min = None
+        row.hold_do = None
+        row.offer_auto_przydzielony = None
+        row.offer_override_authorized = None
+        row.offer_override_note = None
+        row.offer_sala_id = None
+        row.offer_kanal = None
     stale_claim_filter = models.RezerwacjaStolikClaim.expires_at <= now
     if expired_waitlist_ids:
         # The owner expiry is authoritative. Delete all claims of that owner even
@@ -1598,13 +1697,18 @@ def cleanup_expired_holds(db, now: datetime) -> int:
             stale_claim_filter,
             models.RezerwacjaStolikClaim.waitlist_id.in_(expired_waitlist_ids),
         )
+    if scoped_dates:
+        stale_claim_filter = and_(
+            models.RezerwacjaStolikClaim.data.in_(scoped_dates),
+            stale_claim_filter,
+        )
     result = db.execute(
         delete(models.RezerwacjaStolikClaim).where(
             models.RezerwacjaStolikClaim.waitlist_id.isnot(None),
             stale_claim_filter,
         )
     )
-    return expired_public + int(result.rowcount or 0)
+    return expired_public + len(expired_waitlists) + int(result.rowcount or 0)
 
 
 def occupied_table_ids(
@@ -1713,7 +1817,12 @@ def pacing_status(
     max_reservations: int | None,
     max_covers: int | None,
     exclude_termin_id: int | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
+    effective_now = _lifecycle_utc_naive(
+        now if now is not None else _utcnow_naive(),
+        field_name="now",
+    )
     start_minute = _minute(start, field_name="Godzina rozpoczęcia")
     window_min = max(1, int(window_min or 1))
     ledger = models.RezerwacjaPacingLedger
@@ -1726,8 +1835,17 @@ def pacing_status(
     if exclude_termin_id is not None:
         statement = statement.where(ledger.termin_id != exclude_termin_id)
     rows = db.execute(statement).scalars().all()
-    reservations = len(rows)
-    covers = sum(int(row.covers or 0) for row in rows)
+    waitlist_rows = [
+        row for row in active_waitlist_offer_projections(
+            db, data=data, now=effective_now,
+        )
+        if bucket_start <= row.start_minute < min(1440, bucket_start + window_min)
+    ]
+    reservations = len(rows) + len(waitlist_rows)
+    covers = (
+        sum(int(row.covers or 0) for row in rows)
+        + sum(row.covers for row in waitlist_rows)
+    )
     would_reservations = reservations + 1
     would_covers = covers + max(1, int(party_size or 1))
     reservation_full = bool(max_reservations and would_reservations > max_reservations)
@@ -1745,6 +1863,121 @@ def pacing_status(
         "bucket_start": bucket_start,
         "bucket_end": min(1440, bucket_start + window_min),
     }
+
+
+@dataclass(frozen=True)
+class WaitlistOfferProjection:
+    waitlist_id: int
+    owner_key: tuple[str, int]
+    data: date
+    start_minute: int
+    end_minute: int
+    blocked_end_minute: int
+    covers: int
+    channel: str
+    room_id: int | None
+
+
+def active_waitlist_offer_projections(
+    db,
+    *,
+    data: date,
+    now: datetime | None = None,
+) -> tuple[WaitlistOfferProjection, ...]:
+    """Materialize complete active offers as synthetic R3 capacity owners.
+
+    Physical table claims remain the source of truth. A waitlist offer enters
+    pacing/concurrent calculations only when every frozen claim is present and
+    carries the same unexpired lifecycle deadline.
+    """
+    effective_now = _lifecycle_utc_naive(
+        now if now is not None else _utcnow_naive(),
+        field_name="now",
+    )
+    owners = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.data == data,
+        models.ListaOczekujacych.status == "zaoferowano",
+        models.ListaOczekujacych.hold_do > effective_now,
+        models.ListaOczekujacych.hold_stolik_id.isnot(None),
+        models.ListaOczekujacych.hold_godz_od.isnot(None),
+        models.ListaOczekujacych.hold_godz_do.isnot(None),
+    ).order_by(models.ListaOczekujacych.id).all()
+    if not owners:
+        return ()
+    owner_ids = [row.id for row in owners]
+    claims_by_owner: dict[int, list[Any]] = {owner_id: [] for owner_id in owner_ids}
+    for claim in db.query(models.RezerwacjaStolikClaim).filter(
+        models.RezerwacjaStolikClaim.waitlist_id.in_(owner_ids),
+    ).all():
+        claims_by_owner.setdefault(claim.waitlist_id, []).append(claim)
+
+    projections = []
+    for owner in owners:
+        if (
+            int(owner.offer_version or 0) <= 0
+            or not owner.offer_key_hash
+            or not owner.offer_request_fingerprint
+            or owner.zaoferowano_at is None
+            or owner.oferta_wygasa_at is None
+            or owner.oferta_wygasa_at != owner.hold_do
+            or owner.offer_auto_przydzielony is None
+            or owner.offer_override_authorized is None
+            or owner.offer_kanal not in {"online", "wewnetrzna"}
+        ):
+            continue
+        raw_ids = [owner.hold_stolik_id, *(owner.hold_stoliki_dodatkowe or [])]
+        try:
+            table_ids = tuple(int(value) for value in raw_ids)
+        except (TypeError, ValueError):
+            continue
+        if (
+            not table_ids
+            or any(value <= 0 for value in table_ids)
+            or len(set(table_ids)) != len(table_ids)
+        ):
+            continue
+        try:
+            start_minute, blocked_end = claim_minute_window(
+                owner.hold_godz_od,
+                owner.hold_godz_do,
+                int(owner.hold_bufor_min or 0),
+            )
+            end_minute = _minute(
+                owner.hold_godz_do, field_name="Godzina zakończenia",
+            )
+        except (ReservationError, TypeError, ValueError):
+            continue
+        expected = {
+            (table_id, minute)
+            for table_id in table_ids
+            for minute in range(start_minute, blocked_end)
+        }
+        claims = claims_by_owner.get(owner.id, [])
+        if (
+            len(claims) != len(expected)
+            or {(row.stolik_id, row.minute) for row in claims} != expected
+            or any(
+                row.data != owner.data
+                or row.expires_at is None
+                or row.expires_at <= effective_now
+                or row.expires_at != owner.hold_do
+                for row in claims
+            )
+        ):
+            continue
+        projections.append(WaitlistOfferProjection(
+            waitlist_id=owner.id,
+            # Tagged identity cannot collide with a real Termin primary key.
+            owner_key=("waitlist", int(owner.id)),
+            data=owner.data,
+            start_minute=start_minute,
+            end_minute=end_minute,
+            blocked_end_minute=blocked_end,
+            covers=max(1, int(owner.liczba_osob or 1)),
+            channel=owner.offer_kanal,
+            room_id=owner.offer_sala_id,
+        ))
+    return tuple(projections)
 
 
 def release_termin_allocation(
@@ -1807,7 +2040,7 @@ def replace_termin_allocation(
         field_name="now",
     )
     if cleanup_holds:
-        cleanup_expired_holds(db, effective_now)
+        cleanup_expired_holds(db, effective_now, dates=[data])
     release_termin_allocation(
         db, termin_id, include_capacity=include_capacity,
     )
@@ -1862,6 +2095,7 @@ def replace_termin_allocation(
         max_reservations=max_reservations,
         max_covers=max_covers,
         exclude_termin_id=termin_id,
+        now=effective_now,
     )
     if enforce_pacing and pacing["reservation_full"]:
         raise ReservationError(
@@ -1973,7 +2207,7 @@ def replace_waitlist_hold(
             rule="table_hold",
         )
     if cleanup_holds:
-        cleanup_expired_holds(db, now)
+        cleanup_expired_holds(db, now, dates=[data])
     release_waitlist_hold(db, waitlist_id)
     ids = tuple(sorted({
         int(value)

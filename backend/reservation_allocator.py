@@ -46,6 +46,7 @@ class AllocationRequest:
     preferred_zone: str | None = None
     preferred_features: tuple[str, ...] = ()
     preserve_existing_room_access: bool = False
+    preserve_explicit_interval: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.liczba_osob, bool) or int(self.liczba_osob) < 1:
@@ -310,6 +311,7 @@ def _rule_request(
         existing_termin_id=request.existing_termin_id,
         intent=request.rule_intent,
         preserve_existing_room_access=request.preserve_existing_room_access,
+        preserve_explicit_interval=request.preserve_explicit_interval,
     )
 
 

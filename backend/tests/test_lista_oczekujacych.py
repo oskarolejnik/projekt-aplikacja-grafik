@@ -25,9 +25,9 @@ def test_zrealizuj_tworzy_rezerwacje(admin_client):
     rez = r.json()["rezerwacja"]
     assert rez["nazwisko"] == "Gość" and rez["godz_od"] == "19:00" and rez["stolik_id"] == st["id"]
     assert rez["godz_do"] == "21:00"   # +120 min
-    # wpis przeszedł w 'zrealizowany' i wskazuje na rezerwację
+    # wpis przeszedł w kanoniczny stan akceptacji i wskazuje na rezerwację
     w = next(x for x in admin_client.get("/api/lista-oczekujacych?data=2026-07-02").json()["lista"] if x["id"] == wid)
-    assert w["status"] == "zrealizowany" and w["termin_id"] == rez["id"]
+    assert w["status"] == "zaakceptowano" and w["termin_id"] == rez["id"]
     # rezerwacja widoczna na liście rezerwacji stolików
     rezerwacje = admin_client.get("/api/rezerwacje-stolik?start=2026-07-02&end=2026-07-02").json()["rezerwacje"]
     assert any(x["id"] == rez["id"] for x in rezerwacje)
@@ -51,7 +51,7 @@ def test_zrealizuj_dwa_razy_409(admin_client):
 def test_odwolaj(admin_client):
     wid = admin_client.post("/api/lista-oczekujacych", json={"data": "2026-07-05", "nazwisko": "B"}).json()["id"]
     r = admin_client.post(f"/api/lista-oczekujacych/{wid}/odwolaj")
-    assert r.status_code == 200 and r.json()["status"] == "odwolany"
+    assert r.status_code == 200 and r.json()["status"] == "anulowano"
 
 
 def test_modul_off_403(admin_client):

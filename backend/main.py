@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import re
 import os
 import math
@@ -85,6 +86,7 @@ from routers.rodo import (
     usun_outbox_przed_usunieciem_pii,
     usun_powiazane_pii_rezerwacji,
     usun_powiazane_publiczne_sekrety,
+    wyczysc_notatki_kontekstu_nadpisan,
 )
 from routers.reguly_rezerwacji import (
     router as reguly_rezerwacji_router,
@@ -515,6 +517,11 @@ async def role_guard(request: Request, call_next):
         if token else None
     )
     using_workstation = not token and workstation_auth.workstation_request(request)
+    if not token and not using_workstation:
+        return JSONResponse(
+            {"detail": "Wymagane logowanie."},
+            status_code=401,
+        )
     # Egzekwuj BIEŻĄCY stan konta z bazy — NIE ufaj roli wmrożonej w token (CWE-613). Dzięki temu
     # dezaktywacja (User.aktywny=False) i degradacja roli działają natychmiast, a nie dopiero po
     # wygaśnięciu tokenu. Większość endpointów admina jest chroniona wyłącznie tym middlewarem.
@@ -1961,6 +1968,8 @@ def _ocen_reguly_slotu(
     sala_id=None,
     existing_termin_id=None,
     preserve_existing_room_access=False,
+    preserve_explicit_interval=False,
+    now=None,
 ):
     if godz_od is None:
         return None
@@ -1976,10 +1985,21 @@ def _ocen_reguly_slotu(
             existing_termin_id=existing_termin_id,
             intent=intent,
             preserve_existing_room_access=preserve_existing_room_access,
+            preserve_explicit_interval=preserve_explicit_interval,
         ),
         # Reguły biznesowe (okno wyprzedzenia/cutoff/DST) operują w czasie
         # lokalu. Lifecycle holdów i claimów pozostaje osobno w naive UTC.
-        now=_teraz_lokalnie() or datetime.now(timezone.utc),
+        now=(
+            now.replace(tzinfo=timezone.utc).astimezone(
+                ZoneInfo("Europe/Warsaw"),
+            )
+            if now is not None and now.tzinfo is None
+            else (
+                now.astimezone(ZoneInfo("Europe/Warsaw"))
+                if now is not None
+                else (_teraz_lokalnie() or datetime.now(timezone.utc))
+            )
+        ),
     )
 
 
@@ -2020,6 +2040,9 @@ def _zastap_ledger_terminu(
     evaluation=None,
     override=False,
     intent="create",
+    buffer_override=None,
+    preserve_interval=False,
+    now=None,
 ):
     """Aktualizuje ledger w tej samej transakcji co projekcję ``Termin``."""
     if t.status not in REZ_AKTYWNE:
@@ -2041,7 +2064,11 @@ def _zastap_ledger_terminu(
         sala_id=room_id,
         preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
     )
-    if evaluation is not None and evaluation.godz_do is not None:
+    if (
+        evaluation is not None
+        and evaluation.godz_do is not None
+        and not preserve_interval
+    ):
         t.godz_do = evaluation.godz_do
     if evaluation is not None and enforce_pacing:
         reservation_rules.enforce_rule_evaluation(
@@ -2058,9 +2085,13 @@ def _zastap_ledger_terminu(
         )
     )
     buffer_min = (
-        evaluation.buffer_min
-        if has_typed_buffer
-        else (get_lokal_config(db).rez_bufor_min or 0)
+        max(0, int(buffer_override))
+        if buffer_override is not None
+        else (
+            evaluation.buffer_min
+            if has_typed_buffer
+            else (get_lokal_config(db).rez_bufor_min or 0)
+        )
     )
     return reservation_service.replace_termin_allocation(
         db,
@@ -2078,7 +2109,7 @@ def _zastap_ledger_terminu(
         override=bool(override),
         room_id=room_id,
         channel=reservation_service.normalise_reservation_channel(t.kanal),
-        now=utcnow_naive(),
+        now=(now if now is not None else utcnow_naive()),
         candidates=candidates,
         alternatives=alternatives,
         **pacing,
@@ -2562,6 +2593,53 @@ def _wymagaj_szkicu_planu(message: str):
     )
 
 
+def _blokuj_topologie_aktywnej_oferty(
+    db: Session,
+    table_ids,
+    *,
+    now: Optional[datetime] = None,
+) -> None:
+    """Fence legacy topology writes against current offered table claims.
+
+    Callers first lock the same ``stoliki`` rows as offer creation.  The query
+    is intentionally conservative: a short-lived current offer must be
+    withdrawn before any physical/topological property of its tables changes.
+    """
+    ids = tuple(sorted(_ids_stolikow(table_ids)))
+    if not ids:
+        return
+    effective_now = now or reservation_service.lifecycle_now_utc()
+    rows = db.query(
+        models.RezerwacjaStolikClaim.waitlist_id,
+        models.RezerwacjaStolikClaim.stolik_id,
+    ).join(
+        models.ListaOczekujacych,
+        models.ListaOczekujacych.id
+        == models.RezerwacjaStolikClaim.waitlist_id,
+    ).filter(
+        models.RezerwacjaStolikClaim.stolik_id.in_(ids),
+        models.RezerwacjaStolikClaim.expires_at > effective_now,
+        models.ListaOczekujacych.status == "zaoferowano",
+        models.ListaOczekujacych.hold_do > effective_now,
+        models.ListaOczekujacych.oferta_wygasa_at
+        == models.ListaOczekujacych.hold_do,
+    ).all()
+    if not rows:
+        return
+    raise HTTPException(
+        409,
+        detail={
+            "code": "WAITLIST_OFFER_TOPOLOGY_CONFLICT",
+            "message": (
+                "Te stoliki są objęte aktywną ofertą waitlisty. "
+                "Najpierw wycofaj ofertę, a potem zmień konfigurację."
+            ),
+            "table_ids": sorted({table_id for _, table_id in rows}),
+            "waitlist_ids": sorted({waitlist_id for waitlist_id, _ in rows}),
+        },
+    )
+
+
 @app.post("/api/stoliki", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def dodaj_stolik(dane: schemas.StolikIn, db: Session = Depends(get_db)):
     _waliduj_parametry_stolika(dane, db)
@@ -2582,12 +2660,17 @@ def dodaj_stolik(dane: schemas.StolikIn, db: Session = Depends(get_db)):
 
 @app.put("/api/stoliki/{sid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db)):
-    s = db.get(models.Stolik, sid)
+    reservation_service.begin_floor_plan_write(db)
+    locked = reservation_service.lock_tables(db, [sid])
+    s = locked[0] if locked else None
     if not s:
         raise HTTPException(404, "Brak stolika.")
+    _waliduj_parametry_stolika(dane, db)
+    incoming = dane.model_dump()
+    if any(getattr(s, key) != value for key, value in incoming.items()):
+        _blokuj_topologie_aktywnej_oferty(db, [sid])
     previous_room_id = s.sala_id
     previous_active = s.aktywny
-    _waliduj_parametry_stolika(dane, db)
     if _stolik_ma_wersjonowany_plan(db, s):
         canonical = next(
             (row for row in _stoliki_do_odczytu(db) if row["id"] == sid),
@@ -2634,16 +2717,19 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
                 409,
                 "Stolik ma aktywne lub przyszłe rezerwacje. Najpierw przepnij je na inne stoły.",
             )
-        reservation_service.cleanup_expired_holds(
-            db,
-            utcnow_naive(),
-        )
-        if db.query(models.RezerwacjaStolikClaim.id).filter_by(stolik_id=sid).first():
+        now = utcnow_naive()
+        if db.query(models.RezerwacjaStolikClaim.id).filter(
+            models.RezerwacjaStolikClaim.stolik_id == sid,
+            or_(
+                models.RezerwacjaStolikClaim.expires_at.is_(None),
+                models.RezerwacjaStolikClaim.expires_at > now,
+            ),
+        ).first():
             raise HTTPException(
                 409,
                 "Stolik ma aktywne zajęcie lub hold. Najpierw zwolnij go w rezerwacjach.",
             )
-    for k, v in dane.model_dump().items():
+    for k, v in incoming.items():
         setattr(s, k, v)
     db.commit(); db.refresh(s)
     return schemas.StolikOut.model_validate(s).model_dump()
@@ -2651,7 +2737,10 @@ def edytuj_stolik(sid: int, dane: schemas.StolikIn, db: Session = Depends(get_db
 
 @app.delete("/api/stoliki/{sid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def usun_stolik(sid: int, db: Session = Depends(get_db)):
-    s = db.get(models.Stolik, sid)
+    # Serializuj usunięcie z producentami claimów na tym samym wierszu stołu.
+    reservation_service.begin_floor_plan_write(db)
+    locked = reservation_service.lock_tables(db, [sid])
+    s = locked[0] if locked else None
     if s:
         # Id stolika jest częścią historii rezerwacji i JSON-owych składów kombinacji. Ciche
         # usunięcie zostawiałoby osierocone identyfikatory, których FK nie potrafi ochronić.
@@ -2665,11 +2754,22 @@ def usun_stolik(sid: int, db: Session = Depends(get_db)):
         kombinacje = db.query(models.KombinacjaStolow.stoliki).all()
         if any(sid in _ids_stolikow(wartosc) for (wartosc,) in kombinacje):
             raise HTTPException(409, "Stolik należy do kombinacji. Najpierw usuń lub zmień tę kombinację.")
-        reservation_service.cleanup_expired_holds(
-            db,
-            utcnow_naive(),
-        )
-        if db.query(models.RezerwacjaStolikClaim.id).filter_by(stolik_id=sid).first():
+        now = utcnow_naive()
+        claim_dates = {
+            value for (value,) in db.query(
+                models.RezerwacjaStolikClaim.data,
+            ).filter(
+                models.RezerwacjaStolikClaim.stolik_id == sid,
+            ).distinct().all()
+        }
+        if claim_dates:
+            reservation_service.cleanup_expired_holds(
+                db, now, dates=claim_dates,
+            )
+            db.flush()
+        if db.query(models.RezerwacjaStolikClaim.id).filter_by(
+            stolik_id=sid,
+        ).first():
             raise HTTPException(
                 409,
                 "Stolik ma aktywne zajęcie lub hold. Najpierw zwolnij go w rezerwacjach.",
@@ -2723,6 +2823,14 @@ def _pojemnosc_kombinacji(db, ids, minimum, maksimum) -> int:
     return efektywne_maksimum
 
 
+def _zablokuj_legacy_kombinacje(db: Session, kid: int):
+    """Lock and refresh one legacy combination before deriving table locks."""
+    query = db.query(models.KombinacjaStolow).filter_by(id=kid)
+    if db.get_bind().dialect.name == "postgresql":
+        query = query.with_for_update()
+    return query.populate_existing().first()
+
+
 @app.get("/api/kombinacje", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def get_kombinacje(db: Session = Depends(get_db)):
     return {"kombinacje": _kombinacje_do_odczytu(db)}
@@ -2730,6 +2838,18 @@ def get_kombinacje(db: Session = Depends(get_db)):
 
 @app.post("/api/kombinacje", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def dodaj_kombinacje(dane: schemas.KombinacjaStolowIn, db: Session = Depends(get_db)):
+    requested_ids = _ids_stolikow(dane.stoliki)
+    if len(requested_ids) < 2:
+        # Zachowaj dotychczasowy, precyzyjny błąd walidacji przed wejściem
+        # w sekcję blokującą zapis planu.
+        _waliduj_sklad_kombinacji(db, dane.stoliki)
+    reservation_service.begin_floor_plan_write(db)
+    locked_tables = reservation_service.lock_tables(db, requested_ids)
+    if len(locked_tables) != len(requested_ids):
+        raise HTTPException(400, "Nieznany stolik w kombinacji.")
+    _blokuj_topologie_aktywnej_oferty(db, requested_ids)
+    # Powtórna walidacja pod blokadami chroni przed zmianą aktywności, sali
+    # lub wersjonowania stolików pomiędzy odczytem żądania a zapisem definicji.
     ids = _waliduj_sklad_kombinacji(db, dane.stoliki)
     pojemnosc_max = _pojemnosc_kombinacji(
         db, ids, dane.pojemnosc_min, dane.pojemnosc_max)
@@ -2743,9 +2863,13 @@ def dodaj_kombinacje(dane: schemas.KombinacjaStolowIn, db: Session = Depends(get
 
 @app.put("/api/kombinacje/{kid}", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def edytuj_kombinacje(kid: int, dane: schemas.KombinacjaStolowIn, db: Session = Depends(get_db)):
-    k = db.get(models.KombinacjaStolow, kid)
+    reservation_service.begin_floor_plan_write(db)
+    k = _zablokuj_legacy_kombinacje(db, kid)
     if not k:
         raise HTTPException(404, "Brak kombinacji.")
+    touched_ids = _ids_stolikow(k.stoliki) | _ids_stolikow(dane.stoliki)
+    reservation_service.lock_tables(db, touched_ids)
+    _blokuj_topologie_aktywnej_oferty(db, touched_ids)
     _wymagaj_legacy_stolikow_poza_planem(db, k.stoliki)
     ids = _waliduj_sklad_kombinacji(db, dane.stoliki)
     pojemnosc_max = _pojemnosc_kombinacji(
@@ -2759,8 +2883,12 @@ def edytuj_kombinacje(kid: int, dane: schemas.KombinacjaStolowIn, db: Session = 
 
 @app.delete("/api/kombinacje/{kid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def usun_kombinacje(kid: int, db: Session = Depends(get_db)):
-    k = db.get(models.KombinacjaStolow, kid)
+    reservation_service.begin_floor_plan_write(db)
+    k = _zablokuj_legacy_kombinacje(db, kid)
     if k:
+        touched_ids = _ids_stolikow(k.stoliki)
+        reservation_service.lock_tables(db, touched_ids)
+        _blokuj_topologie_aktywnej_oferty(db, touched_ids)
         _wymagaj_legacy_stolikow_poza_planem(db, k.stoliki)
         db.delete(k); db.commit()
 
@@ -2858,24 +2986,47 @@ def dodaj_sasiedztwo(dane: schemas.SasiedztwoStolowIn, db: Session = Depends(get
 
 @app.delete("/api/sasiedztwo/{kid}", status_code=204, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def usun_sasiedztwo(kid: int, db: Session = Depends(get_db)):
+    reservation_service.begin_floor_plan_write(db)
     k = db.get(models.SasiedztwoStolow, kid)
     if k:
-        _wymagaj_legacy_stolikow_poza_planem(db, (k.stolik_a, k.stolik_b))
+        touched_ids = (k.stolik_a, k.stolik_b)
+        reservation_service.lock_tables(db, touched_ids)
+        _blokuj_topologie_aktywnej_oferty(db, touched_ids)
+        _wymagaj_legacy_stolikow_poza_planem(db, touched_ids)
         db.delete(k); db.commit()
 
 
 # ── Silnik sadzania (best-fit + kombinacje): SUGESTIA + AUTO ──────────────────
 @app.get("/api/host/sugestia-stolika", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
-def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), osoby: int = 2,
-                          strefa: Optional[str] = None, db: Session = Depends(get_db)):
+def host_sugestia_stolika(
+    data: date = Query(...),
+    godz_od: time = Query(...),
+    osoby: int = 2,
+    strefa: Optional[str] = None,
+    waitlist_id: Optional[int] = Query(None, gt=0),
+    db: Session = Depends(get_db),
+):
     """Top-3 propozycje stołu/kombinacji dla grupy — host akceptuje jedną (tryb SUGESTIA)."""
     osoby = max(1, osoby)
+    target_channel = "wewnetrzna"
+    if waitlist_id is not None:
+        waitlist = db.get(models.ListaOczekujacych, waitlist_id)
+        if waitlist is None or waitlist.status not in reservation_service.WAITLIST_ACTIVE_STATUSES:
+            raise HTTPException(404, "Brak aktywnego wpisu waitlisty.")
+        if waitlist.data != data or max(1, int(waitlist.liczba_osob or 1)) != osoby:
+            raise reservation_service.ReservationError(
+                409,
+                "WAITLIST_PREVIEW_CONTEXT_MISMATCH",
+                "Podgląd musi zachować dzień i liczbę osób z wpisu waitlisty.",
+                rule="waitlist_offer",
+            )
+        target_channel = "online" if waitlist.kanal == "online" else "wewnetrzna"
     result = _ocen_przydzial_rezerwacji(
         db,
         data=data,
         godz_od=godz_od,
         osoby=osoby,
-        kanal="wewnetrzna",
+        kanal=target_channel,
         intent="quote",
         preferowana_strefa=strefa,
         alternative_limit=2,
@@ -3141,6 +3292,50 @@ def _host_out(t: models.Termin, teraz=None, profil=None, user=None) -> dict:
     return wpis
 
 
+def _host_waitlist_out(w, *, user, communication_summary=None):
+    """Minimal operational projection; never expands contact or note PII."""
+    pokaz_kontakt = _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe")
+    summary = dict(communication_summary) if communication_summary else None
+    if summary is not None and not pokaz_kontakt:
+        summary["channel"] = None
+    return {
+        "id": w.id,
+        "nazwisko": w.nazwisko if pokaz_kontakt else "Gość",
+        "godz_od": _hm(w.godz_od),
+        "liczba_osob": w.liczba_osob,
+        "status": w.status,
+        "utworzono_at": w.utworzono_at.isoformat() if w.utworzono_at else None,
+        "priorytet": int(w.priorytet or 0),
+        "offer_version": int(w.offer_version or 0),
+        "offer_auto_przydzielony": w.offer_auto_przydzielony,
+        "offer_override_authorized": w.offer_override_authorized,
+        "can_queue_communication": bool(
+            pokaz_kontakt
+            and reservation_communication.available_delivery_channels(w)
+        ),
+        "zaoferowano_at": w.zaoferowano_at.isoformat() if w.zaoferowano_at else None,
+        "oferta_wygasa_at": (
+            w.oferta_wygasa_at.isoformat() if w.oferta_wygasa_at else None
+        ),
+        "hold_stolik_id": w.hold_stolik_id,
+        "hold_stoliki_dodatkowe": list(w.hold_stoliki_dodatkowe or []),
+        "hold_godz_od": _hm(w.hold_godz_od),
+        "hold_godz_do": _hm(w.hold_godz_do),
+        "hold_do": w.hold_do.isoformat() if w.hold_do else None,
+        "communication_summary": summary,
+    }
+
+
+def _host_waitlist_communication_out(w, *, communication_summary):
+    """Minimalny, kontaktowy inbox błędów po zakończeniu waitlisty."""
+    return {
+        "id": w.id,
+        "nazwisko": w.nazwisko,
+        "status": w.status,
+        "communication_summary": dict(communication_summary),
+    }
+
+
 def _host_kolejka_payload(
     *,
     dzien: date,
@@ -3164,14 +3359,65 @@ def _host_kolejka_payload(
             na_sali.append(wpis)
         else:
             nadchodzace.append(wpis)
-    pokaz_kontakt = _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe")
-    waitlista = [{"id": w.id, "nazwisko": w.nazwisko if pokaz_kontakt else "Gość",
-                  "godz_od": _hm(w.godz_od), "liczba_osob": w.liczba_osob}
-                 for w in db.query(models.ListaOczekujacych).filter_by(data=dzien, status="oczekuje")
-                 .order_by(models.ListaOczekujacych.id).all()]
+    waitlist_rows = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.data == dzien,
+        models.ListaOczekujacych.status.in_(
+            reservation_service.WAITLIST_ACTIVE_STATUSES
+        ),
+    ).all()
+    waitlist_rows = [
+        row for row in waitlist_rows
+        if row.status == "oczekuje"
+        or _czy_kompletny_hold_oferty(db, row, teraz=teraz)
+    ]
+    waitlist_rows.sort(key=lambda row: (
+        0 if row.status == "zaoferowano" else 1,
+        row.oferta_wygasa_at or datetime.max,
+        -int(row.priorytet or 0),
+        row.utworzono_at,
+        row.id,
+    ))
+    summaries = reservation_communication.summaries_for_waitlists(
+        db, (row.id for row in waitlist_rows),
+    )
+    waitlista = [
+        _host_waitlist_out(
+            row,
+            user=user,
+            communication_summary=summaries.get(row.id),
+        )
+        for row in waitlist_rows
+    ]
+    komunikacja_waitlist = []
+    if _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
+        terminal_rows = db.query(models.ListaOczekujacych).filter(
+            models.ListaOczekujacych.data == dzien,
+            models.ListaOczekujacych.status.in_((
+                "zaakceptowano", "wygasla", "anulowano",
+            )),
+        ).all()
+        terminal_summaries = reservation_communication.summaries_for_waitlists(
+            db, (row.id for row in terminal_rows),
+        )
+        terminal_with_attention = [
+            (row, terminal_summaries.get(row.id))
+            for row in terminal_rows
+            if (terminal_summaries.get(row.id) or {}).get("attention_required")
+        ]
+        terminal_with_attention.sort(key=lambda item: (
+            (item[1] or {}).get("last_event_at") or "",
+            item[0].id,
+        ))
+        komunikacja_waitlist = [
+            _host_waitlist_communication_out(
+                row, communication_summary=summary,
+            )
+            for row, summary in terminal_with_attention
+        ]
     return {
         "data": str(dzien), "nadchodzace": nadchodzace, "na_sali": na_sali,
         "zakonczone": zakonczone, "waitlista": waitlista,
+        "komunikacja_waitlist": komunikacja_waitlist,
         "podsumowanie": {"nadchodzace": len(nadchodzace), "na_sali": len(na_sali),
                          "zakonczone": len(zakonczone), "waitlista": len(waitlista),
                          "coverow_na_sali": sum((w.get("liczba_osob") or 0) for w in na_sali)},
@@ -3197,12 +3443,33 @@ def _host_os_czasu_payload(
     dzien: date,
     db: Session,
     user: models.User,
+    teraz: Optional[datetime] = None,
 ) -> dict:
     """Buduje PII-safe oś czasu z kombinacjami rozbitymi na stoły składowe."""
     rez = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == dzien,
         models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).order_by(models.Termin.godz_od).all()
+    teraz = (
+        teraz.astimezone(timezone.utc).replace(tzinfo=None)
+        if teraz is not None and teraz.tzinfo is not None
+        else (teraz.replace(tzinfo=None) if teraz is not None else utcnow_naive())
+    )
+    oferty = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.data == dzien,
+        models.ListaOczekujacych.status == "zaoferowano",
+        models.ListaOczekujacych.hold_do > teraz,
+        models.ListaOczekujacych.hold_stolik_id.isnot(None),
+    ).all()
+    oferty = [
+        oferta for oferta in oferty
+        if _czy_kompletny_hold_oferty(db, oferta, teraz=teraz)
+    ]
     przypisane_ids = set().union(*(_stoly_terminu(t) for t in rez)) if rez else set()
+    for oferta in oferty:
+        przypisane_ids.update(_stoliki_zadania(
+            oferta.hold_stolik_id,
+            oferta.hold_stoliki_dodatkowe,
+        ))
     runtime_stoly = {stolik["id"]: stolik for stolik in _stoly_do_seating(db)}
     # Wyłączenie sali zatrzymuje nowe przydziały, ale nie może osierocić paska już
     # przypisanej rezerwacji. Do osi dokładamy więc wyłącznie historycznie użyte
@@ -3231,7 +3498,34 @@ def _host_os_czasu_payload(
                               "rezerwacja_id": t.id,
                               "nazwisko": t.nazwisko if _ma_dostep_rezerwacji(
                                   user, "rezerwacje.dane_kontaktowe") else "Gość",
-                              "liczba_osob": t.liczba_osob, "faza_hosta": t.faza_hosta})
+                              "liczba_osob": t.liczba_osob, "faza_hosta": t.faza_hosta,
+                              "typ": "rezerwacja"})
+    pokaz_kontakt = _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe")
+    for oferta in oferty:
+        for sid in _stoliki_zadania(
+            oferta.hold_stolik_id,
+            oferta.hold_stoliki_dodatkowe,
+        ):
+            zajetosci.append({
+                "stolik_id": sid,
+                "godz_od": _hm(oferta.hold_godz_od),
+                "godz_do": _hm(oferta.hold_godz_do),
+                "rezerwacja_id": None,
+                "waitlist_id": oferta.id,
+                "nazwisko": oferta.nazwisko if pokaz_kontakt else "Gość",
+                "liczba_osob": oferta.liczba_osob,
+                "faza_hosta": None,
+                "typ": "oferta",
+                "status": oferta.status,
+                "offer_version": int(oferta.offer_version or 0),
+                "offer_auto_przydzielony": oferta.offer_auto_przydzielony,
+                "offer_override_authorized": oferta.offer_override_authorized,
+                "oferta_wygasa_at": (
+                    oferta.oferta_wygasa_at.isoformat()
+                    if oferta.oferta_wygasa_at else None
+                ),
+                "hold_do": oferta.hold_do.isoformat() if oferta.hold_do else None,
+            })
     return {"data": str(dzien), "stoly": stoly, "godziny": godziny, "zajetosci": zajetosci}
 
 
@@ -3278,12 +3572,14 @@ def _host_snapshot_payload(
             dzien=dzien,
             db=db,
             user=user,
+            teraz=generated_at_utc,
         ),
         "plan_sali": operational_plan_payload(
             dzien=dzien,
             sala_id=None,
             db=db,
             user=user,
+            teraz=generated_at_utc,
         ),
     }
 
@@ -4309,6 +4605,7 @@ def usun_rezerwacje_stolik(
             db, termin=t, action="delete", actor=user, before=before,
         )
         db.flush()
+        wyczysc_notatki_kontekstu_nadpisan(db, [t.id])
         # Jawne odpięcie całej historii nie polega na konfiguracji FK konkretnego silnika.
         db.query(models.ReservationAudit).filter_by(termin_id=t.id).update(
             {models.ReservationAudit.termin_id: None}, synchronize_session=False,
@@ -4482,8 +4779,11 @@ def ponow_komunikacje_rezerwacji(
     if message is None:
         raise HTTPException(404, "Brak wiadomości.")
     _wymagaj_dostepu_do_wiadomosci(user, message)
+    teraz = utcnow_naive()
     try:
-        reservation_communication.retry_failed(db, message, actor=user)
+        reservation_communication.retry_failed(
+            db, message, actor=user, now=teraz,
+        )
     except ValueError as exc:
         code = str(exc)
         if code == "UNCERTAIN_REQUIRES_RECONCILIATION":
@@ -4498,12 +4798,15 @@ def ponow_komunikacje_rezerwacji(
         if code in {
             "MESSAGE_SUPERSEDED", "MESSAGE_OWNER_MISSING", "MESSAGE_OWNER_NOT_CURRENT",
         }:
-            raise HTTPException(
-                409, "Wiadomość nie dotyczy już bieżącego stanu rezerwacji.",
+            raise reservation_service.ReservationError(
+                409,
+                code,
+                "Wiadomość nie dotyczy już bieżącego stanu rezerwacji.",
+                rule="communication",
             ) from exc
         raise HTTPException(409, "Tylko niedostarczoną wiadomość można ponowić.") from exc
     db.add(models.AuditLog(
-        ts=utcnow_naive(),
+        ts=teraz,
         user_id=user.id,
         login=user.login,
         akcja="rezerwacje_komunikacja_retry",
@@ -4531,6 +4834,15 @@ def uzgodnij_komunikacje_rezerwacji(
     if message is None:
         raise HTTPException(404, "Brak wiadomości.")
     _wymagaj_dostepu_do_wiadomosci(user, message)
+    teraz = utcnow_naive()
+    previous_error_code = message.last_error_code
+    stale_delivery_acknowledged = bool(
+        dane.wynik == "sent"
+        and message.waitlist_id is not None
+        and message.sent_at is not None
+        and previous_error_code
+        == reservation_communication.WAITLIST_STALE_DELIVERED_CODE
+    )
     try:
         reservation_communication.reconcile_uncertain(
             db,
@@ -4538,6 +4850,7 @@ def uzgodnij_komunikacje_rezerwacji(
             outcome=dane.wynik,
             note=dane.notatka,
             actor=user,
+            now=teraz,
         )
     except ValueError as exc:
         code = str(exc)
@@ -4545,22 +4858,35 @@ def uzgodnij_komunikacje_rezerwacji(
             raise HTTPException(
                 409, "Termin ważności wiadomości minął; nie można jej już wysłać.",
             ) from exc
+        if code == "STALE_DELIVERY_REQUIRES_ACKNOWLEDGEMENT":
+            raise HTTPException(
+                409,
+                "Ta wiadomość została już dostarczona po zmianie oferty. "
+                "Możesz tylko potwierdzić zdarzenie i zamknąć alert.",
+            ) from exc
         if code in {
             "MESSAGE_SUPERSEDED", "MESSAGE_OWNER_MISSING", "MESSAGE_OWNER_NOT_CURRENT",
         }:
-            raise HTTPException(
-                409, "Wiadomość nie dotyczy już bieżącego stanu rezerwacji.",
+            raise reservation_service.ReservationError(
+                409,
+                code,
+                "Wiadomość nie dotyczy już bieżącego stanu rezerwacji.",
+                rule="communication",
             ) from exc
         raise HTTPException(
             409, "Tylko wiadomość z niepewnym wynikiem można uzgodnić.",
         ) from exc
     db.add(models.AuditLog(
-        ts=utcnow_naive(),
+        ts=teraz,
         user_id=user.id,
         login=user.login,
         akcja="rezerwacje_komunikacja_reconcile",
         zasob=f"message:{message.id}",
-        szczegoly=dane.wynik,
+        szczegoly=reservation_service.canonical_json({
+            "outcome": dane.wynik,
+            "previous_error_code": previous_error_code,
+            "stale_delivery_acknowledged": stale_delivery_acknowledged,
+        }),
     ))
     db.commit(); db.refresh(message)
     return JSONResponse(
@@ -4607,11 +4933,411 @@ def _wyczysc_hold_waitlisty(w):
     w.hold_godz_do = None
     w.hold_bufor_min = None
     w.hold_do = None
+    w.offer_auto_przydzielony = None
+    w.offer_override_authorized = None
+    w.offer_override_note = None
+    w.offer_sala_id = None
+    w.offer_kanal = None
+
+
+def _audit_waitlisty(db, w, action, *, user=None, now=None, details=None):
+    """PII-free lifecycle audit; raw idempotency keys never reach this record."""
+    db.add(models.AuditLog(
+        ts=now or utcnow_naive(),
+        user_id=getattr(user, "id", None),
+        login=getattr(user, "login", None),
+        akcja=f"waitlist_{action}",
+        zasob=f"waitlist:{w.id}",
+        szczegoly=reservation_service.canonical_json(details or {}),
+    ))
+
+
+_WAITLIST_OVERRIDE_REASON_CODES = {
+    "guest_request",
+    "large_group_confirmed",
+    "event_exception",
+    "operational_decision",
+    "walk_in",
+    "other",
+    "legacy_confirmation",
+}
+_WAITLIST_OVERRIDE_AUDIT_REASONS = {
+    "capacity_override", "pacing_override", "other",
+}
+_WAITLIST_GRANDFATHER_RULES = frozenset({
+    "pacing_reservations",
+    "pacing_covers",
+    "concurrent_reservations",
+    "concurrent_covers",
+})
+
+
+def _waitlist_override_audit_payload(evaluation, override_context):
+    if not override_context or evaluation.decision != "override_required":
+        return None
+    details = _szczegoly_nadpisania_r3(
+        evaluation,
+        # Każda nowa oferta zapisuje pełną, typowaną tożsamość naruszeń.
+        legacy=False,
+    )
+    if not details:
+        raise RuntimeError("WAITLIST_OVERRIDE_AUDIT_INCOMPLETE")
+    details = dict(details)
+    details["operator_reason_code"] = override_context["reason_code"]
+    return {
+        "authorized": True,
+        "reason_code": override_context["reason_code"],
+        "audit_reason": _powod_audytu_nadpisania(evaluation),
+        "details": details,
+    }
+
+
+def _frozen_waitlist_override_context(db, w, offer_version):
+    if not w.offer_override_authorized:
+        return None
+    row = db.query(models.AuditLog).filter_by(
+        akcja="waitlist_offered",
+        zasob=f"waitlist:{w.id}",
+    ).order_by(models.AuditLog.id.desc()).first()
+    encrypted_context = db.query(
+        models.WaitlistOfferOverrideContext,
+    ).filter_by(
+        waitlist_id=w.id,
+        offer_version=int(offer_version),
+    ).one_or_none()
+    try:
+        payload = json.loads(row.szczegoly) if row is not None else None
+        frozen = payload.get("override") if isinstance(payload, dict) else None
+        reason_code = frozen.get("reason_code")
+        audit_reason = frozen.get("audit_reason")
+        details = frozen.get("details")
+        if (
+            int(payload.get("offer_version")) != int(offer_version)
+            or frozen.get("authorized") is not True
+            or reason_code not in _WAITLIST_OVERRIDE_REASON_CODES
+            or audit_reason not in _WAITLIST_OVERRIDE_AUDIT_REASONS
+            or not isinstance(details, dict)
+            or encrypted_context is None
+            or encrypted_context.reason_code != reason_code
+        ):
+            raise ValueError("invalid frozen override")
+        # Reuse the strict PII-free reservation-audit validator before any hold
+        # is released. Free-form text stays in the encrypted per-generation row.
+        reservation_audit._normalise_override_details(details)
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_OVERRIDE_AUDIT_INCOMPLETE",
+            "Nie można potwierdzić audytu autoryzacji tej oferty.",
+            rule="waitlist_offer",
+        ) from exc
+    return {
+        "reason_code": reason_code,
+        "note": encrypted_context.note,
+        "audit_reason": audit_reason,
+        "details": details,
+    }
+
+
+def _waitlist_accept_enforcement(evaluation, frozen_override_context):
+    """Authorize only the frozen promise, never a fresh arbitrary override.
+
+    Capacity/pacing violations are grandfathered because the complete active
+    offer was already counted as a synthetic owner. Other overrideable rules
+    must match the typed rule/code captured when that offer was published.
+    """
+    violations = tuple(evaluation.violations or ())
+    if not violations:
+        return False, ()
+    if any(not item.overrideable_by_operator for item in violations):
+        raise reservation_rules.evaluation_to_reservation_error(evaluation)
+
+    grandfathered = tuple(sorted({
+        item.rule for item in violations
+        if item.rule in _WAITLIST_GRANDFATHER_RULES
+    }))
+    frozen_rows = (
+        frozen_override_context.get("details", {}).get("violations", [])
+        if frozen_override_context else []
+    )
+    for violation in violations:
+        if violation.rule in _WAITLIST_GRANDFATHER_RULES:
+            continue
+        expected_identity = reservation_service.canonical_json({
+            "rule": violation.rule,
+            "code": violation.code,
+            "scope": dict(violation.scope or {}),
+            "source": dict(violation.source or {}),
+        })
+        if not any(
+            isinstance(row, dict)
+            and reservation_service.canonical_json({
+                "rule": row.get("rule"),
+                "code": row.get("code"),
+                "scope": dict(row.get("scope") or {}),
+                "source": dict(row.get("source") or {}),
+            }) == expected_identity
+            for row in frozen_rows
+        ):
+            raise reservation_rules.evaluation_to_reservation_error(evaluation)
+    return True, grandfathered
+
+
+def _wiadomosci_biezacej_oferty(db, w):
+    current_dedupe = reservation_communication.current_waitlist_offer_dedupe(w)
+    if current_dedupe is None:
+        return []
+    latest_query = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        waitlist_id=w.id,
+        typ_zdarzenia="table_ready",
+        dedupe_key=current_dedupe,
+    )
+    latest = latest_query.order_by(
+        models.RezerwacjaWiadomoscOutbox.id.desc(),
+    ).first()
+    if latest is None:
+        return []
+    return db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        waitlist_id=w.id,
+        typ_zdarzenia="table_ready",
+        dedupe_key=latest.dedupe_key,
+    ).order_by(models.RezerwacjaWiadomoscOutbox.id).all()
+
+
+def _odpowiedz_oferty(db, w, user):
+    messages = _wiadomosci_biezacej_oferty(db, w)
+    summaries = reservation_communication.summaries_for_waitlists(db, [w.id])
+    visible_messages = (
+        messages
+        if _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe")
+        else []
+    )
+    return {
+        "queued": any(
+            row.stan in {"queued", "processing", "retry"} for row in messages
+        ),
+        "messages": [
+            reservation_communication.message_dict(row)
+            for row in visible_messages
+        ],
+        "wpis": _lista_out(w, user, summaries.get(w.id)),
+    }
+
+
+def _wymagaj_wersji_oferty(w, expected_version):
+    current = int(w.offer_version or 0)
+    if int(expected_version) != current:
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_VERSION_CONFLICT",
+            f"Oferta zmieniła się w innym widoku. Bieżąca wersja: {current}.",
+            rule="waitlist_offer",
+        )
+
+
+def _odswiez_wygasniecie_waitlisty(db, w, guards, *, teraz):
+    was_offered = w.status == "zaoferowano"
+    reservation_service.cleanup_expired_holds(
+        db, teraz, dates=[w.data],
+    )
+    db.flush()
+    if was_offered and w.status == "wygasla":
+        _commit_zapis_rezerwacji(db, guards)
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_EXPIRED",
+            "Oferta wygasła. Stoły zostały bezpiecznie zwolnione.",
+            rule="waitlist_offer",
+        )
+
+
+def _czy_kompletny_hold_oferty(db, w, *, teraz):
+    if (
+        w.status != "zaoferowano"
+        or w.hold_stolik_id is None
+        or w.hold_godz_od is None
+        or w.hold_godz_do is None
+        or w.hold_do is None
+        or w.hold_do <= teraz
+    ):
+        return False
+    held_ids = _stoliki_zadania(w.hold_stolik_id, w.hold_stoliki_dodatkowe)
+    if not held_ids:
+        return False
+    try:
+        start_minute, blocked_end = reservation_service.claim_minute_window(
+            w.hold_godz_od, w.hold_godz_do, int(w.hold_bufor_min or 0),
+        )
+    except reservation_service.ReservationError:
+        return False
+    expected_slots = {
+        (table_id, minute)
+        for table_id in held_ids
+        for minute in range(start_minute, blocked_end)
+    }
+    claims = db.query(
+        models.RezerwacjaStolikClaim.stolik_id,
+        models.RezerwacjaStolikClaim.minute,
+        models.RezerwacjaStolikClaim.data,
+        models.RezerwacjaStolikClaim.expires_at,
+    ).filter_by(waitlist_id=w.id).all()
+    return (
+        len(claims) == len(expected_slots)
+        and {(row.stolik_id, row.minute) for row in claims} == expected_slots
+        and all(
+            row.data == w.data
+            and row.expires_at is not None
+            and row.expires_at > teraz
+            and row.expires_at == w.hold_do
+            for row in claims
+        )
+    )
+
+
+def _zaloz_hold_waitlisty(
+    db, w, dane, *, teraz, request, user, override_context,
+):
+    """Select and claim one exact allocator-approved table configuration."""
+    godz = dane.godz_od or w.godz_od
+    if godz is None:
+        raise HTTPException(400, "Ustaw godzinę, aby utworzyć czasową ofertę.")
+    existing_ids = []
+    if w.hold_do is not None and w.hold_do > teraz and w.hold_stolik_id is not None:
+        existing_ids = _stoliki_zadania(
+            w.hold_stolik_id, w.hold_stoliki_dodatkowe,
+        )
+    requested_ids = _stoliki_zadania(dane.stolik_id, dane.stoliki) or existing_ids
+    runtime_table_ids = {table["id"] for table in _stoly_do_seating(db)}
+    if requested_ids and not set(requested_ids) <= runtime_table_ids:
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+
+    reservation_service.release_waitlist_hold(db, w.id)
+    _wyczysc_hold_waitlisty(w)
+    db.flush()
+    target_channel = "online" if w.kanal == "online" else "wewnetrzna"
+    result = _ocen_przydzial_rezerwacji(
+        db,
+        data=w.data,
+        godz_od=godz,
+        osoby=w.liczba_osob or 1,
+        kanal=target_channel,
+        intent="quote",
+        alternative_limit=9999,
+        now=teraz,
+    )
+    candidate = (
+        _kandydat_zestawu(result, requested_ids)
+        if requested_ids else result.selected
+    )
+    if candidate is None:
+        _wymagaj_dozwolonego_przydzialu(
+            result,
+            override=bool(
+                override_context
+                and result.evaluation.decision == "override_required"
+            ),
+        )
+        raise reservation_service.ReservationError(
+            409,
+            "INVALID_TABLE_COMBINATION",
+            "Wybrany zestaw nie jest dostępną, zatwierdzoną konfiguracją.",
+            rule="table_hold",
+        )
+    table_ids = list(candidate.table_ids)
+    locked_tables = reservation_service.lock_tables(db, table_ids)
+    if len(locked_tables) != len(table_ids):
+        raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
+    # Publikacja planu blokuje te same rekordy Stolik. Po zdobyciu locków
+    # powtarzamy pełną ocenę, aby nie materializować wariantu ze starej wersji.
+    revalidated_result = _ocen_przydzial_rezerwacji(
+        db,
+        data=w.data,
+        godz_od=godz,
+        osoby=w.liczba_osob or 1,
+        kanal=target_channel,
+        intent="quote",
+        alternative_limit=9999,
+        now=teraz,
+    )
+    revalidated_candidate = _kandydat_zestawu(
+        revalidated_result, table_ids,
+    )
+    if revalidated_candidate is None:
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_PLAN_CHANGED",
+            "Układ sali zmienił się podczas tworzenia oferty. Odśwież propozycje.",
+            rule="table_hold",
+        )
+    result = revalidated_result
+    candidate = revalidated_candidate
+    evaluation = _ocen_reguly_slotu(
+        db,
+        data=w.data,
+        godz_od=godz,
+        liczba_osob=w.liczba_osob or 1,
+        kanal=target_channel,
+        sala_id=candidate.room_id,
+        intent="create",
+        now=teraz,
+    )
+    override_active = bool(
+        override_context and evaluation.decision == "override_required"
+    )
+    _wymagaj_reautoryzacji_nadpisania(
+        db, request, user, override_active,
+    )
+    reservation_rules.enforce_rule_evaluation(
+        evaluation,
+        override=override_active,
+        can_override=override_active,
+    )
+    godz_do = evaluation.godz_do
+    if godz_do is None:
+        raise HTTPException(400, "Nie udało się wyznaczyć końca wizyty.")
+    hold_do = teraz + timedelta(minutes=max(1, int(dane.minuty or 15)))
+    reservation_service.replace_waitlist_hold(
+        db,
+        waitlist_id=w.id,
+        table_ids=table_ids,
+        data=w.data,
+        expires_at=hold_do,
+        now=teraz,
+        start=godz,
+        end=godz_do,
+        buffer_min=evaluation.buffer_min,
+        cleanup_holds=False,
+    )
+    w.godz_od = godz
+    w.hold_stolik_id = table_ids[0]
+    w.hold_stoliki_dodatkowe = table_ids[1:] or None
+    w.hold_godz_od = godz
+    w.hold_godz_do = godz_do
+    w.hold_bufor_min = evaluation.buffer_min
+    w.hold_do = hold_do
+    w.offer_sala_id = candidate.room_id
+    w.offer_kanal = target_channel
+    recommended_ids = (
+        set(result.selected.table_ids) if result.selected is not None else set()
+    )
+    offer_auto_przydzielony = bool(
+        recommended_ids and set(table_ids) == recommended_ids
+    )
+    return (
+        table_ids,
+        hold_do,
+        offer_auto_przydzielony,
+        override_active,
+        evaluation,
+    )
 
 
 def _lista_out(w: models.ListaOczekujacych, user=None, communication_summary=None) -> dict:
     kontakt = _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe")
     notatki = _ma_dostep_rezerwacji(user, "rezerwacje.notatki_wewnetrzne")
+    summary = dict(communication_summary) if communication_summary else None
+    if summary is not None and not kontakt:
+        summary["channel"] = None
     ukryte = []
     if not kontakt:
         ukryte.extend(("nazwisko", "telefon", "email"))
@@ -4628,10 +5354,23 @@ def _lista_out(w: models.ListaOczekujacych, user=None, communication_summary=Non
         "kanal_komunikacji": w.kanal_komunikacji if kontakt else None,
         "notatka": w.notatka if notatki else None,
         "status": w.status,
+        "priorytet": int(w.priorytet or 0),
+        "offer_version": int(w.offer_version or 0),
+        "offer_auto_przydzielony": w.offer_auto_przydzielony,
+        "offer_override_authorized": w.offer_override_authorized,
+        "zaoferowano_at": w.zaoferowano_at.isoformat() if w.zaoferowano_at else None,
+        "oferta_wygasa_at": (
+            w.oferta_wygasa_at.isoformat() if w.oferta_wygasa_at else None
+        ),
+        "zaakceptowano_at": (
+            w.zaakceptowano_at.isoformat() if w.zaakceptowano_at else None
+        ),
+        "wygasla_at": w.wygasla_at.isoformat() if w.wygasla_at else None,
+        "anulowano_at": w.anulowano_at.isoformat() if w.anulowano_at else None,
         "termin_id": w.termin_id,
         "kanal": w.kanal,
         "powiadomiono_at": w.powiadomiono_at.isoformat() if w.powiadomiono_at else None,
-        "communication_summary": communication_summary,
+        "communication_summary": summary,
         "hold_stolik_id": w.hold_stolik_id,
         "hold_stoliki_dodatkowe": list(w.hold_stoliki_dodatkowe or []),
         "hold_godz_od": _hm(w.hold_godz_od),
@@ -4650,8 +5389,12 @@ def get_lista_oczekujacych(
 ):
     rows = (db.query(models.ListaOczekujacych)
             .filter(models.ListaOczekujacych.data == data)
-            .order_by(models.ListaOczekujacych.status, models.ListaOczekujacych.godz_od,
-                      models.ListaOczekujacych.id).all())
+            .order_by(
+                models.ListaOczekujacych.status,
+                models.ListaOczekujacych.priorytet.desc(),
+                models.ListaOczekujacych.utworzono_at,
+                models.ListaOczekujacych.id,
+            ).all())
     summaries = reservation_communication.summaries_for_waitlists(
         db, (row.id for row in rows),
     )
@@ -4694,46 +5437,401 @@ def usun_lista_oczekujacych(
         db.delete(w); _commit_zapis_rezerwacji(db, guards)
 
 
+def _anuluj_lista_oczekujacych(
+    wid, *, expected_version, legacy_plain_only=False, db, user,
+):
+    w, guards = _zablokuj_waitliste(db, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    if legacy_plain_only and w.status != "oczekuje":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_LEGACY_ALIAS_NOT_ALLOWED",
+            "Ta operacja dotyczy wyłącznie wpisu bez aktywnej oferty.",
+            rule="waitlist_offer",
+        )
+    teraz = utcnow_naive()
+    _odswiez_wygasniecie_waitlisty(db, w, guards, teraz=teraz)
+    if expected_version is not None:
+        _wymagaj_wersji_oferty(w, expected_version)
+    if w.status == "anulowano":
+        db.rollback()
+        return _lista_out(w, user)
+    if w.status in {"zaakceptowano", "wygasla"}:
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_TERMINAL_STATE",
+            "Zakończonego wpisu waitlisty nie można anulować ponownie.",
+            rule="waitlist_offer",
+        )
+    previous_version = int(w.offer_version or 0)
+    reservation_service.release_waitlist_hold(db, w.id)
+    _wyczysc_hold_waitlisty(w)
+    w.status = "anulowano"
+    w.anulowano_at = teraz
+    w.offer_version = previous_version + 1
+    reservation_communication.cancel_waitlist_pending(db, w.id)
+    _audit_waitlisty(
+        db, w, "cancelled", user=user, now=teraz,
+        details={
+            "offer_version": previous_version,
+            "next_offer_version": w.offer_version,
+        },
+    )
+    _commit_zapis_rezerwacji(db, guards)
+    db.refresh(w)
+    return _lista_out(w, user)
+
+
+@app.post("/api/lista-oczekujacych/{wid}/anuluj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def anuluj_lista_oczekujacych(
+    wid: int,
+    dane: schemas.WaitlistAnulujIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    return _anuluj_lista_oczekujacych(
+        wid,
+        expected_version=dane.expected_offer_version,
+        db=db,
+        user=user,
+    )
+
+
 @app.post("/api/lista-oczekujacych/{wid}/odwolaj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def odwolaj_lista_oczekujacych(
     wid: int,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    w, guards = _zablokuj_waitliste(db, wid)
-    if not w:
-        raise HTTPException(404, "Brak wpisu.")
-    reservation_service.release_waitlist_hold(db, w.id)
-    _wyczysc_hold_waitlisty(w)
-    w.status = "odwolany"
-    reservation_communication.cancel_waitlist_pending(db, w.id)
-    _commit_zapis_rezerwacji(db, guards); db.refresh(w)
-    return _lista_out(w, user)
+    """Legacy alias. New clients use /anuluj with optimistic version."""
+    return _anuluj_lista_oczekujacych(
+        wid,
+        expected_version=None,
+        legacy_plain_only=True,
+        db=db,
+        user=user,
+    )
 
 
-@app.post("/api/lista-oczekujacych/{wid}/zrealizuj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
-def zrealizuj_lista_oczekujacych(
+@app.post(
+    "/api/lista-oczekujacych/{wid}/oferta",
+    response_model=schemas.WaitlistOfertaOut,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def zaoferuj_lista_oczekujacych(
     wid: int,
-    dane: schemas.ZrealizujIn,
+    dane: schemas.WaitlistOfertaIn,
     request: Request,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    """Realizuje wpis z listy oczekujących → tworzy rezerwację na wskazanym stoliku
-    (walidacja pojemności/kolizji). Wpis dostaje status 'zrealizowany'."""
+    """Atomically freeze one approved table set and optionally notify the guest."""
     override_context = _jawne_nadpisanie_limitow(
         user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
+    identity = reservation_service.required_idempotency_identity(
+        operation="waitlist.offer:v1",
+        raw_key=idempotency_key,
+        payload={"waitlist_id": wid, "request": dane.model_dump(mode="json")},
+        secret=SECRET_KEY,
     )
     w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
     teraz = utcnow_naive()
+    _odswiez_wygasniecie_waitlisty(db, w, guards, teraz=teraz)
+
+    if w.offer_key_hash == identity.key_hash:
+        if not w.offer_request_fingerprint or not secrets.compare_digest(
+            w.offer_request_fingerprint, identity.request_fingerprint,
+        ):
+            db.rollback()
+            raise reservation_service.ReservationError(
+                409,
+                "IDEMPOTENCY_KEY_REUSED",
+                "Ten klucz Idempotency-Key został użyty z innymi danymi.",
+                rule="idempotency",
+            )
+        if w.status == "zaoferowano" and w.hold_do and w.hold_do > teraz:
+            response = _odpowiedz_oferty(db, w, user)
+            db.rollback()
+            return response
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "IDEMPOTENCY_KEY_REUSED",
+            "Ta generacja oferty została już zakończona.",
+            rule="idempotency",
+        )
+
+    _wymagaj_wersji_oferty(w, dane.expected_offer_version)
+    if w.status != "oczekuje":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_NOT_AVAILABLE",
+            "Ofertę można utworzyć wyłącznie dla oczekującego wpisu.",
+            rule="waitlist_offer",
+        )
+    ambiguous_delivery = db.query(models.RezerwacjaWiadomoscOutbox.id).filter(
+        models.RezerwacjaWiadomoscOutbox.waitlist_id == w.id,
+        models.RezerwacjaWiadomoscOutbox.typ_zdarzenia == "table_ready",
+        models.RezerwacjaWiadomoscOutbox.stan.in_(("processing", "uncertain")),
+    ).first()
+    if ambiguous_delivery is not None:
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_DELIVERY_RECONCILIATION_REQUIRED",
+            "Poprzednie powiadomienie wymaga zakończenia lub uzgodnienia przed nową ofertą.",
+            rule="waitlist_offer",
+        )
+
+    (
+        table_ids,
+        deadline,
+        offer_auto_przydzielony,
+        offer_override_authorized,
+        offer_evaluation,
+    ) = _zaloz_hold_waitlisty(
+        db,
+        w,
+        dane,
+        teraz=teraz,
+        request=request,
+        user=user,
+        override_context=override_context,
+    )
+    previous_version = int(w.offer_version or 0)
+    w.status = "zaoferowano"
+    w.offer_version = previous_version + 1
+    w.offer_auto_przydzielony = offer_auto_przydzielony
+    w.offer_override_authorized = offer_override_authorized
+    w.offer_override_note = (
+        override_context.get("note")
+        if offer_override_authorized and override_context
+        else None
+    )
+    w.offer_key_hash = identity.key_hash
+    w.offer_request_fingerprint = identity.request_fingerprint
+    w.zaoferowano_at = teraz
+    w.oferta_wygasa_at = deadline
+    w.powiadomiono_at = None
+    db.flush()
+
+    override_audit_payload = _waitlist_override_audit_payload(
+        offer_evaluation, override_context,
+    )
+    if offer_override_authorized:
+        if not override_context or override_audit_payload is None:
+            raise RuntimeError("WAITLIST_OVERRIDE_CONTEXT_INCOMPLETE")
+        db.add(models.WaitlistOfferOverrideContext(
+            waitlist_id=w.id,
+            offer_version=w.offer_version,
+            reason_code=override_context["reason_code"],
+            note=override_context.get("note"),
+            created_at=teraz,
+        ))
+
+    messages = []
+    if _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
+        messages = reservation_communication.enqueue_table_ready(
+            db,
+            w,
+            dedupe_key=(
+                f"waitlist:{w.id}:offer:{w.offer_version}:{identity.key_hash}"
+            ),
+            actor=user,
+            now=teraz,
+        )
+    _audit_waitlisty(
+        db,
+        w,
+        "offered",
+        user=user,
+        now=teraz,
+        details={
+            "offer_version": w.offer_version,
+            "previous_offer_version": previous_version,
+            "table_ids": table_ids,
+            "auto_przydzielony": offer_auto_przydzielony,
+            "override_authorized": offer_override_authorized,
+            "override": override_audit_payload,
+            "deadline": deadline.isoformat(),
+            "queued_channels": sorted({row.kanal for row in messages}),
+        },
+    )
+    _commit_zapis_rezerwacji(db, guards)
+    db.refresh(w)
+    return _odpowiedz_oferty(db, w, user)
+
+
+@app.post(
+    "/api/lista-oczekujacych/{wid}/wycofaj-oferte",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def wycofaj_oferte_lista_oczekujacych(
+    wid: int,
+    dane: schemas.WaitlistOfferVersionIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    w, guards = _zablokuj_waitliste(db, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    teraz = utcnow_naive()
+    _odswiez_wygasniecie_waitlisty(db, w, guards, teraz=teraz)
+    _wymagaj_wersji_oferty(w, dane.offer_version)
+    if w.status != "zaoferowano":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_NOT_ACTIVE",
+            "Nie ma aktywnej oferty do wycofania.",
+            rule="waitlist_offer",
+        )
+    previous_version = int(w.offer_version or 0)
+    reservation_service.release_waitlist_hold(db, w.id)
+    _wyczysc_hold_waitlisty(w)
+    w.status = "oczekuje"
+    w.offer_version = previous_version + 1
+    reservation_communication.cancel_waitlist_pending(db, w.id, now=teraz)
+    _audit_waitlisty(
+        db,
+        w,
+        "withdrawn",
+        user=user,
+        now=teraz,
+        details={
+            "offer_version": previous_version,
+            "next_offer_version": w.offer_version,
+        },
+    )
+    _commit_zapis_rezerwacji(db, guards)
+    db.refresh(w)
+    return _lista_out(w, user)
+
+
+@app.post(
+    "/api/lista-oczekujacych/{wid}/priorytet",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def ustaw_priorytet_lista_oczekujacych(
+    wid: int,
+    dane: schemas.WaitlistPriorytetIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    w, guards = _zablokuj_waitliste(db, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    teraz = utcnow_naive()
+    _odswiez_wygasniecie_waitlisty(db, w, guards, teraz=teraz)
+    _wymagaj_wersji_oferty(w, dane.expected_offer_version)
+    if w.status != "oczekuje":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_PRIORITY_NOT_AVAILABLE",
+            "Priorytet można zmienić tylko przed utworzeniem oferty.",
+            rule="waitlist_offer",
+        )
+    previous_priority = int(w.priorytet or 0)
+    if previous_priority == dane.priorytet:
+        response = _lista_out(w, user)
+        db.rollback()
+        return response
+    previous_version = int(w.offer_version or 0)
+    w.priorytet = dane.priorytet
+    w.offer_version = previous_version + 1
+    _audit_waitlisty(
+        db,
+        w,
+        "priority_changed",
+        user=user,
+        now=teraz,
+        details={
+            "previous_priority": previous_priority,
+            "priority": dane.priorytet,
+            "offer_version": previous_version,
+            "next_offer_version": w.offer_version,
+        },
+    )
+    _commit_zapis_rezerwacji(db, guards)
+    db.refresh(w)
+    return _lista_out(w, user)
+
+
+def _zaakceptuj_lista_oczekujacych(
+    wid: int,
+    dane,
+    request: Request,
+    *,
+    expected_version,
+    idempotency_key,
+    legacy_direct=False,
+    db,
+    user,
+):
+    """Convert exactly one unexpired offered table set into a reservation."""
+    if legacy_direct:
+        override_context = _jawne_nadpisanie_limitow(
+            user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+        )
+    else:
+        if dane.przekrocz_limity or dane.nadpisanie_limitow is not None:
+            raise reservation_service.ReservationError(
+                409,
+                "WAITLIST_ACCEPT_OVERRIDE_NOT_ALLOWED",
+                "Wyjątek limitu musi być autoryzowany przy tworzeniu tej oferty.",
+                rule="waitlist_offer",
+            )
+        override_context = None
+    if not legacy_direct:
+        reservation_service.required_idempotency_identity(
+            operation="reservation.create.waitlist:v2",
+            raw_key=idempotency_key,
+            payload={
+                "waitlist_id": wid,
+                "expected_offer_version": expected_version,
+                "request": dane.model_dump(mode="json"),
+            },
+            secret=SECRET_KEY,
+        )
+    w, guards = _zablokuj_waitliste(db, wid)
+    if not w:
+        raise HTTPException(404, "Brak wpisu.")
+    teraz = utcnow_naive()
+    if legacy_direct and w.status == "zaoferowano":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_LEGACY_ALIAS_NOT_ALLOWED",
+            "Aktywną ofertę można zaakceptować tylko z jej bieżącą wersją.",
+            rule="waitlist_offer",
+        )
+    if not legacy_direct and w.status == "zaoferowano":
+        _odswiez_wygasniecie_waitlisty(db, w, guards, teraz=teraz)
+        _wymagaj_wersji_oferty(w, expected_version)
     idem = reservation_service.begin_idempotency(
         db,
-        operation="reservation.create.waitlist:v1",
+        operation=(
+            "reservation.create.waitlist:v1"
+            if legacy_direct else "reservation.create.waitlist:v2"
+        ),
         raw_key=idempotency_key,
-        payload={"waitlist_id": wid, **dane.model_dump(mode="json")},
+        payload=(
+            {"waitlist_id": wid, **dane.model_dump(mode="json")}
+            if legacy_direct else {
+                "waitlist_id": wid,
+                "expected_offer_version": expected_version,
+                "request": dane.model_dump(mode="json"),
+            }
+        ),
         secret=SECRET_KEY,
         now=teraz,
     )
@@ -4751,27 +5849,135 @@ def zrealizuj_lista_oczekujacych(
             "rezerwacja": _rezerwacja_out(replayed, user),
             "wpis": _lista_out(current_waitlist, user),
         }
-    if w.status != "oczekuje":
-        raise HTTPException(409, "Wpis już zrealizowany lub odwołany.")
-    held_ids = []
-    if w.hold_do is not None and w.hold_do > teraz and w.hold_stolik_id is not None:
-        held_ids = _stoliki_zadania(
-            w.hold_stolik_id,
-            w.hold_stoliki_dodatkowe,
+    required_status = "oczekuje" if legacy_direct else "zaoferowano"
+    if w.status != required_status:
+        raise reservation_service.ReservationError(
+            409,
+            (
+                "WAITLIST_LEGACY_DIRECT_NOT_AVAILABLE"
+                if legacy_direct else "WAITLIST_OFFER_NOT_ACTIVE"
+            ),
+            (
+                "Bezpośrednio można zrealizować wyłącznie oczekujący wpis."
+                if legacy_direct
+                else "Akceptacja wymaga aktywnej, niewygasłej oferty."
+            ),
+            rule="waitlist_offer",
         )
     explicit_ids = _stoliki_zadania(dane.stolik_id, dane.stoliki)
-    requested_ids = explicit_ids or held_ids
+    held_ids = []
+    frozen_start = None
+    frozen_end = None
+    frozen_buffer = 0
+    frozen_deadline = None
+    frozen_offer_auto_przydzielony = None
+    frozen_offer_override_authorized = None
+    frozen_offer_sala_id = None
+    frozen_offer_kanal = None
+    frozen_override_context = None
+    if legacy_direct:
+        if w.hold_do is not None and w.hold_do > teraz and w.hold_stolik_id is not None:
+            held_ids = _stoliki_zadania(
+                w.hold_stolik_id, w.hold_stoliki_dodatkowe,
+            )
+        requested_ids = explicit_ids or held_ids
+        godz = dane.godz_od or w.godz_od
+    else:
+        held_ids = _stoliki_zadania(
+            w.hold_stolik_id, w.hold_stoliki_dodatkowe,
+        )
+        frozen_start = w.hold_godz_od
+        frozen_end = w.hold_godz_do
+        frozen_buffer = int(w.hold_bufor_min or 0)
+        frozen_deadline = w.hold_do
+        frozen_offer_auto_przydzielony = w.offer_auto_przydzielony
+        frozen_offer_override_authorized = w.offer_override_authorized
+        frozen_offer_sala_id = w.offer_sala_id
+        frozen_offer_kanal = w.offer_kanal
+        if (
+            not held_ids
+            or frozen_start is None
+            or frozen_end is None
+            or frozen_deadline is None
+            or frozen_deadline <= teraz
+            or w.oferta_wygasa_at != frozen_deadline
+            or frozen_offer_auto_przydzielony is None
+            or frozen_offer_override_authorized is None
+            or frozen_offer_kanal not in {"online", "wewnetrzna"}
+        ):
+            raise reservation_service.ReservationError(
+                409,
+                "WAITLIST_OFFER_HOLD_INCOMPLETE",
+                "Oferta nie ma kompletnego, aktywnego zestawu stołów.",
+                rule="waitlist_offer",
+            )
+        if frozen_offer_override_authorized:
+            frozen_override_context = _frozen_waitlist_override_context(
+                db, w, expected_version,
+            )
+        if explicit_ids and set(explicit_ids) != set(held_ids):
+            raise reservation_service.ReservationError(
+                409,
+                "WAITLIST_OFFER_TABLE_MISMATCH",
+                "Akceptacja musi użyć dokładnie zestawu zamrożonego w ofercie.",
+                rule="waitlist_offer",
+            )
+        if dane.godz_od is not None and dane.godz_od != frozen_start:
+            raise reservation_service.ReservationError(
+                409,
+                "WAITLIST_OFFER_TIME_MISMATCH",
+                "Akceptacja musi zachować godzinę zamrożoną w ofercie.",
+                rule="waitlist_offer",
+            )
+        claims = db.query(models.RezerwacjaStolikClaim).filter_by(
+            waitlist_id=w.id,
+        ).all()
+        start_minute, blocked_end = reservation_service.claim_minute_window(
+            frozen_start,
+            frozen_end,
+            frozen_buffer,
+        )
+        expected_claims = len(held_ids) * max(0, blocked_end - start_minute)
+        expected_claim_slots = {
+            (table_id, minute)
+            for table_id in held_ids
+            for minute in range(start_minute, blocked_end)
+        }
+        if (
+            len(claims) != expected_claims
+            or {(row.stolik_id, row.minute) for row in claims} != expected_claim_slots
+            or any(
+                row.data != w.data
+                or row.expires_at is None
+                or row.expires_at <= teraz
+                or row.expires_at != frozen_deadline
+                for row in claims
+            )
+        ):
+            raise reservation_service.ReservationError(
+                409,
+                "WAITLIST_OFFER_CLAIMS_INCOMPLETE",
+                "Oferta nie ma kompletnego atomowego zajęcia zasobów.",
+                rule="waitlist_offer",
+            )
+        requested_ids = held_ids
+        godz = frozen_start
     reservation_service.release_waitlist_hold(db, w.id)
-    _wyczysc_hold_waitlisty(w)      # realizacja kończy HOLD w tej samej transakcji
+    _wyczysc_hold_waitlisty(w)
     db.flush()
-    godz = dane.godz_od or w.godz_od
     if godz is None:
         raise HTTPException(400, "Ustaw godzinę realizacji wpisu.")
     is_walk_in = dane.tryb == "walk_in"
     reservation_channel = (
-        "walk_in" if is_walk_in else ("online" if w.kanal == "online" else "reczna")
+        ("online" if frozen_offer_kanal == "online" else "reczna")
+        if not legacy_direct
+        else (
+            "walk_in"
+            if is_walk_in
+            else ("online" if w.kanal == "online" else "reczna")
+        )
     )
-    if explicit_ids:
+    if legacy_direct and explicit_ids:
         _waliduj_przydzial_rezerwacji(
             db,
             w.data,
@@ -4786,45 +5992,75 @@ def zrealizuj_lista_oczekujacych(
         godz_od=godz,
         osoby=w.liczba_osob or 1,
         kanal=reservation_channel,
-        intent="create",
+        godz_do=(frozen_end if not legacy_direct else None),
+        intent=("create" if legacy_direct else "quote"),
+        preserve_explicit_interval=not legacy_direct,
+        physical_buffer_min=(frozen_buffer if not legacy_direct else None),
         alternative_limit=9999,
+        now=teraz,
     )
     candidate = (
         _kandydat_zestawu(result, requested_ids)
         if requested_ids else result.selected
     )
     if candidate is None:
-        _wymagaj_dozwolonego_przydzialu(result)
+        _wymagaj_dozwolonego_przydzialu(
+            result,
+            override=bool(
+                (legacy_direct and override_context)
+                or (not legacy_direct and frozen_offer_override_authorized)
+            ),
+        )
         raise reservation_service.ReservationError(
             409,
             "INVALID_TABLE_COMBINATION",
             "Wybrany zestaw nie jest dostępną, zatwierdzoną konfiguracją.",
             rule="table",
         )
+    if not legacy_direct and candidate.room_id != frozen_offer_sala_id:
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_PLAN_CHANGED",
+            "Układ sali zmienił się od utworzenia oferty.",
+            rule="table_hold",
+        )
     evaluation = _ocen_reguly_slotu(
         db,
         data=w.data,
         godz_od=godz,
+        godz_do=(frozen_end if not legacy_direct else None),
         liczba_osob=w.liczba_osob or 1,
         kanal=reservation_channel,
         sala_id=candidate.room_id,
         intent="create",
+        preserve_explicit_interval=not legacy_direct,
+        now=teraz,
     )
-    override_active = bool(
-        override_context and evaluation.decision == "override_required"
+    grandfathered_capacity_rules = ()
+    if legacy_direct:
+        enforcement_override = bool(
+            override_context and evaluation.decision == "override_required"
+        )
+        ledger_override = enforcement_override
+    else:
+        enforcement_override, grandfathered_capacity_rules = (
+            _waitlist_accept_enforcement(evaluation, frozen_override_context)
+        )
+        ledger_override = bool(frozen_offer_override_authorized)
+    if legacy_direct:
+        _wymagaj_reautoryzacji_nadpisania(
+            db, request, user, enforcement_override,
+        )
+    reservation_rules.enforce_rule_evaluation(
+        evaluation,
+        override=enforcement_override,
+        can_override=enforcement_override,
     )
-    _wymagaj_reautoryzacji_nadpisania(
-        db, request, user, override_active,
-    )
-    if evaluation.decision == "deny" or (
-        evaluation.decision == "override_required" and not override_active
-    ):
-        reservation_rules.enforce_rule_evaluation(evaluation)
     table_ids = list(candidate.table_ids)
     locked_tables = reservation_service.lock_tables(db, table_ids)
     if len(locked_tables) != len(table_ids):
         raise HTTPException(400, "Nieznany lub nieaktywny stolik.")
-    godz_do = evaluation.godz_do
+    godz_do = frozen_end if not legacy_direct else evaluation.godz_do
     if godz_do is None:
         raise HTTPException(400, "Nie udało się wyznaczyć końca wizyty.")
     t = models.Termin(
@@ -4833,7 +6069,11 @@ def zrealizuj_lista_oczekujacych(
         liczba_osob=w.liczba_osob, notatka=w.notatka, status="potwierdzona", zadatek=0.0,
         utworzono_at=teraz, godz_od=godz, godz_do=godz_do, stolik_id=table_ids[0],
         stoliki_dodatkowe=(table_ids[1:] or None),
-        auto_przydzielony=not bool(explicit_ids),
+        auto_przydzielony=(
+            not bool(explicit_ids)
+            if legacy_direct
+            else bool(frozen_offer_auto_przydzielony)
+        ),
         rodzaj="stolik", kanal=reservation_channel,
         faza_hosta=("posadzony" if is_walk_in else None),
         host_arrived_at=(teraz if is_walk_in else None),
@@ -4843,25 +6083,66 @@ def zrealizuj_lista_oczekujacych(
     _ustaw_proweniencje_przydzialu(t, _kandydat_legacy_z_alokacji(candidate))
     try:
         db.add(t); db.flush()
-        override_details = (
-            _szczegoly_nadpisania_r3(
-                evaluation, legacy=bool(override_context and override_context["legacy"]),
+        if legacy_direct and enforcement_override:
+            override_details = _szczegoly_nadpisania_r3(
+                evaluation,
+                legacy=bool(override_context and override_context["legacy"]),
             )
-            if override_active else None
-        )
+            override_audit_reason = _powod_audytu_nadpisania(evaluation)
+            override_reason_code = override_context["reason_code"]
+            override_note = override_context["note"]
+        elif frozen_override_context is not None:
+            override_details = frozen_override_context["details"]
+            override_audit_reason = frozen_override_context["audit_reason"]
+            override_reason_code = frozen_override_context["reason_code"]
+            override_note = frozen_override_context["note"]
+        else:
+            override_details = None
+            override_audit_reason = None
+            override_reason_code = None
+            override_note = None
         _zastap_ledger_terminu(
             db,
             t,
-            enforce_pacing=True,
+            # Ta sama typowana ewaluacja została już wyegzekwowana powyżej.
+            # Ponowne sprawdzenie myliłoby wewnętrzny transfer obietnicy
+            # pojemności z ręcznym nadpisaniem i odrzucało ważną ofertę.
+            enforce_pacing=False,
             evaluation=evaluation,
-            override=override_active,
+            override=ledger_override,
             intent="create",
+            buffer_override=(frozen_buffer if not legacy_direct else None),
+            preserve_interval=not legacy_direct,
+            now=teraz,
             candidates=[{"stoliki": table_ids}],
             alternatives=result.to_dict(expose_exact=True).get("alternatives") or (),
         )
-        w.status = "zrealizowany"; w.zrealizowano_at = teraz; w.termin_id = t.id
+        accepted_offer_version = int(w.offer_version or 0)
+        w.status = "zaakceptowano"
+        w.zrealizowano_at = teraz
+        w.zaakceptowano_at = teraz
+        w.termin_id = t.id
+        w.offer_version = accepted_offer_version + 1
         reservation_communication.cancel_waitlist_pending(db, w.id, now=teraz)
-        odpowiedz = {"rezerwacja": _rezerwacja_out(t, user), "wpis": _lista_out(w, user)}
+        _audit_waitlisty(
+            db, w, "accepted", user=user, now=teraz,
+            details={
+                "offer_version": accepted_offer_version,
+                "next_offer_version": w.offer_version,
+                "reservation_id": t.id,
+                "table_ids": table_ids,
+                "auto_przydzielony": t.auto_przydzielony,
+                "override_authorized": ledger_override,
+                "grandfathered_capacity_rules": list(
+                    grandfathered_capacity_rules
+                ),
+                "tryb": dane.tryb,
+            },
+        )
+        odpowiedz = {
+            "rezerwacja": _rezerwacja_out(t, user),
+            "wpis": _lista_out(w, user),
+        }
         reservation_audit.add_reservation_audit(
             db,
             termin=t,
@@ -4876,11 +6157,11 @@ def zrealizuj_lista_oczekujacych(
                 termin=t,
                 action="override",
                 actor=user,
-                reason=_powod_audytu_nadpisania(evaluation),
+                reason=override_audit_reason,
                 after=t,
                 override_details=override_details,
-                override_reason_code=override_context["reason_code"],
-                override_note=override_context["note"],
+                override_reason_code=override_reason_code,
+                override_note=override_note,
             )
         if not is_walk_in:
             reservation_communication.enqueue_reservation(
@@ -4905,6 +6186,49 @@ def zrealizuj_lista_oczekujacych(
     return odpowiedz
 
 
+@app.post("/api/lista-oczekujacych/{wid}/zaakceptuj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def zaakceptuj_lista_oczekujacych(
+    wid: int,
+    dane: schemas.WaitlistZaakceptujIn,
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    return _zaakceptuj_lista_oczekujacych(
+        wid,
+        dane,
+        request,
+        expected_version=dane.offer_version,
+        idempotency_key=idempotency_key,
+        legacy_direct=False,
+        db=db,
+        user=user,
+    )
+
+
+@app.post("/api/lista-oczekujacych/{wid}/zrealizuj", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def zrealizuj_lista_oczekujacych(
+    wid: int,
+    dane: schemas.ZrealizujIn,
+    request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Legacy direct path for a plain waiting entry; never consumes an offer."""
+    return _zaakceptuj_lista_oczekujacych(
+        wid,
+        dane,
+        request,
+        expected_version=None,
+        idempotency_key=idempotency_key,
+        legacy_direct=True,
+        db=db,
+        user=user,
+    )
+
+
 @app.post(
     "/api/lista-oczekujacych/{wid}/powiadom",
     response_model=schemas.WaitlistPowiadomOut,
@@ -4916,35 +6240,65 @@ def powiadom_lista_oczekujacych(
     user: models.User = Depends(get_current_user),
 ):
     """Atomowo kolejkuje „stolik gotowy”; worker stempluje dopiero przyjęcie przez provider."""
-    w, _guards = _zablokuj_waitliste(db, wid)
+    if not _ma_dostep_rezerwacji(user, "rezerwacje.dane_kontaktowe"):
+        raise HTTPException(403, "Brak uprawnienia do danych kontaktowych gości.")
+    w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
-    if w.status != "oczekuje":
-        raise HTTPException(409, "Wpis nie oczekuje już na stolik.")
-    if w.powiadomiono_at is not None:
-        existing_count = db.query(models.RezerwacjaWiadomoscOutbox.id).filter_by(
-            waitlist_id=w.id,
-            typ_zdarzenia="table_ready",
-        ).count()
-        if existing_count == 0:
-            summary = reservation_communication.summaries_for_waitlists(db, [w.id]).get(w.id)
-            return {
-                "queued": False,
-                "juz_powiadomiony": True,
-                "legacy_delivery": True,
-                "messages": [],
-                "wpis": _lista_out(w, user, summary),
-            }
-    existing = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
-        waitlist_id=w.id,
-        typ_zdarzenia="table_ready",
-    ).order_by(models.RezerwacjaWiadomoscOutbox.id.desc()).first()
-    if existing is not None:
-        group = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
-            waitlist_id=w.id,
-            typ_zdarzenia="table_ready",
-            dedupe_key=existing.dedupe_key,
-        ).order_by(models.RezerwacjaWiadomoscOutbox.id).all()
+    teraz = utcnow_naive()
+    _odswiez_wygasniecie_waitlisty(db, w, guards, teraz=teraz)
+    if w.status != "zaoferowano":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_NOT_ACTIVE",
+            "Powiadomienie wymaga aktywnej oferty z zajętym zestawem stołów.",
+            rule="waitlist_offer",
+        )
+    held_ids = _stoliki_zadania(w.hold_stolik_id, w.hold_stoliki_dodatkowe)
+    if (
+        not held_ids
+        or w.hold_godz_od is None
+        or w.hold_godz_do is None
+        or w.hold_do is None
+        or w.hold_do <= teraz
+    ):
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_HOLD_INCOMPLETE",
+            "Oferta nie ma kompletnego, aktywnego zestawu stołów.",
+            rule="waitlist_offer",
+        )
+    start_minute, blocked_end = reservation_service.claim_minute_window(
+        w.hold_godz_od, w.hold_godz_do, int(w.hold_bufor_min or 0),
+    )
+    claims = db.query(models.RezerwacjaStolikClaim).filter_by(waitlist_id=w.id).all()
+    expected_claim_slots = {
+        (table_id, minute)
+        for table_id in held_ids
+        for minute in range(start_minute, blocked_end)
+    }
+    if (
+        len(claims) != len(expected_claim_slots)
+        or {(row.stolik_id, row.minute) for row in claims} != expected_claim_slots
+        or any(
+            row.data != w.data
+            or row.expires_at is None
+            or row.expires_at <= teraz
+            or row.expires_at != w.hold_do
+            for row in claims
+        )
+    ):
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_OFFER_CLAIMS_INCOMPLETE",
+            "Oferta nie ma kompletnego atomowego zajęcia zasobów.",
+            rule="waitlist_offer",
+        )
+    group = _wiadomosci_biezacej_oferty(db, w)
+    if group:
         summary = reservation_communication.summaries_for_waitlists(db, [w.id]).get(w.id)
         return {
             "queued": any(row.stan in {"queued", "processing", "retry"} for row in group),
@@ -4953,13 +6307,33 @@ def powiadom_lista_oczekujacych(
             "messages": [reservation_communication.message_dict(row) for row in group],
             "wpis": _lista_out(w, user, summary),
         }
-    messages = reservation_communication.enqueue_table_ready(db, w, actor=user)
+    messages = reservation_communication.enqueue_table_ready(
+        db,
+        w,
+        dedupe_key=(
+            f"waitlist:{w.id}:offer:{w.offer_version}:{w.offer_key_hash}"
+        ),
+        actor=user,
+        now=teraz,
+    )
     if not messages:
+        db.rollback()
         raise HTTPException(
             400,
             "Brak dostępnego kanału kontaktu albo komunikacja operacyjna jest wyłączona.",
         )
-    db.commit()
+    _audit_waitlisty(
+        db,
+        w,
+        "notification_queued",
+        user=user,
+        now=teraz,
+        details={
+            "offer_version": int(w.offer_version or 0),
+            "queued_channels": sorted({row.kanal for row in messages}),
+        },
+    )
+    _commit_zapis_rezerwacji(db, guards)
     summary = reservation_communication.summaries_for_waitlists(db, [w.id]).get(w.id)
     return {
         "queued": True,
@@ -4985,13 +6359,16 @@ def historia_komunikacji_waitlisty(
     waitlist = db.get(models.ListaOczekujacych, wid)
     if waitlist is None:
         raise HTTPException(404, "Brak wpisu.")
+    teraz = utcnow_naive()
     summary = reservation_communication.summaries_for_waitlists(db, [wid]).get(wid)
     return JSONResponse(
         {
             "waitlist_id": wid,
             "summary": summary,
             "legacy_delivery": bool(summary and summary.get("legacy_delivery")),
-            "messages": reservation_communication.waitlist_history(db, wid),
+            "messages": reservation_communication.waitlist_history(
+                db, wid, now=teraz,
+            ),
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -5014,7 +6391,7 @@ def hold_lista_oczekujacych(
     if godz is None:
         raise HTTPException(400, "Ustaw godzinę, aby utworzyć czasowy hold.")
     teraz = utcnow_naive()
-    reservation_service.cleanup_expired_holds(db, teraz)
+    reservation_service.cleanup_expired_holds(db, teraz, dates=[w.data])
     reservation_service.release_waitlist_hold(db, w.id)
     db.flush()
     requested_ids = _stoliki_zadania(dane.stolik_id, dane.stoliki)
@@ -5094,6 +6471,14 @@ def zwolnij_hold_lista_oczekujacych(
     w, guards = _zablokuj_waitliste(db, wid)
     if not w:
         raise HTTPException(404, "Brak wpisu.")
+    if w.status != "oczekuje":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_LEGACY_HOLD_NOT_ALLOWED",
+            "Aktywną ofertę można zwolnić tylko przez wycofanie oferty.",
+            rule="waitlist_offer",
+        )
     reservation_service.release_waitlist_hold(db, w.id)
     _wyczysc_hold_waitlisty(w)
     _commit_zapis_rezerwacji(db, guards); db.refresh(w)
@@ -5956,15 +7341,24 @@ def _ocen_przydzial_rezerwacji(
     preferowana_strefa=None,
     preferowane_cechy=(),
     zachowaj_nieaktywny_przydzial=False,
+    preserve_explicit_interval=False,
+    physical_buffer_min=None,
     alternative_limit=3,
+    now=None,
 ):
     """Jedyny evaluator zasobu dla widgetu, recepcji, hosta i symulatora.
 
     Zajetosc liczymy osobno dla kazdej sali, bo R3 pozwala jej miec wlasny
     bufor. Krotszy bufor jednej sali nie oslabia wiec ochrony drugiej.
     """
-    lifecycle_now = utcnow_naive()
-    rule_now = _teraz_lokalnie() or datetime.now(timezone.utc)
+    lifecycle_now = (
+        now.astimezone(timezone.utc).replace(tzinfo=None)
+        if now is not None and now.tzinfo is not None
+        else (now.replace(tzinfo=None) if now is not None else utcnow_naive())
+    )
+    rule_now = lifecycle_now.replace(tzinfo=timezone.utc).astimezone(
+        ZoneInfo("Europe/Warsaw"),
+    )
     tables = _stoly_do_seating(db)
     combinations = _kombinacje_do_seating(
         db,
@@ -5981,6 +7375,8 @@ def _ocen_przydzial_rezerwacji(
         existing_termin_id=pomin_id,
         intent=rule_intent,
         preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
+        preserve_explicit_interval=preserve_explicit_interval,
+        now=lifecycle_now,
     )
     occupied = set()
     table_ids_by_room = defaultdict(set)
@@ -5999,6 +7395,8 @@ def _ocen_przydzial_rezerwacji(
                 existing_termin_id=pomin_id,
                 intent=rule_intent,
                 preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
+                preserve_explicit_interval=preserve_explicit_interval,
+                now=lifecycle_now,
             )
             if evaluation is None or evaluation.godz_do is None:
                 continue
@@ -6007,7 +7405,14 @@ def _ocen_przydzial_rezerwacji(
                 data=data,
                 start=godz_od,
                 end=evaluation.godz_do,
-                buffer_min=evaluation.buffer_min,
+                # The rule evaluation remains current and drives diagnostics.
+                # A verified waitlist offer may, however, transfer an older
+                # physical promise whose claim interval has a frozen buffer.
+                buffer_min=(
+                    evaluation.buffer_min
+                    if physical_buffer_min is None
+                    else max(0, int(physical_buffer_min or 0))
+                ),
                 exclude_termin_id=pomin_id,
                 now=lifecycle_now,
             )
@@ -6030,6 +7435,7 @@ def _ocen_przydzial_rezerwacji(
             preferred_zone=preferowana_strefa,
             preferred_features=tuple(preferowane_cechy or ()),
             preserve_existing_room_access=zachowaj_nieaktywny_przydzial,
+            preserve_explicit_interval=preserve_explicit_interval,
         ),
         tables=tables,
         combinations=combinations,
@@ -7016,7 +8422,9 @@ def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Reques
     if dane.telefon or dane.email:                 # limit po kontakcie (PII szyfrowane → filtr po odszyfr.)
         dzisiaj = db.query(models.ListaOczekujacych).filter(
             models.ListaOczekujacych.data == dane.data,
-            models.ListaOczekujacych.status == "oczekuje").all()
+            models.ListaOczekujacych.status.in_(
+                reservation_service.WAITLIST_ACTIVE_STATUSES
+            )).all()
         ile = sum(1 for w in dzisiaj if (dane.telefon and w.telefon == dane.telefon)
                   or (dane.email and w.email == dane.email))
         if ile >= ONLINE_LIMIT_DZIENNY:

@@ -2,6 +2,7 @@
 Ten test buduje bazę PRZEZ Alembic (upgrade head) i porównuje kolumny kluczowych tabel z modelem —
 to jedyny sposób złapać drift, którego create_all nie pokaże (np. osierocone/brakujące pole)."""
 
+import importlib
 import os
 import shutil
 import sqlite3
@@ -14,7 +15,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0064_r6a_reservation_workstations"
+HEAD = "0065_r6b2_waitlist_offers"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -35,6 +36,170 @@ _TABELE = [
     "reservation_operator_credentials", "reservation_workstations",
     "reservation_operator_sessions", "reservation_workstation_audit",
 ]
+
+
+@pytest.mark.parametrize(
+    "name,source,reflected,weakened_literal",
+    [
+        (
+            "ck_lista_oczekujacych_status",
+            "waitlist",
+            "(status::text = ANY (ARRAY['oczekuje'::character varying, "
+            "'zaoferowano'::character varying, "
+            "'zaakceptowano'::character varying, "
+            "'wygasla'::character varying, "
+            "'anulowano'::character varying]::text[]))",
+            "anulowano",
+        ),
+        (
+            "ck_lista_oczekujacych_offer_kanal",
+            "waitlist",
+            "((offer_kanal IS NULL) OR (offer_kanal::text = ANY "
+            "(ARRAY['online'::character varying, "
+            "'wewnetrzna'::character varying]::text[])))",
+            "wewnetrzna",
+        ),
+        (
+            "ck_waitlist_offer_override_context_reason_code",
+            "context",
+            "(reason_code::text = ANY (ARRAY["
+            "'guest_request'::character varying, "
+            "'large_group_confirmed'::character varying, "
+            "'event_exception'::character varying, "
+            "'operational_decision'::character varying, "
+            "'walk_in'::character varying, 'other'::character varying, "
+            "'legacy_confirmation'::character varying]::text[]))",
+            "legacy_confirmation",
+        ),
+    ],
+)
+def test_r6b2_adoption_accepts_postgresql_any_for_exact_membership_only(
+    name, source, reflected, weakened_literal,
+):
+    migration = importlib.import_module(
+        "migrations.versions.20260718_0065_r6b2_waitlist_offers"
+    )
+    expected = (
+        migration._CHECKS[name]
+        if source == "waitlist"
+        else migration._CONTEXT_CHECKS[name]
+    )
+    assert migration._check_matches(
+        name, reflected, expected, "postgresql",
+    )
+    weakened = reflected.replace(
+        f"'{weakened_literal}'::character varying",
+        "'dowolny'::character varying",
+    )
+    assert not migration._check_matches(
+        name, weakened, expected, "postgresql",
+    )
+
+
+def _r6b2_context_inspector(migration, id_generator):
+    columns = [
+        {
+            "name": name,
+            "type": column_type,
+            "nullable": nullable,
+        }
+        for name, column_type, nullable in migration._CONTEXT_COLUMNS
+    ]
+    id_column = next(item for item in columns if item["name"] == "id")
+    id_column.update(id_generator)
+
+    class FakeInspector:
+        def get_columns(self, table):
+            assert table == migration._CONTEXT_TABLE
+            return columns
+
+        def get_pk_constraint(self, table):
+            assert table == migration._CONTEXT_TABLE
+            return {"constrained_columns": ["id"]}
+
+        def get_indexes(self, table):
+            assert table == migration._CONTEXT_TABLE
+            return [
+                {
+                    "name": name,
+                    "column_names": list(column_names),
+                    "unique": unique,
+                }
+                for name, (column_names, unique)
+                in migration._CONTEXT_INDEXES.items()
+            ]
+
+        def get_unique_constraints(self, table):
+            assert table == migration._CONTEXT_TABLE
+            return [
+                {"name": name, "column_names": list(column_names)}
+                for name, column_names in migration._CONTEXT_UNIQUES.items()
+            ]
+
+        def get_foreign_keys(self, table):
+            assert table == migration._CONTEXT_TABLE
+            return [
+                {
+                    "constrained_columns": list(local_columns),
+                    "referred_table": referred_table,
+                    "referred_columns": list(referred_columns),
+                    "options": {"ondelete": ondelete},
+                }
+                for (
+                    local_columns,
+                    referred_table,
+                    referred_columns,
+                    ondelete,
+                ) in migration._CONTEXT_FKS
+            ]
+
+        def get_check_constraints(self, table):
+            assert table == migration._CONTEXT_TABLE
+            return [
+                {"name": name, "sqltext": sql}
+                for name, sql in migration._CONTEXT_CHECKS.items()
+            ]
+
+    return FakeInspector()
+
+
+def test_r6b2_postgresql_adoption_rejects_context_pk_without_generator():
+    migration = importlib.import_module(
+        "migrations.versions.20260718_0065_r6b2_waitlist_offers"
+    )
+    inspector = _r6b2_context_inspector(
+        migration,
+        {"default": None, "identity": None},
+    )
+    with pytest.raises(RuntimeError, match="PK has no generator"):
+        migration._validate_context_schema(inspector, "postgresql")
+
+
+@pytest.mark.parametrize(
+    "id_generator",
+    [
+        {
+            "default": (
+                "nextval('public.waitlist_offer_override_context_id_seq'"
+                "::regclass)"
+            ),
+            "identity": None,
+        },
+        {
+            "default": None,
+            "identity": {"always": False, "start": 1, "increment": 1},
+        },
+    ],
+    ids=["serial-nextval", "identity"],
+)
+def test_r6b2_postgresql_adoption_accepts_supported_context_pk_generators(
+    id_generator,
+):
+    migration = importlib.import_module(
+        "migrations.versions.20260718_0065_r6b2_waitlist_offers"
+    )
+    inspector = _r6b2_context_inspector(migration, id_generator)
+    migration._validate_context_schema(inspector, "postgresql")
 
 
 def _env(db_file, prefix="ledger"):
@@ -114,6 +279,228 @@ def _alembic(env, *args):
         [sys.executable, "-m", "alembic", *args],
         cwd=str(BACKEND), env=env, capture_output=True, text=True,
     )
+
+
+def test_migracja_0065_mapuje_legacy_i_ma_lossless_round_trip(tmp_path):
+    db_file = tmp_path / "_r6b2_lossless_round_trip.db"
+    env = _env(db_file, "r6b2-lossless")
+    upgraded = _alembic(env, "upgrade", "0064_r6a_reservation_workstations")
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.executemany(
+            "INSERT INTO lista_oczekujacych "
+            "(id,data,nazwisko,status,utworzono_at,zrealizowano_at) "
+            "VALUES (?,?,?,?,?,?)",
+            [
+                (
+                    1, "2035-07-18", "Legacy zaakceptowany", "zrealizowany",
+                    "2026-07-18 09:00:00", "2026-07-18 10:00:00",
+                ),
+                (
+                    2, "2035-07-18", "Legacy anulowany", "odwolany",
+                    "2026-07-18 11:00:00", None,
+                ),
+            ],
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        rows = con.execute(
+            "SELECT id,status,zaakceptowano_at,anulowano_at "
+            "FROM lista_oczekujacych ORDER BY id"
+        ).fetchall()
+        context_table = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='waitlist_offer_override_context'"
+        ).fetchone()
+    finally:
+        con.close()
+    assert rows == [
+        (1, "zaakceptowano", "2026-07-18 10:00:00", None),
+        (2, "anulowano", None, "2026-07-18 11:00:00"),
+    ]
+    assert context_table == ("waitlist_offer_override_context",)
+
+    downgraded = _alembic(
+        env, "downgrade", "0064_r6a_reservation_workstations",
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        rows = con.execute(
+            "SELECT id,status,zrealizowano_at "
+            "FROM lista_oczekujacych ORDER BY id"
+        ).fetchall()
+        columns = {
+            row[1] for row in con.execute("PRAGMA table_info(lista_oczekujacych)")
+        }
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        context_table = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='waitlist_offer_override_context'"
+        ).fetchone()
+    finally:
+        con.close()
+    assert rows == [
+        (1, "zrealizowany", "2026-07-18 10:00:00"),
+        (2, "odwolany", None),
+    ]
+    assert "priorytet" not in columns
+    assert "offer_version" not in columns
+    assert context_table is None
+    assert revision == "0064_r6a_reservation_workstations"
+
+
+def test_migracja_0065_blokuje_lossy_downgrade(tmp_path):
+    db_file = tmp_path / "_r6b2_lossy_downgrade.db"
+    env = _env(db_file, "r6b2-lossy")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO lista_oczekujacych "
+            "(id,data,nazwisko,status,utworzono_at) "
+            "VALUES (1,'2035-07-18','Aktywna oferta','zaoferowano',"
+            "'2026-07-18 12:00:00')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    downgraded = _alembic(
+        env, "downgrade", "0064_r6a_reservation_workstations",
+    )
+    output = downgraded.stdout + downgraded.stderr
+    assert downgraded.returncode != 0
+    assert "R6B2_DOWNGRADE_DATA_LOSS" in output
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        status = con.execute(
+            "SELECT status FROM lista_oczekujacych WHERE id=1"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert revision == HEAD
+    assert status == "zaoferowano"
+
+
+def test_migracja_0065_partial_adoption_fail_closed(tmp_path):
+    db_file = tmp_path / "_r6b2_partial_adoption.db"
+    env = _env(db_file, "r6b2-partial")
+    upgraded = _alembic(env, "upgrade", "0064_r6a_reservation_workstations")
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "ALTER TABLE lista_oczekujacych "
+            "ADD COLUMN priorytet INTEGER NOT NULL DEFAULT 0"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    adoption = _alembic(env, "upgrade", HEAD)
+    output = adoption.stdout + adoption.stderr
+    assert adoption.returncode != 0
+    assert "R6B2_PARTIAL_ADOPTION" in output
+
+
+def test_migracja_0065_wrong_shape_override_context_fail_closed(tmp_path):
+    db_file = tmp_path / "_r6b2_wrong_context.db"
+    env = _env(db_file, "r6b2-wrong-context")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute("DROP TABLE waitlist_offer_override_context")
+        con.execute(
+            "CREATE TABLE waitlist_offer_override_context (id INTEGER PRIMARY KEY)"
+        )
+        con.commit()
+    finally:
+        con.close()
+    stamped = _alembic(env, "stamp", "0064_r6a_reservation_workstations")
+    assert stamped.returncode == 0, stamped.stderr
+
+    adoption = _alembic(env, "upgrade", HEAD)
+    output = adoption.stdout + adoption.stderr
+    assert adoption.returncode != 0
+    assert "R6B2_PARTIAL_ADOPTION" in output
+
+
+@pytest.mark.parametrize("defect", ["column", "check", "index"])
+def test_r6b2_adoption_fail_closed_dla_niezgodnych_samych_nazw(
+    monkeypatch, defect,
+):
+    migration = importlib.import_module(
+        "migrations.versions.20260718_0065_r6b2_waitlist_offers"
+    )
+    columns = [
+        {
+            "name": name,
+            "type": column_type,
+            "nullable": nullable,
+            "default": default,
+        }
+        for name, column_type, nullable, default in migration._ADDITIONS
+    ]
+    checks = [
+        {"name": name, "sqltext": sql}
+        for name, sql in migration._CHECKS.items()
+    ]
+    indexes = [{
+        "name": migration._INDEX_NAME,
+        "column_names": list(migration._INDEX_COLUMNS),
+        "unique": False,
+    }]
+    if defect == "column":
+        next(item for item in columns if item["name"] == "offer_version")[
+            "nullable"
+        ] = True
+    elif defect == "check":
+        next(
+            item for item in checks
+            if item["name"] == "ck_lista_oczekujacych_offer_version"
+        )["sqltext"] = "offer_version >= -1"
+    else:
+        indexes[0]["column_names"] = list(migration._INDEX_COLUMNS[:-1])
+
+    class FakeInspector:
+        def get_table_names(self):
+            return ["lista_oczekujacych", migration._CONTEXT_TABLE]
+
+        def get_columns(self, _table):
+            return columns
+
+        def get_check_constraints(self, _table):
+            return checks
+
+        def get_indexes(self, _table):
+            return indexes
+
+    class FakeBind:
+        class dialect:
+            name = "sqlite"
+
+    monkeypatch.setattr(migration.sa, "inspect", lambda _bind: FakeInspector())
+    with pytest.raises(RuntimeError, match="R6B2_PARTIAL_ADOPTION"):
+        migration._validate_adopted_schema(FakeBind())
 
 
 def _sql_closing_parenthesis(sql, opening_index):

@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a i R6b.1 wdrożone oraz odebrane automatycznie; otwarte bramy środowiskowe · 18 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a, R6b.1 i R6b.2 wdrożone oraz odebrane automatycznie; otwarte bramy środowiskowe · 18 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -936,7 +936,7 @@ przejąć aktywnej sesji prostym odgadnięciem PIN-u.
 Aktualizacje live nie ogłaszają całej tablicy czytnikowi ekranu. `aria-live` obejmuje wyłącznie
 wynik konkretnej akcji; timery nie generują cyklicznych komunikatów.
 
-**Stan wdrożenia — 18 lipca 2026: R6b.1 ukończone i odebrane automatycznie.**
+**Stan wdrożenia — 18 lipca 2026: R6b.1 i R6b.2 ukończone oraz odebrane automatycznie.**
 
 - [x] `GET /api/host/snapshot` atomowo zasila kolejkę, opublikowany plan sali i oś czasu jednym
   wersjonowanym kontraktem z czasem generacji; odpowiedź pozostaje prywatna i `no-store`.
@@ -952,7 +952,21 @@ wynik konkretnej akcji; timery nie generują cyklicznych komunikatów.
 - [x] 57 testów backendu, 65 plików / 474 testy frontendu oraz build produkcyjny przeszły.
 - [x] Smoke przeglądarkowy desktop i 390 px potwierdził brak poziomego overflow, cele dotykowe
   minimum 44 px oraz poprawne przełączanie `Goście / Sala / Czas`.
-- [ ] R6b.2: pełny cykl życia waitlisty i ofert.
+- [x] R6b.2: migracja `0065` dodaje pełny cykl `oczekuje` → `zaoferowano` → `zaakceptowano` /
+  `wygasła` / `anulowano`, wersjonowaną ofertę i atomowy hold dokładnie całego zestawu stołów.
+- [x] Oferta zamraża godzinę, koniec wizyty, bufor, salę, kanał, konfigurację i źródło decyzji;
+  wymagany hash-only klucz idempotencji chroni przed podwójnym utworzeniem lub przyjęciem.
+- [x] Obietnica pojemności i pacingu z chwili oferty jest zachowana przy akceptacji. Kontrolowane
+  przekroczenie wymaga uprawnienia, ponownego PIN-u, typowanego powodu i szyfrowanego kontekstu.
+- [x] Aktywna oferta chroni stół, kombinację `4+2`, `6+4` i salę przed niezgodną publikacją,
+  wyłączeniem lub legacy-zmianą topologii; inne sale nie dostają fałszywego konfliktu.
+- [x] Powiadomienie „stolik gotowy” korzysta z outboxa R5b albo jawnej obsługi ustnej. Dostarczenie
+  po terminalizacji tworzy zamykalny alert, a niewysłane terminalne błędy nie zaśmiecają inboxa.
+- [x] Host pokazuje odliczanie, dobór konfiguracji, przyjęcie, wycofanie i komunikację bez pełnego
+  przeładowania; cache offline pozostaje redagowany i tylko do odczytu.
+- [x] Pełny backend aplikacyjny, pełny round-trip migracji, 65 plików / 489 testów frontendu,
+  build produkcyjny oraz smoke Host 390×844 przeszły. Test współbieżności PostgreSQL pozostaje
+  osobną bramą środowiskową, gdy `TEST_POSTGRES_URL` nie jest dostępny.
 - [ ] R6b.3: walidowany drag-and-drop z równorzędną alternatywą klawiaturową.
 
 **Done R6b:** host prowadzi cały serwis z jednego widoku, a każda akcja daje lokalny i odwracalny tam,
@@ -1093,11 +1107,10 @@ R0a–R5b są zamkniętymi checkpointami. R5c jest technicznie gotowe, lecz zgod
 pozostaje wyłączone do czasu uruchomienia JDG i gotowości merchant. Nie spełnia jeszcze bramy
 produkcyjnej, ale odłożona integracja Stripe nie blokuje niezależnego R6a.
 
-R6b.1 jest zamkniętym checkpointem. Najbliższy niezależny krok produktowy to **R6b.2**: pełny cykl
-życia waitlisty (`oczekuje → zaoferowano → zaakceptowano / wygasła / anulowano`), czasowa oferta,
-hold całej konfiguracji stołów, audyt komunikacji i bezpieczne zwolnienie zasobów. Następnie R6b.3
-dodaje walidowany drag-and-drop z pełną alternatywą klawiaturową. Smoke docelowego urządzenia i
-współbieżność PostgreSQL pozostają bramami rolloutowymi R6a, nie nowym zakresem funkcjonalnym.
+R6b.1 i R6b.2 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to **R6b.3**:
+walidowany drag-and-drop w host standzie z pełną, równorzędną alternatywą klawiaturową i tym samym
+kontraktem konfliktu oraz odwracalnego feedbacku. Smoke docelowego urządzenia i współbieżność
+PostgreSQL pozostają bramami rolloutowymi R6a/R6b, nie nowym zakresem funkcjonalnym.
 
 Produkcyjne testy Stripe płatność–zwrot wrócą dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
 pozostaje osobnym kontekstem i nie może ponownie używać stanu, webhooków ani modeli płatności rezerwacji.

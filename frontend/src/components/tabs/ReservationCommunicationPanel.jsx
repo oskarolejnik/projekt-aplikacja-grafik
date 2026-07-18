@@ -15,6 +15,13 @@ const HISTORY_REFRESH_CONFLICTS = new Set([
   'COMMUNICATION_RECONCILIATION_REQUIRED',
 ])
 const CHANNEL_LABELS = { email: 'E-mail', sms: 'SMS' }
+const WAITLIST_STALE_DELIVERED_CODE = 'WAITLIST_STALE_TABLE_READY_DELIVERED'
+
+const isStaleDelivered = (message) => Boolean(
+  message?.state === 'uncertain'
+  && message?.sent_at
+  && message?.last_error_code === WAITLIST_STALE_DELIVERED_CODE
+)
 
 const OWNER_META = {
   reservation: {
@@ -77,6 +84,7 @@ export default function ReservationCommunicationPanel({
   communicationPreference = 'auto',
   actionsDisabled = false,
   manualAlreadyHandled = false,
+  showQueueAction = true,
   confirmAction,
   onSummaryChange,
 }) {
@@ -276,7 +284,7 @@ export default function ReservationCommunicationPanel({
   }
 
   const queueMessage = async () => {
-    if (actionLockRef.current || actionsDisabled || visibleLoading || loadError || manualBlockReason) return
+    if (!showQueueAction || actionLockRef.current || actionsDisabled || visibleLoading || loadError || manualBlockReason) return
     const requestOwnerKey = ownerKey
     let confirmResend = false
     if (ownerType === 'reservation' && hasManualMessage) {
@@ -341,7 +349,9 @@ export default function ReservationCommunicationPanel({
       return
     }
     const labels = {
-      sent: 'Wiadomość oznaczono jako wysłaną.',
+      sent: isStaleDelivered(message)
+        ? 'Alert zamknięty. Dostarczenie pozostaje zapisane w historii.'
+        : 'Wiadomość oznaczono jako wysłaną.',
       failed: 'Wiadomość oznaczono jako niewysłaną.',
       retry: 'Ponowienie dodano do kolejki ze świadomą zgodą na ryzyko duplikatu.',
     }
@@ -405,6 +415,7 @@ export default function ReservationCommunicationPanel({
           {visibleHistory.messages.length ? visibleHistory.messages.map((message) => {
             const timestamp = formatTimestamp(message.sent_at || message.uncertain_at || message.updated_at || message.created_at)
             const busy = action?.endsWith(`:${message.id}`)
+            const staleDelivered = isStaleDelivered(message)
             return (
               <article key={message.id} className="py-3 [&+&]:border-t [&+&]:border-line">
                 <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
@@ -448,10 +459,14 @@ export default function ReservationCommunicationPanel({
                   <div className="mt-3 border-y border-lemon/25 bg-lemon/[0.04] px-3 py-3" role="note" aria-label="Niepewny wynik dostarczenia">
                     <div className="flex gap-2 text-sm leading-relaxed text-lemon">
                       <Icon name="warning" className="mt-0.5 h-4 w-4 shrink-0" />
-                      <p>Dostawca mógł przyjąć wiadomość. Sprawdź skrzynkę lub panel dostawcy — ponowienie może wysłać duplikat.</p>
+                      <p>
+                        {staleDelivered
+                          ? 'Wiadomość została dostarczona po wycofaniu, anulowaniu lub wygaśnięciu oferty. Gość mógł zobaczyć nieaktualną informację o gotowym stoliku.'
+                          : 'Dostawca mógł przyjąć wiadomość. Sprawdź skrzynkę lub panel dostawcy — ponowienie może wysłać duplikat.'}
+                      </p>
                     </div>
                     <label htmlFor={`${panelId}-note-${message.id}`} className="field-label mt-3 block">
-                      Wynik sprawdzenia
+                      {staleDelivered ? 'Sposób wyjaśnienia' : 'Wynik sprawdzenia'}
                       <textarea
                         id={`${panelId}-note-${message.id}`}
                         rows={2}
@@ -459,27 +474,38 @@ export default function ReservationCommunicationPanel({
                         value={notes[message.id] || ''}
                         onChange={(event) => setNotes((current) => ({ ...current, [message.id]: event.target.value }))}
                         className="field mt-1.5 resize-y"
-                        placeholder="np. Brak wiadomości w panelu SMS"
+                        placeholder={staleDelivered
+                          ? 'np. Telefonicznie wyjaśniono gościowi zmianę'
+                          : 'np. Brak wiadomości w panelu SMS'}
                         disabled={Boolean(action) || actionsDisabled}
                       />
                     </label>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <Button size="sm" variant="ghost" disabled={Boolean(action) || actionsDisabled} loading={action === actionKey('reconcile-sent', message.id)} loadingLabel="Zapisuję…" onClick={() => reconcile(message, 'sent')}>
-                        <Icon name="check" className="h-4 w-4" />
-                        Oznacz jako wysłaną
-                      </Button>
-                      <Button size="sm" variant="ghost" disabled={Boolean(action) || actionsDisabled} loading={action === actionKey('reconcile-failed', message.id)} loadingLabel="Zapisuję…" onClick={() => reconcile(message, 'failed')}>
-                        <Icon name="close" className="h-4 w-4" />
-                        Oznacz jako niewysłaną
-                      </Button>
-                      {message.retry_allowed !== false ? (
-                        <Button size="sm" variant="ghost" className="border-danger/25 text-danger hover:bg-danger/10" disabled={Boolean(action) || actionsDisabled} loading={action === actionKey('reconcile-retry', message.id)} loadingLabel="Dodaję ponowienie…" onClick={() => reconcile(message, 'retry')}>
-                          <Icon name="refresh" className="h-4 w-4" />
-                          Ponów mimo ryzyka
+                      {staleDelivered ? (
+                        <Button size="sm" variant="ghost" disabled={Boolean(action) || actionsDisabled} loading={action === actionKey('reconcile-sent', message.id)} loadingLabel="Zamykam alert…" onClick={() => reconcile(message, 'sent')}>
+                          <Icon name="check" className="h-4 w-4" />
+                          Potwierdź i zamknij alert
                         </Button>
-                      ) : null}
+                      ) : (
+                        <>
+                          <Button size="sm" variant="ghost" disabled={Boolean(action) || actionsDisabled} loading={action === actionKey('reconcile-sent', message.id)} loadingLabel="Zapisuję…" onClick={() => reconcile(message, 'sent')}>
+                            <Icon name="check" className="h-4 w-4" />
+                            Oznacz jako wysłaną
+                          </Button>
+                          <Button size="sm" variant="ghost" disabled={Boolean(action) || actionsDisabled} loading={action === actionKey('reconcile-failed', message.id)} loadingLabel="Zapisuję…" onClick={() => reconcile(message, 'failed')}>
+                            <Icon name="close" className="h-4 w-4" />
+                            Oznacz jako niewysłaną
+                          </Button>
+                          {message.retry_allowed !== false ? (
+                            <Button size="sm" variant="ghost" className="border-danger/25 text-danger hover:bg-danger/10" disabled={Boolean(action) || actionsDisabled} loading={action === actionKey('reconcile-retry', message.id)} loadingLabel="Dodaję ponowienie…" onClick={() => reconcile(message, 'retry')}>
+                              <Icon name="refresh" className="h-4 w-4" />
+                              Ponów mimo ryzyka
+                            </Button>
+                          ) : null}
+                        </>
+                      )}
                     </div>
-                    {message.retry_allowed === false ? (
+                    {!staleDelivered && message.retry_allowed === false ? (
                       <p className="mt-2 text-xs leading-relaxed text-muted">
                         To wynik wcześniejszej wersji rezerwacji. Możesz go oznaczyć, ale nie ponawiać wysyłki.
                       </p>
@@ -500,20 +526,22 @@ export default function ReservationCommunicationPanel({
       ) : null}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={queueMessage}
-          loading={action === 'queue' || action === 'queue-confirm'}
-          loadingLabel={action === 'queue-confirm' ? 'Czekam na decyzję…' : 'Dodaję do kolejki…'}
-          disabled={Boolean(action) || queueDisabled}
-        >
-          <Icon name="bell" className="h-4 w-4" />
-          {queueLabel}
-        </Button>
+        {showQueueAction ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={queueMessage}
+            loading={action === 'queue' || action === 'queue-confirm'}
+            loadingLabel={action === 'queue-confirm' ? 'Czekam na decyzję…' : 'Dodaję do kolejki…'}
+            disabled={Boolean(action) || queueDisabled}
+          >
+            <Icon name="bell" className="h-4 w-4" />
+            {queueLabel}
+          </Button>
+        ) : null}
         {refreshing ? <span className="inline-flex items-center gap-2 text-xs text-muted" role="status"><Spinner className="h-3.5 w-3.5 motion-reduce:animate-none" /> Aktualizuję…</span> : null}
       </div>
-      {queueDisabledReason ? <p className="mt-2 text-xs leading-relaxed text-muted">{queueDisabledReason}</p> : null}
+      {showQueueAction && queueDisabledReason ? <p className="mt-2 text-xs leading-relaxed text-muted">{queueDisabledReason}</p> : null}
       <InlineFeedback
         feedback={refreshError ? { type: 'warning', message: `Nie udało się odświeżyć statusu: ${refreshError}` } : null}
         className="mt-2"

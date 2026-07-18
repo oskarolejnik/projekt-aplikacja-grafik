@@ -66,7 +66,7 @@ def test_realizacja_konczy_wlasny_hold(admin_client):
     r = admin_client.post(f"/api/lista-oczekujacych/{e}/zrealizuj", json={"stolik_id": s1})
     assert r.status_code == 200, r.text
     wpis = r.json()["wpis"]
-    assert wpis["status"] == "zrealizowany" and wpis["hold_stolik_id"] is None
+    assert wpis["status"] == "zaakceptowano" and wpis["hold_stolik_id"] is None
 
 
 def test_wielostolowy_hold_jest_czasowy_i_realizuje_walk_in(admin_client, db):
@@ -231,13 +231,21 @@ def test_override_required_przy_realizacji_zachowuje_pelny_wielostolowy_hold(
 
 
 def test_powiadom_kolejkuje_bez_stempla_i_nie_dubluje(admin_client, db):
+    table_id = _stolik(admin_client, "Notify", 2)
     e = _wait(admin_client, DZIEN, "18:00", 2, email="g@x.pl")
+    offered = admin_client.post(
+        f"/api/lista-oczekujacych/{e}/oferta",
+        json={"stolik_id": table_id, "minuty": 30, "expected_offer_version": 0},
+        headers={"Idempotency-Key": "waitlist-notify-offer"},
+    )
+    assert offered.status_code == 200, offered.text
+    message_id = offered.json()["messages"][0]["id"]
     r1 = admin_client.post(f"/api/lista-oczekujacych/{e}/powiadom")
     assert r1.status_code == 200
     assert r1.json()["queued"] is True
     assert r1.json()["wpis"]["powiadomiono_at"] is None
     assert r1.json()["messages"][0]["state"] == "queued"
-    message_id = r1.json()["messages"][0]["id"]
+    assert r1.json()["messages"][0]["id"] == message_id
     r2 = admin_client.post(f"/api/lista-oczekujacych/{e}/powiadom")
     assert r2.json()["queued"] is True
     assert r2.json()["juz_powiadomiony"] is False

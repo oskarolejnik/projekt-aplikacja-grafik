@@ -57,6 +57,18 @@ const STATUS_FEEDBACK = {
   odwolana: 'Odwołano rezerwację.',
 }
 
+const WAITLIST_STATUS_META = {
+  oczekuje: { label: 'Oczekuje', className: 'bg-white/[0.07] text-ink' },
+  zaoferowano: { label: 'Zaoferowano', className: 'bg-lemon/12 text-lemon' },
+  zaakceptowano: { label: 'Zaakceptowano', className: 'bg-mint/15 text-mint' },
+  wygasla: { label: 'Wygasła', className: 'bg-danger/10 text-danger' },
+  anulowano: { label: 'Anulowano', className: 'bg-white/[0.05] text-muted' },
+  // Adapter historycznych rekordów sprzed R6b.2.
+  zrealizowany: { label: 'Posadzony', className: 'bg-mint/15 text-mint' },
+  odwolany: { label: 'Odwołany', className: 'bg-white/[0.05] text-muted' },
+}
+const ACTIVE_WAITLIST_STATUSES = new Set(['oczekuje', 'zaoferowano'])
+
 const emptyWaitlist = () => ({
   godz_od: '',
   liczba_osob: '',
@@ -88,7 +100,9 @@ const sortReservations = (rows) => [...rows].sort((a, b) =>
 const sortTables = (rows) => [...rows].sort((a, b) =>
   (a.kolejnosc || 0) - (b.kolejnosc || 0) || a.id - b.id)
 const sortWaitlist = (rows) => [...rows].sort((a, b) =>
-  (a.status || '').localeCompare(b.status || '') ||
+  ({ zaoferowano: 0, oczekuje: 1, zaakceptowano: 2, wygasla: 3, anulowano: 4 }[a.status] ?? 8)
+    - ({ zaoferowano: 0, oczekuje: 1, zaakceptowano: 2, wygasla: 3, anulowano: 4 }[b.status] ?? 8) ||
+  Number(b.priorytet || 0) - Number(a.priorytet || 0) ||
   (a.godz_od || '').localeCompare(b.godz_od || '') || a.id - b.id)
 
 const replaceById = (rows, next, sorter = (value) => value) => {
@@ -964,7 +978,7 @@ export default function RezerwacjeStolik({
   }
 
   const activeReservations = useMemo(() => rez.filter((row) => ['rezerwacja', 'potwierdzona'].includes(row.status)), [rez])
-  const activeWaitlist = useMemo(() => lista.filter((entry) => entry.status === 'oczekuje'), [lista])
+  const activeWaitlist = useMemo(() => lista.filter((entry) => ACTIVE_WAITLIST_STATUSES.has(entry.status)), [lista])
   const guestCount = activeReservations.reduce((sum, row) => sum + (Number(row.liczba_osob) || 0), 0)
   const dataLabel = parseDay(data).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })
   const isToday = data === dzisISO()
@@ -1351,10 +1365,12 @@ export default function RezerwacjeStolik({
       {listaModal ? (
         <DialogFrame title={`Lista oczekujących · ${data}`} closeLabel="Zamknij listę oczekujących" onClose={closeWaitlist} maxWidth="max-w-xl" restoreFocusRef={waitlistTriggerRef}>
           <div className="mb-5 space-y-2">
+            <p className="pb-2 text-xs leading-relaxed text-muted">Oferty stolika twórz w widoku Host. System najpierw blokuje tam cały zestaw stolików, a dopiero potem uruchamia komunikację.</p>
             {lista.length === 0 ? <p className="text-sm text-muted">Nikt nie oczekuje w tym dniu.</p> : null}
             {lista.map((entry) => {
               const action = waitActions[entry.id]
               const guestName = canViewContacts ? entry.nazwisko : 'Gość'
+              const waitStatus = WAITLIST_STATUS_META[entry.status] || { label: 'Status nieznany', className: 'bg-white/[0.05] text-muted' }
               return (
                 <div key={entry.id} className="border-b border-line py-3 last:border-0">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1368,11 +1384,7 @@ export default function RezerwacjeStolik({
                       {entry.communication_summary ? (
                         <ReservationCommunicationStatus summary={entry.communication_summary} />
                       ) : null}
-                      {entry.status !== 'oczekuje' ? (
-                        <span className={`rounded-full px-2 py-1 text-xs ${entry.status === 'zrealizowany' ? 'bg-mint/15 text-mint' : 'bg-white/10 text-muted'}`}>
-                          {entry.status === 'zrealizowany' ? 'Posadzony' : 'Odwołany'}
-                        </span>
-                      ) : null}
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${waitStatus.className}`}>{waitStatus.label}</span>
                       {canViewContacts ? (
                         <Button
                           variant="subtle"
@@ -1383,7 +1395,7 @@ export default function RezerwacjeStolik({
                           aria-controls={`waitlist-communication-${entry.id}`}
                         >
                           <Icon name="bell" className="h-4 w-4" />
-                          {waitCommunicationId === entry.id ? 'Zwiń komunikację' : 'Stolik gotowy'}
+                          {waitCommunicationId === entry.id ? 'Zwiń komunikację' : 'Komunikacja'}
                         </Button>
                       ) : null}
                       {isAdmin ? (
@@ -1475,7 +1487,8 @@ export default function RezerwacjeStolik({
                         initialSummary={entry.communication_summary}
                         communicationPreference={entry.kanal_komunikacji || 'auto'}
                         canQueue={canQueueCommunication(entry)}
-                        actionsDisabled={Boolean(action) || entry.status !== 'oczekuje'}
+                        actionsDisabled={Boolean(action)}
+                        showQueueAction={entry.status === 'zaoferowano'}
                         manualAlreadyHandled={Boolean(entry.powiadomiono_at || entry.communication_summary?.legacy_delivery)}
                         confirmAction={confirm}
                         onSummaryChange={updateCommunicationSummary}

@@ -1511,6 +1511,36 @@ class ListaOczekujacych(Base):
             "kanal_komunikacji IN ('auto', 'email', 'sms', 'oba', 'brak')",
             name="ck_lista_oczekujacych_kanal_komunikacji",
         ),
+        CheckConstraint(
+            "status IN ('oczekuje', 'zaoferowano', 'zaakceptowano', "
+            "'wygasla', 'anulowano')",
+            name="ck_lista_oczekujacych_status",
+        ),
+        CheckConstraint(
+            "priorytet >= 0 AND priorytet <= 9",
+            name="ck_lista_oczekujacych_priorytet",
+        ),
+        CheckConstraint(
+            "offer_version >= 0",
+            name="ck_lista_oczekujacych_offer_version",
+        ),
+        CheckConstraint(
+            "offer_key_hash IS NULL OR length(offer_key_hash) = 64",
+            name="ck_lista_oczekujacych_offer_key_hash",
+        ),
+        CheckConstraint(
+            "offer_request_fingerprint IS NULL OR "
+            "length(offer_request_fingerprint) = 64",
+            name="ck_lista_oczekujacych_offer_fingerprint",
+        ),
+        CheckConstraint(
+            "offer_kanal IS NULL OR offer_kanal IN ('online', 'wewnetrzna')",
+            name="ck_lista_oczekujacych_offer_kanal",
+        ),
+        Index(
+            "ix_lista_oczekujacych_data_status_priorytet",
+            "data", "status", "priorytet", "utworzono_at", "id",
+        ),
     )
     id              = Column(Integer, primary_key=True, index=True)
     data            = Column(Date, nullable=False, index=True)
@@ -1523,7 +1553,29 @@ class ListaOczekujacych(Base):
         String(8), nullable=False, default="auto", server_default="auto",
     )
     notatka         = Column(String, nullable=True)
-    status          = Column(String(16), nullable=False, default="oczekuje")  # oczekuje|zrealizowany|odwolany
+    status          = Column(String(16), nullable=False, default="oczekuje")
+    priorytet       = Column(Integer, nullable=False, default=0, server_default="0")
+    # Monotoniczny guard optymistyczny. Rosnie przy kazdej nowej ofercie i
+    # kazdym przejsciu, ktore konczy jej biezaca generacje.
+    offer_version   = Column(Integer, nullable=False, default=0, server_default="0")
+    # Zamrozona proweniencja wyboru zestawu. NULL poza aktywna oferta;
+    # True tylko gdy oferta zachowala rekomendacje silnika alokacji.
+    offer_auto_przydzielony = Column(Boolean, nullable=True)
+    # Jednorazowa autoryzacja override jest przypisana do aktywnej generacji.
+    # Szczegoly decyzji pozostaja w audycie; tutaj utrzymujemy tylko fence.
+    offer_override_authorized = Column(Boolean, nullable=True)
+    offer_override_note = Column(EncryptedString(2048), nullable=True)
+    offer_sala_id = Column(Integer, nullable=True)
+    offer_kanal = Column(String(16), nullable=True)
+    # Hash-only idempotency oferty. Nie zapisujemy odpowiedzi ani surowego klucza,
+    # dzięki czemu replay jest odbudowywany z aktualnymi uprawnieniami operatora.
+    offer_key_hash  = Column(String(64), nullable=True)
+    offer_request_fingerprint = Column(String(64), nullable=True)
+    zaoferowano_at  = Column(DateTime, nullable=True)
+    oferta_wygasa_at = Column(DateTime, nullable=True)
+    zaakceptowano_at = Column(DateTime, nullable=True)
+    wygasla_at      = Column(DateTime, nullable=True)
+    anulowano_at    = Column(DateTime, nullable=True)
     utworzono_at    = Column(DateTime, nullable=False)
     zrealizowano_at = Column(DateTime, nullable=True)
     termin_id       = Column(Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True)   # przypisany termin
@@ -1537,6 +1589,41 @@ class ListaOczekujacych(Base):
     hold_do         = Column(DateTime, nullable=True)                                         # do kiedy trzymany
     token           = Column(String(64), nullable=True, index=True)                          # magic-link gościa (potwierdzenie holdu)
     kanal           = Column(String(16), nullable=False, default="reczna")                    # reczna|online
+
+
+class WaitlistOfferOverrideContext(Base):
+    """Durable encrypted free-text context for one waitlist offer generation."""
+    __tablename__ = "waitlist_offer_override_context"
+    __table_args__ = (
+        UniqueConstraint(
+            "waitlist_id", "offer_version",
+            name="uq_waitlist_offer_override_context_generation",
+        ),
+        CheckConstraint(
+            "offer_version > 0",
+            name="ck_waitlist_offer_override_context_version",
+        ),
+        CheckConstraint(
+            "reason_code IN ("
+            "'guest_request', 'large_group_confirmed', 'event_exception', "
+            "'operational_decision', 'walk_in', 'other', 'legacy_confirmation')",
+            name="ck_waitlist_offer_override_context_reason_code",
+        ),
+        Index(
+            "ix_waitlist_offer_override_context_waitlist_created",
+            "waitlist_id", "created_at",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    waitlist_id = Column(
+        Integer,
+        ForeignKey("lista_oczekujacych.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    offer_version = Column(Integer, nullable=False)
+    reason_code = Column(String(32), nullable=False)
+    note = Column(EncryptedString(2048), nullable=True)
+    created_at = Column(DateTime, nullable=False)
 
 
 class RezerwacjaWiadomoscOutbox(Base):

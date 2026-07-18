@@ -9,7 +9,9 @@ const absoluteMinutes = (value, origin) => {
   return parsed < origin ? parsed + 1440 : parsed
 }
 
-const statusClass = (phase) => {
+const statusClass = (entry) => {
+  if (entry?.typ === 'oferta' || entry?.waitlist_id) return 'border-coral/45 bg-coral/[0.14] text-ink border-dashed'
+  const phase = entry?.faza_hosta
   if (phase === 'rachunek') return 'border-lemon/45 bg-lemon/18 text-ink'
   if (phase === 'oplacony') return 'border-white/[0.18] bg-white/[0.10] text-ink'
   if (phase === 'posadzony') return 'border-mint/45 bg-mint/18 text-ink'
@@ -17,6 +19,19 @@ const statusClass = (phase) => {
 }
 
 const timeLabel = (value) => String(value || '').slice(0, 5)
+
+const offerDeadlineLabel = (value) => {
+  if (!value) return null
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`
+  const parsed = new Date(normalized)
+  if (Number.isNaN(parsed.getTime())) return null
+  return new Intl.DateTimeFormat('pl-PL', {
+    timeZone: 'Europe/Warsaw',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(parsed)
+}
 
 export default function HostTimeline({ timeline, canViewContacts = false }) {
   const tables = timeline?.stoly || []
@@ -93,18 +108,21 @@ export default function HostTimeline({ timeline, canViewContacts = false }) {
                     if (entryEnd <= entryStart) entryEnd += 1440
                     const left = Math.max(0, ((entryStart - start) / duration) * 100)
                     const width = Math.max(1.5, (Math.min(entryEnd, end) - Math.max(entryStart, start)) / duration * 100)
+                    const offer = entry.typ === 'oferta' || Boolean(entry.waitlist_id)
                     const guest = canViewContacts ? entry.nazwisko || 'Gość' : 'Gość'
-                    const label = `${guest} · ${timeLabel(entry.godz_od)}–${timeLabel(entry.godz_do)}`
+                    const label = `${offer ? `Oferta dla ${guest}` : guest} · ${timeLabel(entry.godz_od)}–${timeLabel(entry.godz_do)}`
+                    const deadline = offer ? offerDeadlineLabel(entry.hold_do) : null
+                    const titledLabel = `${label}${deadline ? ` · ważna do ${deadline}` : ''}`
                     return (
                       <div
-                        key={`${entry.rezerwacja_id}:${index}`}
+                        key={`${offer ? `waitlist-${entry.waitlist_id}` : `reservation-${entry.rezerwacja_id}`}:${index}`}
                         tabIndex={0}
-                        className={`absolute inset-y-2 flex min-w-8 items-center overflow-hidden rounded-lg border px-2 text-[0.68rem] font-semibold shadow-soft outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-mint/70 ${statusClass(entry.faza_hosta)}`}
+                        className={`absolute inset-y-2 flex min-w-8 items-center overflow-hidden rounded-lg border px-2 text-[0.68rem] font-semibold shadow-soft outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-mint/70 ${statusClass(entry)}`}
                         style={{ left: `${left}%`, width: `${width}%` }}
-                        aria-label={`${table.nazwa}: ${label}${entry.liczba_osob ? `, ${entry.liczba_osob} osób` : ''}`}
-                        title={label}
+                        aria-label={`${table.nazwa}: ${label}${entry.liczba_osob ? `, ${entry.liczba_osob} osób` : ''}${deadline ? `, ważna do ${deadline}` : ''}`}
+                        title={titledLabel}
                       >
-                        <span className="truncate">{guest}</span>
+                        <span className="truncate">{offer ? `Oferta · ${guest}` : guest}</span>
                       </div>
                     )
                   })}

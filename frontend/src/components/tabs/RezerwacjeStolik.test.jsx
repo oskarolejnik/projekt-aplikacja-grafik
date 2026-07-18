@@ -487,53 +487,145 @@ describe('Rezerwacje stolików', () => {
     expect(badge).not.toHaveAttribute('role', 'status')
   })
 
-  it('otwiera historię wpisu i kolejkuje powiadomienie „stolik gotowy”', async () => {
-    let historyLoads = 0
+  it('otwiera historię wpisu bez niezależnego wysyłania komunikatu „stolik gotowy”', async () => {
     apiMock.mockImplementation((path, method, _body, options) => {
       if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
       if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
       if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
       if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/komunikacja` && method === 'GET') {
-        historyLoads += 1
-        return Promise.resolve(historyLoads === 1
-          ? { summary: null, messages: [] }
-          : {
-              summary: { state: 'queued', channel: 'sms', attention_count: 0 },
-              messages: [{
-                id: 301,
-                event: 'table_ready',
-                event_label: 'Stolik gotowy',
-                channel: 'sms',
-                recipient: '***333',
-                state: 'queued',
-                attempt_count: 0,
-                max_attempts: 5,
-              }],
-            })
-      }
-      if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/powiadom` && method === 'POST') {
-        expect(options.headers['Idempotency-Key']).toBe('manual-reservation-test-key')
-        return Promise.resolve({ queued: true, messages: [] })
+        expect(options.signal).toBeInstanceOf(AbortSignal)
+        return Promise.resolve({
+          summary: { state: 'queued', channel: 'sms', attention_count: 0 },
+          messages: [{
+            id: 301,
+            event: 'table_ready',
+            event_label: 'Oferta stolików',
+            channel: 'sms',
+            recipient: '***333',
+            state: 'queued',
+            attempt_count: 0,
+            max_attempts: 5,
+          }],
+        })
       }
       return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
     })
 
     render(<RezerwacjeStolik />)
     fireEvent.click(await screen.findByRole('button', { name: 'Oczekujący (1)' }))
-    const communication = screen.getByRole('button', { name: 'Stolik gotowy' })
+    const communication = screen.getByRole('button', { name: 'Komunikacja' })
     expect(communication).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(communication)
 
     expect(screen.getByRole('button', { name: 'Zwiń komunikację' })).toHaveAttribute('aria-expanded', 'true')
+    expect(await screen.findByText('Oferta stolików')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Powiadom: stolik gotowy' })).not.toBeInTheDocument()
+    expect(apiMock.mock.calls.some(([path]) => path.endsWith('/powiadom'))).toBe(false)
+  })
+
+  it('dla wycofanej oferty pozwala uzgodnić niepewny wynik bez kolejki i nieaktualnego retry', async () => {
+    authState.isAdmin = false
+    authState.permissions = ['rezerwacje.host', 'rezerwacje.dane_kontaktowe']
+    const uncertainMessage = {
+      id: 302,
+      event: 'table_ready',
+      event_label: 'Oferta stolików',
+      channel: 'sms',
+      recipient: '***333',
+      state: 'uncertain',
+      attention_required: true,
+      attempt_count: 1,
+      max_attempts: 5,
+      retry_allowed: false,
+    }
+    let reconciled = false
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
+      if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/komunikacja` && method === 'GET') {
+        const message = reconciled
+          ? { ...uncertainMessage, state: 'failed', attention_required: false }
+          : uncertainMessage
+        return Promise.resolve({
+          waitlist_id: WAITLIST_ENTRY.id,
+          summary: { state: message.state, event: 'table_ready', channel: 'sms', attention_required: !reconciled, attention_count: reconciled ? 0 : 1 },
+          messages: [message],
+        })
+      }
+      if (path === `/rezerwacje/komunikacja/${uncertainMessage.id}/reconcile` && method === 'POST') {
+        expect(body).toEqual({ wynik: 'failed', notatka: 'Brak wiadomości w panelu operatora SMS.' })
+        reconciled = true
+        return Promise.resolve({ ...uncertainMessage, state: 'failed' })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Oczekujący (1)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Komunikacja' }))
+
+    expect(await screen.findByText(/ponowienie może wysłać duplikat/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Oznacz jako wysłaną' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Oznacz jako niewysłaną' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Ponów mimo ryzyka' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Powiadom: stolik gotowy' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Możesz go oznaczyć, ale nie ponawiać wysyłki/)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Wynik sprawdzenia'), {
+      target: { value: 'Brak wiadomości w panelu operatora SMS.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Oznacz jako niewysłaną' }))
+
+    expect(await screen.findByText('Wiadomość oznaczono jako niewysłaną.')).toBeInTheDocument()
+    expect(apiMock).toHaveBeenCalledWith(
+      `/rezerwacje/komunikacja/${uncertainMessage.id}/reconcile`,
+      'POST',
+      { wynik: 'failed', notatka: 'Brak wiadomości w panelu operatora SMS.' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('pozwala operatorowi z kontaktem wysłać komunikat wyłącznie dla aktywnej oferty', async () => {
+    const offeredEntry = {
+      ...WAITLIST_ENTRY,
+      status: 'zaoferowano',
+      offer_version: 1,
+      hold_stolik_id: TABLE.id,
+      hold_stoliki_dodatkowe: [],
+      hold_godz_od: '19:00',
+      hold_godz_do: '20:30',
+      hold_do: '2030-03-01T18:10:00.000Z',
+    }
+    apiMock.mockImplementation((path, method, _body, options) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [offeredEntry] })
+      if (path === `/lista-oczekujacych/${offeredEntry.id}/komunikacja` && method === 'GET') {
+        return Promise.resolve({ summary: null, messages: [] })
+      }
+      if (path === `/lista-oczekujacych/${offeredEntry.id}/powiadom` && method === 'POST') {
+        expect(options.signal).toBeInstanceOf(AbortSignal)
+        expect(options.headers['Idempotency-Key']).toBe('manual-reservation-test-key')
+        return Promise.resolve({ queued: true, wpis: offeredEntry, messages: [] })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Oczekujący (1)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Komunikacja' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Powiadom: stolik gotowy' }))
 
     expect(await screen.findByText('Dodano powiadomienie „stolik gotowy” do kolejki.')).toBeInTheDocument()
-    expect(screen.getByText('Stolik gotowy')).toBeInTheDocument()
     expect(apiMock).toHaveBeenCalledWith(
-      `/lista-oczekujacych/${WAITLIST_ENTRY.id}/powiadom`,
+      `/lista-oczekujacych/${offeredEntry.id}/powiadom`,
       'POST',
       null,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        headers: { 'Idempotency-Key': 'manual-reservation-test-key' },
+      }),
     )
   })
 

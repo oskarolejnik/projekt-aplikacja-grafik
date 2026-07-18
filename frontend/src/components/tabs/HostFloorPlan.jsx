@@ -25,7 +25,7 @@ const stateMeta = {
     dotClass: 'bg-info',
   },
   hold: {
-    label: 'Wstrzymany',
+    label: 'Oferta waitlisty',
     tableClass: 'border-coral/35 bg-coral/10 text-ink',
     dotClass: 'bg-coral',
   },
@@ -82,6 +82,12 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
 
   const operationalState = useMemo(() => {
     const states = new Map()
+    for (const entry of queue?.waitlista || []) {
+      if (entry.status !== 'zaoferowano') continue
+      const tableIds = [entry.hold_stolik_id, ...(entry.hold_stoliki_dodatkowe || [])]
+        .map(Number).filter((id) => Number.isFinite(id) && id > 0)
+      for (const tableId of tableIds) states.set(tableId, { kind: 'hold', waitlist: entry })
+    }
     for (const reservation of queue?.nadchodzace || []) {
       const kind = reservation.faza_hosta === 'przybyl' ? 'arrived' : 'upcoming'
       for (const tableId of tableReservationIds(reservation)) {
@@ -167,7 +173,8 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
                 const width = Math.max(9, Number(table.szerokosc) || 12)
                 const height = Math.max(9, Number(table.wysokosc) || 12)
                 const reservation = operational?.reservation
-                const guest = canViewContacts ? reservation?.nazwisko || 'Gość' : 'Gość'
+                const waitlist = operational?.waitlist
+                const guest = canViewContacts ? reservation?.nazwisko || waitlist?.nazwisko || 'Gość' : 'Gość'
                 const timer = kind === 'occupied' && reservation?.minuty_od_posadzenia != null
                   ? `${reservation.minuty_od_posadzenia} min`
                   : null
@@ -177,7 +184,7 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
                     type="button"
                     onClick={() => setSelectedTableId(table.id)}
                     aria-pressed={selected}
-                    aria-label={`${table.nazwa}, ${table.pojemnosc} ${placesLabel(table.pojemnosc)}, ${meta.label}${reservation ? `, ${guest}` : ''}${timer ? `, ${timer}` : ''}`}
+                    aria-label={`${table.nazwa}, ${table.pojemnosc} ${placesLabel(table.pojemnosc)}, ${meta.label}${reservation || waitlist ? `, ${guest}` : ''}${waitlist?.hold_do ? `, oferta do ${waitlist.hold_do}` : ''}${timer ? `, ${timer}` : ''}`}
                     className={`absolute z-10 grid min-h-11 min-w-11 place-items-center rounded-xl border text-center shadow-soft transition-[border-color,background-color,box-shadow] duration-150 ${meta.tableClass} ${selected ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : 'hover:border-white/[0.28]'}`}
                     style={{
                       left: `${table.plan_x ?? 50}%`,
@@ -206,7 +213,9 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
                 <p className="mt-0.5 text-xs text-muted">
                   {selectedTable.pojemnosc} {placesLabel(selectedTable.pojemnosc)}
                   {selectedOperational?.reservation?.liczba_osob ? ` · ${selectedOperational.reservation.liczba_osob} os.` : ''}
+                  {selectedOperational?.waitlist?.liczba_osob ? ` · ${selectedOperational.waitlist.liczba_osob} os.` : ''}
                   {selectedOperational?.reservation?.godz_od ? ` · ${selectedOperational.reservation.godz_od}` : ''}
+                  {selectedOperational?.waitlist?.hold_godz_od ? ` · ${selectedOperational.waitlist.hold_godz_od}` : ''}
                 </p>
               </div>
               <span className="inline-flex min-h-8 shrink-0 items-center gap-2 self-start rounded-full border border-line bg-white/[0.035] px-3 text-xs font-semibold text-ink sm:self-auto">

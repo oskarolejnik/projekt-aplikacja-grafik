@@ -368,5 +368,28 @@ def downgrade() -> None:
 
     # Ograniczenia są inline i znikają razem z kolumnami.
     op.drop_column("lokal_config", "rezerwacje_przypomnienie_h")
-    op.drop_column("lista_oczekujacych", "kanal_komunikacji")
+    # ``lista_oczekujacych`` może zostać przebudowana przez późniejszą migrację
+    # (np. R6b.2). SQLite zapisuje wtedy inline CHECK kanału jako ograniczenie
+    # tabelowe, przez co natywny DROP COLUMN pozostawia odwołanie do usuniętej
+    # kolumny i odrzuca DDL. Jawna przebudowa usuwa CHECK i kolumnę razem;
+    # PostgreSQL nadal korzysta z natywnego DROP COLUMN.
+    if connection.dialect.name == "sqlite":
+        waitlist_checks = {
+            item.get("name")
+            for item in sa.inspect(connection).get_check_constraints(
+                "lista_oczekujacych"
+            )
+            if item.get("name")
+        }
+        with op.batch_alter_table(
+            "lista_oczekujacych", recreate="always",
+        ) as batch:
+            if "ck_lista_oczekujacych_kanal_komunikacji" in waitlist_checks:
+                batch.drop_constraint(
+                    "ck_lista_oczekujacych_kanal_komunikacji",
+                    type_="check",
+                )
+            batch.drop_column("kanal_komunikacji")
+    else:
+        op.drop_column("lista_oczekujacych", "kanal_komunikacji")
     op.drop_column("terminy", "kanal_komunikacji")

@@ -1,7 +1,7 @@
 import { reservationActorKey, reservationHistoryState } from './reservationSession'
 
 const PREFIX = 'lokalo:reservations:v1:host-snapshot:'
-const CACHE_VERSION = 1
+const CACHE_VERSION = 2
 const SNAPSHOT_SCHEMA_VERSION = 1
 const PRIVACY_EPOCH_KEY = 'lokaloReservationPrivacyEpoch'
 export const HOST_SNAPSHOT_CACHE_TTL_MS = 12 * 60 * 60 * 1000
@@ -11,6 +11,9 @@ const CLOCK_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/
 const RESERVATION_STATUSES = new Set(['rezerwacja', 'potwierdzona', 'odwolana', 'odbyla', 'no_show'])
 const HOST_PHASES = new Set(['przybyl', 'posadzony', 'rachunek', 'oplacony', 'wyszedl'])
 const WAITLIST_STATUSES = new Set(['oczekuje', 'zaoferowano', 'zaakceptowano', 'wygasla', 'anulowano', 'odwolany'])
+const WAITLIST_TERMINAL_STATUSES = new Set(['zaakceptowano', 'wygasla', 'anulowano'])
+const COMMUNICATION_STATES = new Set(['queued', 'processing', 'retry', 'sent', 'failed', 'uncertain', 'expired', 'cancelled'])
+const COMMUNICATION_CHANNELS = new Set(['email', 'sms', 'oba'])
 const TABLE_STATUSES = new Set([
   'nieaktywny',
   'potwierdzony',
@@ -85,15 +88,52 @@ const safeReservation = (value) => {
   }
 }
 
+const safeCommunicationSummary = (value) => {
+  if (!isRecord(value)) return null
+  return {
+    state: safeEnum(value.state, COMMUNICATION_STATES),
+    channel: safeEnum(value.channel, COMMUNICATION_CHANNELS),
+    attention_count: safeInteger(value.attention_count, 0, 1000),
+    attention_required: safeBoolean(value.attention_required),
+    legacy_delivery: safeBoolean(value.legacy_delivery),
+  }
+}
+
 const safeWaitlistEntry = (value) => {
   if (!isRecord(value)) return null
   const id = safeInteger(value.id)
   if (id === null) return null
   return {
     id,
+    data: isIsoDay(value.data) ? value.data : null,
     godz_od: safeClock(value.godz_od),
     liczba_osob: safeInteger(value.liczba_osob, 0, 10000),
     status: safeEnum(value.status, WAITLIST_STATUSES),
+    priorytet: safeInteger(value.priorytet, 0, 9),
+    utworzono_at: safeTimestamp(value.utworzono_at),
+    zaoferowano_at: safeTimestamp(value.zaoferowano_at),
+    hold_stolik_id: safeInteger(value.hold_stolik_id),
+    hold_stoliki_dodatkowe: safeIds(value.hold_stoliki_dodatkowe),
+    hold_godz_od: safeClock(value.hold_godz_od),
+    hold_godz_do: safeClock(value.hold_godz_do),
+    hold_do: safeTimestamp(value.hold_do),
+    offer_version: safeInteger(value.offer_version, 0, 1000000000),
+    communication_summary: safeCommunicationSummary(value.communication_summary),
+    nazwisko: 'Gość',
+    gosc: null,
+  }
+}
+
+const safeWaitlistCommunicationEntry = (value) => {
+  if (!isRecord(value)) return null
+  const id = safeInteger(value.id)
+  const status = safeEnum(value.status, WAITLIST_TERMINAL_STATUSES)
+  const communicationSummary = safeCommunicationSummary(value.communication_summary)
+  if (id === null || status === null || communicationSummary?.attention_required !== true) return null
+  return {
+    id,
+    status,
+    communication_summary: communicationSummary,
     nazwisko: 'Gość',
     gosc: null,
   }
@@ -105,12 +145,17 @@ const safeQueue = (value, day) => {
   const naSali = safeArray(source.na_sali, safeReservation)
   const zakonczone = safeArray(source.zakonczone, safeReservation)
   const waitlista = safeArray(source.waitlista, safeWaitlistEntry)
+  const komunikacjaWaitlist = safeArray(
+    source.komunikacja_waitlist,
+    safeWaitlistCommunicationEntry,
+  )
   return {
     data: day,
     nadchodzace,
     na_sali: naSali,
     zakonczone,
     waitlista,
+    komunikacja_waitlist: komunikacjaWaitlist,
     podsumowanie: {
       nadchodzace: nadchodzace.length,
       na_sali: naSali.length,
@@ -137,12 +182,17 @@ const safeTimelineOccupancy = (value) => {
   if (!isRecord(value)) return null
   const stolikId = safeInteger(value.stolik_id)
   const reservationId = safeInteger(value.rezerwacja_id)
-  if (stolikId === null || reservationId === null) return null
+  const waitlistId = safeInteger(value.waitlist_id)
+  const offer = value.typ === 'oferta' || waitlistId !== null
+  if (stolikId === null || (offer ? waitlistId === null : reservationId === null)) return null
   return {
     stolik_id: stolikId,
     godz_od: safeClock(value.godz_od),
     godz_do: safeClock(value.godz_do),
-    rezerwacja_id: reservationId,
+    typ: offer ? 'oferta' : null,
+    rezerwacja_id: offer ? null : reservationId,
+    waitlist_id: offer ? waitlistId : null,
+    hold_do: offer ? safeTimestamp(value.hold_do) : null,
     liczba_osob: safeInteger(value.liczba_osob, 0, 10000),
     faza_hosta: safeEnum(value.faza_hosta, HOST_PHASES),
     nazwisko: 'Gość',
@@ -302,7 +352,7 @@ const removeCacheEntry = (storage, key) => {
   }
 }
 
-export function writeHostSnapshotCache(user, snapshot) {
+export function writeHostSnapshotCache(user, snapshot, { serverNow } = {}) {
   const context = cacheContext(user)
   const storage = storageForSession()
   if (!context || !storage) return false
@@ -312,11 +362,16 @@ export function writeHostSnapshotCache(user, snapshot) {
     return false
   }
   try {
+    const cachedAt = Date.now()
+    const serverTimeAtCache = Number.isFinite(serverNow)
+      ? new Date(serverNow).toISOString()
+      : safeSnapshot.generated_at
     storage.setItem(context.key, JSON.stringify({
       cacheVersion: CACHE_VERSION,
       privacyEpoch: context.privacyEpoch,
       date: safeSnapshot.data,
-      cachedAt: Date.now(),
+      cachedAt,
+      serverTimeAtCache,
       snapshot: safeSnapshot,
     }))
     return true
@@ -336,11 +391,13 @@ export function readHostSnapshotCache(user, date) {
   try {
     const saved = JSON.parse(storage.getItem(context.key) || 'null')
     const age = Date.now() - saved?.cachedAt
+    const serverTimeAtCache = safeTimestamp(saved?.serverTimeAtCache)
     const invalid = !isRecord(saved)
       || saved.cacheVersion !== CACHE_VERSION
       || saved.privacyEpoch !== context.privacyEpoch
       || !isIsoDay(saved.date)
       || !Number.isFinite(saved.cachedAt)
+      || !serverTimeAtCache
       || age < 0
       || age > HOST_SNAPSHOT_CACHE_TTL_MS
     if (invalid) {
@@ -355,6 +412,11 @@ export function readHostSnapshotCache(user, date) {
       removeCacheEntry(storage, context.key)
       return null
     }
+    Object.defineProperty(snapshot, '__hostCacheClock', {
+      configurable: false,
+      enumerable: false,
+      value: { cachedAt: saved.cachedAt, serverTimeAtCache },
+    })
     return snapshot
   } catch {
     removeCacheEntry(storage, context.key)

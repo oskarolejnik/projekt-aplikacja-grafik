@@ -159,6 +159,7 @@ class RuleRequest:
     intent: Intent = "quote"
     godz_do: time | None = None
     preserve_existing_room_access: bool = False
+    preserve_explicit_interval: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kanal", normalise_channel(self.kanal))
@@ -612,6 +613,7 @@ def _occupancy_rows(
     *,
     start_minute: int | None = None,
     end_minute: int | None = None,
+    waitlist_offers: Sequence[Any] = (),
 ) -> list[Any]:
     """Odczytuje ledger i przedłuża aktywne wizyty hosta na oceniane okno.
 
@@ -624,6 +626,17 @@ def _occupancy_rows(
     if model is None:
         return []
     rows = db.query(model).filter(model.data == booking_date).all()
+    for offer in waitlist_offers:
+        rows.extend(
+            SimpleNamespace(
+                termin_id=offer.owner_key,
+                minute=minute,
+                sala_id=offer.room_id,
+                kanal=offer.channel,
+                covers=offer.covers,
+            )
+            for minute in range(offer.start_minute, offer.end_minute)
+        )
     if (
         start_minute is None
         or end_minute is None
@@ -699,14 +712,29 @@ def _concurrent_usage(
     return reservations, covers
 
 
-def _pacing_rows(db, booking_date: date) -> list[Any]:
+def _pacing_rows(
+    db,
+    booking_date: date,
+    *,
+    waitlist_offers: Sequence[Any] = (),
+) -> list[Any]:
     model = getattr(models, "RezerwacjaPacingLedger", None)
     if model is None:
         return []
-    return db.query(model).filter(model.data == booking_date).all()
+    rows = db.query(model).filter(model.data == booking_date).all()
+    rows.extend(
+        SimpleNamespace(
+            termin_id=offer.owner_key,
+            data=offer.data,
+            start_minute=offer.start_minute,
+            covers=offer.covers,
+        )
+        for offer in waitlist_offers
+    )
+    return rows
 
 
-def _occupancy_meta(rows: Iterable[Any]) -> dict[int, Any]:
+def _occupancy_meta(rows: Iterable[Any]) -> dict[Any, Any]:
     result = {}
     for row in rows:
         termin_id = _value(row, "termin_id")
@@ -717,7 +745,7 @@ def _occupancy_meta(rows: Iterable[Any]) -> dict[int, Any]:
 
 def _pacing_usage(
     rows: Iterable[Any],
-    occupancy_meta: Mapping[int, Any],
+    occupancy_meta: Mapping[Any, Any],
     *,
     bucket_start: int,
     bucket_end: int,
@@ -778,6 +806,12 @@ def evaluate_reservation_rules(
 ) -> RuleEvaluation:
     """Ocenia reguly bez wyboru ani zajecia stolika."""
     local_now = _now_local(now)
+    lifecycle_now = local_now.astimezone(timezone.utc).replace(tzinfo=None)
+    waitlist_offers = reservation_service.active_waitlist_offer_projections(
+        db,
+        data=request.data,
+        now=lifecycle_now,
+    )
     services = serwisy_dnia(db, request.data)
     service = serwis_dla_godziny(db, request.data, request.godz_od, strict=True)
     room = _room(db, request.sala_id)
@@ -788,9 +822,13 @@ def evaluate_reservation_rules(
     configured_end_minute = start_minute + duration
     # Jawny koniec moze wydluzyc wizyte, ale nie moze skrocic zajetosci ponizej
     # turn-time serwisu i w ten sposob ominac limitow jednoczesnych rezerwacji.
-    raw_end_minute = max(
-        _minute(request.godz_do) if request.godz_do is not None else 0,
-        configured_end_minute,
+    raw_end_minute = (
+        _minute(request.godz_do)
+        if request.preserve_explicit_interval and request.godz_do is not None
+        else max(
+            _minute(request.godz_do) if request.godz_do is not None else 0,
+            configured_end_minute,
+        )
     )
     end_minute = min(1440, raw_end_minute)
     end_value = _time_from_minute(end_minute) if end_minute < 1440 else None
@@ -982,8 +1020,13 @@ def evaluate_reservation_rules(
         request.data,
         start_minute=start_minute,
         end_minute=end_minute,
+        waitlist_offers=waitlist_offers,
     )
-    pacing_rows = _pacing_rows(db, request.data)
+    pacing_rows = _pacing_rows(
+        db,
+        request.data,
+        waitlist_offers=waitlist_offers,
+    )
     meta = _occupancy_meta(occupancy)
     pacing_window = _positive(_setting(policy, "pacing_window_min").value) or step
     anchor = _minute(service.godz_od) if service is not None else 0

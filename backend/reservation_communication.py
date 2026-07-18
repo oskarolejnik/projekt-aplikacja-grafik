@@ -22,6 +22,7 @@ from sqlalchemy import or_, text
 
 import mailer
 import models
+import reservation_service
 import sms
 import settings as app_settings
 from database import SessionLocal
@@ -34,6 +35,9 @@ WARSAW = ZoneInfo("Europe/Warsaw")
 ACTIVE_RESERVATION_STATES = ("rezerwacja", "potwierdzona")
 PENDING_STATES = ("queued", "retry")
 ATTENTION_STATES = ("failed", "uncertain", "expired")
+WAITLIST_STALE_DELIVERED_CODE = "WAITLIST_STALE_TABLE_READY_DELIVERED"
+WAITLIST_SUPERSEDED_UNCERTAIN_CODE = "WAITLIST_SUPERSEDED_DELIVERY_UNCERTAIN"
+WAITLIST_SUPERSEDED_NOT_SENT_CODE = "WAITLIST_SUPERSEDED_DELIVERY_NOT_SENT"
 TEMPLATE_VERSION = "r5b-v1"
 LEASE_SECONDS = 90
 DEFAULT_MAX_ATTEMPTS = 5
@@ -102,12 +106,21 @@ def _actor_kind(actor=None, actor_kind: Optional[str] = None) -> str:
     return "user" if actor is not None else "system"
 
 
-def _dedupe(value: str) -> str:
+def dedupe_identity(value: str) -> str:
     value = str(value or "").strip()
     if not value:
         value = f"manual:{secrets.token_hex(16)}"
     # Ani klucz idempotencji żądania, ani opis zdarzenia nie trafia do bazy.
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def current_waitlist_offer_dedupe(waitlist) -> Optional[str]:
+    if waitlist is None or not getattr(waitlist, "offer_key_hash", None):
+        return None
+    return dedupe_identity(
+        f"waitlist:{waitlist.id}:offer:{int(waitlist.offer_version or 0)}:"
+        f"{waitlist.offer_key_hash}"
+    )
 
 
 def _provider_key(dedupe_key: str, channel: str) -> str:
@@ -189,6 +202,11 @@ def _channels(owner) -> list[tuple[str, str]]:
     return [("sms", phone)] if phone else []
 
 
+def available_delivery_channels(owner) -> tuple[str, ...]:
+    """PII-free capability projection for operator views."""
+    return tuple(channel for channel, _recipient in _channels(owner))
+
+
 def _hm(value) -> str:
     return value.strftime("%H:%M") if value is not None else ""
 
@@ -220,7 +238,18 @@ def render_message(event_type: str, owner, cfg, channel: str) -> tuple[Optional[
         sentence = f"Twoja rezerwacja w {venue} ({details}) została anulowana."
     elif event_type == "table_ready":
         subject = f"Stolik gotowy — {venue}"
-        sentence = f"Twój stolik w {venue} jest gotowy. Zapraszamy!"
+        deadline = getattr(owner, "oferta_wygasa_at", None) or getattr(
+            owner, "hold_do", None,
+        )
+        deadline_text = ""
+        if deadline is not None:
+            if deadline.tzinfo is None or deadline.utcoffset() is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            local_deadline = deadline.astimezone(WARSAW)
+            deadline_text = f" Oferta jest ważna do {local_deadline:%H:%M}."
+        sentence = (
+            f"Twój stolik w {venue} jest gotowy.{deadline_text} Zapraszamy!"
+        )
     else:
         raise ValueError(f"Nieznany szablon wiadomości: {event_type}")
 
@@ -241,17 +270,18 @@ def _enqueue(
     expires_at: Optional[datetime] = None,
     actor=None,
     actor_kind: Optional[str] = None,
+    now: Optional[datetime] = None,
 ) -> list[models.RezerwacjaWiadomoscOutbox]:
     if event_type not in EVENT_LABELS:
         raise ValueError("Nieznany typ wiadomości operacyjnej.")
     owner_id = getattr(owner, "id", None)
     if not owner_id:
         raise ValueError("Wiadomość wymaga zapisanego właściciela.")
-    event_key = _dedupe(dedupe_key or (
+    event_key = dedupe_identity(dedupe_key or (
         f"{owner_kind}:{owner_id}:{event_type}:{secrets.token_hex(16)}"
     ))
-    now = _now()
-    effective_available_at = available_at or now
+    effective_now = _now(now)
+    effective_available_at = available_at or effective_now
     effective_expires_at = expires_at or (effective_available_at + timedelta(days=7))
     if effective_expires_at <= effective_available_at:
         return []
@@ -300,8 +330,8 @@ def _enqueue(
             expires_at=effective_expires_at,
             actor_kind=_actor_kind(actor, actor_kind),
             actor_user_id=getattr(actor, "id", None),
-            created_at=now,
-            updated_at=now,
+            created_at=effective_now,
+            updated_at=effective_now,
         )
         db.add(row)
         rows.append(row)
@@ -349,11 +379,28 @@ def enqueue_table_ready(
     cfg=None,
     dedupe_key: Optional[str] = None,
     actor=None,
+    now: Optional[datetime] = None,
 ) -> list[models.RezerwacjaWiadomoscOutbox]:
     cfg = cfg or db.get(models.LokalConfig, 1) or models.LokalConfig(id=1)
-    effective_now = _now()
+    effective_now = _now(now)
     deadline = getattr(waitlist, "hold_do", None)
-    if deadline is None or deadline <= effective_now:
+    offer_deadline = getattr(waitlist, "oferta_wygasa_at", None)
+    is_offer_generation = bool(
+        getattr(waitlist, "status", None) == "zaoferowano"
+        or offer_deadline is not None
+        or getattr(waitlist, "offer_key_hash", None)
+    )
+    if is_offer_generation and (
+        deadline is None
+        or offer_deadline is None
+        or deadline != offer_deadline
+        or deadline <= effective_now
+    ):
+        # Oferta R6b.2 ma jeden zamrożony deadline dla holda i wiadomości.
+        # Nie wolno odtwarzać go z czasu procesu ani przedłużać o kolejne 30 min.
+        return []
+    if not is_offer_generation and (deadline is None or deadline <= effective_now):
+        # Kompatybilność wyłącznie dla historycznego, przed-R6b.2 wywołania.
         deadline = effective_now + timedelta(minutes=30)
     return _enqueue(
         db,
@@ -367,8 +414,10 @@ def enqueue_table_ready(
         dedupe_key=dedupe_key or (
             f"waitlist:{waitlist.id}:table_ready:{secrets.token_hex(16)}"
         ),
+        available_at=effective_now,
         expires_at=deadline,
         actor=actor,
+        now=effective_now,
     )
 
 
@@ -786,14 +835,26 @@ def _recover_expired_leases(db, now: datetime) -> int:
         effective_idempotency = bool(
             attempt is not None and attempt.provider_supports_idempotency
         )
-        relevance_error = _retry_relevance_error(db, row)
-        if relevance_error and (
-            (before_io and row.expires_at > now)
-            or (not before_io and effective_idempotency)
-        ):
+        relevance_error = _retry_relevance_error(db, row, now=now)
+        if relevance_error and before_io:
             _cancel_stale_retry(
                 row, attempt, code=relevance_error, now=now,
             )
+            continue
+        if relevance_error:
+            # Provider I/O started and no provider-status lookup proved the
+            # outcome. Even an idempotency key cannot turn that into certainty;
+            # keep an operator-visible fence before another waitlist offer.
+            row.stan = "uncertain"
+            row.uncertain_at = now
+            row.last_error_code = "LEASE_EXPIRED_SUPERSEDED_AMBIGUOUS"
+            if attempt is not None:
+                attempt.wynik = "uncertain"
+                attempt.error_code = row.last_error_code
+                attempt.finished_at = now
+            row.lease_token = None
+            row.lease_expires_at = None
+            row.updated_at = now
             continue
         if before_io and row.expires_at > now:
             row.stan = "retry"
@@ -804,11 +865,19 @@ def _recover_expired_leases(db, now: datetime) -> int:
                 attempt.error_code = row.last_error_code
                 attempt.finished_at = now
                 attempt.retry_at = now
-        elif before_io or (effective_idempotency and row.expires_at <= now):
+        elif before_io:
             row.stan = "expired"
             row.last_error_code = "MESSAGE_EXPIRED"
             if attempt is not None:
                 attempt.wynik = "failed"
+                attempt.error_code = row.last_error_code
+                attempt.finished_at = now
+        elif row.expires_at <= now:
+            row.stan = "uncertain"
+            row.uncertain_at = now
+            row.last_error_code = "LEASE_EXPIRED_AFTER_IO_DEADLINE_AMBIGUOUS"
+            if attempt is not None:
+                attempt.wynik = "uncertain"
                 attempt.error_code = row.last_error_code
                 attempt.finished_at = now
         elif effective_idempotency:
@@ -864,7 +933,9 @@ def claim_next(*, now: Optional[datetime] = None) -> Optional[ClaimedMessage]:
             if row is None:
                 db.commit()
                 return None
-            relevance_error = _retry_relevance_error(db, row)
+            relevance_error = _retry_relevance_error(
+                db, row, now=effective_now,
+            )
             if relevance_error:
                 _cancel_stale_retry(
                     row, None, code=relevance_error, now=effective_now,
@@ -950,6 +1021,15 @@ def mark_claim_started(
         if attempt.wynik != "claimed":
             db.rollback()
             return None
+        relevance_error = _retry_relevance_error(
+            db, row, now=effective_now,
+        )
+        if relevance_error:
+            _cancel_stale_retry(
+                row, attempt, code=relevance_error, now=effective_now,
+            )
+            db.commit()
+            return None
         effective_idempotency = bool(row.provider_supports_idempotency)
         if (
             attempt.provider_supports_idempotency != effective_idempotency
@@ -988,12 +1068,11 @@ def backoff_seconds(message_id: int, attempt_number: int) -> int:
     return base + jitter
 
 
-def _stamp_table_ready(db, row, when: datetime) -> None:
-    if row.typ_zdarzenia != "table_ready" or row.waitlist_id is None:
-        return
-    waitlist = db.get(models.ListaOczekujacych, row.waitlist_id)
-    if waitlist is not None and waitlist.powiadomiono_at is None:
-        waitlist.powiadomiono_at = when
+def _stamp_table_ready(db, row, when: datetime) -> bool:
+    # Generational waitlist delivery state lives exclusively in the outbox.
+    # Finalization intentionally never writes the owner: reservation mutations
+    # lock day/owner before outbox, so an outbox->owner write would invert order.
+    return False
 
 
 def finalize_claim(claim: ClaimedMessage, result, *, now: Optional[datetime] = None) -> bool:
@@ -1025,8 +1104,33 @@ def finalize_claim(claim: ClaimedMessage, result, *, now: Optional[datetime] = N
         attempt.error_code = result.code
         attempt.provider_message_id = result.provider_message_id
         attempt.status_code = result.status_code
+        relevance_error = _retry_relevance_error(db, row, now=effective_now)
+        waitlist_relevance_error = (
+            relevance_error if row.waitlist_id is not None else None
+        )
 
-        if outcome == "sent":
+        if outcome == "sent" and waitlist_relevance_error is not None:
+            # The provider truth remains "sent", but the owner changed while I/O
+            # was in flight. Keep a durable operator-visible fence: the guest may
+            # have received a table-ready message for a withdrawn/terminal offer.
+            attempt.wynik = "sent"
+            row.stan = "uncertain"
+            row.sent_at = effective_now
+            row.uncertain_at = effective_now
+            row.last_error_code = WAITLIST_STALE_DELIVERED_CODE
+            db.add(models.AuditLog(
+                ts=effective_now,
+                user_id=None,
+                login=None,
+                akcja="waitlist_stale_delivery_detected",
+                zasob=f"message:{row.id}",
+                szczegoly=reservation_service.canonical_json({
+                    "waitlist_id": row.waitlist_id,
+                    "relevance_error": waitlist_relevance_error,
+                    "provider_outcome": "sent",
+                }),
+            ))
+        elif outcome == "sent":
             attempt.wynik = "sent"
             row.stan = "sent"
             row.sent_at = effective_now
@@ -1034,7 +1138,7 @@ def finalize_claim(claim: ClaimedMessage, result, *, now: Optional[datetime] = N
             _stamp_table_ready(db, row, effective_now)
         elif (
             outcome == "retry"
-            and (relevance_error := _retry_relevance_error(db, row)) is not None
+            and relevance_error is not None
         ):
             _cancel_stale_retry(
                 row, attempt, code=relevance_error, now=effective_now,
@@ -1057,7 +1161,18 @@ def finalize_claim(claim: ClaimedMessage, result, *, now: Optional[datetime] = N
             attempt.wynik = "uncertain"
             row.stan = "uncertain"
             row.uncertain_at = effective_now
-            row.last_error_code = result.code
+            row.last_error_code = (
+                WAITLIST_SUPERSEDED_UNCERTAIN_CODE
+                if waitlist_relevance_error is not None
+                else result.code
+            )
+        elif waitlist_relevance_error is not None:
+            # A deterministic provider failure after the offer stopped being
+            # current needs no operator action and must not become a permanent
+            # terminal-inbox alert.
+            attempt.wynik = "failed"
+            row.stan = "cancelled"
+            row.last_error_code = WAITLIST_SUPERSEDED_NOT_SENT_CODE
         else:
             attempt.wynik = "failed"
             row.stan = "failed"
@@ -1136,7 +1251,58 @@ def run_delivery_once(*, limit: int = 20) -> dict:
     }
 
 
+def run_waitlist_expiry_once(*, now: Optional[datetime] = None) -> int:
+    """Expire offered inventory under the same ordered day locks as writers."""
+    effective_now = _now(now)
+    db = SessionLocal()
+    try:
+        dates = {
+            value for (value,) in db.query(models.ListaOczekujacych.data).filter(
+                models.ListaOczekujacych.status == "zaoferowano",
+                models.ListaOczekujacych.hold_do <= effective_now,
+            ).all()
+        }
+        dates.update(
+            value for (value,) in db.query(models.RezerwacjaPublicznyHold.data).filter(
+                models.RezerwacjaPublicznyHold.state == "active",
+                models.RezerwacjaPublicznyHold.expires_at <= effective_now,
+            ).all()
+        )
+        if not dates:
+            db.rollback()
+            return 0
+
+        guards = reservation_service.begin_locked_write(db, dates)
+        # Re-evaluate after acquiring every day anchor; the candidate scan above
+        # was deliberately advisory and may have raced with acceptance/release.
+        waitlist_count = db.query(models.ListaOczekujacych.id).filter(
+            models.ListaOczekujacych.data.in_(dates),
+            models.ListaOczekujacych.status == "zaoferowano",
+            models.ListaOczekujacych.hold_do <= effective_now,
+        ).count()
+        public_count = db.query(models.RezerwacjaPublicznyHold.id).filter(
+            models.RezerwacjaPublicznyHold.data.in_(dates),
+            models.RezerwacjaPublicznyHold.state == "active",
+            models.RezerwacjaPublicznyHold.expires_at <= effective_now,
+        ).count()
+        if not waitlist_count and not public_count:
+            db.rollback()
+            return 0
+        reservation_service.cleanup_expired_holds(
+            db, effective_now, dates=dates,
+        )
+        reservation_service.touch_days(guards)
+        db.commit()
+        return int(waitlist_count + public_count)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def run_communication_once(*, delivery_limit: int = 20) -> dict:
+    expired_offers = run_waitlist_expiry_once()
     db = SessionLocal()
     try:
         _begin_worker_write(db)
@@ -1153,7 +1319,11 @@ def run_communication_once(*, delivery_limit: int = 20) -> dict:
         raise
     finally:
         db.close()
-    return {"reminders": reminders, **run_delivery_once(limit=delivery_limit)}
+    return {
+        "expired_offers": expired_offers,
+        "reminders": reminders,
+        **run_delivery_once(limit=delivery_limit),
+    }
 
 
 def _mask_recipient(channel: str, value: str) -> str:
@@ -1164,7 +1334,18 @@ def _mask_recipient(channel: str, value: str) -> str:
     return f"***{digits[-3:]}" if digits else "***"
 
 
-def message_dict(row, *, attempts=(), retry_allowed: bool = False) -> dict:
+def message_dict(
+    row,
+    *,
+    attempts=(),
+    retry_allowed: bool = False,
+    attention_required: Optional[bool] = None,
+) -> dict:
+    effective_attention = (
+        row.stan in ATTENTION_STATES
+        if attention_required is None
+        else bool(attention_required)
+    )
     return {
         "id": row.id,
         "event": row.typ_zdarzenia,
@@ -1172,7 +1353,7 @@ def message_dict(row, *, attempts=(), retry_allowed: bool = False) -> dict:
         "channel": row.kanal,
         "recipient": _mask_recipient(row.kanal, row.odbiorca),
         "state": row.stan,
-        "attention_required": row.stan in ATTENTION_STATES,
+        "attention_required": effective_attention,
         "attempt_count": row.liczba_prob,
         "max_attempts": row.maks_prob,
         "available_at": row.available_at.isoformat() if row.available_at else None,
@@ -1234,7 +1415,12 @@ def reservation_history(db, reservation_id: int) -> list[dict]:
     ]
 
 
-def waitlist_history(db, waitlist_id: int) -> list[dict]:
+def waitlist_history(
+    db,
+    waitlist_id: int,
+    *,
+    now: Optional[datetime] = None,
+) -> list[dict]:
     rows = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
         waitlist_id=waitlist_id,
     ).order_by(
@@ -1251,7 +1437,12 @@ def waitlist_history(db, waitlist_id: int) -> list[dict]:
         ).all()
         for attempt in attempts:
             attempts_by_message.setdefault(attempt.wiadomosc_id, []).append(attempt)
-    effective_now = _now()
+    effective_now = _now(now)
+    owner = db.get(models.ListaOczekujacych, waitlist_id)
+    terminal_waitlist = bool(
+        owner is not None
+        and owner.status in reservation_service.WAITLIST_TERMINAL_STATUSES
+    )
     return [
         message_dict(
             row,
@@ -1259,7 +1450,10 @@ def waitlist_history(db, waitlist_id: int) -> list[dict]:
             retry_allowed=bool(
                 row.stan in {"failed", "uncertain"}
                 and row.expires_at > effective_now
-                and _retry_relevance_error(db, row) is None
+                and _retry_relevance_error(db, row, now=effective_now) is None
+            ),
+            attention_required=(
+                row.stan == "uncertain" if terminal_waitlist else None
             ),
         )
         for row in rows
@@ -1292,10 +1486,15 @@ def current_confirmation_state(db, reservation_id: int) -> Optional[str]:
     return "expired" if "expired" in states else None
 
 
-def _summary_for_messages(messages) -> Optional[dict]:
+def _summary_for_messages(
+    messages,
+    *,
+    terminal_waitlist: bool = False,
+) -> Optional[dict]:
     if not messages:
         return None
-    attention = [row for row in messages if row.stan in ATTENTION_STATES]
+    attention_states = {"uncertain"} if terminal_waitlist else set(ATTENTION_STATES)
+    attention = [row for row in messages if row.stan in attention_states]
     pending = [
         row for row in messages
         if row.stan in {"processing", "retry", "queued"}
@@ -1353,6 +1552,16 @@ def summaries_for_waitlists(db, waitlist_ids: Iterable[int]) -> dict[int, dict]:
     ids = {int(value) for value in waitlist_ids if value is not None}
     if not ids:
         return {}
+    owners = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.id.in_(ids),
+    ).all()
+    owners_by_id = {owner.id: owner for owner in owners}
+    offered_ids = {owner.id for owner in owners if owner.status == "zaoferowano"}
+    current_offer_dedupe = {
+        owner.id: current_waitlist_offer_dedupe(owner)
+        for owner in owners
+        if owner.status == "zaoferowano" and owner.offer_key_hash
+    }
     rows = db.query(models.RezerwacjaWiadomoscOutbox).filter(
         models.RezerwacjaWiadomoscOutbox.waitlist_id.in_(ids),
         models.RezerwacjaWiadomoscOutbox.stan != "cancelled",
@@ -1362,15 +1571,30 @@ def summaries_for_waitlists(db, waitlist_ids: Iterable[int]) -> dict[int, dict]:
     ).all()
     grouped = {waitlist_id: [] for waitlist_id in ids}
     for row in rows:
+        expected_dedupe = current_offer_dedupe.get(row.waitlist_id)
+        if (
+            row.waitlist_id in offered_ids
+            and row.dedupe_key != expected_dedupe
+            and row.stan != "uncertain"
+        ):
+            continue
         grouped.setdefault(row.waitlist_id, []).append(row)
     output = {
-        waitlist_id: _summary_for_messages(messages)
+        waitlist_id: _summary_for_messages(
+            messages,
+            terminal_waitlist=bool(
+                owners_by_id.get(waitlist_id) is not None
+                and owners_by_id[waitlist_id].status
+                in reservation_service.WAITLIST_TERMINAL_STATUSES
+            ),
+        )
         for waitlist_id, messages in grouped.items()
     }
     legacy_ids = [waitlist_id for waitlist_id, summary in output.items() if summary is None]
     if legacy_ids:
         legacy_rows = db.query(models.ListaOczekujacych).filter(
             models.ListaOczekujacych.id.in_(legacy_ids),
+            models.ListaOczekujacych.status != "zaoferowano",
             models.ListaOczekujacych.powiadomiono_at.isnot(None),
         ).all()
         for row in legacy_rows:
@@ -1398,7 +1622,13 @@ def lock_message(db, message_id: int):
     return query.first()
 
 
-def _retry_relevance_error(db, message) -> Optional[str]:
+def _retry_relevance_error(
+    db,
+    message,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[str]:
+    effective_now = _now(now)
     if message.termin_id is not None:
         owner = db.get(models.Termin, message.termin_id)
         if owner is None or owner.rodzaj != "stolik":
@@ -1439,30 +1669,38 @@ def _retry_relevance_error(db, message) -> Optional[str]:
     owner = db.get(models.ListaOczekujacych, message.waitlist_id)
     if owner is None:
         return "MESSAGE_OWNER_MISSING"
-    if owner.status != "oczekuje" or message.typ_zdarzenia != "table_ready":
+    if owner.status != "zaoferowano" or message.typ_zdarzenia != "table_ready":
+        return "MESSAGE_OWNER_NOT_CURRENT"
+    if (
+        owner.hold_do is None
+        or owner.oferta_wygasa_at is None
+        or owner.hold_do != owner.oferta_wygasa_at
+        or owner.hold_do <= effective_now
+    ):
         return "MESSAGE_OWNER_NOT_CURRENT"
     if (message.kanal, message.odbiorca) not in set(_channels(owner)):
         return "MESSAGE_SUPERSEDED"
-    latest_event = db.query(models.RezerwacjaWiadomoscOutbox).filter(
-        models.RezerwacjaWiadomoscOutbox.waitlist_id == owner.id,
-        models.RezerwacjaWiadomoscOutbox.typ_zdarzenia == "table_ready",
-    ).order_by(models.RezerwacjaWiadomoscOutbox.id.desc()).first()
-    if latest_event is None or latest_event.dedupe_key != message.dedupe_key:
+    current_dedupe = current_waitlist_offer_dedupe(owner)
+    if current_dedupe is None or not secrets.compare_digest(
+        current_dedupe, message.dedupe_key,
+    ):
         return "MESSAGE_SUPERSEDED"
     return None
 
 
 def retry_failed(db, message, *, actor, now: Optional[datetime] = None) -> None:
+    effective_now = _now(now)
+    if message.expires_at <= effective_now:
+        raise ValueError("MESSAGE_EXPIRED")
+    relevance_error = _retry_relevance_error(
+        db, message, now=effective_now,
+    )
+    if relevance_error:
+        raise ValueError(relevance_error)
     if message.stan == "uncertain":
         raise ValueError("UNCERTAIN_REQUIRES_RECONCILIATION")
     if message.stan != "failed":
         raise ValueError("MESSAGE_NOT_FAILED")
-    effective_now = _now(now)
-    if message.expires_at <= effective_now:
-        raise ValueError("MESSAGE_EXPIRED")
-    relevance_error = _retry_relevance_error(db, message)
-    if relevance_error:
-        raise ValueError(relevance_error)
     message.stan = "queued"
     message.available_at = effective_now
     message.maks_prob = max(message.maks_prob, message.liczba_prob + 3)
@@ -1484,10 +1722,24 @@ def reconcile_uncertain(
     if outcome not in {"sent", "failed", "retry"}:
         raise ValueError("INVALID_RECONCILIATION")
     effective_now = _now(now)
+    stale_delivered = (
+        message.waitlist_id is not None
+        and message.sent_at is not None
+        and message.last_error_code == WAITLIST_STALE_DELIVERED_CODE
+    )
+    if stale_delivered and outcome != "sent":
+        raise ValueError("STALE_DELIVERY_REQUIRES_ACKNOWLEDGEMENT")
+    waitlist_relevance_error = (
+        _retry_relevance_error(db, message, now=effective_now)
+        if message.waitlist_id is not None
+        else None
+    )
     if outcome == "retry" and message.expires_at <= effective_now:
         raise ValueError("MESSAGE_EXPIRED")
     if outcome == "retry":
-        relevance_error = _retry_relevance_error(db, message)
+        if waitlist_relevance_error:
+            raise ValueError(waitlist_relevance_error)
+        relevance_error = _retry_relevance_error(db, message, now=effective_now)
         if relevance_error:
             raise ValueError(relevance_error)
     message.reconciled_at = effective_now
@@ -1496,12 +1748,18 @@ def reconcile_uncertain(
     message.updated_at = effective_now
     if outcome == "sent":
         message.stan = "sent"
-        message.sent_at = effective_now
+        # A stale-delivered acknowledgement closes the alert without rewriting
+        # the actual provider delivery timestamp.
+        message.sent_at = message.sent_at or effective_now
         message.last_error_code = None
         _stamp_table_ready(db, message, effective_now)
     elif outcome == "failed":
-        message.stan = "failed"
-        message.last_error_code = "RECONCILED_NOT_SENT"
+        if waitlist_relevance_error is not None:
+            message.stan = "cancelled"
+            message.last_error_code = WAITLIST_SUPERSEDED_NOT_SENT_CODE
+        else:
+            message.stan = "failed"
+            message.last_error_code = "RECONCILED_NOT_SENT"
     else:
         # This is the only path that retries an ambiguous non-idempotent attempt:
         # the operator has explicitly acknowledged the possible duplicate.

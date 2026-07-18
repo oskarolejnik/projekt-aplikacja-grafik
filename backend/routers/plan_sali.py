@@ -1,7 +1,7 @@
 """Sale rezerwacyjne oraz wersjonowany, publikowany plan stolików (R2.1)."""
 
 from collections import defaultdict
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 import math
 from typing import List, Optional
 
@@ -750,29 +750,46 @@ def _konflikty_dezaktywacji(db: Session, stoliki_ids):
         for claim in db.query(models.RezerwacjaStolikClaim).filter(
             models.RezerwacjaStolikClaim.stolik_id.in_(ids),
             models.RezerwacjaStolikClaim.waitlist_id.isnot(None),
-            models.RezerwacjaStolikClaim.expires_at > _teraz(),
+            models.RezerwacjaStolikClaim.expires_at
+            > reservation_service.lifecycle_now_utc(),
         ).all()
     ]
     return sorted(set(reservation_ids)), sorted(set(hold_ids))
 
 
-def _konflikty_redukcji_pojemnosci(db: Session, pojemnosci):
-    """Chroni istniejace przydzialy; edycja szkicu pozostaje dozwolona."""
-    room_ids = set(pojemnosci)
+def _konflikty_redukcji_pojemnosci(db: Session, zakresy_pojemnosci):
+    """Protect both ends of a table's published physical party-size range."""
+    room_ids = set(zakresy_pojemnosci)
     if not room_ids:
         return [], [], []
-    live_capacity = {
-        table_id: int(capacity or 0)
-        for table_id, capacity in db.query(
-            models.Stolik.id, models.Stolik.pojemnosc,
+    live_ranges = {
+        table_id: (int(minimum or 1), int(capacity or 0))
+        for table_id, minimum, capacity in db.query(
+            models.Stolik.id,
+            models.Stolik.pojemnosc_min,
+            models.Stolik.pojemnosc,
         ).all()
     }
 
+    def table_range(table_id):
+        return zakresy_pojemnosci.get(
+            table_id,
+            live_ranges.get(table_id, (1, 0)),
+        )
+
     def assigned_capacity(table_ids):
         return sum(
-            int(pojemnosci.get(table_id, live_capacity.get(table_id, 0)) or 0)
+            int(table_range(table_id)[1] or 0)
             for table_id in table_ids
         )
+
+    def invalid_range(table_ids, people):
+        if people > assigned_capacity(table_ids):
+            return True
+        if len(table_ids) != 1:
+            return False
+        table_id = next(iter(table_ids))
+        return table_id in room_ids and people < int(table_range(table_id)[0] or 1)
 
     reservation_ids = set()
     conflict_table_ids = set()
@@ -786,13 +803,14 @@ def _konflikty_redukcji_pojemnosci(db: Session, pojemnosci):
         if reservation.stolik_id:
             table_ids.add(reservation.stolik_id)
         people = int(reservation.liczba_osob or 0)
-        if table_ids & room_ids and people > assigned_capacity(table_ids):
+        if table_ids & room_ids and invalid_range(table_ids, people):
             reservation_ids.add(reservation.id)
             conflict_table_ids.update(table_ids & room_ids)
 
     claims = db.query(models.RezerwacjaStolikClaim).filter(
         models.RezerwacjaStolikClaim.waitlist_id.isnot(None),
-        models.RezerwacjaStolikClaim.expires_at > _teraz(),
+        models.RezerwacjaStolikClaim.expires_at
+        > reservation_service.lifecycle_now_utc(),
     ).all()
     claims_by_waitlist = defaultdict(list)
     for claim in claims:
@@ -801,13 +819,15 @@ def _konflikty_redukcji_pojemnosci(db: Session, pojemnosci):
     if claims_by_waitlist:
         waitlist_rows = db.query(models.ListaOczekujacych).filter(
             models.ListaOczekujacych.id.in_(claims_by_waitlist),
-            models.ListaOczekujacych.status == "oczekuje",
+            models.ListaOczekujacych.status.in_(
+                reservation_service.WAITLIST_ACTIVE_STATUSES
+            ),
         ).all()
         for waitlist in waitlist_rows:
             owned_claims = claims_by_waitlist[waitlist.id]
             table_ids = {claim.stolik_id for claim in owned_claims}
             people = int(waitlist.liczba_osob or 0)
-            if table_ids & room_ids and people > assigned_capacity(table_ids):
+            if table_ids & room_ids and invalid_range(table_ids, people):
                 hold_ids.update(claim.id for claim in owned_claims)
                 conflict_table_ids.update(table_ids & room_ids)
 
@@ -818,13 +838,22 @@ def _konflikty_redukcji_pojemnosci(db: Session, pojemnosci):
     )
 
 
-def _konflikty_zakresu_kombinacji(db: Session, kombinacje):
+def _konflikty_zakresu_kombinacji(
+    db: Session,
+    kombinacje,
+    *,
+    sala_id: int,
+    room_table_ids,
+):
     """Chroni dokładne, istniejące przydziały przed nowym zakresem zestawu.
 
     Termin nie przechowuje jeszcze identyfikatora wersji kombinacji, dlatego
     porównujemy kanoniczny zestaw stolików. Częściowe nakładanie zestawów nie jest
     konfliktem: A+B i A+C pozostają dwiema niezależnymi definicjami.
     """
+    scoped_table_ids = frozenset(_ids_stolikow(room_table_ids))
+    if not scoped_table_ids:
+        return [], [], []
     range_by_tables = {}
     for combination in kombinacje or []:
         if not bool(_wartosc(combination, "aktywna_w_planie", True)):
@@ -832,11 +861,27 @@ def _konflikty_zakresu_kombinacji(db: Session, kombinacje):
         table_ids = frozenset(_ids_stolikow(_wartosc(combination, "stoliki")))
         minimum = _wartosc(combination, "pojemnosc_min")
         maximum = _wartosc(combination, "pojemnosc_max")
+        channel = (_wartosc(combination, "kanal", "oba") or "oba").strip()
         if len(table_ids) >= 2 and minimum is not None and maximum is not None:
-            range_by_tables[table_ids] = (int(minimum), int(maximum))
-    if not range_by_tables:
-        return [], [], []
-
+            range_by_tables[table_ids] = (
+                int(minimum), int(maximum), channel,
+            )
+    published_combinations = db.query(models.KombinacjaStolowPlanu).join(
+        models.WersjaPlanuSali,
+        models.WersjaPlanuSali.id == models.KombinacjaStolowPlanu.wersja_id,
+    ).join(
+        models.PlanSali,
+        models.PlanSali.id == models.WersjaPlanuSali.plan_id,
+    ).filter(
+        models.PlanSali.sala_id == sala_id,
+        models.WersjaPlanuSali.status == "published",
+        models.KombinacjaStolowPlanu.aktywna_w_planie.is_(True),
+    ).all()
+    protected_published_sets = {
+        frozenset(item.stolik_id for item in combination.skladniki)
+        for combination in published_combinations
+        if len(combination.skladniki) >= 2
+    }
     reservation_ids = set()
     conflict_table_ids = set()
     reservations = db.query(models.Termin).filter(
@@ -848,15 +893,33 @@ def _konflikty_zakresu_kombinacji(db: Session, kombinacje):
         table_ids = _ids_stolikow(reservation.stoliki_dodatkowe)
         if reservation.stolik_id:
             table_ids.add(reservation.stolik_id)
+        if not table_ids or not table_ids <= scoped_table_ids:
+            continue
         allowed_range = range_by_tables.get(frozenset(table_ids))
         people = int(reservation.liczba_osob or 0)
-        if allowed_range is not None and not allowed_range[0] <= people <= allowed_range[1]:
+        reservation_channel = reservation_service.normalise_reservation_channel(
+            reservation.kanal,
+        )
+        if len(table_ids) >= 2 and (
+            (
+                allowed_range is None
+                and frozenset(table_ids) in protected_published_sets
+            )
+            or (
+                allowed_range is not None
+                and (
+                    not allowed_range[0] <= people <= allowed_range[1]
+                    or allowed_range[2] not in {"oba", reservation_channel}
+                )
+            )
+        ):
             reservation_ids.add(reservation.id)
             conflict_table_ids.update(table_ids)
 
     claims = db.query(models.RezerwacjaStolikClaim).filter(
         models.RezerwacjaStolikClaim.waitlist_id.isnot(None),
-        models.RezerwacjaStolikClaim.expires_at > _teraz(),
+        models.RezerwacjaStolikClaim.expires_at
+        > reservation_service.lifecycle_now_utc(),
     ).all()
     claims_by_waitlist = defaultdict(list)
     for claim in claims:
@@ -865,14 +928,37 @@ def _konflikty_zakresu_kombinacji(db: Session, kombinacje):
     if claims_by_waitlist:
         waitlist_rows = db.query(models.ListaOczekujacych).filter(
             models.ListaOczekujacych.id.in_(claims_by_waitlist),
-            models.ListaOczekujacych.status == "oczekuje",
+            models.ListaOczekujacych.status.in_(
+                reservation_service.WAITLIST_ACTIVE_STATUSES
+            ),
         ).all()
         for waitlist in waitlist_rows:
             owned_claims = claims_by_waitlist[waitlist.id]
             table_ids = {claim.stolik_id for claim in owned_claims}
+            if not table_ids or not table_ids <= scoped_table_ids:
+                continue
             allowed_range = range_by_tables.get(frozenset(table_ids))
             people = int(waitlist.liczba_osob or 0)
-            if allowed_range is not None and not allowed_range[0] <= people <= allowed_range[1]:
+            waitlist_channel = (
+                waitlist.offer_kanal
+                if waitlist.offer_kanal in {"online", "wewnetrzna"}
+                else reservation_service.normalise_reservation_channel(
+                    waitlist.kanal,
+                )
+            )
+            if len(table_ids) >= 2 and (
+                (
+                    allowed_range is None
+                    and frozenset(table_ids) in protected_published_sets
+                )
+                or (
+                    allowed_range is not None
+                    and (
+                        not allowed_range[0] <= people <= allowed_range[1]
+                        or allowed_range[2] not in {"oba", waitlist_channel}
+                    )
+                )
+            ):
                 hold_ids.update(claim.id for claim in owned_claims)
                 conflict_table_ids.update(table_ids)
 
@@ -979,6 +1065,38 @@ def edytuj_sale_rezerwacyjna(
     db: Session = Depends(get_db),
 ):
     sala = _sala_or_404(db, sala_id)
+    if sala.aktywna and not dane.aktywna:
+        reservation_service.begin_floor_plan_write(db)
+        sala = _sala_or_404(db, sala_id)
+        room_table_ids = [table.id for table in _stoliki_sali(db, sala)]
+        reservation_service.lock_tables(db, room_table_ids)
+        now = reservation_service.lifecycle_now_utc()
+        active_offer_ids = [
+            row[0] for row in db.query(
+                models.RezerwacjaStolikClaim.waitlist_id,
+            ).join(
+                models.ListaOczekujacych,
+                models.ListaOczekujacych.id
+                == models.RezerwacjaStolikClaim.waitlist_id,
+            ).filter(
+                models.RezerwacjaStolikClaim.stolik_id.in_(room_table_ids),
+                models.RezerwacjaStolikClaim.expires_at > now,
+                models.ListaOczekujacych.status == "zaoferowano",
+                models.ListaOczekujacych.hold_do > now,
+            ).distinct().all()
+        ] if room_table_ids else []
+        if active_offer_ids:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "ROOM_ACTIVE_WAITLIST_OFFERS",
+                    "message": (
+                        "Sala ma aktywne oferty listy oczekujących. "
+                        "Najpierw wycofaj te oferty."
+                    ),
+                    "waitlist_ids": sorted(active_offer_ids),
+                },
+            )
     name_key = room_name_key(dane.nazwa)
     duplicate = db.query(models.SalaRezerwacyjna).filter(
         models.SalaRezerwacyjna.id != sala.id,
@@ -1326,13 +1444,21 @@ def publikuj_plan(
         _konflikty_redukcji_pojemnosci(
             db,
             {
-                pozycja["stolik_id"]: int(pozycja["pojemnosc"])
+                pozycja["stolik_id"]: (
+                    int(pozycja.get("pojemnosc_min") or 1),
+                    int(pozycja["pojemnosc"]),
+                )
                 for pozycja in pozycje
             },
         )
     )
     combination_reservation_ids, combination_hold_ids, combination_table_ids = (
-        _konflikty_zakresu_kombinacji(db, draft_combinations)
+        _konflikty_zakresu_kombinacji(
+            db,
+            draft_combinations,
+            sala_id=sala.id,
+            room_table_ids=room_table_ids,
+        )
     )
     reservation_ids = sorted(
         set(reservation_ids)
@@ -1404,6 +1530,7 @@ def operational_plan_payload(
     sala_id: Optional[int],
     db: Session,
     user: models.User,
+    teraz: Optional[datetime] = None,
 ):
     """Buduje published-only operacyjny plan dnia dla endpointów hosta."""
     selected_sala = _sala_or_404(db, sala_id) if sala_id is not None else None
@@ -1464,12 +1591,17 @@ def operational_plan_payload(
         for sid in stoly_terminu:
             per_stolik[sid].append(termin)
 
+    hold_now = (
+        teraz.astimezone(timezone.utc).replace(tzinfo=None)
+        if teraz is not None and teraz.tzinfo is not None
+        else (teraz.replace(tzinfo=None) if teraz is not None else _teraz())
+    )
     hold_table_ids = {
         stolik_id
         for (stolik_id,) in db.query(models.RezerwacjaStolikClaim.stolik_id).filter(
             models.RezerwacjaStolikClaim.data == dzien,
             models.RezerwacjaStolikClaim.waitlist_id.isnot(None),
-            models.RezerwacjaStolikClaim.expires_at > _teraz(),
+            models.RezerwacjaStolikClaim.expires_at > hold_now,
         ).distinct().all()
     }
     stan = {snapshot.rewir_nr: snapshot for snapshot in db.query(models.StanStolow).all()}

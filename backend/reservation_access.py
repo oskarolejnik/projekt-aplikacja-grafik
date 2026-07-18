@@ -38,7 +38,7 @@ _COMMUNICATION_ITEM = re.compile(
     r"^/api/rezerwacje/komunikacja/[1-9]\d*/(?P<action>retry|reconcile)$"
 )
 _WAITLIST_ITEM = re.compile(
-    r"^/api/lista-oczekujacych/(?P<id>[1-9]\d*)(?:/(?P<action>odwolaj|zrealizuj|powiadom|hold|zwolnij-hold|komunikacja))?$"
+    r"^/api/lista-oczekujacych/(?P<id>[1-9]\d*)(?:/(?P<action>odwolaj|anuluj|zrealizuj|zaakceptuj|oferta|wycofaj-oferte|priorytet|powiadom|hold|zwolnij-hold|komunikacja))?$"
 )
 _CONFIG_ITEM = re.compile(
     r"^/api/(?P<resource>stoliki|kombinacje|sasiedztwo|godziny-otwarcia|wyjatki-kalendarza)/[1-9]\d*$"
@@ -196,11 +196,11 @@ def requirement_for(method: str, path: str) -> Requirement | None:
     match = _WAITLIST_ITEM.fullmatch(path)
     if match:
         action = match.group("action")
-        if action == "odwolaj" and method == "POST":
+        if action in {"odwolaj", "anuluj"} and method == "POST":
             return Requirement(any_of=(OPERATIONS, HOST))
-        if action in {"hold", "zwolnij-hold"} and method == "POST":
+        if action in {"hold", "zwolnij-hold", "wycofaj-oferte", "priorytet", "oferta"} and method == "POST":
             return Requirement(any_of=(OPERATIONS, HOST))
-        if action == "zrealizuj" and method == "POST":
+        if action in {"zrealizuj", "zaakceptuj"} and method == "POST":
             return Requirement(any_of=(OPERATIONS, HOST))
         if action == "powiadom" and method == "POST":
             return Requirement(all_of=(CONTACT,), any_of=(OPERATIONS, HOST))

@@ -13,6 +13,7 @@ import maintenance
 import main
 import models
 import reservation_communication as communication
+import reservation_audit
 import reservation_service
 from crm_identity import hash_key, reservation_fallback_hash
 from deps import get_lokal_config, utcnow_naive
@@ -26,6 +27,45 @@ def _termin(db, *, data, nazwisko="Kowalski", telefon=TEL, status="rezerwacja", 
     t = models.Termin(data=data, nazwisko=nazwisko, telefon=telefon, status=status, rodzaj=rodzaj, notatka=notatka)
     db.add(t); db.commit(); db.refresh(t)
     return t
+
+
+def _override_audit(db, termin, *, note="Poufna decyzja operatora"):
+    audit = models.ReservationAudit(
+        created_at=utcnow_naive(),
+        reservation_ref=reservation_audit.reservation_reference(termin),
+        termin_id=termin.id,
+        actor_kind="system",
+        actor_user_id=None,
+        actor_login=None,
+        action="override",
+        reason="other",
+        diff={
+            "changes": {},
+            "pii_changed": [],
+            "override": {
+                "violations": [{
+                    "rule": "party_max",
+                    "code": "PARTY_SIZE_ABOVE_MAX",
+                    "scope": {"type": "global", "sala_id": None, "kanal": None},
+                    "source": {"type": "override", "id": 1},
+                    "observed": 6,
+                    "limit": 4,
+                    "projected": 6,
+                }],
+            },
+        },
+    )
+    db.add(audit)
+    db.flush()
+    context = models.ReservationOverrideContext(
+        audit_id=audit.id,
+        reason_code="operational_decision",
+        note=note,
+    )
+    db.add(context)
+    db.commit()
+    db.refresh(context)
+    return audit, context
 
 
 def _zgoda(
@@ -58,7 +98,8 @@ def _zgoda(
 
 
 def test_eksport_gosc(admin_client, db):
-    _termin(db, data=date.today())
+    current = _termin(db, data=date.today())
+    _override_audit(db, current, note="Gość poprosił o wyjątek")
     _termin(db, data=date.today() - timedelta(days=30), status="odbyla")
     r = admin_client.post("/api/rodo/eksport-gosc", json={"klucz": KLUCZ})
     assert r.headers["cache-control"] == "private, no-store"
@@ -69,6 +110,10 @@ def test_eksport_gosc(admin_client, db):
     body = r.json()
     assert body["liczba_rekordow"] == 2
     assert any(w["telefon"] == TEL for w in body["rezerwacje"])
+    exported_audit = body["prywatnosc"]["audyty_rezerwacji"][0]
+    assert exported_audit["powod"] == "other"
+    assert exported_audit["kod_powodu_nadpisania"] == "operational_decision"
+    assert exported_audit["notatka_nadpisania"] == "Gość poprosił o wyjątek"
     assert admin_client.get(
         "/api/rodo/eksport-gosc", params={"klucz": KLUCZ},
     ).status_code == 404
@@ -312,6 +357,7 @@ def test_rodo_rezerwacji_nie_ujawnia_hashy_i_usuwa_publiczne_sekrety(admin_clien
 
 def test_retencja_anonimizuje_stare_zamkniete(admin_client, db):
     stary = _termin(db, data=date.today() - timedelta(days=800), status="odbyla")   # ~2,2 roku
+    _old_override_audit, old_context = _override_audit(db, stary)
     swiezy = _termin(db, data=date.today() - timedelta(days=30), status="odbyla")
     db.add(models.ProfilGoscia(
         klucz_hash=hash_key(KLUCZ),
@@ -328,8 +374,57 @@ def test_retencja_anonimizuje_stare_zamkniete(admin_client, db):
     assert db.query(models.ProfilGoscia).filter_by(
         klucz_hash=hash_key(KLUCZ),
     ).one().alergie == "orzechy"
-    audit = db.query(models.ReservationAudit).filter_by(termin_id=stary.id).one()
+    audit = db.query(models.ReservationAudit).filter_by(
+        termin_id=stary.id, action="edit",
+    ).one()
     assert audit.action == "edit" and audit.reason == "system_automation"
+    db.refresh(old_context)
+    assert old_context.note is None
+    assert old_context.reason_code == "operational_decision"
+
+
+def test_anonimization_and_hard_delete_erase_override_note_before_fk_detach(
+    admin_client, db,
+):
+    anonymized = _termin(
+        db,
+        data=date.today(),
+        nazwisko="Anon Override",
+        telefon="700 800 901",
+    )
+    _audit, anon_context = _override_audit(
+        db, anonymized, note="Anonimizowana poufna notatka",
+    )
+    response = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": _normalizuj_numer("700 800 901")},
+    )
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    assert db.get(models.ReservationOverrideContext, anon_context.id).note is None
+
+    deleted = _termin(
+        db,
+        data=date.today() + timedelta(days=1),
+        nazwisko="Delete Override",
+        telefon="700 800 902",
+        status="potwierdzona",
+    )
+    deleted_audit, deleted_context = _override_audit(
+        db, deleted, note="Kasowana poufna notatka",
+    )
+    deleted_id = deleted.id
+    response = admin_client.delete(f"/api/rezerwacje-stolik/{deleted_id}")
+    assert response.status_code == 204, response.text
+    db.expire_all()
+    assert db.get(models.Termin, deleted_id) is None
+    preserved_audit = db.get(models.ReservationAudit, deleted_audit.id)
+    assert preserved_audit.termin_id is None
+    preserved_context = db.get(
+        models.ReservationOverrideContext, deleted_context.id,
+    )
+    assert preserved_context.note is None
+    assert preserved_context.reason_code == "operational_decision"
 
 
 def test_retencja_z_configu_czysci_stare_dane_i_zachowuje_aktywny_hold(admin_client, db):
@@ -346,7 +441,7 @@ def test_retencja_z_configu_czysci_stare_dane_i_zachowuje_aktywny_hold(admin_cli
         telefon="700100200",
         email="stara@example.com",
         notatka="dane wrazliwe",
-        status="odwolany",
+        status="anulowano",
         utworzono_at=now - timedelta(days=90),
         kanal="online",
         token="stary-token-waitlisty",
@@ -357,7 +452,7 @@ def test_retencja_z_configu_czysci_stare_dane_i_zachowuje_aktywny_hold(admin_cli
         liczba_osob=3,
         nazwisko="Swieza Waitlista",
         telefon="700100201",
-        status="zrealizowany",
+        status="zaakceptowano",
         utworzono_at=now - timedelta(days=40),
         kanal="reczna",
     )
@@ -538,7 +633,7 @@ def test_automatyczna_retencja_jest_dzienna_systemowa_i_nie_rusza_aktywnych(db):
         liczba_osob=2,
         nazwisko="Waitlista zamknieta",
         telefon="700200303",
-        status="zrealizowany",
+        status="zaakceptowano",
         utworzono_at=now - timedelta(days=90),
         zrealizowano_at=now - timedelta(days=89),
         kanal="online",
@@ -980,6 +1075,13 @@ def test_subject_a_erasure_does_not_block_on_subject_b_processing_message(
 
 def test_waitlist_claimed_before_io_is_erased_and_cannot_start(admin_client, db):
     now = utcnow_naive()
+    deadline = now + timedelta(minutes=15)
+    stolik = models.Stolik(
+        nazwa="RODO-race", pojemnosc=2, aktywny=True, kolejnosc=0,
+    )
+    db.add(stolik)
+    db.flush()
+    offer_key_hash = hashlib.sha256(b"rodo-waitlist-claimed-offer").hexdigest()
     wpis = models.ListaOczekujacych(
         data=date.today(),
         godz_od=time(18, 0),
@@ -987,17 +1089,42 @@ def test_waitlist_claimed_before_io_is_erased_and_cannot_start(admin_client, db)
         nazwisko="Kowalski",
         telefon=TEL,
         kanal_komunikacji="sms",
-        status="oczekuje",
+        status="zaoferowano",
+        offer_version=1,
+        offer_auto_przydzielony=True,
+        offer_override_authorized=False,
+        offer_key_hash=offer_key_hash,
+        offer_request_fingerprint=hashlib.sha256(
+            b"rodo-waitlist-claimed-payload"
+        ).hexdigest(),
+        zaoferowano_at=now,
+        oferta_wygasa_at=deadline,
         utworzono_at=now,
         kanal="reczna",
-        hold_do=now + timedelta(minutes=15),
+        hold_stolik_id=stolik.id,
+        hold_stoliki_dodatkowe=[],
+        hold_godz_od=time(18, 0),
+        hold_godz_do=time(18, 15),
+        hold_bufor_min=0,
+        hold_do=deadline,
     )
     db.add(wpis)
     db.flush()
+    db.add_all([
+        models.RezerwacjaStolikClaim(
+            waitlist_id=wpis.id,
+            stolik_id=stolik.id,
+            data=wpis.data,
+            minute=minute,
+            expires_at=deadline,
+            created_at=now,
+        )
+        for minute in range(18 * 60, 18 * 60 + 15)
+    ])
     messages = communication.enqueue_table_ready(
         db,
         wpis,
-        dedupe_key="rodo-waitlist-claimed-race",
+        dedupe_key=f"waitlist:{wpis.id}:offer:1:{offer_key_hash}",
     )
     messages[0].available_at = now - timedelta(seconds=1)
     db.commit()
@@ -1115,8 +1242,17 @@ def test_admin_rodo_relocks_all_owner_days_after_concurrent_move(
 
 def test_hard_waitlist_delete_fences_claimed_and_processing_delivery(admin_client, db):
     now = utcnow_naive()
+    stolik = models.Stolik(
+        nazwa="RODO-hard-delete", pojemnosc=2, aktywny=True, kolejnosc=0,
+    )
+    db.add(stolik)
+    db.commit()
 
     def queued_waitlist(suffix):
+        deadline = now + timedelta(minutes=15)
+        offer_key_hash = hashlib.sha256(
+            f"waitlist-hard-delete-offer-{suffix}".encode()
+        ).hexdigest()
         wpis = models.ListaOczekujacych(
             data=date.today(),
             godz_od=time(18, 0),
@@ -1124,17 +1260,42 @@ def test_hard_waitlist_delete_fences_claimed_and_processing_delivery(admin_clien
             nazwisko=f"Waitlist {suffix}",
             telefon=f"7005006{suffix}",
             kanal_komunikacji="sms",
-            status="oczekuje",
+            status="zaoferowano",
+            offer_version=1,
+            offer_auto_przydzielony=True,
+            offer_override_authorized=False,
+            offer_key_hash=offer_key_hash,
+            offer_request_fingerprint=hashlib.sha256(
+                f"waitlist-hard-delete-payload-{suffix}".encode()
+            ).hexdigest(),
+            zaoferowano_at=now,
+            oferta_wygasa_at=deadline,
             utworzono_at=now,
             kanal="reczna",
-            hold_do=now + timedelta(minutes=15),
+            hold_stolik_id=stolik.id,
+            hold_stoliki_dodatkowe=[],
+            hold_godz_od=time(18, 0),
+            hold_godz_do=time(18, 15),
+            hold_bufor_min=0,
+            hold_do=deadline,
         )
         db.add(wpis)
         db.flush()
+        db.add_all([
+            models.RezerwacjaStolikClaim(
+                waitlist_id=wpis.id,
+                stolik_id=stolik.id,
+                data=wpis.data,
+                minute=minute,
+                expires_at=deadline,
+                created_at=now,
+            )
+            for minute in range(18 * 60, 18 * 60 + 15)
+        ])
         messages = communication.enqueue_table_ready(
             db,
             wpis,
-            dedupe_key=f"waitlist-hard-delete-{suffix}",
+            dedupe_key=f"waitlist:{wpis.id}:offer:1:{offer_key_hash}",
         )
         messages[0].available_at = now - timedelta(seconds=1)
         db.commit()

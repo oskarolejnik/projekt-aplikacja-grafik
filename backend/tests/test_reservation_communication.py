@@ -458,6 +458,32 @@ def test_expired_idempotent_lease_after_io_is_retried_with_same_key(
     assert attempts[1].provider_idempotency_key == provider_key
 
 
+def test_started_idempotent_io_past_message_deadline_is_uncertain(
+    monkeypatch,
+    db,
+):
+    monkeypatch.setenv("SMS_SUPPORTS_IDEMPOTENCY", "true")
+    message_id, _ = _queue_due_message(db, channel="sms")
+    row = db.get(models.RezerwacjaWiadomoscOutbox, message_id)
+    row.expires_at = NOW + timedelta(seconds=1)
+    db.commit()
+    claim = communication.claim_next(now=NOW)
+    communication.mark_claim_started(claim, now=NOW)
+
+    assert communication.claim_next(
+        now=NOW + timedelta(seconds=communication.LEASE_SECONDS + 1),
+    ) is None
+    db.expire_all()
+    row = db.get(models.RezerwacjaWiadomoscOutbox, message_id)
+    attempt = db.query(models.RezerwacjaWiadomoscProba).filter_by(
+        wiadomosc_id=message_id,
+        numer=1,
+    ).one()
+    assert row.stan == "uncertain"
+    assert row.last_error_code == "LEASE_EXPIRED_AFTER_IO_DEADLINE_AMBIGUOUS"
+    assert attempt.wynik == "uncertain"
+
+
 def test_message_deadline_expires_without_provider_attempt(db):
     reservation = _reservation(db)
     rows = communication.enqueue_reservation(
@@ -515,7 +541,7 @@ def test_uncertain_requires_explicit_reconciliation_before_retry(db, admin):
     assert retried.provider_idempotency_key == provider_key
 
 
-def test_table_ready_is_stamped_only_after_confirmed_or_reconciled_delivery(
+def test_table_ready_delivery_state_lives_in_outbox_without_owner_stamp(
     db,
     admin,
     monkeypatch,
@@ -531,9 +557,13 @@ def test_table_ready_is_stamped_only_after_confirmed_or_reconciled_delivery(
         nazwisko="Gość listy",
         email="wait@example.test",
         kanal_komunikacji="email",
-        status="oczekuje",
+        status="zaoferowano",
+        offer_version=1,
+        offer_key_hash="a" * 64,
+        offer_request_fingerprint="b" * 64,
         kanal="reczna",
         hold_do=NOW + timedelta(minutes=30),
+        oferta_wygasa_at=NOW + timedelta(minutes=30),
         utworzono_at=NOW,
     )
     db.add(waitlist)
@@ -541,8 +571,12 @@ def test_table_ready_is_stamped_only_after_confirmed_or_reconciled_delivery(
     rows = communication.enqueue_table_ready(
         db,
         waitlist,
-        dedupe_key="table-ready-once",
+        dedupe_key=(
+            f"waitlist:{waitlist.id}:offer:{waitlist.offer_version}:"
+            f"{waitlist.offer_key_hash}"
+        ),
         actor=admin,
+        now=NOW,
     )
     db.flush()
     waitlist_id = waitlist.id
@@ -572,10 +606,221 @@ def test_table_ready_is_stamped_only_after_confirmed_or_reconciled_delivery(
     )
     db.commit()
     db.expire_all()
-    assert db.get(models.ListaOczekujacych, waitlist_id).powiadomiono_at == (
-        NOW + timedelta(seconds=2)
-    )
+    assert db.get(models.ListaOczekujacych, waitlist_id).powiadomiono_at is None
     assert db.get(models.RezerwacjaWiadomoscOutbox, message_id).stan == "sent"
+
+
+def test_r6b2_table_ready_never_rebuilds_or_extends_offer_deadline(db, admin):
+    waitlist = models.ListaOczekujacych(
+        data=NOW.date(),
+        godz_od=time(18, 0),
+        liczba_osob=2,
+        nazwisko="Deadline",
+        email="deadline@example.test",
+        kanal_komunikacji="email",
+        status="zaoferowano",
+        offer_version=1,
+        offer_key_hash="c" * 64,
+        offer_request_fingerprint="d" * 64,
+        kanal="reczna",
+        hold_do=NOW + timedelta(minutes=30),
+        oferta_wygasa_at=NOW + timedelta(minutes=29),
+        utworzono_at=NOW,
+    )
+    db.add(waitlist)
+    db.flush()
+
+    mismatched = communication.enqueue_table_ready(
+        db,
+        waitlist,
+        dedupe_key=(
+            f"waitlist:{waitlist.id}:offer:{waitlist.offer_version}:"
+            f"{waitlist.offer_key_hash}"
+        ),
+        actor=admin,
+        now=NOW,
+    )
+    assert mismatched == []
+
+    waitlist.hold_do = NOW
+    waitlist.oferta_wygasa_at = NOW
+    expired = communication.enqueue_table_ready(
+        db,
+        waitlist,
+        dedupe_key=(
+            f"waitlist:{waitlist.id}:offer:{waitlist.offer_version}:"
+            f"{waitlist.offer_key_hash}"
+        ),
+        actor=admin,
+        now=NOW,
+    )
+    assert expired == []
+    assert db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        waitlist_id=waitlist.id,
+    ).count() == 0
+
+
+def test_worker_does_not_start_waitlist_delivery_at_offer_expiry(db, admin):
+    deadline = NOW + timedelta(seconds=5)
+    waitlist = models.ListaOczekujacych(
+        data=NOW.date(),
+        godz_od=time(18, 0),
+        liczba_osob=2,
+        nazwisko="Expiry",
+        email="expiry@example.test",
+        kanal_komunikacji="email",
+        status="zaoferowano",
+        offer_version=1,
+        offer_key_hash="e" * 64,
+        offer_request_fingerprint="f" * 64,
+        kanal="reczna",
+        hold_do=deadline,
+        oferta_wygasa_at=deadline,
+        utworzono_at=NOW,
+    )
+    db.add(waitlist)
+    db.flush()
+    rows = communication.enqueue_table_ready(
+        db,
+        waitlist,
+        dedupe_key=(
+            f"waitlist:{waitlist.id}:offer:{waitlist.offer_version}:"
+            f"{waitlist.offer_key_hash}"
+        ),
+        actor=admin,
+        now=NOW,
+    )
+    db.flush()
+    message_id = rows[0].id
+    db.commit()
+    db.close()
+
+    assert communication.claim_next(now=deadline) is None
+    message = db.get(models.RezerwacjaWiadomoscOutbox, message_id)
+    assert message.stan == "expired"
+    assert message.last_error_code == "MESSAGE_EXPIRED"
+    assert message.liczba_prob == 0
+
+
+@pytest.mark.parametrize(
+    ("state", "attention_required"),
+    [("failed", False), ("expired", False), ("uncertain", True)],
+)
+def test_terminal_waitlist_only_keeps_ambiguous_delivery_attention(
+    db, admin, state, attention_required,
+):
+    waitlist = models.ListaOczekujacych(
+        data=NOW.date(),
+        godz_od=time(18, 0),
+        liczba_osob=2,
+        nazwisko="Terminal summary",
+        email="terminal-summary@example.test",
+        kanal_komunikacji="email",
+        status="zaoferowano",
+        offer_version=1,
+        offer_key_hash="1" * 64,
+        offer_request_fingerprint="2" * 64,
+        kanal="reczna",
+        hold_do=NOW + timedelta(minutes=30),
+        oferta_wygasa_at=NOW + timedelta(minutes=30),
+        utworzono_at=NOW,
+    )
+    db.add(waitlist)
+    db.flush()
+    message = communication.enqueue_table_ready(
+        db,
+        waitlist,
+        dedupe_key=(
+            f"waitlist:{waitlist.id}:offer:{waitlist.offer_version}:"
+            f"{waitlist.offer_key_hash}"
+        ),
+        actor=admin,
+        now=NOW,
+    )[0]
+    db.flush()
+    waitlist.status = "anulowano"
+    waitlist.anulowano_at = NOW + timedelta(seconds=1)
+    waitlist.hold_do = None
+    waitlist.oferta_wygasa_at = None
+    message.stan = state
+    message.last_error_code = f"TEST_{state.upper()}"
+    if state == "uncertain":
+        message.uncertain_at = NOW + timedelta(seconds=1)
+    db.flush()
+
+    summary = communication.summaries_for_waitlists(db, [waitlist.id])[waitlist.id]
+    history_message = communication.waitlist_history(
+        db, waitlist.id, now=NOW + timedelta(seconds=2),
+    )[0]
+    assert summary["attention_required"] is attention_required
+    assert summary["attention_count"] == int(attention_required)
+    assert history_message["attention_required"] is attention_required
+    assert history_message["retry_allowed"] is False
+
+
+def test_deterministic_finalize_after_terminal_waitlist_auto_cancels(db, admin):
+    waitlist = models.ListaOczekujacych(
+        data=NOW.date(),
+        godz_od=time(18, 0),
+        liczba_osob=2,
+        nazwisko="Terminal finalize",
+        email="terminal-finalize@example.test",
+        kanal_komunikacji="email",
+        status="zaoferowano",
+        offer_version=1,
+        offer_key_hash="3" * 64,
+        offer_request_fingerprint="4" * 64,
+        kanal="reczna",
+        hold_do=NOW + timedelta(minutes=30),
+        oferta_wygasa_at=NOW + timedelta(minutes=30),
+        utworzono_at=NOW,
+    )
+    db.add(waitlist)
+    db.flush()
+    message = communication.enqueue_table_ready(
+        db,
+        waitlist,
+        dedupe_key=(
+            f"waitlist:{waitlist.id}:offer:{waitlist.offer_version}:"
+            f"{waitlist.offer_key_hash}"
+        ),
+        actor=admin,
+        now=NOW,
+    )[0]
+    db.flush()
+    waitlist_id = waitlist.id
+    message_id = message.id
+    db.commit()
+    db.close()
+
+    claim = communication.claim_next(now=NOW)
+    started = communication.mark_claim_started(claim, now=NOW)
+    waitlist = db.get(models.ListaOczekujacych, waitlist_id)
+    waitlist.status = "anulowano"
+    waitlist.anulowano_at = NOW + timedelta(seconds=1)
+    waitlist.hold_do = None
+    waitlist.oferta_wygasa_at = None
+    db.commit()
+    db.close()
+
+    assert communication.finalize_claim(
+        started,
+        DeliveryResult("failed", "PROVIDER_REJECTED"),
+        now=NOW + timedelta(seconds=2),
+    ) is True
+    message = db.get(models.RezerwacjaWiadomoscOutbox, message_id)
+    attempt = db.query(models.RezerwacjaWiadomoscProba).filter_by(
+        wiadomosc_id=message_id,
+        numer=1,
+    ).one()
+    assert message.stan == "cancelled"
+    assert message.last_error_code == communication.WAITLIST_SUPERSEDED_NOT_SENT_CODE
+    assert attempt.wynik == "failed"
+    assert attempt.error_code == "PROVIDER_REJECTED"
+    assert communication.summaries_for_waitlists(db, [waitlist_id])[waitlist_id] is None
+    assert communication.waitlist_history(
+        db, waitlist_id, now=NOW + timedelta(seconds=3),
+    )[0]["attention_required"] is False
 
 
 def test_rodo_purge_removes_encrypted_snapshot_and_delivery_attempt(db):

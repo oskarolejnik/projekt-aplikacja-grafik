@@ -158,6 +158,68 @@ describe('ReservationCommunicationPanel', () => {
     expect(await screen.findByText(/świadomą zgodą na ryzyko duplikatu/i)).toBeInTheDocument()
   })
 
+  it('pokazuje dostarczoną wiadomość starej oferty jako jeden bezpieczny alert do zamknięcia', async () => {
+    const staleDelivered = {
+      ...MESSAGE,
+      event: 'table_ready',
+      event_label: 'Stolik gotowy',
+      state: 'uncertain',
+      channel: 'sms',
+      recipient: '***700',
+      sent_at: '2030-01-02T17:04:00Z',
+      uncertain_at: '2030-01-02T17:04:00Z',
+      last_error_code: 'WAITLIST_STALE_TABLE_READY_DELIVERED',
+      retry_allowed: false,
+    }
+    let reconciled = false
+    apiMock.mockImplementation((path, method, body) => {
+      if (path === '/lista-oczekujacych/11/komunikacja' && method === 'GET') {
+        const message = reconciled
+          ? { ...staleDelivered, state: 'sent', attention_required: false, last_error_code: null }
+          : staleDelivered
+        return Promise.resolve({
+          summary: {
+            state: message.state,
+            event: 'table_ready',
+            channel: 'sms',
+            attention_required: !reconciled,
+          },
+          messages: [message],
+        })
+      }
+      if (path === `/rezerwacje/komunikacja/${MESSAGE.id}/reconcile` && method === 'POST') {
+        expect(body).toEqual({
+          wynik: 'sent',
+          notatka: 'Telefonicznie wyjaśniono gościowi zmianę.',
+        })
+        reconciled = true
+        return Promise.resolve({ ...staleDelivered, state: 'sent' })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method} ${path}`))
+    })
+
+    render(
+      <ReservationCommunicationPanel
+        ownerType="waitlist"
+        ownerId={11}
+        showQueueAction={false}
+      />,
+    )
+
+    expect(await screen.findByText(/wiadomość została dostarczona po wycofaniu, anulowaniu lub wygaśnięciu oferty/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Potwierdź i zamknij alert' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Oznacz jako niewysłaną' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ponów mimo ryzyka' })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Sposób wyjaśnienia'), {
+      target: { value: 'Telefonicznie wyjaśniono gościowi zmianę.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź i zamknij alert' }))
+
+    expect(await screen.findByText('Alert zamknięty. Dostarczenie pozostaje zapisane w historii.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Potwierdź i zamknij alert' })).not.toBeInTheDocument())
+  })
+
   it('nie wysyła na stare dane kontaktowe, gdy formularz ma niezapisane zmiany', async () => {
     apiMock.mockResolvedValue({
       summary: { state: 'failed', channel: 'email' },

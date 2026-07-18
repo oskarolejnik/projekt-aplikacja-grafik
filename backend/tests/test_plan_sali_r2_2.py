@@ -585,6 +585,70 @@ def test_publish_blocks_capacity_reduction_for_exact_assignment_and_hold(admin_c
     ).json()["stoliki"][0]["pojemnosc"] == 4
 
 
+def test_publish_blocks_single_table_minimum_above_active_offer(
+    admin_client, db,
+):
+    room = _room(admin_client, "Sala minimalnej grupy")
+    table = _table(db, room, "Oferta dla dwojga", capacity=4)
+    initial = _draft(admin_client, room)
+    published = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room['id']}/plan/publikuj",
+        json={"expected_revision": initial["wersja"]["rewizja"]},
+    )
+    assert published.status_code == 200, published.text
+
+    booking_day = date.today() + timedelta(days=24)
+    waitlist = admin_client.post(
+        "/api/lista-oczekujacych",
+        json={
+            "data": str(booking_day),
+            "godz_od": "18:00",
+            "liczba_osob": 2,
+            "nazwisko": "Oferta ponizej nowego minimum",
+            "email": "minimum-offer@example.test",
+            "kanal_komunikacji": "email",
+        },
+    )
+    assert waitlist.status_code == 201, waitlist.text
+    waitlist_id = waitlist.json()["id"]
+    offered = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/oferta",
+        headers={"Idempotency-Key": "minimum-plan-offer"},
+        json={
+            "stoliki": [table.id],
+            "minuty": 30,
+            "expected_offer_version": 0,
+        },
+    )
+    assert offered.status_code == 200, offered.text
+
+    draft = _draft(admin_client, room)
+    raised_minimum = _save(admin_client, room, {
+        "expected_revision": 0,
+        "pozycje": _positions(draft, {
+            table.id: {"pojemnosc_min": 3},
+        }),
+    })
+    assert raised_minimum.status_code == 200, raised_minimum.text
+    conflict = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room['id']}/plan/publikuj",
+        json={"expected_revision": 1},
+    )
+    assert conflict.status_code == 409, conflict.text
+    detail = conflict.json()["detail"]
+    assert detail["code"] == "PLAN_PUBLISH_CONFLICT"
+    assert detail["table_ids"] == [table.id]
+    assert detail["hold_ids"]
+
+    accepted = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/zaakceptuj",
+        headers={"Idempotency-Key": "minimum-plan-accept"},
+        json={"offer_version": 1},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["rezerwacja"]["stolik_id"] == table.id
+
+
 def test_publish_blocks_combination_range_outside_exact_reservation_and_hold(
     admin_client,
     db,
@@ -716,3 +780,210 @@ def test_publish_blocks_combination_range_outside_exact_reservation_and_hold(
         f"/api/sale-rezerwacyjne/{room['id']}/plan/szkic",
     ).json()
     assert still_draft["kombinacje"][0]["pojemnosc_max"] == 8
+
+
+def test_active_combination_offer_blocks_room_disable_channel_and_removal(
+    admin_client, db,
+):
+    room = _room(admin_client, "Sala chronionej oferty")
+    first = _table(db, room, "Oferta 4", capacity=4)
+    second = _table(db, room, "Oferta 2", capacity=2)
+    initial = _draft(admin_client, room)
+    configured = _save(admin_client, room, {
+        "expected_revision": 0,
+        "pozycje": _positions(initial),
+        "krawedzie": [{
+            "stolik_a_id": first.id,
+            "stolik_b_id": second.id,
+        }],
+        "kombinacje": [{
+            "nazwa": "Oferta 4+2",
+            "stoliki": [first.id, second.id],
+            "pojemnosc_min": 6,
+            "pojemnosc_max": 6,
+            "kanal": "oba",
+            "aktywna_w_planie": True,
+        }],
+    })
+    assert configured.status_code == 200, configured.text
+    published = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room['id']}/plan/publikuj",
+        json={"expected_revision": 1},
+    )
+    assert published.status_code == 200, published.text
+
+    booking_day = date.today() + timedelta(days=25)
+    waitlist = admin_client.post(
+        "/api/lista-oczekujacych",
+        json={
+            "data": str(booking_day),
+            "godz_od": "18:00",
+            "liczba_osob": 6,
+            "nazwisko": "Chroniona oferta",
+            "email": "protected-offer@example.test",
+            "kanal_komunikacji": "email",
+        },
+    )
+    assert waitlist.status_code == 201, waitlist.text
+    waitlist_id = waitlist.json()["id"]
+    offered = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/oferta",
+        headers={"Idempotency-Key": "protected-plan-offer"},
+        json={
+            "stoliki": [first.id, second.id],
+            "minuty": 30,
+            "expected_offer_version": 0,
+        },
+    )
+    assert offered.status_code == 200, offered.text
+
+    disable = admin_client.put(
+        f"/api/sale-rezerwacyjne/{room['id']}",
+        json={
+            "nazwa": room["nazwa"],
+            "aktywna": False,
+            "kolejnosc": room["kolejnosc"],
+        },
+    )
+    assert disable.status_code == 409, disable.text
+    assert disable.json()["detail"]["code"] == "ROOM_ACTIVE_WAITLIST_OFFERS"
+
+    draft = _draft(admin_client, room)
+    changed_channel = _save(admin_client, room, {
+        "expected_revision": 0,
+        "pozycje": _positions(draft),
+        "krawedzie": draft["krawedzie"],
+        "kombinacje": [{
+            **draft["kombinacje"][0],
+            "kanal": "online",
+        }],
+    })
+    assert changed_channel.status_code == 200, changed_channel.text
+    channel_conflict = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room['id']}/plan/publikuj",
+        json={"expected_revision": 1},
+    )
+    assert channel_conflict.status_code == 409, channel_conflict.text
+    assert channel_conflict.json()["detail"]["code"] == "PLAN_PUBLISH_CONFLICT"
+
+    removed = _save(admin_client, room, {
+        "expected_revision": 1,
+        "pozycje": _positions(draft),
+        "krawedzie": draft["krawedzie"],
+        "kombinacje": [],
+    })
+    assert removed.status_code == 200, removed.text
+    conflict = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room['id']}/plan/publikuj",
+        json={"expected_revision": 2},
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"]["code"] == "PLAN_PUBLISH_CONFLICT"
+
+    accepted = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/zaakceptuj",
+        headers={"Idempotency-Key": "protected-plan-accept"},
+        json={"offer_version": 1},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert {
+        accepted.json()["rezerwacja"]["stolik_id"],
+        *accepted.json()["rezerwacja"]["stoliki_dodatkowe"],
+    } == {first.id, second.id}
+
+
+def test_combination_publish_conflicts_are_scoped_to_current_room(
+    admin_client, db,
+):
+    room_a = _room(admin_client, "Sala A bez konfliktu")
+    table_a = _table(db, room_a, "A1", capacity=4)
+    initial_a = _draft(admin_client, room_a)
+    published_a = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room_a['id']}/plan/publikuj",
+        json={"expected_revision": initial_a["wersja"]["rewizja"]},
+    )
+    assert published_a.status_code == 200, published_a.text
+
+    room_b = _room(admin_client, "Sala B z oferta")
+    first_b = _table(db, room_b, "B4", capacity=4)
+    second_b = _table(db, room_b, "B2", capacity=2)
+    initial_b = _draft(admin_client, room_b)
+    configured_b = _save(admin_client, room_b, {
+        "expected_revision": 0,
+        "pozycje": _positions(initial_b),
+        "krawedzie": [{
+            "stolik_a_id": first_b.id,
+            "stolik_b_id": second_b.id,
+        }],
+        "kombinacje": [{
+            "nazwa": "B 4+2",
+            "stoliki": [first_b.id, second_b.id],
+            "pojemnosc_min": 6,
+            "pojemnosc_max": 6,
+            "kanal": "oba",
+            "aktywna_w_planie": True,
+        }],
+    })
+    assert configured_b.status_code == 200, configured_b.text
+    published_b = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room_b['id']}/plan/publikuj",
+        json={"expected_revision": 1},
+    )
+    assert published_b.status_code == 200, published_b.text
+
+    booking_day = date.today() + timedelta(days=27)
+    waitlist = admin_client.post(
+        "/api/lista-oczekujacych",
+        json={
+            "data": str(booking_day),
+            "godz_od": "18:00",
+            "liczba_osob": 6,
+            "nazwisko": "Oferta tylko w sali B",
+            "email": "room-b-offer@example.test",
+            "kanal_komunikacji": "email",
+        },
+    )
+    assert waitlist.status_code == 201, waitlist.text
+    waitlist_id = waitlist.json()["id"]
+    offered = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/oferta",
+        headers={"Idempotency-Key": "room-b-scoped-offer"},
+        json={
+            "stoliki": [first_b.id, second_b.id],
+            "minuty": 30,
+            "expected_offer_version": 0,
+        },
+    )
+    assert offered.status_code == 200, offered.text
+
+    harmless_a = _draft(admin_client, room_a)
+    republished_a = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room_a['id']}/plan/publikuj",
+        json={"expected_revision": harmless_a["wersja"]["rewizja"]},
+    )
+    assert republished_a.status_code == 200, republished_a.text
+    assert admin_client.get(
+        f"/api/sale-rezerwacyjne/{room_a['id']}/plan",
+    ).json()["stoliki"][0]["id"] == table_a.id
+
+    draft_b = _draft(admin_client, room_b)
+    removed_b = _save(admin_client, room_b, {
+        "expected_revision": 0,
+        "pozycje": _positions(draft_b),
+        "krawedzie": draft_b["krawedzie"],
+        "kombinacje": [],
+    })
+    assert removed_b.status_code == 200, removed_b.text
+    conflict_b = admin_client.post(
+        f"/api/sale-rezerwacyjne/{room_b['id']}/plan/publikuj",
+        json={"expected_revision": 1},
+    )
+    assert conflict_b.status_code == 409, conflict_b.text
+    assert conflict_b.json()["detail"]["code"] == "PLAN_PUBLISH_CONFLICT"
+
+    accepted = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/zaakceptuj",
+        headers={"Idempotency-Key": "room-b-scoped-accept"},
+        json={"offer_version": 1},
+    )
+    assert accepted.status_code == 200, accepted.text

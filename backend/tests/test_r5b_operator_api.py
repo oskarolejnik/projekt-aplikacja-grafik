@@ -63,6 +63,21 @@ def _waitlist(admin_client, *, preference="email"):
     return response.json()["id"]
 
 
+def _offer_waitlist(admin_client, waitlist_id, *, name="R5B-WAIT"):
+    table_id = _table(admin_client, name)
+    response = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/oferta",
+        headers={"Idempotency-Key": f"offer-{waitlist_id}-{name}"},
+        json={
+            "stolik_id": table_id,
+            "minuty": 30,
+            "expected_offer_version": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response
+
+
 def _set_confirmation_state(db, reservation_id, state):
     now = datetime.utcnow()
     rows = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
@@ -319,9 +334,8 @@ def test_waitlist_both_channels_have_one_group_summary_history_and_no_duplicates
     waitlist_id = _waitlist(admin_client, preference="oba")
     path = f"/api/lista-oczekujacych/{waitlist_id}/powiadom"
 
-    first = admin_client.post(path)
-    assert first.status_code == 200, first.text
-    first_body = schemas.WaitlistPowiadomOut.model_validate(first.json())
+    first = _offer_waitlist(admin_client, waitlist_id, name="R5B-BOTH")
+    first_body = schemas.WaitlistOfertaOut.model_validate(first.json())
     assert first_body.queued is True
     assert {message.channel for message in first_body.messages} == {"email", "sms"}
     assert first_body.wpis["communication_summary"]["channel"] == "oba"
@@ -386,11 +400,8 @@ def test_legacy_waitlist_stamp_is_visible_but_never_requeued(admin_client, db):
     assert history_body.summary.state == "sent"
 
     notify = admin_client.post(f"/api/lista-oczekujacych/{waitlist_id}/powiadom")
-    notify_body = schemas.WaitlistPowiadomOut.model_validate(notify.json())
-    assert notify_body.queued is False
-    assert notify_body.juz_powiadomiony is True
-    assert notify_body.legacy_delivery is True
-    assert notify_body.messages == []
+    assert notify.status_code == 409
+    assert notify.json()["code"] == "WAITLIST_OFFER_NOT_ACTIVE"
     assert db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
         waitlist_id=waitlist_id,
     ).count() == 0
@@ -399,8 +410,7 @@ def test_legacy_waitlist_stamp_is_visible_but_never_requeued(admin_client, db):
 def test_generic_retry_and_reconcile_enforce_message_owner_type(client, admin_client, db):
     reservation_id = _reservation(admin_client, _table(admin_client, "AUTH"), preference="oba")
     waitlist_id = _waitlist(admin_client, preference="oba")
-    queued = admin_client.post(f"/api/lista-oczekujacych/{waitlist_id}/powiadom")
-    assert queued.status_code == 200, queued.text
+    queued = _offer_waitlist(admin_client, waitlist_id, name="R5B-AUTH-WAIT")
 
     reservation_rows = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
         termin_id=reservation_id,
@@ -458,3 +468,77 @@ def test_generic_retry_and_reconcile_enforce_message_owner_type(client, admin_cl
     )
     assert reconcile.status_code == 200, reconcile.text
     assert schemas.RezerwacjaWiadomoscOut.model_validate(reconcile.json()).state == "failed"
+
+
+def test_waitlist_retry_uses_current_offer_generation_without_latest_outbox(
+    client,
+    admin_client,
+    db,
+):
+    waitlist_id = _waitlist(admin_client, preference="email")
+    first_offer = _offer_waitlist(
+        admin_client, waitlist_id, name="R5B-GENERATION",
+    ).json()
+    first_version = first_offer["wpis"]["offer_version"]
+    table_id = first_offer["wpis"]["hold_stolik_id"]
+    first_message = db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        waitlist_id=waitlist_id,
+        typ_zdarzenia="table_ready",
+    ).one()
+    first_message.stan = "failed"
+    first_message.last_error_code = "TEST_FAILED"
+    first_message.updated_at = datetime.utcnow()
+    db.commit()
+    first_message_id = first_message.id
+
+    withdrawn = admin_client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/wycofaj-oferte",
+        json={"offer_version": first_version},
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    withdrawn_version = withdrawn.json()["offer_version"]
+
+    host_without_contact = factories.UserFactory(
+        login="host_generation_without_contact",
+        rola="szef",
+        pracownik=None,
+        uprawnienia_override={
+            "rezerwacje.host": True,
+            "rezerwacje.operacje": False,
+            "rezerwacje.dane_kontaktowe": False,
+        },
+    )
+    second_offer = client.post(
+        f"/api/lista-oczekujacych/{waitlist_id}/oferta",
+        headers=_headers(
+            host_without_contact,
+            **{"Idempotency-Key": "waitlist-generation-v2-no-contact"},
+        ),
+        json={
+            "stolik_id": table_id,
+            "minuty": 30,
+            "expected_offer_version": withdrawn_version,
+        },
+    )
+    assert second_offer.status_code == 200, second_offer.text
+    assert second_offer.json()["wpis"]["offer_version"] == withdrawn_version + 1
+    assert db.query(models.RezerwacjaWiadomoscOutbox).filter_by(
+        waitlist_id=waitlist_id,
+        typ_zdarzenia="table_ready",
+    ).count() == 1
+
+    stale_retry = admin_client.post(
+        f"/api/rezerwacje/komunikacja/{first_message_id}/retry",
+    )
+    assert stale_retry.status_code == 409, stale_retry.text
+    assert stale_retry.json()["code"] == "MESSAGE_SUPERSEDED"
+
+    history = admin_client.get(
+        f"/api/lista-oczekujacych/{waitlist_id}/komunikacja",
+    )
+    assert history.status_code == 200, history.text
+    stale = next(
+        message for message in history.json()["messages"]
+        if message["id"] == first_message_id
+    )
+    assert stale["retry_allowed"] is False

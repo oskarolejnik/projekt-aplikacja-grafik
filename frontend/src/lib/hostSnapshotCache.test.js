@@ -57,6 +57,19 @@ const snapshot = (day = DAY) => ({
       telefon: '700-WAITLIST-PII',
       notatka: 'WAITLIST-NOTE-PII',
     }],
+    komunikacja_waitlist: [{
+      id: 52,
+      status: 'anulowano',
+      nazwisko: 'Terminal-WAITLIST-PII',
+      telefon: '711-TERMINAL-PII',
+      communication_summary: {
+        state: 'uncertain',
+        channel: 'sms',
+        attention_count: 1,
+        attention_required: true,
+        recipient: '711-SUMMARY-PII',
+      },
+    }],
   },
   os_czasu: {
     data: day,
@@ -153,6 +166,9 @@ describe('hostSnapshotCache', () => {
       'TAG-PII',
       'OKAZJA-PII',
       'Nowak-WAITLIST-PII',
+      'Terminal-WAITLIST-PII',
+      '711-TERMINAL-PII',
+      '711-SUMMARY-PII',
       'Timeline-PII',
       'Plan-PII',
       'ROOT-PII',
@@ -169,6 +185,18 @@ describe('hostSnapshotCache', () => {
       kolejka: {
         nadchodzace: [{ id: 11, nazwisko: 'Gość', gosc: null }],
         waitlista: [{ id: 51, nazwisko: 'Gość', gosc: null }],
+        komunikacja_waitlist: [{
+          id: 52,
+          status: 'anulowano',
+          nazwisko: 'Gość',
+          gosc: null,
+          communication_summary: {
+            state: 'uncertain',
+            channel: 'sms',
+            attention_count: 1,
+            attention_required: true,
+          },
+        }],
       },
       os_czasu: {
         zajetosci: [{ rezerwacja_id: 11, nazwisko: 'Gość', gosc: null }],
@@ -186,6 +214,76 @@ describe('hostSnapshotCache', () => {
       status: 'potwierdzona',
       faza_hosta: 'przybyl',
     })
+  })
+
+  it('zachowuje operacyjny hold oferty i jej pasek timeline bez danych kontaktowych', () => {
+    const source = snapshot()
+    source.kolejka.waitlista[0] = {
+      ...source.kolejka.waitlista[0],
+      data: DAY,
+      status: 'zaoferowano',
+      priorytet: 1,
+      utworzono_at: '2026-07-18T15:30:00.000Z',
+      zaoferowano_at: '2026-07-18T16:00:00.000Z',
+      hold_stolik_id: 3,
+      hold_stoliki_dodatkowe: [4],
+      hold_godz_od: '19:00',
+      hold_godz_do: '20:30',
+      hold_do: '2026-07-18T16:10:00.000Z',
+      offer_version: 4,
+      communication_summary: {
+        state: 'queued',
+        channel: 'sms',
+        attention_count: 0,
+        attention_required: false,
+        recipient: '500-COMMUNICATION-PII',
+      },
+    }
+    source.os_czasu.zajetosci.push({
+      typ: 'oferta',
+      waitlist_id: 51,
+      rezerwacja_id: null,
+      stolik_id: 3,
+      godz_od: '19:00',
+      godz_do: '20:30',
+      hold_do: '2026-07-18T16:10:00.000Z',
+      liczba_osob: 2,
+      nazwisko: 'Oferta-WAITLIST-PII',
+    })
+
+    expect(writeHostSnapshotCache(USER, source)).toBe(true)
+    const raw = JSON.stringify(sessionStorage)
+    expect(raw).not.toContain('500-COMMUNICATION-PII')
+    expect(raw).not.toContain('Oferta-WAITLIST-PII')
+
+    const cached = readHostSnapshotCache(USER, DAY)
+    expect(cached.kolejka.waitlista[0]).toMatchObject({
+      id: 51,
+      status: 'zaoferowano',
+      priorytet: 1,
+      hold_stolik_id: 3,
+      hold_stoliki_dodatkowe: [4],
+      hold_godz_od: '19:00',
+      hold_godz_do: '20:30',
+      hold_do: '2026-07-18T16:10:00.000Z',
+      offer_version: 4,
+      nazwisko: 'Gość',
+      communication_summary: {
+        state: 'queued',
+        channel: 'sms',
+        attention_count: 0,
+        attention_required: false,
+      },
+    })
+    expect(cached.os_czasu.zajetosci).toContainEqual(expect.objectContaining({
+      typ: 'oferta',
+      waitlist_id: 51,
+      rezerwacja_id: null,
+      stolik_id: 3,
+      godz_od: '19:00',
+      godz_do: '20:30',
+      nazwisko: 'Gość',
+    }))
   })
 
   it('przechowuje tylko ostatni dzień aktora, ale nie niszczy go przy podglądzie innej daty', () => {

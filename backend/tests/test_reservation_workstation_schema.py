@@ -86,7 +86,7 @@ def test_r6a_migration_round_trip_on_empty_database(tmp_path):
             "AND name='reservation_workstation_audit'"
         ).fetchone()[0]
     assert R6A_TABLES <= tables
-    assert revision == "0064_r6a_reservation_workstations"
+    assert revision == "0065_r6b2_waitlist_offers"
     assert "uq_reservation_operator_session_token_hash" in session_sql
     assert "ck_reservation_operator_session_secret_hashes" in session_sql
     assert "ck_reservation_operator_session_reauth_grant" in session_sql
@@ -125,7 +125,7 @@ def test_r6a_adopts_complete_unversioned_current_schema(tmp_path):
         revision = connection.execute(
             "SELECT version_num FROM alembic_version"
         ).fetchone()[0]
-    assert revision == "0064_r6a_reservation_workstations"
+    assert revision == "0065_r6b2_waitlist_offers"
 
 
 def test_r6a_adoption_rejects_partial_unversioned_schema(tmp_path):
@@ -164,5 +164,5 @@ def test_r6a_upgrades_complete_unversioned_0063_schema(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert revision == "0064_r6a_reservation_workstations"
+    assert revision == "0065_r6b2_waitlist_offers"
     assert R6A_TABLES <= tables
