@@ -77,12 +77,8 @@ describe('SzefView permissions', () => {
     render(<SzefView />)
 
     expect(screen.getByText('Recepcja / Host · Ola')).toBeInTheDocument()
-    const nav = screen.getByRole('navigation', { name: 'Widoki recepcji' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Rezerwacje',
-    ])
     await waitFor(() => expect(screen.getByText('Workspace rezerwacji')).toBeInTheDocument())
-    expect(within(nav).getByRole('button', { name: 'Rezerwacje' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByRole('navigation', { name: 'Widoki recepcji' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Grafik' })).not.toBeInTheDocument()
   })
 
@@ -108,11 +104,8 @@ describe('SzefView permissions', () => {
 
     render(<SzefView />)
 
-    const nav = screen.getByRole('navigation', { name: 'Widoki szefa' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Rezerwacje (podgląd)',
-    ])
     expect(await screen.findByText('Widok rezerwacji')).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Widoki szefa' })).not.toBeInTheDocument()
     expect(screen.queryByText('Workspace rezerwacji')).not.toBeInTheDocument()
   })
 

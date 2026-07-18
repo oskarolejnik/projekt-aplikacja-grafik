@@ -22,14 +22,23 @@ def test_waliduj_slug_odrzuca(zly):
 # ── sekrety ───────────────────────────────────────────────────────────────────
 def test_generuj_sekrety_bezpieczne_i_unikalne():
     a, b = nc.generuj_sekrety(), nc.generuj_sekrety()
-    assert set(a) == {"SECRET_KEY", "RCP_INGEST_TOKEN", "ENCRYPTION_KEY"}
+    assert set(a) == {
+        "SECRET_KEY", "RCP_INGEST_TOKEN", "ENCRYPTION_KEY",
+        "WORKSTATION_PIN_PEPPER",
+    }
     assert a["SECRET_KEY"] != b["SECRET_KEY"]            # losowe przy każdym wywołaniu
     assert a["RCP_INGEST_TOKEN"] != b["RCP_INGEST_TOKEN"]
     assert a["ENCRYPTION_KEY"] != b["ENCRYPTION_KEY"] and len(a["ENCRYPTION_KEY"]) >= 32
+    assert a["WORKSTATION_PIN_PEPPER"] != b["WORKSTATION_PIN_PEPPER"]
+    assert len(a["WORKSTATION_PIN_PEPPER"]) >= 32
+    assert a["WORKSTATION_PIN_PEPPER"] not in {
+        a["SECRET_KEY"], a["ENCRYPTION_KEY"],
+    }
     assert len(a["SECRET_KEY"]) >= 32
     # Wygenerowane sekrety NIE mogą trafić na listę niebezpiecznych z settings (fail-fast by je odrzucił).
     assert a["SECRET_KEY"] not in settings._INSECURE_SECRET_KEYS
     assert a["RCP_INGEST_TOKEN"] not in settings._INSECURE_RCP_TOKENS
+    assert a["WORKSTATION_PIN_PEPPER"] not in settings._INSECURE_WORKSTATION_PIN_PEPPERS
 
 
 def test_domyslne_haslo_przechodzi_walidacje():
@@ -41,13 +50,15 @@ def test_domyslne_haslo_przechodzi_walidacje():
 # ── render .env ───────────────────────────────────────────────────────────────
 def test_renderuj_env_produkcyjny_i_z_sekretami():
     sek = {"SECRET_KEY": "AAAA-bardzo-dlugi-sekret-instancji-xyz", "RCP_INGEST_TOKEN": "RCP-token-instancji-123",
-           "ENCRYPTION_KEY": "ENC-klucz-szyfrowania-instancji-xyz"}
+           "ENCRYPTION_KEY": "ENC-klucz-szyfrowania-instancji-xyz",
+           "WORKSTATION_PIN_PEPPER": "PIN-osobny-sekret-instancji-0123456789xyz"}
     env = nc.renderuj_env("bistro-verde", nazwa="Bistro Verde", domena="bistroverde.pl",
                           db_url="sqlite:///./x.db", sekrety=sek)
     assert "APP_ENV=production" in env
     assert f"SECRET_KEY={sek['SECRET_KEY']}" in env
     assert f"RCP_INGEST_TOKEN={sek['RCP_INGEST_TOKEN']}" in env
     assert f"ENCRYPTION_KEY={sek['ENCRYPTION_KEY']}" in env    # PII szyfrowane at-rest od startu
+    assert f"WORKSTATION_PIN_PEPPER={sek['WORKSTATION_PIN_PEPPER']}" in env
     assert "DATABASE_URL=sqlite:///./x.db" in env
     assert "bistroverde.pl" in env
     # Żadnych niebezpiecznych placeholderów z .env.example.

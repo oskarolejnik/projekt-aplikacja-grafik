@@ -57,6 +57,7 @@ def generuj_sekrety() -> dict:
     return {
         "SECRET_KEY": secrets.token_urlsafe(48),       # 64 znaki — daleko ponad próg bezpieczeństwa
         "RCP_INGEST_TOKEN": secrets.token_urlsafe(32),  # token agenta POS (ten sam po stronie agenta)
+        "WORKSTATION_PIN_PEPPER": secrets.token_urlsafe(48),
         # Klucz szyfrowania PII gości at-rest (Fernet). MUSI być generowany, inaczej instancja
         # startuje w trybie passthrough i zapisuje telefon/e-mail gości jawnym tekstem (RODO art. 32).
         # UWAGA: STAŁY po pierwszym zapisie — zmiana klucza uniemożliwi odszyfrowanie danych.
@@ -99,6 +100,9 @@ TOKEN_TTL_MINUTES=720
 # Klucz szyfrowania PII gości at-rest (Fernet) — WYMAGANY. Bez niego telefon/e-mail gości
 # byłyby zapisywane jawnym tekstem. STAŁY: nie zmieniaj po pierwszym zapisie danych.
 ENCRYPTION_KEY={sekrety.get('ENCRYPTION_KEY', '')}
+
+# Osobny, stabilny sekret do hashowania PIN-ow stanowiska Recepcji/Hosta.
+WORKSTATION_PIN_PEPPER={sekrety.get('WORKSTATION_PIN_PEPPER', '')}
 
 # Puste = tylko same-origin (backend serwuje frontend spod tej samej domeny).
 CORS_ORIGINS=
@@ -346,6 +350,7 @@ def main(argv=None) -> int:
     os.environ["DATABASE_URL"] = db_url
     os.environ["SECRET_KEY"] = sekrety["SECRET_KEY"]
     os.environ["RCP_INGEST_TOKEN"] = sekrety["RCP_INGEST_TOKEN"]
+    os.environ["WORKSTATION_PIN_PEPPER"] = sekrety["WORKSTATION_PIN_PEPPER"]
 
     import database  # import po ustawieniu env (czyta DATABASE_URL przy starcie)
 

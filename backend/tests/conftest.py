@@ -27,6 +27,7 @@ os.environ["APP_ENV"] = "test"
 # Scenariusze Stripe ustawiają pełny kontrakt jawnie przez monkeypatch.
 os.environ["PAYMENTS_PROVIDER"] = "sandbox"
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("WORKSTATION_PIN_PEPPER", "test-workstation-pin-pepper-stable-0123456789")
 os.environ.setdefault("TOKEN_TTL_MINUTES", "720")
 # WYMUSZAMY (override, nie setdefault): testy ingestu hardkodują nagłówek
 # X-RCP-Token="test-rcp-token", więc token w środowisku (np. RCP_INGEST_TOKEN ustawiony

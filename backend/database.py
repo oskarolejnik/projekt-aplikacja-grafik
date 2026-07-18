@@ -294,6 +294,61 @@ _R5C_FOREIGN_KEYS = {
     }
     for table_name, model_table in _R5C_MODEL_TABLES.items()
 }
+_R6A_REVISION = "0064_r6a_reservation_workstations"
+_R6A_TABLES = {
+    "reservation_operator_credentials",
+    "reservation_workstations",
+    "reservation_operator_sessions",
+    "reservation_workstation_audit",
+}
+_R6A_MODEL_TABLES = {
+    table_name: Base.metadata.tables[table_name]
+    for table_name in _R6A_TABLES
+}
+_R6A_COLUMNS = {
+    table_name: {column.name for column in model_table.columns}
+    for table_name, model_table in _R6A_MODEL_TABLES.items()
+}
+_R6A_UNIQUES = {
+    table_name: {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in model_table.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name
+    }
+    for table_name, model_table in _R6A_MODEL_TABLES.items()
+}
+_R6A_INDEXES = {
+    table_name: {
+        index.name: (
+            tuple(column.name for column in index.columns),
+            bool(index.unique),
+        )
+        for index in model_table.indexes
+        if index.name
+    }
+    for table_name, model_table in _R6A_MODEL_TABLES.items()
+}
+_R6A_CHECKS = {
+    table_name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in model_table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    for table_name, model_table in _R6A_MODEL_TABLES.items()
+}
+_R6A_FOREIGN_KEYS = {
+    table_name: {
+        (
+            tuple(element.parent.name for element in constraint.elements),
+            constraint.elements[0].column.table.name,
+            tuple(element.column.name for element in constraint.elements),
+            str(constraint.ondelete or "").upper(),
+        )
+        for constraint in model_table.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    for table_name, model_table in _R6A_MODEL_TABLES.items()
+}
 _R5B_TABLES = {
     "rezerwacje_wiadomosci_outbox",
     "rezerwacje_wiadomosci_proby",
@@ -1583,7 +1638,7 @@ def _is_complete_r0b_schema(inspector, tables, model_tables) -> bool:
     """
     if not (
         model_tables - {_R1A_AUDIT_TABLE} - _R2_TABLES - _R3_TABLES
-        - _R5A_TABLES - _R5B_TABLES - _R5C_TABLES
+        - _R5A_TABLES - _R5B_TABLES - _R5C_TABLES - _R6A_TABLES
     ).issubset(tables):
         return False
     for table_name in _R0B_LEDGER_TABLES:
@@ -2954,6 +3009,95 @@ def _validate_r5c_adoption_schema(inspector=None) -> bool:
     return True
 
 
+def _validate_r6a_adoption_schema(inspector=None) -> bool:
+    """Reject partial or weakened unversioned R6a workstation schemas."""
+    from sqlalchemy import inspect
+
+    inspector = inspector or inspect(engine)
+    bind = getattr(inspector, "bind", None)
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    dialect_name = dialect_name or engine.dialect.name
+    tables = set(inspector.get_table_names())
+    if not _R6A_TABLES.issubset(tables):
+        raise RuntimeError(
+            "Schemat R6a jest niekompletny; nie mozna oznaczyc migracji 0064."
+        )
+
+    for table_name, expected_columns in _R6A_COLUMNS.items():
+        _validate_r5a_column_contract(
+            inspector, table_name, expected_columns, exact=True,
+        )
+        expected_pk = tuple(
+            column.name
+            for column in _R6A_MODEL_TABLES[table_name].primary_key.columns
+        )
+        actual_pk = tuple(
+            inspector.get_pk_constraint(table_name).get("constrained_columns") or ()
+        )
+        if actual_pk != expected_pk:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowy PRIMARY KEY R6a."
+            )
+
+        semantic_uniques = {
+            item.get("name"): tuple(item.get("column_names") or ())
+            for item in inspector.get_unique_constraints(table_name)
+            if item.get("name")
+        }
+        reflected_indexes = {
+            item.get("name"): (
+                tuple(item.get("column_names") or ()),
+                bool(item.get("unique")),
+            )
+            for item in inspector.get_indexes(table_name)
+            if item.get("name")
+        }
+        for name, columns in _R6A_UNIQUES[table_name].items():
+            if semantic_uniques.get(name) != columns and reflected_indexes.get(name) != (columns, True):
+                raise RuntimeError(
+                    f"Ograniczenie {name} ma nieprawidlowa definicje UNIQUE R6a."
+                )
+        for name, shape in _R6A_INDEXES[table_name].items():
+            if reflected_indexes.get(name) != shape:
+                raise RuntimeError(f"Indeks {name} ma nieprawidlowa definicje R6a.")
+
+        raw_fks = inspector.get_foreign_keys(table_name)
+        reflected_fks = {
+            (
+                tuple(item.get("constrained_columns") or ()),
+                item.get("referred_table"),
+                tuple(item.get("referred_columns") or ()),
+                str((item.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for item in raw_fks
+        }
+        if (
+            len(raw_fks) != len(_R6A_FOREIGN_KEYS[table_name])
+            or reflected_fks != _R6A_FOREIGN_KEYS[table_name]
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} nie ma dokladnie wymaganych FK R6a."
+            )
+
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in inspector.get_check_constraints(table_name)
+            if item.get("name")
+        }
+        if set(reflected_checks) != set(_R6A_CHECKS[table_name]):
+            raise RuntimeError(
+                f"Tabela {table_name} ma brakujacy lub nadmiarowy CHECK R6a."
+            )
+        for name, expected_sql in _R6A_CHECKS[table_name].items():
+            if _r5a_check_signature(
+                reflected_checks[name], dialect_name,
+            ) != _r5a_check_signature(expected_sql, dialect_name):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje R6a."
+                )
+    return True
+
+
 def _invalidate_legacy_public_tokens() -> int:
     """Clears reversible plaintext public tokens on the stamp-only adoption path."""
     from sqlalchemy import inspect, text
@@ -3032,6 +3176,11 @@ def init_db():
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
         complete_current = model_tables.issubset(tables)
+        r6a_tables_present = _R6A_TABLES & tables
+        if r6a_tables_present and r6a_tables_present != _R6A_TABLES:
+            raise RuntimeError(
+                "Schemat R6a jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
+            )
         r5c_tables_present = _R5C_TABLES & tables
         r5c_base_present = {
             table_name: expected & {
@@ -3086,16 +3235,24 @@ def init_db():
             raise RuntimeError(
                 "Schemat R3 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
             )
+        complete_r5c = (
+            (model_tables - _R6A_TABLES).issubset(tables)
+            and _R5C_TABLES.issubset(tables)
+            and r5c_base_complete
+            and not r6a_tables_present
+        )
         complete_r5b = (
-            (model_tables - _R5C_TABLES).issubset(tables)
+            (model_tables - _R6A_TABLES - _R5C_TABLES).issubset(tables)
             and _R5B_TABLES.issubset(tables)
             and r5b_base_complete
+            and not r6a_tables_present
             and not r5c_tables_present
             and not any(r5c_base_present.values())
         )
         complete_r5a = (
-            (model_tables - _R5B_TABLES - _R5C_TABLES).issubset(tables)
+            (model_tables - _R6A_TABLES - _R5B_TABLES - _R5C_TABLES).issubset(tables)
             and _R5A_TABLES.issubset(tables)
+            and not r6a_tables_present
             and not r5b_tables_present
             and not any(r5b_base_present.values())
             and not r5c_tables_present
@@ -3103,9 +3260,10 @@ def init_db():
         )
         complete_r3 = (
             (
-                model_tables - _R5A_TABLES - _R5B_TABLES - _R5C_TABLES
+                model_tables - _R6A_TABLES - _R5A_TABLES - _R5B_TABLES - _R5C_TABLES
             ).issubset(tables)
             and _R3_TABLES.issubset(tables)
+            and not r6a_tables_present
             and not r5a_tables_present
             and not r5b_tables_present
             and not r5c_tables_present
@@ -3113,10 +3271,11 @@ def init_db():
         )
         complete_r2 = (
             (
-                model_tables - _R3_TABLES - _R5A_TABLES
+                model_tables - _R6A_TABLES - _R3_TABLES - _R5A_TABLES
                 - _R5B_TABLES - _R5C_TABLES
             ).issubset(tables)
             and _R2_TABLES.issubset(tables)
+            and not r6a_tables_present
             and not r3_tables_present
             and not r5a_tables_present
             and not r5b_tables_present
@@ -3127,7 +3286,7 @@ def init_db():
         pre_r0b_tables = (
             model_tables - _R0B_LEDGER_TABLES - {_R1A_AUDIT_TABLE}
             - _R2_TABLES - _R3_TABLES - _R5A_TABLES
-            - _R5B_TABLES - _R5C_TABLES
+            - _R5B_TABLES - _R5C_TABLES - _R6A_TABLES
         )
         termin_columns = (
             {column["name"] for column in insp.get_columns("terminy")}
@@ -3146,6 +3305,7 @@ def init_db():
             _validate_r5a_adoption_schema(insp)
             _validate_r5b_adoption_schema(insp)
             _validate_r5c_adoption_schema(insp)
+            _validate_r6a_adoption_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
             _rebuild_rezerwacje_oblozenie_ledger()
@@ -3156,6 +3316,21 @@ def init_db():
             _validate_r5a_adoption_schema(refreshed)
             _validate_r5b_adoption_schema(refreshed)
             _validate_r5c_adoption_schema(refreshed)
+            _validate_r6a_adoption_schema(refreshed)
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, _R6A_REVISION)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            return
+        if complete_r5c:
+            # Pełny niewersjonowany schemat 0063: migracja 0064 dodaje wyłącznie
+            # nowe, puste zasoby stanowiska i może zostać wykonana normalnie.
+            _validate_r1a_audit_schema(insp)
+            _validate_r2_adoption_schema(insp)
+            _validate_r3_adoption_schema(insp)
+            _validate_r5a_adoption_schema(insp)
+            _validate_r5b_adoption_schema(insp)
+            _validate_r5c_adoption_schema(insp)
             _require_alembic_run(
                 lambda command, cfg: command.stamp(cfg, _R5C_REVISION)
             )

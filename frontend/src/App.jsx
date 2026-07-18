@@ -21,6 +21,7 @@ const Produkt = lazy(() => import('./pages/ProduktPro'))
 const Zaproszenie = lazy(() => import('./pages/Zaproszenie'))
 const WyborInstancji = lazy(() => import('./pages/WyborInstancji'))
 const Dokument = lazy(() => import('./pages/Dokument'))
+const WorkstationGate = lazy(() => import('./components/workstation/WorkstationGate'))
 
 // Publiczne „trasy" wykrywane po query param (bez logowania, poza AuthProvider):
 //   ?rezerwuj → widget rezerwacji gościa,  ?produkt → strona produktu/cennik (marketing),
@@ -30,6 +31,7 @@ const isWidget = _params.has('rezerwuj')
 const isPortalImprezy = _params.has('impreza')
 const isProdukt = _params.has('produkt')
 const isLogin = _params.has('login')   // ?login → ekran logowania (landing marketingowy prowadzi tu z „Zaloguj")
+const isWorkstation = _params.has('stanowisko') // ?stanowisko → dedykowany PIN gate recepcji
 const isStart = _params.has('start')   // ?start → kreator lokalu (świeża instancja) lub rozjazd „co dalej"
 const isOnboardingParam = _params.has('onboarding')   // ?onboarding → kreator zawsze (na zajętej instancji: podgląd demo)
 const isPolityka = _params.has('polityka')            // ?polityka → publiczna Polityka prywatności
@@ -46,57 +48,58 @@ function Routed() {
     loading,
     workstationLocked,
     workstationChecking,
-    retryWorkstation,
+    workstationGate,
+    workstationVersion,
+    unlockWorkstation,
+    forgetWorkstation,
     authorizationRefreshing,
     authorizationError,
     retryAuthorization,
     logout,
   } = useAuth()
   const [lockError, setLockError] = useState('')
+  const [lockRetryAfter, setLockRetryAfter] = useState(0)
   // Dla niezalogowanego sprawdź, czy instancja jest świeża (0 użytkowników) → kreator zamiast logowania.
   const [onboarding, setOnboarding] = useState(null)   // null = sprawdzam, true/false
   useEffect(() => {
-    if (loading || user || workstationLocked || authorizationRefreshing) return
+    if (loading || user || workstationLocked || authorizationRefreshing || isWorkstation) return
     api('/onboarding/status').then((s) => setOnboarding(!!s.potrzebny)).catch(() => setOnboarding(false))
   }, [authorizationRefreshing, loading, user, workstationLocked])
 
   const loadingShell = <LazyFallback label="Sprawdzanie sesji" />
   if (loading) return loadingShell
-  if (workstationLocked) {
-    const checkAgain = async () => {
+  if (workstationLocked && !isLogin) {
+    const unlock = async (credentials) => {
+      setLockError('')
+      setLockRetryAfter(0)
+      try {
+        await unlockWorkstation(credentials)
+      } catch (error) {
+        setLockRetryAfter(error?.retryAfter || 0)
+        setLockError(error?.message || 'Nie udało się odblokować stanowiska. Sprawdź połączenie i spróbuj ponownie.')
+      }
+    }
+    const forget = async () => {
+      if (!window.confirm('Usunąć powiązanie tego urządzenia ze stanowiskiem recepcji?')) return
       setLockError('')
       try {
-        const unlocked = await retryWorkstation()
-        if (!unlocked) setLockError('Stanowisko nadal jest zablokowane.')
-      } catch {
-        setLockError('Nie udało się sprawdzić stanowiska. Sprawdź połączenie i spróbuj ponownie.')
+        await forgetWorkstation()
+      } catch (error) {
+        setLockError(error?.message || 'Nie udało się usunąć powiązania stanowiska.')
       }
     }
     return (
-      <main className="grid min-h-dvh place-items-center bg-bg px-5 py-10 text-ink">
-        <section className="w-full max-w-md rounded-3xl border border-line bg-surface p-7 shadow-2xl shadow-black/20 sm:p-9" aria-labelledby="workstation-lock-title">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-white/[0.04] text-mint" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
-              <rect x="5" y="10" width="14" height="10" rx="3" />
-              <path d="M8 10V7a4 4 0 0 1 8 0v3" />
-            </svg>
-          </div>
-          <p className="mt-6 text-xs font-semibold uppercase tracking-[0.16em] text-muted">Bezpieczna przerwa</p>
-          <h1 id="workstation-lock-title" className="mt-2 font-display text-2xl font-semibold tracking-tight">Stanowisko jest zablokowane</h1>
-          <p className="mt-3 text-sm leading-relaxed text-muted">
-            Dane gości zostały usunięte z ekranu. Gdy stanowisko zostanie odblokowane, sprawdź sesję ponownie.
-          </p>
-          {lockError ? <p className="mt-4 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger" role="alert">{lockError}</p> : null}
-          <div className="mt-7 grid gap-3 sm:grid-cols-2">
-            <button type="button" onClick={checkAgain} disabled={workstationChecking} className="min-h-12 rounded-xl bg-mint px-4 text-sm font-semibold text-bg transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60">
-              {workstationChecking ? 'Sprawdzam…' : 'Sprawdź ponownie'}
-            </button>
-            <button type="button" onClick={logout} className="min-h-12 rounded-xl border border-line bg-white/[0.025] px-4 text-sm font-semibold text-ink transition hover:bg-white/[0.06]">
-              Wyloguj
-            </button>
-          </div>
-        </section>
-      </main>
+      <WorkstationGate
+        station={workstationGate?.station}
+        operators={workstationGate?.operators || []}
+        currentOperatorId={workstationGate?.operators?.find((operator) => operator.last_used)?.id}
+        busy={workstationChecking}
+        error={lockError}
+        retryAfter={lockRetryAfter}
+        onUnlock={unlock}
+        onUsePassword={() => window.location.assign(`${window.location.pathname}?login`)}
+        onForgetStation={workstationGate ? forget : undefined}
+      />
     )
   }
   if (authorizationRefreshing) {
@@ -140,10 +143,11 @@ function Routed() {
     }
     if (isStart) return <Start />                 // ?start → kreator (świeża instancja) albo jasny rozjazd
     if (isLogin) return <Landing />               // ?login → ekran logowania (z landingu „Zaloguj")
+    if (isWorkstation) return <Landing />          // niezarejestrowane stanowisko → logowanie admina do konfiguracji
     return <Produkt />                            // publiczny landing sprzedażowy (domyślny widok gościa)
   }
   if (user.rola === 'admin') return <Dashboard />
-  if (user.rola === 'szef') return <SzefView />
+  if (user.rola === 'szef') return <SzefView key={`szef:${workstationVersion || 0}`} />
   if (user.rola === 'szef_kuchni') return <SzefKuchniView />
   return <EmployeeArea />   // employee (obsługa) i kuchnia — kuchnia ma ukrytą Dyspozycyjność
 }

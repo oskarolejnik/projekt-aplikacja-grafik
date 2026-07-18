@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c wdrożone technicznie, brama produkcyjna Stripe pozostaje otwarta · 16 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a wdrożone i odebrane automatycznie; otwarte bramy środowiskowe · 18 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -801,7 +801,9 @@ cofa poprawnie zapisanej rezerwacji.
 
 #### R5c — Zadatki i preautoryzacja
 
-- Etap zależy od zweryfikowanej integracji płatniczej opisanej w `docs/ROADMAP-MONETYZACJA.md`.
+- Płatności gości za rezerwacje są osobnym kontekstem integracji od rozliczania subskrypcji Lokalo;
+  oba obszary mogą w przyszłości korzystać z tego samego providera, ale nie współdzielą stanu ani
+  kontraktu domenowego.
 - Polityka płatności per serwis, grupa i dzień.
 - Stany: `niewymagana`, `oczekuje`, `autoryzowana`, `oplacona`, `nieudana`, `wygasla`, `zwrocona`.
 - Webhook z weryfikacją podpisu, idempotencją zdarzeń i bezpiecznym retry/refundem.
@@ -814,6 +816,22 @@ bez prawdziwego providera, zweryfikowanych webhooków i E2E płatność–zwrot.
 
 **Done R5c:** zadatek i zwrot są spójne z rezerwacją, audytowalne i przetestowane na prawdziwym
 środowisku testowym providera.
+
+**Decyzja właściciela — 18 lipca 2026:** produkcyjne podpięcie Stripe zostaje odłożone do czasu
+uruchomienia JDG i gotowości formalno-operacyjnej konta merchant. R5c pozostaje technicznie gotowe,
+ale wyłączone: nie uruchamiamy prawdziwych zadatków ani preautoryzacji i nie oznaczamy checkpointu
+jako produkcyjnie `Done`. Odłożenie zewnętrznej integracji nie blokuje dalszych, niezależnych prac R6a.
+
+Utrzymujemy dwa odseparowane konteksty integracji:
+
+1. **Płatności i depozyty rezerwacji gości** — polityki rezerwacji, Checkout/preautoryzacja, zwroty,
+   webhooki oraz audyt powiązany z konkretną rezerwacją.
+2. **Subskrypcje Lokalo** — billing SaaS, plan instancji, odnowienia i degradacja `READ_ONLY`.
+
+Nawet jeśli oba konteksty użyją później Stripe lub tego samego konta operatora, muszą mieć osobne
+namespace konfiguracji, klucze idempotencji, endpointy i inboxy webhooków, modele stanu, monitoring,
+runbooki oraz rollout. Zdarzenie lub obiekt płatności rezerwacji nie może zmieniać subskrypcji Lokalo
+i odwrotnie.
 
 **Wdrożono technicznie 16 lipca 2026:** migracja `0063` dodaje typowane polityki per dzień, serwis,
 kanał i wielkość grupy, agregat płatności w minor units, trwałe polecenia providerowe oraz minimalny,
@@ -851,16 +869,19 @@ zastąpionej próby oraz capture po anulowaniu tworzą dokładnie jeden pełny z
 subskrypcji nie blokuje operacji odwracających (`refund`, zwolnienie autoryzacji, anulowanie publiczne),
 ale nadal blokuje nowe obciążenia.
 
-**Brama nadal otwarta:** hermetyczne testy drivera/workera i lokalne E2E sandbox nie zastępują testu
-na prawdziwym koncie Stripe test mode. Przed oznaczeniem `Done R5c` trzeba przejść sieciowy scenariusz
-`Checkout → podpisany webhook → stan opłacona/autoryzowana → anulowanie → refund webhook`, sprawdzić
-uprawnienia restricted key i monitoring kolejki, a następnie osobno wykonać kontrolowany test live.
+**Brama pozostaje otwarta, a integracja wyłączona:** hermetyczne testy drivera/workera i lokalne E2E
+sandbox nie zastępują testu na prawdziwym koncie Stripe test mode. Po wznowieniu prac — już po gotowości
+JDG — przed oznaczeniem `Done R5c` trzeba przejść sieciowy scenariusz `Checkout → podpisany webhook →
+stan opłacona/autoryzowana → anulowanie → refund webhook`, sprawdzić uprawnienia restricted key i
+monitoring kolejki, a następnie osobno wykonać kontrolowany test live.
 
 ### R6 — Tryb stanowiska hosta
 
 **Cel:** ekran żyje wraz z serwisem i ogranicza liczbę decyzji recepcji.
 
 #### R6a — Tożsamość operatora i blokada stanowiska
+
+Kontrakt docelowy:
 
 - Nazwane konto i zwykłe logowanie z R1 pozostają bezpiecznym fallbackiem.
 - Osobny model poświadczenia PIN przechowuje wyłącznie mocny hash, liczbę prób i czas blokady.
@@ -869,6 +890,34 @@ uprawnienia restricted key i monitoring kolejki, a następnie osobno wykonać ko
 - Rate limit, narastająca blokada i audyt prób chronią przed zgadywaniem PIN-u.
 - Automatyczna blokada natychmiast maskuje PII; odblokowanie przywraca wyłącznie kontekst danego
   operatora, nigdy szkic poprzedniej osoby.
+
+**Stan wdrożenia — 18 lipca 2026: R6a wdrożone i odebrane automatycznie.** Checklista odzwierciedla
+wyłącznie faktycznie zweryfikowany zakres oraz jawnie oddziela bramy środowiskowe:
+
+- [x] Nazwane konta, presety uprawnień i zwykłe logowanie jako fallback są dostępne z R1.
+- [x] Serwer ma modele stanowiska, poświadczenia PIN, krótkiej sesji operatora i audytu oraz migrację
+  `0064`; PIN jest przechowywany jako hash, nigdy jako tekst jawny.
+- [x] 18 testów akceptacyjnych backendu potwierdza rejestrację stanowiska, dokładny preset operatora,
+  PIN/unlock/manual lock, trwałą i narastającą blokadę, pełny kontrakt CSRF/cookies, ochronę device
+  proof, priorytet zwykłego Bearera, cofnięcie sesji i audyt dwóch nazwanych operatorów.
+- [x] Migracja `0064` ma sprawdzony round-trip, adopcję pełnego schematu i odrzucenie schematu
+  częściowego; pełny `test_migracje_drift.py` przeszedł przed reautoryzacją, a po dodaniu pól grantu
+  ponownie przeszedł test zgodności migracji z modelem oraz testy schematu R6a.
+- [x] Jawna reautoryzacja własnym PIN-em działa wyłącznie dla faktycznego `override_required`:
+  jednorazowy grant ma 90 s, jest związany z sesją i przechowywany tylko jako hash; chroni wszystkie
+  sześć ścieżek nadpisania, a błędny PIN nie wylogowuje operatora.
+- [x] Testy potwierdzają natychmiastowe unieważnienie sesji po dezaktywacji konta, powiązanego
+  pracownika, zmianie uprawnień oraz zmianie lub cofnięciu PIN-u.
+- [x] `WorkstationGate` jest podłączony do rzeczywistego przepływu `AuthContext`/`App`:
+  wybór, przełączenie i odblokowanie operatora, automatyczna blokada oraz czyszczenie PII i szkiców.
+- [x] Pełny frontend: 64 pliki i 462 testy; build produkcyjny przeszedł 18 lipca 2026. Idle-lock ma
+  testy timerów, limitu touch, przełączenia operatora i natychmiastowego maskowania PII po powrocie
+  karty z tła.
+- [x] E2E mutacji rezerwacji zapisuje `ReservationAudit.actor_user_id`/`actor_login`; po przełączeniu
+  operatora stara sesja dostaje `423` i nie może wykonać kolejnego zapisu.
+- [ ] Przejść końcowy smoke administratora, managera i recepcji na docelowym urządzeniu/PWA.
+- [ ] Przejść testy współbieżności na PostgreSQL: równoległy unlock, revoke/deactivation podczas
+  unlock oraz dwa równoległe nadpisania jednym grantem. Lokalnie brak Postgresa i Dockera.
 
 **Done R6a:** przełączenie operatora zachowuje audyt osoby wykonującej operację i nie pozwala
 przejąć aktywnej sesji prostym odgadnięciem PIN-u.
@@ -1021,9 +1070,15 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 
 ## 15. Następna decyzja wykonawcza
 
-R0a–R5b są zamkniętymi checkpointami. Implementacja techniczna `R5c` jest gotowa do integracyjnego
-testu na prawdziwym koncie Stripe test mode, ale nie spełnia jeszcze bramy produkcyjnej opisanej wyżej.
-Najbliższa decyzja wykonawcza to skonfigurowanie restricted key i podpisanego endpointu webhook,
-przejście pełnego E2E płatność–zwrot oraz zapis dowodu odbioru. Dopiero po tym można oznaczyć `Done R5c`
-i przejść do R6a. Serwerowa blokada stanowiska z sesją operatora i PIN-em pozostaje oddzielnym
-zadaniem R6a, którego nie wolno udawać samą zasłoną frontendu.
+R0a–R5b są zamkniętymi checkpointami. R5c jest technicznie gotowe, lecz zgodnie z decyzją właściciela
+pozostaje wyłączone do czasu uruchomienia JDG i gotowości merchant. Nie spełnia jeszcze bramy
+produkcyjnej, ale odłożona integracja Stripe nie blokuje niezależnego R6a.
+
+Najbliższy niezależny krok produktowy to **R6b.1**: jeden snapshot hosta zasilający plan, listę i oś
+czasu, odświeżanie tylko dla widocznej karty, lokalny feedback akcji, timery wizyt oraz ostatnie dane
+offline tylko do odczytu. Następnie R6b.2 domyka cykl życia waitlisty, a R6b.3 dodaje drag-and-drop
+z pełną alternatywą klawiaturową. Smoke docelowego urządzenia i współbieżność PostgreSQL pozostają
+bramami rolloutowymi R6a, nie nowym zakresem funkcjonalnym.
+
+Produkcyjne testy Stripe płatność–zwrot wrócą dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
+pozostaje osobnym kontekstem i nie może ponownie używać stanu, webhooków ani modeli płatności rezerwacji.

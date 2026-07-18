@@ -349,6 +349,7 @@ class UserOut(BaseModel):
     imie: Optional[str] = None        # uzupełniane z powiązanego Pracownika
     nazwisko: Optional[str] = None
     preset: Optional[str] = None
+    reservation_pin_configured: bool = False
     uprawnienia_override: dict[str, bool] = Field(default_factory=dict)
     uprawnienia: List[str] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
@@ -378,6 +379,105 @@ class UserUprawnieniaUpdate(BaseModel):
 
 class ResetHasloIn(BaseModel):
     haslo: str
+
+
+class ReservationPinIn(BaseModel):
+    pin: str
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("pin")
+    @classmethod
+    def validate_pin(cls, value: str) -> str:
+        if not isinstance(value, str) or len(value) != 6 or not value.isascii() or not value.isdigit():
+            raise ValueError("PIN musi mieć dokładnie 6 cyfr.")
+        return value
+
+
+class ReservationWorkstationCreate(BaseModel):
+    name: str
+    idle_timeout_seconds: int = 300
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = " ".join((value or "").split())
+        if not normalized or len(normalized) > 96:
+            raise ValueError("Nazwa stanowiska musi mieć od 1 do 96 znaków.")
+        return normalized
+
+    @field_validator("idle_timeout_seconds")
+    @classmethod
+    def validate_idle_timeout(cls, value: int) -> int:
+        if value < 60 or value > 3600:
+            raise ValueError("Automatyczna blokada musi mieścić się w zakresie 60–3600 sekund.")
+        return value
+
+
+class ReservationWorkstationOut(BaseModel):
+    id: str
+    name: str
+    active: bool
+    idle_timeout_seconds: int
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReservationWorkstationOperatorOut(BaseModel):
+    id: int
+    display_name: str
+    last_used: bool = False
+
+
+class ReservationWorkstationGateOut(BaseModel):
+    station: ReservationWorkstationOut
+    operators: List[ReservationWorkstationOperatorOut]
+
+
+class ReservationWorkstationUnlockIn(BaseModel):
+    operator_id: int
+    pin: str
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("pin")
+    @classmethod
+    def validate_unlock_pin(cls, value: str) -> str:
+        if not isinstance(value, str) or len(value) != 6 or not value.isascii() or not value.isdigit():
+            raise ValueError("PIN musi mieć dokładnie 6 cyfr.")
+        return value
+
+
+class ReservationWorkstationLockIn(BaseModel):
+    reason: Literal["manual", "idle"] = "manual"
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReservationWorkstationReauthorizeIn(BaseModel):
+    pin: str
+    scope: Literal["reservation_override"]
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("pin")
+    @classmethod
+    def validate_reauthorize_pin(cls, value: str) -> str:
+        if not isinstance(value, str) or len(value) != 6 or not value.isascii() or not value.isdigit():
+            raise ValueError("PIN musi mieć dokładnie 6 cyfr.")
+        return value
+
+
+class ReservationWorkstationReauthorizeOut(BaseModel):
+    grant: str
+    scope: Literal["reservation_override"]
+    expires_at: datetime
+
+
+class ReservationWorkstationSessionOut(BaseModel):
+    active: bool
+    station: Optional[ReservationWorkstationOut] = None
+    user: Optional[UserOut] = None
+    expires_at: Optional[datetime] = None
+    idle_timeout_seconds: Optional[int] = None
 
 class MojaDyspozycjaIn(BaseModel):
     data: date

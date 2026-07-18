@@ -14,6 +14,7 @@ from fastapi import FastAPI, Depends, Header, HTTPException, Query, Request, Res
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,6 +28,7 @@ import reservation_service
 import reservation_communication
 import reservation_payments
 import reservation_payment_worker
+import workstation_auth
 import integracje
 import szyfrowanie
 import maintenance
@@ -42,7 +44,7 @@ from algorithm import auto_assign as _auto_assign, przelicz_imprezy_na_wymagania
 import jwt
 from auth import (
     get_current_user, hash_password, verify_password,
-    create_access_token, SECRET_KEY, ALGORITHM,
+    create_access_token, resolve_request_user, SECRET_KEY, ALGORITHM,
 )
 from validators import sprawdz_login, sprawdz_haslo, sprawdz_email
 from push import wyslij_push, wyslij_push_do_pracownika, wyslij_push_do_adminow
@@ -85,6 +87,7 @@ from routers.reguly_rezerwacji import (
     router as reguly_rezerwacji_router,
     _waliduj_serwis as _waliduj_serwis_r3,
 )
+from routers.workstations import router as workstations_router
 import provisioning
 
 logger = logging.getLogger(__name__)
@@ -96,6 +99,21 @@ app = FastAPI(
     redoc_url="/redoc" if app_settings.IS_DEV else None,
     openapi_url="/openapi.json" if app_settings.IS_DEV else None,
 )
+
+
+@app.exception_handler(workstation_auth.WorkstationReauthRequired)
+async def workstation_reauth_required_handler(
+    _request: Request,
+    _exc: workstation_auth.WorkstationReauthRequired,
+):
+    return JSONResponse(
+        status_code=428,
+        content={
+            "detail": "Ta operacja wymaga ponownego potwierdzenia PIN-em operatora.",
+            "code": "WORKSTATION_REAUTH_REQUIRED",
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.exception_handler(reservation_communication.CommunicationDeliveryInProgress)
@@ -209,6 +227,7 @@ app.include_router(zaproszenia_router) # zaproszenia pracowników do kont — je
 app.include_router(flota_router)       # samoobsługowe zakładanie lokali + panel floty (feedback: zero ręcznej pracy)
 app.include_router(pos_router)         # uniwersalne API danych POS: utarg dnia + heartbeat agenta (tor A integracji)
 app.include_router(reguly_rezerwacji_router)  # R3 — konfiguracja i symulator reguł dostępności
+app.include_router(workstations_router)  # R6a — imienne sesje PIN współdzielonego stanowiska
 
 # CORS „secure by default": w produkcji domyślnie tylko same-origin (backend serwuje
 # frontend z tego samego adresu), w dev lokalne origins. Pełna logika w settings.cors_origins().
@@ -364,9 +383,24 @@ TRASY_PUBLICZNE = (
     ("/api/instancja/puls", ("GET",)),           # panel floty: matka odpytuje dzieci (token FLEET_TOKEN w handlerze)
 )
 
+# Dokładne trasy uwierzytelniane cookie zarejestrowanego urządzenia, ale bez JWT.
+# Nie są prefiksami: przyszła podtrasa nie może odziedziczyć publicznego statusu.
+WORKSTATION_DEVICE_PUBLIC_ROUTES = frozenset({
+    ("GET", "/api/reservation-workstations/operators"),
+    ("POST", "/api/reservation-workstations/unlock"),
+    ("POST", "/api/reservation-workstations/forget-device"),
+})
+
 # Wyjątki od degradacji READ_ONLY — zapis dozwolony mimo nieaktywnej subskrypcji:
 # logowanie, kreator pierwszej konfiguracji, przedłużenie subskrypcji, health.
-READ_ONLY_WYJATKI = ("/api/auth", "/api/onboarding", "/api/subskrypcja", "/api/health")
+READ_ONLY_WYJATKI = (
+    "/api/auth",
+    "/api/onboarding",
+    "/api/subskrypcja",
+    "/api/health",
+    "/api/reservation-workstations",
+    "/api/me/reservation-workstation",
+)
 # Odczytowe komendy POST mają dokładne dopasowanie metoda+trasa. Nie dodajemy ich do
 # prefiksowej listy powyżej, żeby przyszła podtrasa zapisu nie odziedziczyła wyjątku.
 READ_ONLY_POST_ODCZYT = frozenset({
@@ -409,7 +443,15 @@ PII_NO_STORE_PREFIXES = (
     "/api/lista-oczekujacych",
     "/api/rodo",
     "/api/terminy",
+    "/api/reservation-workstations",
+    "/api/me/reservation-workstation",
 )
+PII_NO_STORE_EXACT = frozenset({
+    # ``UserOut`` zawiera imię, nazwisko i e-mail operatora. Trasa jest dostępna
+    # także dla sesji PIN, więc jej snapshot nie może zostać w pamięci HTTP po
+    # automatycznej blokadzie współdzielonego stanowiska.
+    "/api/auth/me",
+})
 
 # Przestrzenie, w których rola nadzorcza ma PEŁNY dostęp (też zapisy). Każdy taki
 # endpoint sam pilnuje, że dotyczy wyłącznie swojej domeny (np. grafik kuchni).
@@ -417,6 +459,8 @@ ROLA_PELNA_PRZESTRZEN = {"szef_kuchni": ("/api/szefkuchni",)}
 
 
 def _trasa_publiczna(path: str, metoda: str) -> bool:
+    if (metoda, path) in WORKSTATION_DEVICE_PUBLIC_ROUTES:
+        return True
     if any(
         metoda == dozwolona_metoda and pattern.fullmatch(path)
         for dozwolona_metoda, pattern in _ONLINE_PUBLIC_ROUTE_PATTERNS
@@ -463,30 +507,79 @@ async def role_guard(request: Request, call_next):
     # 3) Wszystko inne wymaga JWT.
     header = request.headers.get("authorization", "")
     token = header[7:] if header.lower().startswith("bearer ") else ""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.PyJWTError:
-        return JSONResponse({"detail": "Wymagane logowanie."}, status_code=401)
+    credentials = (
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        if token else None
+    )
+    using_workstation = not token and workstation_auth.workstation_request(request)
     # Egzekwuj BIEŻĄCY stan konta z bazy — NIE ufaj roli wmrożonej w token (CWE-613). Dzięki temu
     # dezaktywacja (User.aktywny=False) i degradacja roli działają natychmiast, a nie dopiero po
     # wygaśnięciu tokenu. Większość endpointów admina jest chroniona wyłącznie tym middlewarem.
     _db = SessionLocal()
     try:
-        _user = _db.get(models.User, int(payload.get("sub") or 0))
-    except (TypeError, ValueError):
-        _user = None
+        _user = resolve_request_user(
+            request,
+            _db,
+            credentials,
+            require_workstation_csrf=(
+                using_workstation and metoda in {"POST", "PUT", "PATCH", "DELETE"}
+            ),
+            touch_workstation=(
+                using_workstation and metoda in {"POST", "PUT", "PATCH", "DELETE"}
+            ),
+        )
+    except HTTPException as exc:
+        response = JSONResponse(
+            {"detail": exc.detail},
+            status_code=exc.status_code,
+            headers=exc.headers,
+        )
+        if exc.status_code == 423:
+            response.headers["Cache-Control"] = "private, no-store"
+            response.delete_cookie(
+                workstation_auth.SESSION_COOKIE,
+                path="/api",
+                secure=not app_settings.IS_DEV,
+                httponly=True,
+                samesite="strict",
+            )
+            response.delete_cookie(
+                workstation_auth.CSRF_COOKIE,
+                path="/",
+                secure=not app_settings.IS_DEV,
+                httponly=False,
+                samesite="strict",
+            )
+        return response
     finally:
         _db.close()
-    if _user is None or not _user.aktywny:
-        return JSONResponse({"detail": "Konto nieaktywne lub nie istnieje."}, status_code=401)
     rola = _user.rola
+    wymaganie_rezerwacji = reservation_access.requirement_for(metoda, path)
+    if using_workstation:
+        dozwolone_sesji = path in {
+            "/api/me/uprawnienia",
+            "/api/me/reservation-workstation",
+            "/api/me/reservation-workstation/touch",
+            "/api/me/reservation-workstation/lock",
+            "/api/me/reservation-workstation/reauthorize",
+        }
+        if dozwolone_sesji:
+            return await call_next(request)
+        if (
+            wymaganie_rezerwacji is not None
+            and reservation_access.user_satisfies(_user, wymaganie_rezerwacji)
+        ):
+            return await call_next(request)
+        return JSONResponse(
+            {"detail": "Brak uprawnień sesji stanowiska."},
+            status_code=403,
+        )
     if rola == "admin":
         return await call_next(request)
 
     # Granularne prawa rezerwacji są sprawdzane przed ogólnymi regułami ról.
     # Nowa trasa w chronionej przestrzeni jest domyślnie admin-only, dopóki nie
     # zostanie jawnie dodana do deklaratywnej polityki.
-    wymaganie_rezerwacji = reservation_access.requirement_for(metoda, path)
     if wymaganie_rezerwacji is not None:
         if reservation_access.user_satisfies(_user, wymaganie_rezerwacji):
             return await call_next(request)
@@ -521,7 +614,26 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
-    if _sciezka_na_whitelist(request.url.path, PII_NO_STORE_PREFIXES):
+    if response.status_code == 423 and workstation_auth.workstation_request(request):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.delete_cookie(
+            workstation_auth.SESSION_COOKIE,
+            path="/api",
+            secure=not app_settings.IS_DEV,
+            httponly=True,
+            samesite="strict",
+        )
+        response.delete_cookie(
+            workstation_auth.CSRF_COOKIE,
+            path="/",
+            secure=not app_settings.IS_DEV,
+            httponly=False,
+            samesite="strict",
+        )
+    if (
+        request.url.path in PII_NO_STORE_EXACT
+        or _sciezka_na_whitelist(request.url.path, PII_NO_STORE_PREFIXES)
+    ):
         response.headers["Cache-Control"] = "private, no-store"
         vary = [part.strip() for part in response.headers.get("Vary", "").split(",") if part.strip()]
         for credential_header in ("Authorization", "Cookie"):
@@ -2159,6 +2271,22 @@ def _jawne_nadpisanie_limitow(user, requested: bool, confirmation=None) -> Optio
     }
 
 
+def _wymagaj_reautoryzacji_nadpisania(
+    db: Session,
+    request: Request,
+    user: models.User,
+    override_active: bool,
+) -> None:
+    """PIN session needs a fresh one-use proof only for a real R3 override."""
+    if override_active:
+        workstation_auth.consume_reauth_grant(
+            db,
+            request=request,
+            user=user,
+            scope=workstation_auth.REAUTH_SCOPE_RESERVATION_OVERRIDE,
+        )
+
+
 def _szczegoly_przekroczenia_pacingu(db, t: models.Termin) -> Optional[dict]:
     """Zwraca wyłącznie faktycznie przekroczone, nieosobowe parametry limitu."""
     if t.status not in REZ_AKTYWNE or t.godz_od is None:
@@ -2766,6 +2894,7 @@ def host_sugestia_stolika(data: date = Query(...), godz_od: time = Query(...), o
 @app.post("/api/rezerwacje-stolik/{rid}/auto-przydziel", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def auto_przydziel_stolik(
     rid: int,
+    request: Request,
     dane: Optional[schemas.AutoPrzydzialIn] = None,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
@@ -2795,6 +2924,9 @@ def auto_przydziel_stolik(
     )
     override_active = bool(
         override_context and result.evaluation.decision == "override_required"
+    )
+    _wymagaj_reautoryzacji_nadpisania(
+        db, request, user, override_active,
     )
     selected = _wymagaj_dozwolonego_przydzialu(
         result, override=override_active,
@@ -3135,6 +3267,7 @@ def host_zmien_faze(
 def host_przydziel_stolik(
     rid: int,
     dane: schemas.HostStolikIn,
+    request: Request,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
@@ -3161,6 +3294,9 @@ def host_przydziel_stolik(
     )
     override_active = bool(
         override_context and evaluation.decision == "override_required"
+    )
+    _wymagaj_reautoryzacji_nadpisania(
+        db, request, user, override_active,
     )
     try:
         db.flush()
@@ -3207,6 +3343,7 @@ def host_przydziel_stolik(
 def host_posadz_rezerwacje(
     rid: int,
     dane: schemas.HostPosadzIn,
+    request: Request,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
@@ -3268,6 +3405,9 @@ def host_posadz_rezerwacje(
     )
     override_active = bool(
         override_context and evaluation.decision == "override_required"
+    )
+    _wymagaj_reautoryzacji_nadpisania(
+        db, request, user, override_active,
     )
     godz_do = evaluation.godz_do or godz_do
     teraz = utcnow_naive()
@@ -3427,6 +3567,7 @@ def get_rezerwacja_stolik(
 @app.post("/api/rezerwacje-stolik", status_code=201, dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def dodaj_rezerwacje_stolik(
     dane: schemas.RezerwacjaIn,
+    request: Request,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
@@ -3523,6 +3664,9 @@ def dodaj_rezerwacje_stolik(
             override_context
             and evaluation is not None
             and evaluation.decision == "override_required"
+        )
+        _wymagaj_reautoryzacji_nadpisania(
+            db, request, user, override_active,
         )
         override_details = (
             _szczegoly_nadpisania_r3(
@@ -3625,6 +3769,7 @@ def dodaj_rezerwacje_stolik(
 def edytuj_rezerwacje_stolik(
     rid: int,
     dane: schemas.RezerwacjaIn,
+    request: Request,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
@@ -3710,6 +3855,9 @@ def edytuj_rezerwacje_stolik(
             override_context
             and evaluation is not None
             and evaluation.decision == "override_required"
+        )
+        _wymagaj_reautoryzacji_nadpisania(
+            db, request, user, override_active,
         )
         override_details = (
             _szczegoly_nadpisania_r3(
@@ -4469,6 +4617,7 @@ def odwolaj_lista_oczekujacych(
 def zrealizuj_lista_oczekujacych(
     wid: int,
     dane: schemas.ZrealizujIn,
+    request: Request,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
@@ -4565,6 +4714,9 @@ def zrealizuj_lista_oczekujacych(
     )
     override_active = bool(
         override_context and evaluation.decision == "override_required"
+    )
+    _wymagaj_reautoryzacji_nadpisania(
+        db, request, user, override_active,
     )
     if evaluation.decision == "deny" or (
         evaluation.decision == "override_required" and not override_active

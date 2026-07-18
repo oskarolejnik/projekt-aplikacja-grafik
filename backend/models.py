@@ -184,6 +184,240 @@ class User(Base):
     )
 
     pracownik = relationship("Pracownik")
+    reservation_pin_credential = relationship(
+        "ReservationOperatorCredential",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+
+class ReservationOperatorCredential(Base):
+    """Oddzielne poświadczenie PIN operatora współdzielonego stanowiska.
+
+    PIN nigdy nie jest zapisywany ani zwracany w postaci jawnej. ``version``
+    unieważnia wszystkie wcześniejsze sesje po ustawieniu lub cofnięciu PIN-u.
+    """
+    __tablename__ = "reservation_operator_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "failed_attempts >= 0",
+            name="ck_reservation_operator_credential_attempts",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_reservation_operator_credential_version",
+        ),
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    pin_hash = Column(String(255), nullable=False)
+    failed_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    locked_until = Column(DateTime, nullable=True)
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    updated_at = Column(DateTime, nullable=False)
+
+    user = relationship("User", back_populates="reservation_pin_credential")
+
+
+class ReservationWorkstation(Base):
+    """Zarejestrowane urządzenie Recepcji/Hosta.
+
+    ``secret_hash`` wiąże odblokowanie i późniejsze żądania z konkretną
+    instalacją przeglądarki. ``session_epoch`` atomowo unieważnia poprzedniego
+    operatora przy blokadzie lub przełączeniu osoby.
+    """
+    __tablename__ = "reservation_workstations"
+    __table_args__ = (
+        UniqueConstraint(
+            "secret_hash",
+            name="uq_reservation_workstation_secret_hash",
+        ),
+        CheckConstraint(
+            "length(id) = 36",
+            name="ck_reservation_workstation_id",
+        ),
+        CheckConstraint(
+            "length(secret_hash) = 64",
+            name="ck_reservation_workstation_secret_hash",
+        ),
+        CheckConstraint(
+            "length(trim(name)) >= 1 AND length(name) <= 96",
+            name="ck_reservation_workstation_name",
+        ),
+        CheckConstraint(
+            "idle_timeout_seconds >= 60 AND idle_timeout_seconds <= 3600",
+            name="ck_reservation_workstation_idle_timeout",
+        ),
+        CheckConstraint(
+            "session_epoch >= 0",
+            name="ck_reservation_workstation_epoch",
+        ),
+        CheckConstraint(
+            "failed_attempts >= 0",
+            name="ck_reservation_workstation_attempts",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String(96), nullable=False)
+    secret_hash = Column(String(64), nullable=False)
+    active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    idle_timeout_seconds = Column(Integer, nullable=False, default=300, server_default="300")
+    session_epoch = Column(Integer, nullable=False, default=0, server_default="0")
+    failed_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    locked_until = Column(DateTime, nullable=True)
+    created_by_user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+    sessions = relationship(
+        "ReservationOperatorSession",
+        back_populates="workstation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class ReservationOperatorSession(Base):
+    """Krótka, odwoływalna sesja imiennego operatora stanowiska."""
+    __tablename__ = "reservation_operator_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "token_hash",
+            name="uq_reservation_operator_session_token_hash",
+        ),
+        CheckConstraint(
+            "length(id) = 36",
+            name="ck_reservation_operator_session_id",
+        ),
+        CheckConstraint(
+            "station_epoch >= 1",
+            name="ck_reservation_operator_session_epoch",
+        ),
+        CheckConstraint(
+            "credential_version >= 1",
+            name="ck_reservation_operator_session_credential_version",
+        ),
+        CheckConstraint(
+            "length(authorization_fingerprint) = 64",
+            name="ck_reservation_operator_session_fingerprint",
+        ),
+        CheckConstraint(
+            "length(token_hash) = 64 AND length(csrf_hash) = 64",
+            name="ck_reservation_operator_session_secret_hashes",
+        ),
+        CheckConstraint(
+            "(reauth_grant_hash IS NULL AND reauth_scope IS NULL "
+            "AND reauth_expires_at IS NULL) OR "
+            "(length(reauth_grant_hash) = 64 "
+            "AND reauth_scope = 'reservation_override' "
+            "AND reauth_expires_at IS NOT NULL)",
+            name="ck_reservation_operator_session_reauth_grant",
+        ),
+        CheckConstraint(
+            "expires_at > created_at",
+            name="ck_reservation_operator_session_expiry",
+        ),
+        Index(
+            "ix_reservation_operator_session_station_state",
+            "workstation_id", "locked_at", "expires_at",
+        ),
+        Index(
+            "ix_reservation_operator_session_user_created",
+            "user_id", "created_at",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    token_hash = Column(String(64), nullable=False)
+    csrf_hash = Column(String(64), nullable=False)
+    workstation_id = Column(
+        String(36),
+        ForeignKey("reservation_workstations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    actor_login = Column(String(64), nullable=False)
+    station_epoch = Column(Integer, nullable=False)
+    credential_version = Column(Integer, nullable=False)
+    authorization_fingerprint = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    last_seen_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    reauth_grant_hash = Column(String(64), nullable=True)
+    reauth_scope = Column(String(32), nullable=True)
+    reauth_expires_at = Column(DateTime, nullable=True)
+    locked_at = Column(DateTime, nullable=True)
+    lock_reason = Column(String(32), nullable=True)
+
+    workstation = relationship("ReservationWorkstation", back_populates="sessions")
+    user = relationship("User")
+
+
+class ReservationWorkstationAudit(Base):
+    """Niemodyfikowalny dziennik zdarzeń bezpieczeństwa stanowiska.
+
+    Wpis nie zawiera PIN-u, sekretu urządzenia ani tokenu sesji. Powstaje w tej
+    samej transakcji co blokada, odblokowanie lub zmiana poświadczenia.
+    """
+    __tablename__ = "reservation_workstation_audit"
+    __table_args__ = (
+        CheckConstraint(
+            "event IN ('register', 'unlock', 'lock', 'switch', 'timeout', "
+            "'revoke', 'pin_set', 'pin_revoke', 'authz_revoke', 'reauth', "
+            "'reauth_use')",
+            name="ck_reservation_workstation_audit_event",
+        ),
+        CheckConstraint(
+            "outcome IN ('success', 'failure', 'blocked')",
+            name="ck_reservation_workstation_audit_outcome",
+        ),
+        Index(
+            "ix_reservation_workstation_audit_station_ts",
+            "workstation_id", "ts",
+        ),
+        Index(
+            "ix_reservation_workstation_audit_user_ts",
+            "user_id", "ts",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    ts = Column(DateTime, nullable=False)
+    workstation_id = Column(
+        String(36),
+        ForeignKey("reservation_workstations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    session_id = Column(
+        String(36),
+        ForeignKey("reservation_operator_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    actor_login = Column(String(64), nullable=True)
+    event = Column(String(24), nullable=False)
+    outcome = Column(String(16), nullable=False)
+    ip = Column(String(64), nullable=True)
+    details = Column(JSON, nullable=True)
 
 
 class PublikacjaGrafiku(Base):

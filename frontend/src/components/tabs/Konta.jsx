@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Icon } from '../../lib/icons'
@@ -8,6 +8,20 @@ import { useData } from '../../context/DataContext'
 import { useToast } from '../ui/Toast'
 
 const PRESET_RECEPCJA_HOST = 'recepcja_host'
+const PIN_STATION_PERMISSIONS = new Set([
+  'rezerwacje.operacje',
+  'rezerwacje.host',
+  'rezerwacje.nadpisuj_limity',
+  'rezerwacje.dane_kontaktowe',
+])
+
+const isExactReceptionOperator = (user) => {
+  const permissions = new Set(user.uprawnienia || [])
+  return user.rola === 'szef'
+    && user.preset === PRESET_RECEPCJA_HOST
+    && permissions.size === PIN_STATION_PERMISSIONS.size
+    && [...PIN_STATION_PERMISSIONS].every((permission) => permissions.has(permission))
+}
 
 const GRUPY_PRAW = [
   {
@@ -128,6 +142,194 @@ function DostepKonta({ user, pending, onToggle, onReset, onApplyPreset }) {
         </div>
       </div>
     </details>
+  )
+}
+
+function PinStanowiska({ user, onConfiguredChange }) {
+  const { confirm } = useToast()
+  const inputId = useId()
+  const inputRef = useRef(null)
+  const configured = Boolean(user.reservation_pin_configured)
+  const active = user.aktywny !== false
+  const [editing, setEditing] = useState(!configured && active)
+  const [pin, setPin] = useState('')
+  const [pending, setPending] = useState(null)
+  const [error, setError] = useState('')
+  const [feedback, setFeedback] = useState('')
+
+  useEffect(() => {
+    if (!active) {
+      setPin('')
+      setEditing(false)
+    } else if (!configured) {
+      setEditing(true)
+    }
+  }, [active, configured])
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  const changePin = (event) => {
+    setPin(event.target.value.replace(/\D/g, '').slice(0, 6))
+    setError('')
+    setFeedback('')
+  }
+
+  const savePin = async (event) => {
+    event.preventDefault()
+    if (!active) {
+      setError('Aktywuj konto, aby ustawić PIN stanowiska.')
+      return
+    }
+    if (!/^\d{6}$/.test(pin)) {
+      setError('PIN musi mieć dokładnie 6 cyfr.')
+      inputRef.current?.focus()
+      return
+    }
+
+    setPending('save')
+    setError('')
+    setFeedback('')
+    try {
+      await api(`/users/${user.id}/reservation-pin`, 'PUT', { pin })
+      setPin('')
+      setEditing(false)
+      onConfiguredChange(user.id, true)
+      setFeedback(configured ? 'PIN został zmieniony.' : 'PIN został ustawiony.')
+    } catch (e) {
+      setError(e.message || 'Nie udało się zapisać PIN-u.')
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const removePin = async () => {
+    const approved = await confirm(
+      `Usunąć PIN stanowiska dla konta „${user.login}”? Aktywne sesje tego operatora zostaną zablokowane.`,
+      {
+        title: 'Usuń PIN stanowiska',
+        confirmText: 'Usuń PIN',
+        cancelText: 'Zostaw PIN',
+        danger: true,
+      },
+    )
+    if (!approved) return
+
+    setPending('remove')
+    setError('')
+    setFeedback('')
+    try {
+      await api(`/users/${user.id}/reservation-pin`, 'DELETE')
+      setPin('')
+      setEditing(true)
+      onConfiguredChange(user.id, false)
+      setFeedback('PIN został usunięty.')
+    } catch (e) {
+      setError(e.message || 'Nie udało się usunąć PIN-u.')
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const startEditing = () => {
+    setPin('')
+    setError('')
+    setFeedback('')
+    setEditing(true)
+  }
+
+  const cancelEditing = () => {
+    setPin('')
+    setError('')
+    setEditing(false)
+    setFeedback('')
+  }
+
+  return (
+    <section className="border-t border-line pt-3" aria-labelledby={`${inputId}-title`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 id={`${inputId}-title`} className="text-sm font-semibold text-ink">PIN stanowiska</h3>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${configured ? 'bg-success/15 text-success' : 'bg-white/[0.06] text-muted'}`}>
+              {configured ? 'Ustawiony' : 'Nieustawiony'}
+            </span>
+          </div>
+          <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted">
+            Sześć cyfr do odblokowania wspólnego stanowiska. PIN nie jest później wyświetlany.
+          </p>
+        </div>
+
+        {configured && !editing ? (
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button size="sm" variant="ghost" onClick={startEditing} disabled={!!pending || !active}>
+              Zmień PIN
+            </Button>
+            <Button
+              size="sm"
+              variant="subtle"
+              className="text-danger hover:text-danger"
+              onClick={removePin}
+              disabled={!!pending}
+              loading={pending === 'remove'}
+              loadingLabel="Usuwam…"
+            >
+              Usuń PIN
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {!active ? (
+        <p className="mt-3 text-sm text-muted">Aktywuj konto, aby ustawić lub zmienić PIN.</p>
+      ) : null}
+
+      {editing ? (
+        <form onSubmit={savePin} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" noValidate>
+          <label htmlFor={`${inputId}-pin`} className="field-label w-full sm:max-w-xs">
+            Nowy PIN stanowiska
+            <input
+              ref={inputRef}
+              id={`${inputId}-pin`}
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autoComplete="off"
+              maxLength={6}
+              value={pin}
+              onChange={changePin}
+              disabled={!!pending}
+              aria-invalid={error ? 'true' : undefined}
+              aria-describedby={`${inputId}-hint${error ? ` ${inputId}-error` : ''}`}
+              className="field mt-1.5 min-h-11 text-center text-lg tracking-[0.3em] disabled:cursor-wait disabled:opacity-60"
+            />
+            <span id={`${inputId}-hint`} className="mt-1.5 block normal-case tracking-normal text-muted">
+              Dokładnie 6 cyfr.
+            </span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="submit"
+              size="sm"
+              loading={pending === 'save'}
+              loadingLabel="Zapisuję…"
+              disabled={!!pending}
+            >
+              {configured ? 'Zapisz nowy PIN' : 'Ustaw PIN'}
+            </Button>
+            {configured ? (
+              <Button type="button" size="sm" variant="subtle" onClick={cancelEditing} disabled={!!pending}>
+                Anuluj
+              </Button>
+            ) : null}
+          </div>
+        </form>
+      ) : null}
+
+      {error ? <p id={`${inputId}-error`} className="mt-3 text-sm text-danger" role="alert">{error}</p> : null}
+      {feedback ? <p className="mt-3 text-sm text-success" role="status">{feedback}</p> : null}
+    </section>
   )
 }
 
@@ -359,6 +561,13 @@ export default function Konta() {
     return zapiszDostep(u, { uprawnienia_override: next }, `${u.id}:${permission}`)
   }
   const resetDostep = (u) => zapiszDostep(u, { uprawnienia_override: {} }, `${u.id}:reset`)
+  const updatePinConfigured = (userId, reservationPinConfigured) => {
+    setUsers((current) => current.map((user) => (
+      user.id === userId
+        ? { ...user, reservation_pin_configured: reservationPinConfigured }
+        : user
+    )))
+  }
   const zastosujPresetRecepcji = async (u) => {
     const approved = await confirm(
       `Zastosować preset Recepcja / Host dla konta „${u.login}”? Zastąpi bieżący zakres dostępu tego konta.`,
@@ -496,6 +705,10 @@ export default function Konta() {
                 <div className="text-xs text-muted">
                   Pracownik: <span className="text-ink">{u.imie ? `${u.imie} ${u.nazwisko}` : '— niepowiązane —'}</span>
                 </div>
+
+                {isExactReceptionOperator(u) ? (
+                  <PinStanowiska user={u} onConfiguredChange={updatePinConfigured} />
+                ) : null}
 
                 {u.rola === 'szef' && (
                   <DostepKonta

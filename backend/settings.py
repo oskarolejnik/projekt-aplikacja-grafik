@@ -37,6 +37,13 @@ _INSECURE_SECRET_KEYS = {
     "secret",
     "changethis",
 }
+_INSECURE_WORKSTATION_PIN_PEPPERS = {
+    "",
+    "dev-workstation-pin-pepper-change-me",
+    "zmien-mnie-na-osobny-losowy-sekret",
+    "change-me",
+    "changeme",
+}
 _INSECURE_RCP_TOKENS = {
     "ten-sam-dlugi-sekret-co-w-agencie",
     "zmien-mnie",
@@ -112,6 +119,24 @@ def _problems() -> tuple[list[str], list[str]]:
             "JAWNYM TEKSTEM (bez szyfrowania at-rest, RODO art. 32). Ustaw długi, losowy klucz "
             '(np. python -c "import secrets; print(secrets.token_urlsafe(48))") i NIE zmieniaj go '
             "po pierwszym zapisie danych."
+        )
+
+    workstation_pin_pepper = os.environ.get("WORKSTATION_PIN_PEPPER", "").strip()
+    if workstation_pin_pepper in _INSECURE_WORKSTATION_PIN_PEPPERS:
+        errors.append(
+            "WORKSTATION_PIN_PEPPER jest pusty lub przykładowy — ustaw osobny, stabilny "
+            "sekret do hashowania PIN-ów stanowiska. Nie używaj SECRET_KEY i nie zmieniaj "
+            "go po ustawieniu PIN-ów."
+        )
+    elif len(workstation_pin_pepper) < _MIN_SECRET_LEN:
+        errors.append(
+            f"WORKSTATION_PIN_PEPPER jest za krótki ({len(workstation_pin_pepper)} znaków) — "
+            f"wymagane minimum to {_MIN_SECRET_LEN}."
+        )
+    elif workstation_pin_pepper in {secret, enc}:
+        errors.append(
+            "WORKSTATION_PIN_PEPPER musi być osobnym sekretem; nie może być równy "
+            "SECRET_KEY ani ENCRYPTION_KEY."
         )
 
     rcp = os.environ.get("RCP_INGEST_TOKEN", "")

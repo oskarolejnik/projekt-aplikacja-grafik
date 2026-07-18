@@ -23,6 +23,7 @@ from deps import (
     limit_pracownikow_stan,
 )
 import push
+import workstation_auth
 
 router = APIRouter()
 
@@ -72,16 +73,22 @@ def update_user(uid: int, dane: schemas.UserUpdate, db: Session = Depends(get_db
     u = db.get(models.User, uid)
     if not u:
         raise HTTPException(404, "Nie znaleziono konta.")
+    authorization_changed = False
     if dane.rola is not None:
         if dane.rola not in ROLE_VALID:
             raise HTTPException(400, "Nieprawidłowa rola.")
         if dane.rola != u.rola:
             u.uprawnienia_override = None
+            authorization_changed = True
         u.rola = dane.rola
     if dane.aktywny is not None:
+        authorization_changed = authorization_changed or bool(dane.aktywny) != bool(u.aktywny)
         u.aktywny = dane.aktywny
     if dane.pracownik_id is not None:
+        authorization_changed = authorization_changed or dane.pracownik_id != u.pracownik_id
         u.pracownik_id = dane.pracownik_id
+    if authorization_changed:
+        workstation_auth.revoke_user_sessions(db, u.id)
     db.commit(); db.refresh(u)
     return _user_out(u)
 
@@ -115,6 +122,7 @@ def update_user_uprawnienia(
     else:
         raise HTTPException(400, "Podaj preset albo mapę uprawnień.")
     u.uprawnienia_override = override or None
+    workstation_auth.revoke_user_sessions(db, u.id)
     db.commit(); db.refresh(u)
     return _user_out(u)
 
@@ -124,6 +132,7 @@ def reset_haslo(uid: int, dane: schemas.ResetHasloIn, db: Session = Depends(get_
     if not u:
         raise HTTPException(404, "Nie znaleziono konta.")
     u.haslo_hash = hash_password(dane.haslo)
+    workstation_auth.revoke_user_sessions(db, u.id, reason="password_reset")
     db.commit()
 
 @router.delete("/api/users/{uid}", status_code=204)
@@ -318,6 +327,7 @@ def update_pracownik(pid: int, data: schemas.PracownikCreate, db: Session = Depe
     p = db.get(models.Pracownik, pid)
     if not p:
         raise HTTPException(404, "Nie znaleziono.")
+    active_changed = bool(p.aktywny) != bool(data.aktywny)
     p.imie = data.imie
     p.nazwisko = data.nazwisko
     p.aktywny = data.aktywny
@@ -327,6 +337,10 @@ def update_pracownik(pid: int, data: schemas.PracownikCreate, db: Session = Depe
         models.Stanowisko.id.in_(data.kwalifikacje_ids)
     ).all()
     _ustaw_stawki(db, p, data.stawki)
+    if active_changed:
+        linked_user = db.query(models.User).filter_by(pracownik_id=p.id).first()
+        if linked_user is not None:
+            workstation_auth.revoke_user_sessions(db, linked_user.id)
     db.commit(); db.refresh(p)
     _przypisz_odbicia_do_pracownika(db, p)  # nazwisko moglo sie zmienic -> sprobuj podlinkowac
     return p

@@ -12,6 +12,10 @@ const { apiMock, authState, surfaceState } = vi.hoisted(() => ({
     loading: false,
     workstationLocked: false,
     workstationChecking: false,
+    workstationGate: null,
+    workstationVersion: 0,
+    unlockWorkstation: vi.fn(),
+    forgetWorkstation: vi.fn(),
     retryWorkstation: vi.fn(),
     authorizationRefreshing: false,
     authorizationError: null,
@@ -55,7 +59,11 @@ describe('App — powierzchnie ładowane na żądanie', () => {
     authState.loading = false
     authState.workstationLocked = false
     authState.workstationChecking = false
+    authState.workstationGate = null
+    authState.workstationVersion = 0
     authState.retryWorkstation.mockReset()
+    authState.unlockWorkstation.mockReset()
+    authState.forgetWorkstation.mockReset()
     authState.authorizationRefreshing = false
     authState.authorizationError = null
     authState.retryAuthorization.mockReset()
@@ -90,11 +98,15 @@ describe('App — powierzchnie ładowane na żądanie', () => {
 
   it('po blokadzie stanowiska nie montuje powierzchni roli ani danych operacyjnych', async () => {
     authState.workstationLocked = true
+    authState.workstationGate = {
+      station: { id: 'desk-1', name: 'Recepcja' },
+      operators: [{ id: 7, display_name: 'Ola Nowak', last_used: true }],
+    }
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: 'Stanowisko jest zablokowane' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Sprawdź ponownie' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Wyloguj' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Wróć do pracy' })).toBeInTheDocument()
+    expect(screen.getByText('Stanowisko · Recepcja')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zaloguj się hasłem' })).toBeInTheDocument()
     expect(screen.queryByText('Panel administratora')).not.toBeInTheDocument()
   })
 

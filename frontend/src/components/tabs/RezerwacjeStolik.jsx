@@ -176,7 +176,12 @@ export default function RezerwacjeStolik({
   onOpenRooms,
 } = {}) {
   const { confirm } = useToast()
-  const { can, isAdmin } = useAuth()
+  const {
+    can,
+    isAdmin,
+    workstationSession,
+    reauthorizeWorkstation,
+  } = useAuth()
   const createModeDescriptionId = useId()
   const maPrawo = (permission) => isAdmin || can(permission)
   const canManageFloor = maPrawo('rezerwacje.sala')
@@ -184,6 +189,7 @@ export default function RezerwacjeStolik({
   const canViewNotes = maPrawo('rezerwacje.notatki_wewnetrzne')
   const canViewFinances = maPrawo('rezerwacje.finanse')
   const canOverrideLimits = maPrawo('rezerwacje.nadpisuj_limity')
+  const requiresWorkstationReauth = Boolean(workstationSession?.active)
   const dateControlled = controlledDate !== undefined
   const selectionControlled = reservationId !== undefined
   const [localDate, setLocalDate] = useState(dzisISO())
@@ -550,7 +556,7 @@ export default function RezerwacjeStolik({
     }
   }
 
-  const zapisz = async (nadpisanieLimitow = null) => {
+  const zapisz = async (nadpisanieLimitow = null, { pin = '' } = {}) => {
     if (!canViewContacts || !modal || modalAction) return
     if (!modal.nazwisko?.trim()) {
       setModalFeedback({ type: 'error', message: 'Podaj nazwisko lub nazwę klienta.' })
@@ -561,10 +567,35 @@ export default function RezerwacjeStolik({
       setModalFeedback({ type: 'error', message: 'Wybierz dzień rezerwacji.' })
       return
     }
+    const overrideFeedback = nadpisanieLimitow && modalFeedback?.canOverride
+      ? modalFeedback
+      : null
     setModalAction('save')
-    setModalFeedback(null)
+    setModalFeedback((current) => (nadpisanieLimitow && current?.canOverride
+      ? { ...current, reauthError: null, reauthRetryAfter: 0 }
+      : null))
     const mutation = startMutation()
+    let reauthFailed = false
     try {
+      let reauthGrant = null
+      if (nadpisanieLimitow && requiresWorkstationReauth) {
+        try {
+          const authorization = await reauthorizeWorkstation({
+            pin,
+            scope: 'reservation_override',
+            signal: mutation.controller.signal,
+          })
+          reauthGrant = authorization?.grant || null
+          if (!reauthGrant) {
+            const error = new Error('Nie udało się potwierdzić operatora. Wpisz PIN ponownie.')
+            error.code = 'WORKSTATION_REAUTH_REQUIRED'
+            throw error
+          }
+        } catch (error) {
+          reauthFailed = true
+          throw error
+        }
+      }
       const body = {
         data: modal.data,
         godz_od: modal.godz_od || null,
@@ -593,9 +624,15 @@ export default function RezerwacjeStolik({
         }
       }
       const saved = modal.id
-        ? await api(`/rezerwacje-stolik/${modal.id}`, 'PUT', body, { signal: mutation.controller.signal })
+        ? await api(`/rezerwacje-stolik/${modal.id}`, 'PUT', body, {
+          headers: reauthGrant ? { 'X-Lokalo-Workstation-Reauth': reauthGrant } : {},
+          signal: mutation.controller.signal,
+        })
         : await api('/rezerwacje-stolik', 'POST', body, {
-          headers: { 'Idempotency-Key': probaZapisuRef.current.key },
+          headers: {
+            'Idempotency-Key': probaZapisuRef.current.key,
+            ...(reauthGrant ? { 'X-Lokalo-Workstation-Reauth': reauthGrant } : {}),
+          },
           signal: mutation.controller.signal,
         })
       if (!mutationIsCurrent(mutation)) return
@@ -614,6 +651,24 @@ export default function RezerwacjeStolik({
     } catch (error) {
       if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       if (error.code === 'IDEMPOTENCY_KEY_REUSED') probaZapisuRef.current = null
+      const reauthRequired = requiresWorkstationReauth
+        && Boolean(nadpisanieLimitow)
+        && (
+          reauthFailed
+          || error?.status === 428
+          || String(error?.code || '').startsWith('WORKSTATION_REAUTH')
+        )
+      if (reauthRequired) {
+        setModalFeedback({
+          type: 'warning',
+          message: overrideFeedback?.message || 'Ta operacja przekracza ustawiony limit.',
+          canOverride: true,
+          availability: overrideFeedback?.availability || error.availability || null,
+          reauthError: error.message || 'Nie udało się potwierdzić PIN-u. Spróbuj ponownie.',
+          reauthRetryAfter: Math.max(0, Number(error.retryAfter) || 0),
+        })
+        return
+      }
       const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
         || error.availability?.decision === 'override_required'
         || error.availability?.can_override === true
@@ -805,7 +860,7 @@ export default function RezerwacjeStolik({
     }
   }
 
-  const posadz = async (entry, nadpisanieLimitow = null) => {
+  const posadz = async (entry, nadpisanieLimitow = null, { pin = '' } = {}) => {
     if (waitActions[entry.id]) return
     const tableId = posadzStolik[entry.id]
     if (!tableId) {
@@ -818,7 +873,27 @@ export default function RezerwacjeStolik({
     setWaitActions((current) => ({ ...current, [entry.id]: 'seat' }))
     setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
     const mutation = startMutation()
+    let reauthFailed = false
     try {
+      let reauthGrant = null
+      if (nadpisanieLimitow && requiresWorkstationReauth) {
+        try {
+          const authorization = await reauthorizeWorkstation({
+            pin,
+            scope: 'reservation_override',
+            signal: mutation.controller.signal,
+          })
+          reauthGrant = authorization?.grant || null
+          if (!reauthGrant) {
+            const error = new Error('Nie udało się potwierdzić operatora. Wpisz PIN ponownie.')
+            error.code = 'WORKSTATION_REAUTH_REQUIRED'
+            throw error
+          }
+        } catch (error) {
+          reauthFailed = true
+          throw error
+        }
+      }
       const payload = {
         stolik_id: Number(tableId),
         tryb: 'walk_in',
@@ -827,7 +902,10 @@ export default function RezerwacjeStolik({
           nadpisanie_limitow: nadpisanieLimitow,
         } : {}),
       }
-      const result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', payload, { signal: mutation.controller.signal })
+      const result = await api(`/lista-oczekujacych/${entry.id}/zrealizuj`, 'POST', payload, {
+        headers: reauthGrant ? { 'X-Lokalo-Workstation-Reauth': reauthGrant } : {},
+        signal: mutation.controller.signal,
+      })
       if (!mutationIsCurrent(mutation)) return
       setLista((current) => replaceById(current, result.wpis, sortWaitlist))
       setRez((current) => result.rezerwacja.data === data
@@ -843,6 +921,25 @@ export default function RezerwacjeStolik({
       setPageFeedback({ type: 'success', message: `Posadzono: ${canViewContacts ? entry.nazwisko : 'Gość'}.` })
     } catch (error) {
       if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
+      const reauthRequired = requiresWorkstationReauth
+        && Boolean(nadpisanieLimitow)
+        && (
+          reauthFailed
+          || error?.status === 428
+          || String(error?.code || '').startsWith('WORKSTATION_REAUTH')
+        )
+      if (reauthRequired) {
+        setWaitRowFeedback((current) => ({
+          ...current,
+          [entry.id]: {
+            type: 'warning',
+            message: 'Ta operacja przekracza ustawiony limit.',
+            reauthError: error.message || 'Nie udało się potwierdzić PIN-u. Spróbuj ponownie.',
+            reauthRetryAfter: Math.max(0, Number(error.retryAfter) || 0),
+          },
+        }))
+        return
+      }
       const pacingConflict = ['PACING_RESERVATION_LIMIT', 'PACING_COVERS_LIMIT'].includes(error.code)
         || error.availability?.decision === 'override_required'
         || error.availability?.can_override === true
@@ -1206,6 +1303,10 @@ export default function RezerwacjeStolik({
                 }}
                 onConfirm={zapisz}
                 busy={modalAction === 'save'}
+                requiresPin={requiresWorkstationReauth}
+                reauthError={modalFeedback.reauthError}
+                retryAfter={modalFeedback.reauthRetryAfter}
+                actionLabel={requiresWorkstationReauth ? 'Potwierdź PIN-em i zapisz' : undefined}
               />
             ) : null}
 
@@ -1358,9 +1459,12 @@ export default function RezerwacjeStolik({
                         setWaitOverrideDrafts((current) => ({ ...current, [entry.id]: emptyOverrideDraft() }))
                         setWaitRowFeedback((current) => ({ ...current, [entry.id]: null }))
                       }}
-                      onConfirm={(override) => posadz(entry, override)}
+                      onConfirm={(override, authorization) => posadz(entry, override, authorization)}
                       busy={action === 'seat'}
-                      actionLabel="Posadź mimo limitu"
+                      requiresPin={requiresWorkstationReauth}
+                      reauthError={waitRowFeedback[entry.id]?.reauthError}
+                      retryAfter={waitRowFeedback[entry.id]?.reauthRetryAfter}
+                      actionLabel={requiresWorkstationReauth ? 'Potwierdź PIN-em i posadź' : 'Posadź mimo limitu'}
                     />
                   ) : null}
                   {canViewContacts && waitCommunicationId === entry.id ? (

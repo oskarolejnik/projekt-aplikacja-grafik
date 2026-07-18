@@ -55,6 +55,22 @@ const employee = {
   uprawnienia_override: {},
 }
 
+const reception = {
+  ...manager,
+  id: 12,
+  login: 'recepcja',
+  imie: 'Ola',
+  nazwisko: 'Lis',
+  preset: 'recepcja_host',
+  reservation_pin_configured: false,
+  uprawnienia: [
+    'rezerwacje.operacje',
+    'rezerwacje.host',
+    'rezerwacje.nadpisuj_limity',
+    'rezerwacje.dane_kontaktowe',
+  ],
+}
+
 describe('Konta permissions', () => {
   beforeEach(() => {
     dataState.users = [{ ...manager }, { ...admin }, { ...employee }]
@@ -167,5 +183,75 @@ describe('Konta permissions', () => {
     }))
     expect(await screen.findByText('Aktywny preset')).toBeInTheDocument()
     expect(screen.getAllByText('Recepcja / Host').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('pokazuje kontrolę PIN-u wyłącznie dla dokładnego presetu Recepcja / Host', async () => {
+    dataState.users = [
+      { ...reception },
+      { ...manager, reservation_pin_configured: true },
+      { ...admin, reservation_pin_configured: true },
+    ]
+
+    render(<Konta />)
+    await screen.findByText('recepcja')
+
+    expect(screen.getAllByText('PIN stanowiska')).toHaveLength(1)
+    expect(screen.getByLabelText(/Nowy PIN stanowiska/)).toHaveAttribute('type', 'password')
+    expect(screen.getByText('Nieustawiony')).toBeInTheDocument()
+  })
+
+  it('nie oferuje zmiany PIN-u nieaktywnemu operatorowi', async () => {
+    dataState.users = [{ ...reception, aktywny: false, reservation_pin_configured: true }]
+    render(<Konta />)
+    await screen.findByText('recepcja')
+
+    expect(screen.getByText('Aktywuj konto, aby ustawić lub zmienić PIN.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zmień PIN' })).toBeDisabled()
+    expect(screen.queryByLabelText(/Nowy PIN stanowiska/)).not.toBeInTheDocument()
+  })
+
+  it('waliduje i ustawia dokładnie 6 cyfr bez pozostawiania PIN-u w interfejsie', async () => {
+    dataState.users = [{ ...reception }]
+    render(<Konta />)
+    await screen.findByText('recepcja')
+
+    const pinInput = screen.getByLabelText(/Nowy PIN stanowiska/)
+    fireEvent.change(pinInput, { target: { value: '12a34' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ustaw PIN' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('PIN musi mieć dokładnie 6 cyfr.')
+    expect(apiMock.mock.calls.some(([path]) => path === '/users/12/reservation-pin')).toBe(false)
+
+    fireEvent.change(pinInput, { target: { value: '12a34567' } })
+    expect(pinInput).toHaveValue('123456')
+    fireEvent.click(screen.getByRole('button', { name: 'Ustaw PIN' }))
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/users/12/reservation-pin',
+      'PUT',
+      { pin: '123456' },
+    ))
+    expect(await screen.findByRole('status')).toHaveTextContent('PIN został ustawiony.')
+    expect(screen.getByText('Ustawiony')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue('123456')).not.toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('123456')
+  })
+
+  it('usuwa skonfigurowany PIN po potwierdzeniu i aktualizuje stan konta lokalnie', async () => {
+    dataState.users = [{ ...reception, reservation_pin_configured: true }]
+    render(<Konta />)
+    await screen.findByText('recepcja')
+
+    expect(screen.queryByLabelText(/Nowy PIN stanowiska/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Usuń PIN' }))
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining('Aktywne sesje tego operatora zostaną zablokowane'),
+      expect.objectContaining({ confirmText: 'Usuń PIN', danger: true }),
+    ))
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/users/12/reservation-pin', 'DELETE'))
+    expect(await screen.findByRole('status')).toHaveTextContent('PIN został usunięty.')
+    expect(screen.getByText('Nieustawiony')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Nowy PIN stanowiska/)).toHaveValue('')
   })
 })

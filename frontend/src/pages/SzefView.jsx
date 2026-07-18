@@ -40,7 +40,15 @@ const TABY = [
 // Panel „Szef" — oversight tylko do odczytu: kto pracuje + godziny (Raport godzin),
 // opublikowany grafik, kalendarz imprez. Bez żadnej edycji.
 export default function SzefView() {
-  const { user, logout, can, uprawnieniaReady = true } = useAuth()
+  const {
+    user,
+    logout,
+    can,
+    uprawnieniaReady = true,
+    workstationSession,
+    workstationIdleWarning,
+    lockWorkstation,
+  } = useAuth()
   const reservationHistory = reservationHistoryState(user)
   const { nazwa_lokalu } = useBranding()
   const [widok, setWidok] = useState(() => readReservationRoute()
@@ -122,18 +130,24 @@ export default function SzefView() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <PushButton />
+          {!workstationSession?.active ? <PushButton /> : null}
           <button
             type="button"
-            onClick={logout}
+            onClick={workstationSession?.active ? () => lockWorkstation?.() : logout}
             className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition hover:text-ink"
-            aria-label="Wyloguj"
+            aria-label={workstationSession?.active ? 'Zmień operatora' : 'Wyloguj'}
           >
             <Icon name="logout" className="h-4 w-4" />
-            <span className="hidden sm:inline">Wyloguj</span>
+            <span className="hidden sm:inline">{workstationSession?.active ? 'Zmień operatora' : 'Wyloguj'}</span>
           </button>
         </div>
       </header>
+
+      {workstationSession?.active && workstationIdleWarning ? (
+        <div className="relative z-10 border-b border-lemon/20 bg-lemon/[0.07] px-4 py-2 text-center text-xs font-medium text-lemon" role="status">
+          Stanowisko zablokuje się za {workstationIdleWarning} s bez aktywności.
+        </div>
+      ) : null}
 
       <main className={`relative z-10 mx-auto w-full px-4 py-6 pb-safe md:py-10 ${aktywnyTab?.wide ? 'max-w-7xl' : 'max-w-5xl'}`}>
         {!uprawnieniaReady ? (
@@ -150,7 +164,7 @@ export default function SzefView() {
           </div>
         ) : (
           <>
-            <nav className="mb-6 flex gap-2 overflow-x-auto pb-1" aria-label={czyRecepcja ? 'Widoki recepcji' : 'Widoki szefa'}>
+            {widoczneTaby.length > 1 ? <nav className="mb-6 flex gap-2 overflow-x-auto pb-1" aria-label={czyRecepcja ? 'Widoki recepcji' : 'Widoki szefa'}>
               {widoczneTaby.map((tab) => (
                 <button
                   key={tab.value}
@@ -165,7 +179,7 @@ export default function SzefView() {
                   {tab.label}
                 </button>
               ))}
-            </nav>
+            </nav> : null}
 
             {Active && (
               <div key={aktywnyTab.value} className="animate-tab-in">

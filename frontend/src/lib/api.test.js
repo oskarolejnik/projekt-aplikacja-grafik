@@ -4,6 +4,7 @@ import {
   api,
   nowyKluczIdempotencji,
   pobierzPlik,
+  rotateCredentialGeneration,
   setToken,
   setUnauthorizedHandler,
   setWorkstationLockedHandler,
@@ -17,7 +18,11 @@ const odp = (status, data, ok) => ({
 })
 const mockFetch = (resp) => vi.stubGlobal('fetch', vi.fn().mockResolvedValue(resp))
 
-beforeEach(() => { localStorage.clear(); sessionStorage.clear() })
+beforeEach(() => {
+  localStorage.clear()
+  sessionStorage.clear()
+  document.cookie = 'lokalo_reservation_workstation_csrf=; Path=/; Max-Age=0'
+})
 afterEach(() => {
   vi.unstubAllGlobals()
   setUnauthorizedHandler(null)
@@ -33,6 +38,19 @@ describe('api()', () => {
     expect(url).toBe('/api/test')
     expect(opts.method).toBe('GET')
     expect(opts.headers.Authorization).toBeUndefined()
+    expect(opts.credentials).toBe('include')
+  })
+
+  it('dla mutacji sesji stanowiska dodaje CSRF, ale nie wysyła go przy GET', async () => {
+    document.cookie = 'lokalo_reservation_workstation_csrf=csrf-123; Path=/'
+    mockFetch(odp(204, null))
+
+    await api('/me/reservation-workstation/touch', 'POST')
+
+    expect(fetch.mock.calls[0][1].headers['X-Lokalo-Workstation-CSRF']).toBe('csrf-123')
+    mockFetch(odp(200, { ok: true }))
+    await api('/me/reservation-workstation')
+    expect(fetch.mock.calls[0][1].headers['X-Lokalo-Workstation-CSRF']).toBeUndefined()
   })
 
   it('dołącza nagłówek Bearer, gdy token jest w localStorage', async () => {
@@ -108,6 +126,25 @@ describe('api()', () => {
     expect(localStorage.getItem('grafik_token')).toBeNull()
   })
 
+  it('oczekiwany brak rejestracji urządzenia nie wylogowuje sesji administratora', async () => {
+    setToken('admin-token')
+    const onUnauth = vi.fn()
+    setUnauthorizedHandler(onUnauth)
+    mockFetch(odp(401, {
+      detail: { code: 'WORKSTATION_NOT_REGISTERED', message: 'Brak stanowiska.' },
+    }))
+
+    await expect(api(
+      '/reservation-workstations/operators',
+      'GET',
+      null,
+      { sessionHandling: false },
+    )).rejects.toBeTruthy()
+
+    expect(localStorage.getItem('grafik_token')).toBe('admin-token')
+    expect(onUnauth).not.toHaveBeenCalled()
+  })
+
   it('423 WORKSTATION_LOCKED zachowuje token i woła osobny handler prywatności', async () => {
     setToken('aktywny-token')
     const onLocked = vi.fn()
@@ -132,6 +169,23 @@ describe('api()', () => {
 
     await expect(api('/x')).rejects.toBeTruthy()
 
+    expect(onLocked).not.toHaveBeenCalled()
+  })
+
+  it('odrzuca spóźnione 423 poprzedniej generacji sesji cookie', async () => {
+    document.cookie = 'lokalo_reservation_workstation_csrf=csrf-old; Path=/'
+    const onLocked = vi.fn()
+    setWorkstationLockedHandler(onLocked)
+    let resolveFetch
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => { resolveFetch = resolve })))
+
+    const pending = api('/rezerwacje-stolik')
+    rotateCredentialGeneration()
+    resolveFetch(odp(423, {
+      detail: { code: 'WORKSTATION_LOCKED', message: 'Stara sesja.' },
+    }))
+
+    await expect(pending).rejects.toBeTruthy()
     expect(onLocked).not.toHaveBeenCalled()
   })
 

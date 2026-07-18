@@ -27,6 +27,7 @@ import ReservationsDatabase from './ReservationsDatabase'
 import GuestProfileDialog from './GuestProfileDialog'
 import PlanSali from './PlanSali'
 import ReservationAvailability from './ReservationAvailability'
+import WorkstationSetup from '../workstation/WorkstationSetup'
 
 const VIEW_META = {
   today: { label: 'Dzisiaj', icon: 'clock' },
@@ -583,6 +584,8 @@ export default function ReservationsWorkspace() {
           }))}
         />
       ) : null}
+
+      {configurationMode && isAdmin ? <WorkstationSetup /> : null}
 
       {selectionError ? (
         <div role="alert">

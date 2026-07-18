@@ -16,6 +16,18 @@ def test_encryption_key_wymagany_w_produkcji(monkeypatch):
     assert any("ENCRYPTION_KEY" in e for e in errors)
 
 
+def test_workstation_pin_pepper_musi_byc_osobnym_mocnym_sekretem(monkeypatch):
+    monkeypatch.setenv("WORKSTATION_PIN_PEPPER", "krotki")
+    errors, _ = settings._problems()
+    assert any("WORKSTATION_PIN_PEPPER jest za krótki" in e for e in errors)
+
+    shared = "wspolny-sekret-testowy-0123456789abcdef"
+    monkeypatch.setenv("SECRET_KEY", shared)
+    monkeypatch.setenv("WORKSTATION_PIN_PEPPER", shared)
+    errors, _ = settings._problems()
+    assert any("musi być osobnym sekretem" in e for e in errors)
+
+
 def test_dezaktywacja_konta_uniewaznia_token_natychmiast(admin, db):
     """H2: ten sam, wciąż ważny token po dezaktywacji konta musi zostać odrzucony (401) —
     middleware czyta User.aktywny z bazy, nie ufa roli/statusowi wmrożonym w JWT."""

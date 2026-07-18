@@ -3,10 +3,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock, confirmMock, authState, privacyState, subscribePurgeMock } = vi.hoisted(() => ({
+const {
+  apiMock,
+  confirmMock,
+  reauthorizeWorkstationMock,
+  authState,
+  privacyState,
+  subscribePurgeMock,
+} = vi.hoisted(() => ({
   apiMock: vi.fn(),
   confirmMock: vi.fn(),
-  authState: { isAdmin: true, permissions: [] },
+  reauthorizeWorkstationMock: vi.fn(),
+  authState: { isAdmin: true, permissions: [], workstationSession: null },
   privacyState: { callback: null },
   subscribePurgeMock: vi.fn((callback) => {
     privacyState.callback = callback
@@ -27,6 +35,8 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({
     isAdmin: authState.isAdmin,
     can: (permission) => authState.permissions.includes(permission),
+    workstationSession: authState.workstationSession,
+    reauthorizeWorkstation: reauthorizeWorkstationMock,
   }),
 }))
 vi.mock('../../lib/icons', () => ({ Icon: () => <span aria-hidden /> }))
@@ -102,6 +112,8 @@ afterEach(() => {
   confirmMock.mockResolvedValue(true)
   authState.isAdmin = true
   authState.permissions = []
+  authState.workstationSession = null
+  reauthorizeWorkstationMock.mockReset()
   privacyState.callback = null
 })
 
@@ -590,6 +602,53 @@ describe('Rezerwacje stolików', () => {
     })
   })
 
+  it('na stanowisku posadza z listy oczekujących dopiero po reautoryzacji i przekazuje grant w nagłówku', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.nadpisuj_limity',
+    ]
+    authState.workstationSession = { active: true, station: { id: 'desk-1' }, user: { id: 12 } }
+    reauthorizeWorkstationMock.mockResolvedValue({ grant: 'wreauth-waitlist' })
+    let attempts = 0
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [WAITLIST_ENTRY] })
+      if (path === '/rezerwacje/config') return Promise.resolve({ sale: [] })
+      if (path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/zrealizuj` && method === 'POST') {
+        attempts += 1
+        if (attempts === 1) {
+          const error = new Error('Limit osób w wybranym oknie został przekroczony.')
+          error.availability = { decision: 'override_required', violations: [] }
+          return Promise.reject(error)
+        }
+        return Promise.resolve({
+          wpis: { ...WAITLIST_ENTRY, status: 'zrealizowany', termin_id: 33 },
+          rezerwacja: { ...RESERVATION, ...body, id: 33, nazwisko: WAITLIST_ENTRY.nazwisko },
+        })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Oczekujący (1)' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Stolik dla Kowalska' }), { target: { value: String(TABLE.id) } })
+    fireEvent.click(screen.getByRole('button', { name: 'Posadź' }))
+    await screen.findByRole('button', { name: 'Potwierdź PIN-em i posadź' })
+    fireEvent.change(screen.getByLabelText('Powód przekroczenia'), { target: { value: 'walk_in' } })
+    fireEvent.change(screen.getByLabelText('Twój 6-cyfrowy PIN'), { target: { value: '123456' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź PIN-em i posadź' }))
+
+    await waitFor(() => expect(attempts).toBe(2))
+    const retryCall = apiMock.mock.calls.filter(
+      ([path, method]) => path === `/lista-oczekujacych/${WAITLIST_ENTRY.id}/zrealizuj` && method === 'POST',
+    )[1]
+    expect(retryCall[2]).not.toHaveProperty('pin')
+    expect(retryCall[3].headers).toEqual({ 'X-Lokalo-Workstation-Reauth': 'wreauth-waitlist' })
+  })
+
   it('prowadzi do wersjonowanej konfiguracji sal zamiast martwego modalu stolików', async () => {
     mockInitial()
     const onOpenRooms = vi.fn()
@@ -878,6 +937,156 @@ describe('Rezerwacje stolików', () => {
       notatka: null,
       potwierdzone: true,
     })
+  })
+
+  it('na stanowisku reautoryzuje override własnym PIN-em i używa grantu tylko w nagłówku retry', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.nadpisuj_limity',
+    ]
+    authState.workstationSession = { active: true, station: { id: 'desk-1' }, user: { id: 12 } }
+    reauthorizeWorkstationMock.mockResolvedValue({
+      grant: 'wreauth-single-use',
+      scope: 'reservation_override',
+    })
+    let attempts = 0
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje-stolik' && method === 'POST') {
+        attempts += 1
+        if (attempts === 1) {
+          const error = new Error('Osiągnięto limit nowych rezerwacji.')
+          error.availability = {
+            decision: 'override_required',
+            can_override: true,
+            violations: [{
+              code: 'PACING_RESERVATION_LIMIT',
+              message: 'Limit nowych rezerwacji w ciągu 30 minut',
+            }],
+          }
+          return Promise.reject(error)
+        }
+        return Promise.resolve({ ...RESERVATION, ...body, id: 56, status: 'potwierdzona' })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj rezerwację' }))
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'PIN Test' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
+
+    const overrideButton = await screen.findByRole('button', { name: 'Potwierdź PIN-em i zapisz' })
+    fireEvent.change(screen.getByLabelText('Powód przekroczenia'), { target: { value: 'operational_decision' } })
+    fireEvent.change(screen.getByLabelText('Twój 6-cyfrowy PIN'), { target: { value: '123456' } })
+    fireEvent.click(overrideButton)
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(reauthorizeWorkstationMock).toHaveBeenCalledWith({
+      pin: '123456',
+      scope: 'reservation_override',
+      signal: expect.any(AbortSignal),
+    })
+    const retryCall = apiMock.mock.calls.filter(
+      ([path, method]) => path === '/rezerwacje-stolik' && method === 'POST',
+    )[1]
+    expect(retryCall[2]).not.toHaveProperty('pin')
+    expect(retryCall[2]).not.toHaveProperty('grant')
+    expect(retryCall[3].headers).toEqual(expect.objectContaining({
+      'Idempotency-Key': 'manual-reservation-test-key',
+      'X-Lokalo-Workstation-Reauth': 'wreauth-single-use',
+    }))
+  })
+
+  it('przy edycji na stanowisku przekazuje jednorazowy grant poza treścią rezerwacji', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.nadpisuj_limity',
+    ]
+    authState.workstationSession = { active: true, station: { id: 'desk-1' }, user: { id: 12 } }
+    reauthorizeWorkstationMock.mockResolvedValue({ grant: 'wreauth-edit' })
+    let attempts = 0
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [RESERVATION] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === `/rezerwacje-stolik/${RESERVATION.id}` && method === 'PUT') {
+        attempts += 1
+        if (attempts === 1) {
+          const error = new Error('Zmiana przekracza limit osób.')
+          error.availability = { decision: 'override_required', can_override: true, violations: [] }
+          return Promise.reject(error)
+        }
+        return Promise.resolve({ ...RESERVATION, ...body })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edytuj rezerwację: Nowak' }))
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Nowak – większa grupa' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
+    await screen.findByRole('button', { name: 'Potwierdź PIN-em i zapisz' })
+    fireEvent.change(screen.getByLabelText('Powód przekroczenia'), { target: { value: 'large_group_confirmed' } })
+    fireEvent.change(screen.getByLabelText('Twój 6-cyfrowy PIN'), { target: { value: '123456' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź PIN-em i zapisz' }))
+
+    await waitFor(() => expect(attempts).toBe(2))
+    const retryCall = apiMock.mock.calls.filter(
+      ([path, method]) => path === `/rezerwacje-stolik/${RESERVATION.id}` && method === 'PUT',
+    )[1]
+    expect(retryCall[2]).not.toHaveProperty('pin')
+    expect(retryCall[3].headers).toEqual({ 'X-Lokalo-Workstation-Reauth': 'wreauth-edit' })
+  })
+
+  it('po błędnym PIN-ie i 429 zachowuje formularz oraz powód override', async () => {
+    authState.isAdmin = false
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.nadpisuj_limity',
+    ]
+    authState.workstationSession = { active: true, station: { id: 'desk-1' }, user: { id: 12 } }
+    const pinError = new Error('Nieprawidłowy PIN.')
+    pinError.status = 429
+    pinError.code = 'WORKSTATION_REAUTH_FAILED'
+    pinError.retryAfter = 30
+    reauthorizeWorkstationMock.mockRejectedValue(pinError)
+    let attempts = 0
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje-stolik' && method === 'POST') {
+        attempts += 1
+        const error = new Error('Osiągnięto limit nowych rezerwacji.')
+        error.availability = { decision: 'override_required', can_override: true, violations: [] }
+        return Promise.reject(error)
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj rezerwację' }))
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Nie zgub mnie' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
+    await screen.findByRole('button', { name: 'Potwierdź PIN-em i zapisz' })
+    fireEvent.change(screen.getByLabelText('Powód przekroczenia'), { target: { value: 'guest_request' } })
+    fireEvent.change(screen.getByLabelText('Twój 6-cyfrowy PIN'), { target: { value: '654321' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź PIN-em i zapisz' }))
+
+    expect((await screen.findByRole('alert')).parentElement).toHaveTextContent('Nieprawidłowy PIN. Spróbuj ponownie za 30 s.')
+    expect(screen.getByRole('dialog', { name: 'Nowa rezerwacja' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Nie zgub mnie')
+    expect(screen.getByLabelText('Powód przekroczenia')).toHaveValue('guest_request')
+    expect(screen.getByLabelText('Twój 6-cyfrowy PIN')).toHaveValue('')
+    expect(attempts).toBe(1)
   })
 
   it('preset Recepcji zachowuje tworzenie i kontakty, ale ukrywa salę, finanse, notatki i DELETE', async () => {

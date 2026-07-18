@@ -14,7 +14,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0063_r5c_reservation_payments"
+HEAD = "0064_r6a_reservation_workstations"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -32,6 +32,8 @@ _TABELE = [
     "rezerwacje_wiadomosci_outbox", "rezerwacje_wiadomosci_proby",
     "polityki_platnosci_rezerwacji", "platnosci",
     "rezerwacje_platnosci_polecenia", "rezerwacje_platnosci_webhooki",
+    "reservation_operator_credentials", "reservation_workstations",
+    "reservation_operator_sessions", "reservation_workstation_audit",
 ]
 
 
@@ -41,6 +43,7 @@ def _env(db_file, prefix="ledger"):
         "DATABASE_URL": f"sqlite:///{db_file.as_posix()}",
         "SECRET_KEY": f"{prefix}-test-secret-key-0123456789abcd",
         "ENCRYPTION_KEY": f"{prefix}-test-encryption-key-0123456789",
+        "WORKSTATION_PIN_PEPPER": f"{prefix}-test-pin-pepper-0123456789abcdef",
         "APP_ENV": "development",
     }
 

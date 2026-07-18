@@ -218,6 +218,7 @@ def _user_out(u: models.User) -> schemas.UserOut:
         imie=u.pracownik.imie if u.pracownik else None,
         nazwisko=u.pracownik.nazwisko if u.pracownik else None,
         preset=uprawnienia.rozpoznaj_preset(u),
+        reservation_pin_configured=bool(u.reservation_pin_credential),
         uprawnienia_override=dict(u.uprawnienia_override or {}),
         uprawnienia=uprawnienia.efektywne(u),
     )
