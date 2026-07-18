@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a wdrożone i odebrane automatycznie; otwarte bramy środowiskowe · 18 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a i R6b.1 wdrożone oraz odebrane automatycznie; otwarte bramy środowiskowe · 18 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -936,6 +936,25 @@ przejąć aktywnej sesji prostym odgadnięciem PIN-u.
 Aktualizacje live nie ogłaszają całej tablicy czytnikowi ekranu. `aria-live` obejmuje wyłącznie
 wynik konkretnej akcji; timery nie generują cyklicznych komunikatów.
 
+**Stan wdrożenia — 18 lipca 2026: R6b.1 ukończone i odebrane automatycznie.**
+
+- [x] `GET /api/host/snapshot` atomowo zasila kolejkę, opublikowany plan sali i oś czasu jednym
+  wersjonowanym kontraktem z czasem generacji; odpowiedź pozostaje prywatna i `no-store`.
+- [x] Widok hosta na desktopie łączy plan, priorytetową listę operacyjną i timeline, a na mobile
+  udostępnia lokalny przełącznik `Goście / Sala / Czas` bez utraty kontekstu.
+- [x] Mutacje sadzania i faz wizyty aktualizują wszystkie trzy projekcje lokalnie, pokazują feedback
+  przy konkretnym gościu i dopiero potem wykonują ciche uzgodnienie z serwerem.
+- [x] Polling działa wyłącznie dla aktywnej, widocznej karty; powrót online lub z tła wywołuje
+  natychmiastowe odświeżenie, a spóźnione odpowiedzi są odrzucane.
+- [x] Jeden zegar klienta odświeża czytelne timery bez kolejnych żądań i bez cyklicznego `aria-live`.
+- [x] Awaryjny cache `sessionStorage` ma 12-godzinny TTL, jest związany z operatorem i privacy epoch,
+  przechowuje wyłącznie jawnie wybrane dane operacyjne z nazwą `Gość` i zawsze blokuje zapisy offline.
+- [x] 57 testów backendu, 65 plików / 474 testy frontendu oraz build produkcyjny przeszły.
+- [x] Smoke przeglądarkowy desktop i 390 px potwierdził brak poziomego overflow, cele dotykowe
+  minimum 44 px oraz poprawne przełączanie `Goście / Sala / Czas`.
+- [ ] R6b.2: pełny cykl życia waitlisty i ofert.
+- [ ] R6b.3: walidowany drag-and-drop z równorzędną alternatywą klawiaturową.
+
 **Done R6b:** host prowadzi cały serwis z jednego widoku, a każda akcja daje lokalny i odwracalny tam,
 gdzie to bezpieczne, feedback.
 
@@ -1074,11 +1093,11 @@ R0a–R5b są zamkniętymi checkpointami. R5c jest technicznie gotowe, lecz zgod
 pozostaje wyłączone do czasu uruchomienia JDG i gotowości merchant. Nie spełnia jeszcze bramy
 produkcyjnej, ale odłożona integracja Stripe nie blokuje niezależnego R6a.
 
-Najbliższy niezależny krok produktowy to **R6b.1**: jeden snapshot hosta zasilający plan, listę i oś
-czasu, odświeżanie tylko dla widocznej karty, lokalny feedback akcji, timery wizyt oraz ostatnie dane
-offline tylko do odczytu. Następnie R6b.2 domyka cykl życia waitlisty, a R6b.3 dodaje drag-and-drop
-z pełną alternatywą klawiaturową. Smoke docelowego urządzenia i współbieżność PostgreSQL pozostają
-bramami rolloutowymi R6a, nie nowym zakresem funkcjonalnym.
+R6b.1 jest zamkniętym checkpointem. Najbliższy niezależny krok produktowy to **R6b.2**: pełny cykl
+życia waitlisty (`oczekuje → zaoferowano → zaakceptowano / wygasła / anulowano`), czasowa oferta,
+hold całej konfiguracji stołów, audyt komunikacji i bezpieczne zwolnienie zasobów. Następnie R6b.3
+dodaje walidowany drag-and-drop z pełną alternatywą klawiaturową. Smoke docelowego urządzenia i
+współbieżność PostgreSQL pozostają bramami rolloutowymi R6a, nie nowym zakresem funkcjonalnym.
 
 Produkcyjne testy Stripe płatność–zwrot wrócą dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
 pozostaje osobnym kontekstem i nie może ponownie używać stanu, webhooków ani modeli płatności rezerwacji.

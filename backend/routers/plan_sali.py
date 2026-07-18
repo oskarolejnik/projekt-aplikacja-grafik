@@ -3,7 +3,7 @@
 from collections import defaultdict
 from datetime import date, datetime, time
 import math
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -1398,18 +1398,14 @@ def publikuj_plan(
     return _plan_out(db, sala, published)
 
 
-@router.get(
-    "/api/plan-sali",
-    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
-)
-def plan_sali(
-    data: date = Query(None),
-    sala_id: int = Query(None),
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user),
+def operational_plan_payload(
+    *,
+    dzien: date,
+    sala_id: Optional[int],
+    db: Session,
+    user: models.User,
 ):
-    """Operacyjny plan dnia; geometria pochodzi z published, status z rezerwacji."""
-    dzien = data or _dzis_lokalnie()
+    """Buduje published-only operacyjny plan dnia dla endpointów hosta."""
     selected_sala = _sala_or_404(db, sala_id) if sala_id is not None else None
     sale = db.query(models.SalaRezerwacyjna).order_by(
         models.SalaRezerwacyjna.kolejnosc, models.SalaRezerwacyjna.id,
@@ -1610,6 +1606,25 @@ def plan_sali(
             ),
         },
     }
+
+
+@router.get(
+    "/api/plan-sali",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def plan_sali(
+    data: date = Query(None),
+    sala_id: int = Query(None),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Operacyjny plan dnia; geometria pochodzi z published, status z rezerwacji."""
+    return operational_plan_payload(
+        dzien=data or _dzis_lokalnie(),
+        sala_id=sala_id,
+        db=db,
+        user=user,
+    )
 
 
 @router.put(

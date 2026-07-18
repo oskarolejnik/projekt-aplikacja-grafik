@@ -64,7 +64,10 @@ from routers.platnosci import router as platnosci_router
 from routers.crm import router as crm_router
 from routers.analityka_rezerwacji import router as analityka_rezerwacji_router
 from routers.gielda import router as gielda_router
-from routers.plan_sali import router as plan_sali_router
+from routers.plan_sali import (
+    operational_plan_payload,
+    router as plan_sali_router,
+)
 from routers.ogloszenia import router as ogloszenia_router
 from routers.zgodnosc import router as zgodnosc_router
 from routers.imprezy_ai import router as imprezy_ai_router
@@ -3138,15 +3141,15 @@ def _host_out(t: models.Termin, teraz=None, profil=None, user=None) -> dict:
     return wpis
 
 
-@app.get("/api/host/kolejka", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
-def host_kolejka(
-    data: date = Query(None),
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user),
-):
-    """Widok hosta na dzień: nadchodzący / na sali (z timerem obrotu) / zakończeni + waitlista."""
-    dzien = data or date.today()
-    teraz = utcnow_naive()
+def _host_kolejka_payload(
+    *,
+    dzien: date,
+    db: Session,
+    user: models.User,
+    teraz: Optional[datetime] = None,
+) -> dict:
+    """Buduje jeden PII-safe payload kolejki dla tras hosta."""
+    teraz = teraz or utcnow_naive()
     rez = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == dzien).order_by(models.Termin.godz_od).all()
     profile = _profile_dla_terminow(db, rez)           # {hash: ProfilGoscia} — flagi VIP/alergie/okazja
@@ -3175,15 +3178,27 @@ def host_kolejka(
     }
 
 
-@app.get("/api/host/os-czasu", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
-def host_os_czasu(
+@app.get("/api/host/kolejka", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_kolejka(
     data: date = Query(None),
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    """Oś czasu hosta: stoły × godziny + paski zajętości. Rezerwacje dnia rozbite na stoły składowe
-    (kombinacja → osobny pasek na każdym stole), żeby front narysował siatkę obrotu."""
-    dzien = data or date.today()
+    """Widok hosta na dzień: nadchodzący / na sali (z timerem obrotu) / zakończeni + waitlista."""
+    return _host_kolejka_payload(
+        dzien=data or date.today(),
+        db=db,
+        user=user,
+    )
+
+
+def _host_os_czasu_payload(
+    *,
+    dzien: date,
+    db: Session,
+    user: models.User,
+) -> dict:
+    """Buduje PII-safe oś czasu z kombinacjami rozbitymi na stoły składowe."""
     rez = db.query(models.Termin).filter(
         models.Termin.rodzaj == "stolik", models.Termin.data == dzien,
         models.Termin.status.in_(REZ_AKTYWNE), models.Termin.godz_od.isnot(None)).order_by(models.Termin.godz_od).all()
@@ -3218,6 +3233,89 @@ def host_os_czasu(
                                   user, "rezerwacje.dane_kontaktowe") else "Gość",
                               "liczba_osob": t.liczba_osob, "faza_hosta": t.faza_hosta})
     return {"data": str(dzien), "stoly": stoly, "godziny": godziny, "zajetosci": zajetosci}
+
+
+@app.get("/api/host/os-czasu", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_os_czasu(
+    data: date = Query(None),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Oś czasu hosta: stoły × godziny + paski zajętości."""
+    return _host_os_czasu_payload(
+        dzien=data or date.today(),
+        db=db,
+        user=user,
+    )
+
+
+HOST_SNAPSHOT_SCHEMA_VERSION = 1
+
+
+def _host_snapshot_payload(
+    *,
+    dzien: date,
+    db: Session,
+    user: models.User,
+) -> dict:
+    """Buduje wszystkie projekcje w obrębie jednego snapshotu transakcji."""
+    generated_at_utc = datetime.now(timezone.utc)
+    generated_at = generated_at_utc.isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z",
+    )
+    return {
+        "version": generated_at,
+        "schema_version": HOST_SNAPSHOT_SCHEMA_VERSION,
+        "data": str(dzien),
+        "generated_at": generated_at,
+        "kolejka": _host_kolejka_payload(
+            dzien=dzien,
+            db=db,
+            user=user,
+            teraz=generated_at_utc.replace(tzinfo=None),
+        ),
+        "os_czasu": _host_os_czasu_payload(
+            dzien=dzien,
+            db=db,
+            user=user,
+        ),
+        "plan_sali": operational_plan_payload(
+            dzien=dzien,
+            sala_id=None,
+            db=db,
+            user=user,
+        ),
+    }
+
+
+@app.get("/api/host/snapshot", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
+def host_snapshot(
+    data: date = Query(...),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Spójny snapshot live: kolejka, oś czasu i published-only plan dnia."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return _host_snapshot_payload(dzien=data, db=db, user=user)
+
+    # Auth wykonał już SELECT w sesji requestu, więc nie można bezpiecznie podnieść
+    # jej izolacji. Osobna transakcja REPEATABLE READ gwarantuje, że równoległy zapis
+    # nie pojawi się tylko w jednej z trzech projekcji hosta.
+    snapshot_engine = getattr(bind, "engine", bind)
+    with snapshot_engine.connect().execution_options(
+        isolation_level="REPEATABLE READ",
+    ) as connection:
+        with Session(bind=connection, autoflush=False) as snapshot_db:
+            with snapshot_db.begin():
+                snapshot_user = snapshot_db.get(models.User, user.id)
+                if snapshot_user is None or not snapshot_user.aktywny:
+                    raise HTTPException(status_code=401, detail="Konto jest nieaktywne.")
+                return _host_snapshot_payload(
+                    dzien=data,
+                    db=snapshot_db,
+                    user=snapshot_user,
+                )
 
 
 @app.post("/api/host/rezerwacja/{rid}/faza", dependencies=[Depends(_wymagaj_modul_rezerwacje)])

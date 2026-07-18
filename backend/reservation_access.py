@@ -212,6 +212,7 @@ def requirement_for(method: str, path: str) -> Requirement | None:
         "/api/host/sugestia-stolika",
         "/api/host/kolejka",
         "/api/host/os-czasu",
+        "/api/host/snapshot",
     }:
         return Requirement(all_of=(HOST,))
     if method == "POST" and path == "/api/host/auto-no-show":
