@@ -19,6 +19,7 @@ const VIEWS = [
   { value: 'overview', label: 'Przegląd' },
   { value: 'timing', label: 'Czas wizyt' },
   { value: 'utilization', label: 'Sale i stoły' },
+  { value: 'demand', label: 'Popyt i waitlista' },
 ]
 
 const UTILIZATION_TYPES = [
@@ -34,6 +35,12 @@ const CHANNEL_LABELS = {
   ical: 'iCal',
   walk_in: 'Walk-in',
 }
+
+const DEMAND_BREAKDOWNS = [
+  { value: 'reasons', label: 'Przyczyny' },
+  { value: 'hours', label: 'Godziny' },
+  { value: 'groups', label: 'Wielkość grupy' },
+]
 
 const shiftDateIso = (iso, amount) => {
   const [year, month, day] = iso.split('-').map(Number)
@@ -77,6 +84,7 @@ export default function AnalitykaRezerwacji() {
   const [end, setEnd] = useState(initialRange.end)
   const [view, setView] = useState('overview')
   const [utilizationType, setUtilizationType] = useState('sale')
+  const [demandBreakdown, setDemandBreakdown] = useState('reasons')
   const [snapshot, setSnapshot] = useState(null)
   const [snapshotKey, setSnapshotKey] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -111,15 +119,16 @@ export default function AnalitykaRezerwacji() {
       api(`/analityka/rezerwacje?${suffix}`, 'GET', null, { signal: controller.signal }),
       api(`/analityka/oblozenie?${suffix}`, 'GET', null, { signal: controller.signal }),
       api(`/analityka/rezerwacje/operacyjna?${suffix}`, 'GET', null, { signal: controller.signal }),
+      api(`/analityka/rezerwacje/popyt?${suffix}`, 'GET', null, { signal: controller.signal }),
     ])
     if (controller.signal.aborted || requestRef.current.generation !== generation) return
 
-    const labels = ['podsumowania', 'obłożenia', 'rzeczywistych czasów wizyt']
+    const labels = ['podsumowania', 'obłożenia', 'rzeczywistych czasów wizyt', 'utraconego popytu i waitlisty']
     const failures = requests
       .map((result, index) => result.status === 'rejected' ? labels[index] : null)
       .filter(Boolean)
-    const [summary, occupancy, operational] = requests.map((result) => result.status === 'fulfilled' ? result.value : null)
-    const hasAnyData = Boolean(summary || occupancy || operational)
+    const [summary, occupancy, operational, demand] = requests.map((result) => result.status === 'fulfilled' ? result.value : null)
+    const hasAnyData = Boolean(summary || occupancy || operational || demand)
 
     if (hasAnyData) {
       const previous = snapshotKeyRef.current === contextKey ? snapshotRef.current : null
@@ -127,6 +136,7 @@ export default function AnalitykaRezerwacji() {
         summary: summary ?? previous?.summary ?? null,
         occupancy: occupancy ?? previous?.occupancy ?? null,
         operational: operational ?? previous?.operational ?? null,
+        demand: demand ?? previous?.demand ?? null,
       }
       snapshotRef.current = nextSnapshot
       setSnapshot(nextSnapshot)
@@ -226,13 +236,25 @@ export default function AnalitykaRezerwacji() {
 
       {validRange && !hasCurrentSnapshot && loading ? <AnalyticsSkeleton /> : !visibleSnapshot ? null : (
         <div className="mt-5 space-y-6" aria-busy={refreshing || undefined}>
-          <PillSwitch
-            options={VIEWS}
-            value={view}
-            onChange={setView}
-            label="Obszar wyników rezerwacji"
-            className="w-full"
-          />
+          <label className="block sm:hidden">
+            <span className="field-label">Widok wyników</span>
+            <select
+              className="field mt-1.5 min-h-11"
+              value={view}
+              onChange={(event) => setView(event.target.value)}
+            >
+              {VIEWS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <div className="hidden sm:block">
+            <PillSwitch
+              options={VIEWS}
+              value={view}
+              onChange={setView}
+              label="Obszar wyników rezerwacji"
+              className="w-full"
+            />
+          </div>
 
           {view === 'overview' ? <Overview data={visibleSnapshot} /> : null}
           {view === 'timing' ? <TurnTimeView operational={visibleSnapshot.operational} /> : null}
@@ -241,6 +263,13 @@ export default function AnalitykaRezerwacji() {
               operational={visibleSnapshot.operational}
               type={utilizationType}
               onTypeChange={setUtilizationType}
+            />
+          ) : null}
+          {view === 'demand' ? (
+            <DemandView
+              data={visibleSnapshot.demand}
+              breakdown={demandBreakdown}
+              onBreakdownChange={setDemandBreakdown}
             />
           ) : null}
 
@@ -442,6 +471,174 @@ function UtilizationView({ operational, type, onTypeChange }) {
         <Banner variant="info">{unassigned.wizyty} wizyt nie ma historycznego przydziału i nie zostało dopisanych do żadnej sali ani stołu.</Banner>
       ) : null}
     </section>
+  )
+}
+
+function DemandView({ data, breakdown, onBreakdownChange }) {
+  if (!data) {
+    return (
+      <section aria-labelledby="demand-title-unavailable" className="space-y-5">
+        <div>
+          <h3 id="demand-title-unavailable" className="text-lg font-semibold text-ink">Popyt i lista oczekujących</h3>
+          <p className="mt-1 text-sm text-muted">Próby bez wolnego terminu i wynik wpisów na waitlistę — bez danych osobowych.</p>
+        </div>
+        <Banner variant="info">Dane o utraconym popycie i skuteczności waitlisty są chwilowo niedostępne dla tego okresu.</Banner>
+      </section>
+    )
+  }
+
+  const rejected = data.odrzucony_popyt || {}
+  const waitlist = data.waitlista || {}
+  const quality = data.jakosc_danych || {}
+  const breakdowns = {
+    reasons: (rejected.przyczyny || []).map((row) => ({
+      key: row.kod,
+      label: row.etykieta || 'Inna przyczyna',
+      attempts: row.proby,
+      people: row.osoby,
+    })),
+    hours: (rejected.wg_godziny || []).map((row) => ({
+      key: row.godzina,
+      label: row.godzina || 'Bez wskazanej godziny',
+      attempts: row.proby,
+      people: row.osoby,
+    })),
+    groups: (rejected.wg_wielkosci_grupy || []).map((row) => ({
+      key: row.grupa,
+      label: row.grupa ? `${row.grupa} os.` : 'Nieznana wielkość',
+      attempts: row.proby,
+      people: row.osoby,
+    })),
+  }
+  const rows = breakdowns[breakdown] || []
+  const maxAttempts = Math.max(1, ...rows.map((row) => Number(row.attempts) || 0))
+  const attendedPercent = numberOrNull(waitlist.odbyte_proc)
+  const acceptedPercent = numberOrNull(waitlist.zaakceptowano_proc)
+  const offeredPercent = numberOrNull(waitlist.zaoferowano_proc)
+
+  return (
+    <section aria-labelledby="demand-title" className="space-y-6">
+      <div>
+        <h3 id="demand-title" className="text-lg font-semibold text-ink">Popyt i lista oczekujących</h3>
+        <p className="mt-1 max-w-3xl text-sm text-muted">Pokazuje, kiedy nie było wolnego terminu i ile wpisów zakończyło się pełną, zmierzoną wizytą.</p>
+      </div>
+
+      {quality.sledzenie_od ? (
+        <Banner variant="info">
+          Pomiar odrzuconych prób działa od {quality.sledzenie_od}; starszych odmów nie odtwarzamy ani nie szacujemy.
+        </Banner>
+      ) : null}
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-5 border-y border-line py-5 lg:grid-cols-4">
+        <Fact label="Próby bez terminu" value={rejected.proby ?? 0} sub="nie są unikalnymi gośćmi" />
+        <Fact label="Osoby w tych próbach" value={rejected.osoby ?? 0} sub="suma wielkości grup" />
+        <Fact
+          label="Wizyty z waitlisty"
+          value={attendedPercent === null ? '—' : `${Math.round(attendedPercent)}%`}
+          sub={Number(waitlist.wpisy) > 0
+            ? `${waitlist.odbyte ?? 0} z ${waitlist.wpisy} wpisów`
+            : 'brak wpisów w okresie'}
+        />
+        <Fact label="Próby z waitlisty" value={rejected.z_waitlista ?? 0} sub="wpisy rejestrowane jako popyt" />
+      </dl>
+
+      <div className="grid gap-7 lg:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]">
+        <section aria-labelledby="rejected-demand-breakdown-title" className="border-t border-line pt-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h4 id="rejected-demand-breakdown-title" className="text-sm font-semibold text-ink">Dlaczego brakowało terminu</h4>
+              <p className="mt-1 text-xs leading-relaxed text-muted">Agregaty bez nazwisk, telefonu i e-maila.</p>
+            </div>
+            <label className="sm:min-w-48">
+              <span className="field-label">Przekrój</span>
+              <select className="field mt-1.5 min-h-11" value={breakdown} onChange={(event) => onBreakdownChange(event.target.value)}>
+                {DEMAND_BREAKDOWNS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>
+
+          {(rejected.proby ?? 0) === 0 ? (
+            <EmptyState text="W tym okresie nie odnotowano prób bez dostępnego terminu." />
+          ) : rows.length === 0 ? (
+            <EmptyState text="Brak rozkładu dla wybranego przekroju." />
+          ) : (
+            <ul className="mt-4 divide-y divide-line/70 border-y border-line" aria-label={`Utracony popyt: ${DEMAND_BREAKDOWNS.find((option) => option.value === breakdown)?.label}`}>
+              {rows.map((row, index) => (
+                <DemandRow
+                  key={`${breakdown}:${row.key || index}`}
+                  label={row.label}
+                  attempts={row.attempts}
+                  people={row.people}
+                  max={maxAttempts}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section aria-labelledby="waitlist-effectiveness-title" className="border-t border-line pt-5">
+          <h4 id="waitlist-effectiveness-title" className="text-sm font-semibold text-ink">Co stało się z wpisami</h4>
+          <p className="mt-1 text-xs leading-relaxed text-muted">Kohorta według dnia planowanej wizyty. Odbyta oznacza pełną wizytę z poprawnym posadzeniem i wyjściem.</p>
+
+          {(waitlist.wpisy ?? 0) === 0 ? (
+            <EmptyState text="W tym okresie nie było wpisów na liście oczekujących." />
+          ) : (
+            <>
+              <dl className="mt-4 divide-y divide-line/70 border-y border-line">
+                <DemandStage label="Dodano do listy" value={waitlist.wpisy} />
+                <DemandStage label="Zaproponowano stolik" value={waitlist.zaoferowano} />
+                <DemandStage label="Utworzono rezerwację" value={waitlist.zaakceptowano} />
+                <DemandStage label="Pełna wizyta odbyta" value={waitlist.odbyte} accent />
+              </dl>
+              <p className="mt-3 text-xs leading-relaxed text-muted">
+                {acceptedPercent === null
+                  ? 'Brak zamkniętej próby dla zaakceptowanych wpisów.'
+                  : `${Math.round(acceptedPercent)}% wpisów zamieniono na rezerwację.`}
+                {offeredPercent === null ? '' : ` Ofertę otrzymało ${Math.round(offeredPercent)}%.`}
+              </p>
+              {numberOrNull(waitlist.mediana_do_oferty_min) !== null ? (
+                <p className="mt-2 text-xs leading-relaxed text-muted">Mediana czasu do oferty: {formatMinutes(waitlist.mediana_do_oferty_min)}.</p>
+              ) : null}
+            </>
+          )}
+
+          {(quality.zaakceptowane_bez_potwierdzonej_wizyty ?? 0) > 0 ? (
+            <Banner variant="warn" className="mt-4">
+              {quality.zaakceptowane_bez_potwierdzonej_wizyty} zaakceptowanych wpisów nie ma jeszcze potwierdzonej, pełnej wizyty i nie zostało zaliczonych do wyniku „odbyte”.
+            </Banner>
+          ) : null}
+          {(quality.wpisy_bez_zdarzenia ?? 0) > 0 || (quality.historyczne_bez_przyczyny ?? 0) > 0 ? (
+            <p className="mt-3 text-xs leading-relaxed text-muted">
+              Jakość danych: {quality.wpisy_bez_zdarzenia ?? 0} wpisów bez powiązanego zdarzenia popytu · {quality.historyczne_bez_przyczyny ?? 0} historycznych odmów bez kanonicznej przyczyny.
+            </p>
+          ) : null}
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function DemandRow({ label, attempts, people, max }) {
+  const width = Math.max(0, Math.min(100, ((Number(attempts) || 0) / Math.max(1, Number(max))) * 100))
+  return (
+    <li className="py-3">
+      <div className="flex items-start justify-between gap-4 text-sm">
+        <span className="min-w-0 break-words font-medium text-ink">{label}</span>
+        <span className="shrink-0 text-right text-xs tabular-nums text-muted">{attempts ?? 0} prób · {people ?? 0} os.</span>
+      </div>
+      <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-white/[0.05]" aria-hidden="true">
+        <span className="block h-full rounded-full bg-mint/60" style={{ width: `${width}%` }} />
+      </span>
+    </li>
+  )
+}
+
+function DemandStage({ label, value, accent = false }) {
+  return (
+    <div className="flex min-h-11 items-center justify-between gap-4 py-2.5">
+      <dt className="text-sm text-muted">{label}</dt>
+      <dd className={`font-semibold tabular-nums ${accent ? 'text-mint' : 'text-ink'}`}>{value ?? 0}</dd>
+    </div>
   )
 }
 

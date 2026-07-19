@@ -24,6 +24,7 @@ import models, schemas, raporty, rezerwacje, sprzatanie, rozliczenia, ical_impor
 import reservation_access
 import reservation_allocator
 import reservation_audit
+import reservation_demand
 import reservation_rules
 import reservation_service
 import reservation_communication
@@ -325,6 +326,7 @@ ONLINE_PUBLIC_ROUTE_TEMPLATES = (
     ("GET", "/api/online/alternatywy"),
     ("GET", "/api/online/najblizszy-termin"),
     ("POST", "/api/online/rezerwacja"),
+    ("POST", "/api/online/popyt/odrzucony"),
     ("GET", "/api/online/zarzadzanie/rezerwacja"),
     ("GET", "/api/online/zarzadzanie/platnosc"),
     ("POST", "/api/online/zarzadzanie/platnosc/ponow"),
@@ -4069,6 +4071,7 @@ def host_zmien_faze(
         t.host_left_at = teraz
         if t.status in REZ_AKTYWNE:
             t.status = "odbyla"
+        reservation_demand.mark_waitlist_attended(db, t)
         reservation_service.release_termin_allocation(db, t.id)
         reservation_communication.cancel_pending(db, t.id)
     reservation_audit.add_reservation_audit(
@@ -5859,14 +5862,41 @@ def dodaj_lista_oczekujacych(
 ):
     if not dane.nazwisko or not dane.nazwisko.strip():
         raise HTTPException(400, "Podaj nazwisko / klienta.")
+    # Leniwy singleton konfiguracji może commitować; musi powstać przed blokadą.
+    get_lokal_config(db)
+    guards = reservation_service.begin_locked_write(db, [dane.data])
+    classification = _klasyfikacja_popytu_rezerwacji(
+        db,
+        data=dane.data,
+        godz_od=dane.godz_od,
+        osoby=dane.liczba_osob,
+        kanal="wewnetrzna",
+    )
+    now = utcnow_naive()
     w = models.ListaOczekujacych(
         data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
         nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email,
         kanal_komunikacji=dane.kanal_komunikacji,
         notatka=(dane.notatka if _ma_dostep_rezerwacji(
             user, "rezerwacje.notatki_wewnetrzne") else None),
-        status="oczekuje", utworzono_at=utcnow_naive())
-    db.add(w); db.commit(); db.refresh(w)
+        status="oczekuje", utworzono_at=now,
+        demand_reason_code=classification.reason_code,
+        demand_resource_kind=classification.resource_kind,
+    )
+    db.add(w)
+    db.flush()
+    if dane.liczba_osob is not None:
+        reservation_demand.record_internal_waitlist_event(
+            db,
+            requested_date=dane.data,
+            requested_time=dane.godz_od,
+            party_size=dane.liczba_osob,
+            classification=classification,
+            secret=SECRET_KEY,
+            captured_at=now,
+        )
+    _commit_zapis_rezerwacji(db, guards)
+    db.refresh(w)
     return _lista_out(w, user)
 
 
@@ -7096,6 +7126,7 @@ _limit_alternatywy = _limit_publiczny("alternatives", 30, 60)
 _limit_hold = _limit_publiczny("hold", 12, 600)
 _limit_create_online = _limit_publiczny("reservation-create", 20, 600)
 _limit_waitlist_online = _limit_publiczny("waitlist-create", 15, 600)
+_limit_demand_online = _limit_publiczny("demand-rejected", 30, 600)
 _limit_management = _limit_publiczny("reservation-management", 30, 600)
 _limit_payment_status = _limit_publiczny("payment-status", 90, 600)
 _limit_payment_action = _limit_publiczny("payment-action", 10, 600)
@@ -7902,6 +7933,63 @@ def _ocen_przydzial_rezerwacji(
         intent=intent,
     )
     return result
+
+
+def _klasyfikacja_popytu_rezerwacji(
+    db,
+    *,
+    data,
+    godz_od,
+    osoby,
+    kanal,
+):
+    """Wylicza kategorię R7.2 wyłącznie z kanonicznego wyniku R3/R4."""
+    if isinstance(osoby, bool) or not isinstance(osoby, int) or osoby < 1:
+        return reservation_demand.DemandClassification("other", "unknown")
+    godziny = [godz_od] if godz_od is not None else [
+        slot for slot, _serwis in _sloty_dnia(db, data)
+    ]
+    if not godziny:
+        return reservation_demand.DemandClassification(
+            "service_closed", "policy",
+        )
+
+    classifications = []
+    for slot in godziny:
+        result = _ocen_przydzial_rezerwacji(
+            db,
+            data=data,
+            godz_od=slot,
+            osoby=osoby,
+            kanal=kanal,
+            intent="quote",
+            alternative_limit=0,
+        )
+        classification = reservation_demand.classify_allocation(result)
+        if classification.reason_code == "operator_decision":
+            return classification
+        classifications.append(classification)
+
+    # Dla zapytania bez godziny wybieramy najczęstszy powód dnia, a przy remisie
+    # stałą kolejność produktową. Nie kopiujemy kolejności/tekstu z klienta.
+    priority = {
+        "service_closed": 0,
+        "channel_unavailable": 1,
+        "booking_window": 2,
+        "party_policy": 3,
+        "pacing_limit": 4,
+        "concurrent_limit": 5,
+        "resource_occupied": 6,
+        "no_capacity_match": 7,
+        "other": 8,
+    }
+    counts = defaultdict(int)
+    for classification in classifications:
+        counts[classification] += 1
+    return min(
+        classifications,
+        key=lambda item: (-counts[item], priority.get(item.reason_code, 99)),
+    )
 
 
 class _AllocationAvailabilityAdapter:
@@ -8843,13 +8931,158 @@ def _nalicz_no_show_fee(db, t, *, commit=True):
 
 
 @app.post(
+    "/api/online/popyt/odrzucony",
+    status_code=201,
+    dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_demand_online)],
+)
+def online_odrzucony_popyt(
+    dane: schemas.OdrzuconyPopytIn,
+    request: Request,
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    """Anonimowo rejestruje wyłącznie zweryfikowany przez serwer brak dostępności."""
+    _wymagaj_publiczny_naglowek(
+        reservation_session, nazwa="X-Reservation-Session",
+    )
+    raw_key = _wymagaj_publiczny_naglowek(
+        idempotency_key, nazwa="Idempotency-Key",
+    )
+    now_local = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
+    if dane.data < now_local.date():
+        raise HTTPException(400, "Nie można rejestrować popytu wstecz.")
+    safe_payload = dane.model_dump(mode="json")
+    identity = reservation_demand.event_identity(
+        source_kind="availability",
+        raw_key=raw_key,
+        payload=safe_payload,
+        secret=SECRET_KEY,
+    )
+    # Singleton konfiguracji może commitować; pobieramy go przed blokadą dnia.
+    get_lokal_config(db)
+    guards = reservation_service.begin_locked_write(db, [dane.data])
+    existing = db.query(models.ReservationDemandEvent).filter(
+        models.ReservationDemandEvent.source_kind == "availability",
+        models.ReservationDemandEvent.event_key_hash == identity.key_hash,
+    ).one_or_none()
+    if existing is not None:
+        _event, replayed = reservation_demand.record_event(
+            db,
+            source_kind="availability",
+            channel="online",
+            requested_date=existing.requested_date,
+            requested_time=existing.requested_time,
+            party_size=existing.party_size,
+            classification=reservation_demand.DemandClassification(
+                existing.reason_code, existing.resource_kind,
+            ),
+            identity=identity,
+            captured_at=existing.captured_at,
+        )
+        db.rollback()
+        return {"status": "zapisane", "replayed": replayed}
+
+    classification = _klasyfikacja_popytu_rezerwacji(
+        db,
+        data=dane.data,
+        godz_od=dane.godz_od,
+        osoby=dane.liczba_osob,
+        kanal="online",
+    )
+    if classification.reason_code == "operator_decision":
+        db.rollback()
+        raise reservation_service.ReservationError(
+            409,
+            "DEMAND_AVAILABILITY_EXISTS",
+            "Dla tego zapytania nadal istnieje dostępny termin.",
+            rule="availability",
+        )
+    try:
+        _event, replayed = reservation_demand.record_event(
+            db,
+            source_kind="availability",
+            channel="online",
+            requested_date=dane.data,
+            requested_time=dane.godz_od,
+            party_size=dane.liczba_osob,
+            classification=classification,
+            identity=identity,
+            captured_at=utcnow_naive(),
+        )
+        reservation_service.touch_days(guards)
+        db.commit()
+    except IntegrityError as exc:
+        # Równoległy retry może wygrać UNIQUE między query i flush. Cała lokalna
+        # transakcja jest cofana, a odpowiedź odtwarzamy z anonimowego owner row.
+        db.rollback()
+        owner = db.query(models.ReservationDemandEvent).filter(
+            models.ReservationDemandEvent.source_kind == "availability",
+            models.ReservationDemandEvent.event_key_hash == identity.key_hash,
+        ).one_or_none()
+        if owner is None:
+            raise reservation_service.translate_integrity_error(exc) from exc
+        if not secrets.compare_digest(
+            owner.request_fingerprint, identity.request_fingerprint,
+        ):
+            raise reservation_service.ReservationError(
+                409,
+                "DEMAND_IDEMPOTENCY_KEY_REUSED",
+                "Ten klucz Idempotency-Key został użyty z innymi danymi.",
+                rule="idempotency",
+            ) from exc
+        replayed = True
+    return {"status": "zapisane", "replayed": replayed}
+
+
+def _publiczny_wpis_waitlisty(w, *, replayed=False):
+    return {
+        "replayed": bool(replayed),
+        "wpis": {
+            "data": str(w.data),
+            "godz_od": _hm(w.godz_od),
+            "liczba_osob": w.liczba_osob,
+            "nazwisko": w.nazwisko,
+            "status": w.status,
+        },
+    }
+
+
+def _publiczny_replay_waitlisty_po_konflikcie(db, owner_identity, exc):
+    db.rollback()
+    if owner_identity is None:
+        raise reservation_service.translate_integrity_error(exc) from exc
+    owner = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.create_key_hash == owner_identity.key_hash,
+    ).one_or_none()
+    if owner is None:
+        raise reservation_service.translate_integrity_error(exc) from exc
+    if not secrets.compare_digest(
+        owner.create_request_fingerprint,
+        owner_identity.request_fingerprint,
+    ):
+        raise reservation_service.ReservationError(
+            409,
+            "WAITLIST_CREATE_KEY_REUSED",
+            "Ten klucz Idempotency-Key został użyty z innymi danymi.",
+            rule="idempotency",
+        ) from exc
+    return _publiczny_wpis_waitlisty(owner, replayed=True)
+
+
+@app.post(
     "/api/online/lista-oczekujacych",
     status_code=201,
     dependencies=[Depends(_wymagaj_rezerwacje_online), Depends(_limit_waitlist_online)],
 )
-def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Request, db: Session = Depends(get_db)):
-    """Publicznie: gość zapisuje się na listę oczekujących (gdy brak wolnych stolików). Anty-spam
-    (limit IP + limit po telefonie/e-mailu) skopiowany z rezerwacji online."""
+def online_lista_oczekujacych(
+    dane: schemas.ListaOczekujacychIn,
+    request: Request,
+    reservation_session: Optional[str] = Header(None, alias="X-Reservation-Session"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    """Publiczny zapis z replayem odbudowywanym z wiersza właściciela."""
     if not dane.nazwisko or not dane.nazwisko.strip():
         raise HTTPException(400, "Podaj imię/nazwisko.")
     teraz_lok = _teraz_lokalnie() or datetime.now(timezone.utc).replace(tzinfo=None)
@@ -8861,40 +9094,150 @@ def online_lista_oczekujacych(dane: schemas.ListaOczekujacychIn, request: Reques
     if v2:
         if not _widget_v2_gotowy(cfg):
             raise HTTPException(404, "Nowy widget nie jest jeszcze skonfigurowany dla tego lokalu.")
+        _wymagaj_publiczny_naglowek(
+            reservation_session, nazwa="X-Reservation-Session",
+        )
+        _wymagaj_publiczny_naglowek(
+            idempotency_key, nazwa="Idempotency-Key",
+        )
         _waliduj_prywatnosc_widgetu(dane, cfg)
+
+    operation = "waitlist.create.online:v2" if v2 else "waitlist.create.online:v1"
+    owner_identity = None
+    if v2 or idempotency_key is not None:
+        owner_identity = reservation_service.required_idempotency_identity(
+            operation=operation,
+            raw_key=idempotency_key,
+            payload=dane.model_dump(mode="json"),
+            secret=SECRET_KEY,
+        )
+
+    guards = reservation_service.begin_locked_write(db, [dane.data])
+    if owner_identity is not None:
+        existing = db.query(models.ListaOczekujacych).filter(
+            models.ListaOczekujacych.create_key_hash == owner_identity.key_hash,
+        ).one_or_none()
+        if existing is not None:
+            if not secrets.compare_digest(
+                existing.create_request_fingerprint,
+                owner_identity.request_fingerprint,
+            ):
+                db.rollback()
+                raise reservation_service.ReservationError(
+                    409,
+                    "WAITLIST_CREATE_KEY_REUSED",
+                    "Ten klucz Idempotency-Key został użyty z innymi danymi.",
+                    rule="idempotency",
+                )
+            response = _publiczny_wpis_waitlisty(existing, replayed=True)
+            db.rollback()
+            return response
+
     ip = request.client.host if request.client else "?"
-    if not ratelimit.zuzyj_kwote(f"online-wait:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY):
+    if not ratelimit.zuzyj_kwote(
+        f"online-wait:{ip}", str(dzis_lokalnie), ONLINE_LIMIT_IP_DZIENNY,
+    ):
+        db.rollback()
         raise HTTPException(429, "Przekroczono dzienny limit zapisów z tego adresu.")
-    if dane.telefon or dane.email:                 # limit po kontakcie (PII szyfrowane → filtr po odszyfr.)
+    if dane.telefon or dane.email:
         dzisiaj = db.query(models.ListaOczekujacych).filter(
             models.ListaOczekujacych.data == dane.data,
             models.ListaOczekujacych.status.in_(
                 reservation_service.WAITLIST_ACTIVE_STATUSES
-            )).all()
-        ile = sum(1 for w in dzisiaj if (dane.telefon and w.telefon == dane.telefon)
-                  or (dane.email and w.email == dane.email))
+            ),
+        ).all()
+        ile = sum(
+            1 for row in dzisiaj
+            if (dane.telefon and row.telefon == dane.telefon)
+            or (dane.email and row.email == dane.email)
+        )
         if ile >= ONLINE_LIMIT_DZIENNY:
+            db.rollback()
             raise HTTPException(429, "Jesteś już na liście oczekujących na ten dzień.")
+
+    classification = _klasyfikacja_popytu_rezerwacji(
+        db,
+        data=dane.data,
+        godz_od=dane.godz_od,
+        osoby=dane.liczba_osob,
+        kanal="online",
+    )
+    now = utcnow_naive()
     w = models.ListaOczekujacych(
-        data=dane.data, godz_od=dane.godz_od, liczba_osob=dane.liczba_osob,
-        nazwisko=dane.nazwisko.strip(), telefon=dane.telefon, email=dane.email, notatka=dane.notatka,
+        data=dane.data,
+        godz_od=dane.godz_od,
+        liczba_osob=dane.liczba_osob,
+        nazwisko=dane.nazwisko.strip(),
+        telefon=dane.telefon,
+        email=dane.email,
+        notatka=dane.notatka,
         kanal_komunikacji=dane.kanal_komunikacji,
-        status="oczekuje", kanal="online", token=None, utworzono_at=utcnow_naive())
-    db.add(w); db.flush()
+        status="oczekuje",
+        kanal="online",
+        token=None,
+        utworzono_at=now,
+        create_key_hash=(owner_identity.key_hash if owner_identity else None),
+        create_request_fingerprint=(
+            owner_identity.request_fingerprint if owner_identity else None
+        ),
+        demand_reason_code=classification.reason_code,
+        demand_resource_kind=classification.resource_kind,
+    )
+    db.add(w)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        return _publiczny_replay_waitlisty_po_konflikcie(
+            db, owner_identity, exc,
+        )
+    if dane.liczba_osob is not None:
+        safe_event_payload = {
+            "data": dane.data,
+            "godz_od": dane.godz_od,
+            "liczba_osob": dane.liczba_osob,
+            "kanal": "online",
+        }
+        event_identity = reservation_demand.event_identity(
+            source_kind="waitlist",
+            raw_key=(idempotency_key or secrets.token_urlsafe(32)),
+            payload=safe_event_payload,
+            secret=SECRET_KEY,
+        )
+        reservation_demand.record_event(
+            db,
+            source_kind="waitlist",
+            channel="online",
+            requested_date=dane.data,
+            requested_time=dane.godz_od,
+            party_size=dane.liczba_osob,
+            classification=classification,
+            identity=event_identity,
+            captured_at=now,
+        )
     if v2:
         _zapisz_publiczna_prywatnosc(
             db,
             dane=dane,
             cfg=cfg,
             request=request,
-            now=utcnow_naive(),
+            now=now,
             waitlist_id=w.id,
         )
-    db.commit(); db.refresh(w)
-    wyslij_push_do_adminow(db, "Nowy wpis na liście oczekujących",
-                           f"{w.nazwisko} — {w.data} {_hm(w.godz_od) or ''}".strip(), url="/")
-    return {"wpis": {"data": str(w.data), "godz_od": _hm(w.godz_od),
-            "liczba_osob": w.liczba_osob, "nazwisko": w.nazwisko, "status": w.status}}
+    reservation_service.touch_days(guards)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        return _publiczny_replay_waitlisty_po_konflikcie(
+            db, owner_identity, exc,
+        )
+    db.refresh(w)
+    wyslij_push_do_adminow(
+        db,
+        "Nowy wpis na liście oczekujących",
+        f"{w.nazwisko} — {w.data} {_hm(w.godz_od) or ''}".strip(),
+        url="/",
+    )
+    return _publiczny_wpis_waitlisty(w)
 
 
 def _online_rezerwacja_get_core(token: str, db: Session):

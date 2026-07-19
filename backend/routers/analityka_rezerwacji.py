@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 import models
+import reservation_demand
 import reservation_operational
 import uprawnienia
 from auth import get_current_user
@@ -271,6 +272,20 @@ def analityka_rezerwacje_operacyjna(
             "bez_przydzialu": no_assignment,
         },
     }
+
+
+@router.get(
+    "/api/analityka/rezerwacje/popyt",
+    dependencies=[Depends(_wymagaj_rezerwacje)],
+)
+def analityka_rezerwacje_popyt(
+    start: date = Query(...),
+    end: date = Query(...),
+    db: Session = Depends(get_db),
+):
+    """R7.2: anonimowy odrzucony popyt i lejek waitlisty bez ID, hashy i PII."""
+    _waliduj_zakres(start, end)
+    return reservation_demand.aggregate_demand(db, start=start, end=end)
 
 
 @router.get("/api/analityka/oblozenie", dependencies=[Depends(_wymagaj_rezerwacje)])

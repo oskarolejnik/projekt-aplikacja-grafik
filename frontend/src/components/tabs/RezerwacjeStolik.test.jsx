@@ -245,6 +245,91 @@ describe('Rezerwacje stolików', () => {
     expect(screen.getByLabelText('Nazwisko / klient')).toHaveValue('Kowalska')
   })
 
+  it('po potwierdzonym braku przydziału przenosi szkic na waitlistę bez przepisywania danych', async () => {
+    let waitlistBody
+    apiMock.mockImplementation((path, method, body) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/reguly/symuluj' && method === 'POST') {
+        return Promise.resolve({
+          decision: 'deny',
+          available: false,
+          allocation: null,
+          violations: [{ code: 'NO_CAPACITY_MATCH', message: 'Brak zestawu dla 6 osób.' }],
+        })
+      }
+      if (path === '/lista-oczekujacych' && method === 'POST') {
+        waitlistBody = body
+        return Promise.resolve({ ...WAITLIST_ENTRY, ...body, id: 42 })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    const reservationTrigger = await screen.findByRole('button', { name: 'Dodaj rezerwację' })
+    fireEvent.click(reservationTrigger)
+    fireEvent.change(screen.getByLabelText('Liczba osób'), { target: { value: '6' } })
+    fireEvent.change(screen.getByLabelText('Nazwisko / klient'), { target: { value: 'Kowalska' } })
+    fireEvent.change(screen.getByLabelText('Telefon'), { target: { value: '500600700' } })
+    fireEvent.change(screen.getByLabelText('Kanał komunikacji'), { target: { value: 'sms' } })
+    fireEvent.change(screen.getByLabelText('Notatka'), { target: { value: 'Wózek dziecięcy przy stoliku' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zaproponuj przydział' }))
+
+    expect(await screen.findByText('Brak zestawu dla 6 osób.')).toBeInTheDocument()
+    const transfer = screen.getByRole('button', { name: 'Przenieś do oczekujących' })
+    expect(transfer).toHaveClass('min-h-11')
+    fireEvent.click(transfer)
+
+    expect(await screen.findByRole('heading', { name: `Lista oczekujących · ${TEST_DATE}` })).toBeInTheDocument()
+    const waitlistDialog = screen.getByRole('dialog')
+    expect(screen.getByText(/Przenieśliśmy wpisane dane/)).toBeInTheDocument()
+    const waitlistName = screen.getByLabelText('Nazwisko / klient')
+    expect(waitlistName).toHaveValue('Kowalska')
+    expect(screen.getByLabelText('Preferowana godzina')).toHaveValue('18:00')
+    expect(screen.getByLabelText('Liczba osób')).toHaveValue(6)
+    expect(screen.getByLabelText('Telefon')).toHaveValue('500600700')
+    expect(screen.getByLabelText('Kanał komunikacji')).toHaveValue('sms')
+    expect(screen.getByLabelText('Notatka wewnętrzna')).toHaveValue('Wózek dziecięcy przy stoliku')
+    await act(async () => {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    })
+    expect(waitlistDialog).toContainElement(document.activeElement)
+    expect(waitlistName).toHaveFocus()
+    expect(reservationTrigger).not.toHaveFocus()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj do listy' }))
+    await waitFor(() => expect(waitlistBody).toEqual(expect.objectContaining({
+      data: TEST_DATE,
+      godz_od: '18:00',
+      liczba_osob: 6,
+      nazwisko: 'Kowalska',
+      telefon: '500600700',
+      kanal_komunikacji: 'sms',
+      notatka: 'Wózek dziecięcy przy stoliku',
+    })))
+  })
+
+  it('nie proponuje waitlisty, gdy symulacja nie odpowiedziała', async () => {
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/rezerwacje-stolik?')) return Promise.resolve({ rezerwacje: [] })
+      if (path === '/stoliki') return Promise.resolve({ stoliki: [TABLE] })
+      if (path.startsWith('/lista-oczekujacych?')) return Promise.resolve({ lista: [] })
+      if (path === '/rezerwacje/reguly/symuluj' && method === 'POST') {
+        return Promise.reject(new Error('Brak połączenia z serwerem.'))
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method || 'GET'} ${path}`))
+    })
+
+    render(<RezerwacjeStolik />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj rezerwację' }))
+    fireEvent.change(screen.getByLabelText('Liczba osób'), { target: { value: '6' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zaproponuj przydział' }))
+
+    expect(await screen.findByText('Brak połączenia z serwerem.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Przenieś do oczekujących' })).not.toBeInTheDocument()
+  })
+
   it('walk-in z ręcznym stolikiem pokazuje blokadę i nie uruchamia automatu', async () => {
     let createBody
     apiMock.mockImplementation((path, method, body) => {

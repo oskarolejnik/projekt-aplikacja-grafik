@@ -15,7 +15,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0065_r6b2_waitlist_offers"
+HEAD = "0066_r72_reservation_demand"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -35,6 +35,7 @@ _TABELE = [
     "rezerwacje_platnosci_polecenia", "rezerwacje_platnosci_webhooki",
     "reservation_operator_credentials", "reservation_workstations",
     "reservation_operator_sessions", "reservation_workstation_audit",
+    "reservation_demand_events",
 ]
 
 
@@ -200,6 +201,113 @@ def test_r6b2_postgresql_adoption_accepts_supported_context_pk_generators(
     )
     inspector = _r6b2_context_inspector(migration, id_generator)
     migration._validate_context_schema(inspector, "postgresql")
+
+
+def test_r72_postgresql_adoption_accepts_casted_legacy_defaults(monkeypatch):
+    migration = importlib.import_module(
+        "migrations.versions.20260719_0066_r72_reservation_demand"
+    )
+    waitlist_columns = [
+        {
+            "name": name,
+            "type": column_type,
+            "nullable": nullable,
+            "default": (
+                f"'{default}'::character varying"
+                if default is not None else None
+            ),
+        }
+        for name, column_type, nullable, default
+        in migration._WAITLIST_ADDITIONS
+    ]
+    event_columns = [
+        {
+            "name": name,
+            "type": column_type,
+            "nullable": nullable,
+            "default": None,
+            "identity": (
+                {"always": False, "start": 1, "increment": 1}
+                if name == "id" else None
+            ),
+        }
+        for name, column_type, nullable in migration._EVENT_COLUMNS
+    ]
+
+    class FakeInspector:
+        def get_table_names(self):
+            return [migration._WAITLIST_TABLE, migration._EVENT_TABLE]
+
+        def get_columns(self, table):
+            if table == migration._WAITLIST_TABLE:
+                return waitlist_columns
+            assert table == migration._EVENT_TABLE
+            return event_columns
+
+        def get_check_constraints(self, table):
+            checks = (
+                migration._WAITLIST_CHECKS
+                if table == migration._WAITLIST_TABLE
+                else migration._EVENT_CHECKS
+            )
+            return [
+                {"name": name, "sqltext": sql}
+                for name, sql in checks.items()
+            ]
+
+        def get_indexes(self, table):
+            if table == migration._WAITLIST_TABLE:
+                return [{
+                    "name": "uq_lista_oczekujacych_create_key_hash",
+                    "column_names": ["create_key_hash"],
+                    "unique": True,
+                }]
+            return [
+                {
+                    "name": name,
+                    "column_names": list(columns),
+                    "unique": unique,
+                }
+                for name, (columns, unique)
+                in migration._EVENT_INDEXES.items()
+            ] + [{
+                "name": "uq_reservation_demand_events_source_key",
+                "column_names": ["source_kind", "event_key_hash"],
+                "unique": True,
+            }]
+
+        def get_unique_constraints(self, table):
+            uniques = (
+                migration._WAITLIST_UNIQUES
+                if table == migration._WAITLIST_TABLE
+                else migration._EVENT_UNIQUES
+            )
+            return [
+                {"name": name, "column_names": list(columns)}
+                for name, columns in uniques.items()
+            ]
+
+        def get_pk_constraint(self, table):
+            assert table == migration._EVENT_TABLE
+            return {"constrained_columns": ["id"]}
+
+        def get_foreign_keys(self, table):
+            assert table == migration._EVENT_TABLE
+            return []
+
+    class FakeBind:
+        class dialect:
+            name = "postgresql"
+
+    monkeypatch.setattr(migration.sa, "inspect", lambda _bind: FakeInspector())
+    migration._validate_adopted_schema(FakeBind())
+
+    next(
+        item for item in waitlist_columns
+        if item["name"] == "demand_reason_code"
+    )["default"] = "'other'::character varying"
+    with pytest.raises(RuntimeError, match="incompatible column demand_reason_code"):
+        migration._validate_adopted_schema(FakeBind())
 
 
 def _env(db_file, prefix="ledger"):
@@ -395,7 +503,9 @@ def test_migracja_0065_blokuje_lossy_downgrade(tmp_path):
         ).fetchone()[0]
     finally:
         con.close()
-    assert revision == HEAD
+    # 0066 jest bezpiecznie puste i schodzi jako pierwsze; blokada należy do
+    # 0065, więc Alembic zatrzymuje się dokładnie na tym checkpointcie.
+    assert revision == "0065_r6b2_waitlist_offers"
     assert status == "zaoferowano"
 
 
@@ -501,6 +611,266 @@ def test_r6b2_adoption_fail_closed_dla_niezgodnych_samych_nazw(
     monkeypatch.setattr(migration.sa, "inspect", lambda _bind: FakeInspector())
     with pytest.raises(RuntimeError, match="R6B2_PARTIAL_ADOPTION"):
         migration._validate_adopted_schema(FakeBind())
+
+
+def test_migracja_0066_dodaje_legacy_defaults_i_ma_lossless_round_trip(tmp_path):
+    db_file = tmp_path / "_r72_lossless_round_trip.db"
+    env = _env(db_file, "r72-lossless")
+    upgraded = _alembic(env, "upgrade", "0065_r6b2_waitlist_offers")
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute(
+            "INSERT INTO lista_oczekujacych "
+            "(id,data,nazwisko,status,utworzono_at) "
+            "VALUES (1,'2035-07-19','Legacy R7.2','oczekuje',"
+            "'2026-07-19 09:00:00')"
+        )
+        con.commit()
+
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        row = con.execute(
+            "SELECT create_key_hash,create_request_fingerprint,"
+            "demand_reason_code,demand_resource_kind,attended_at "
+            "FROM lista_oczekujacych WHERE id=1"
+        ).fetchone()
+        event_sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='reservation_demand_events'"
+        ).fetchone()[0]
+        event_indexes = {
+            item[1]: bool(item[2])
+            for item in con.execute(
+                "PRAGMA index_list(reservation_demand_events)"
+            )
+        }
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    assert row == (None, None, "legacy_unknown", "unknown", None)
+    assert revision == HEAD
+    assert {
+        "ck_reservation_demand_events_source",
+        "ck_reservation_demand_events_channel",
+        "ck_reservation_demand_events_party_size",
+        "ck_reservation_demand_events_reason",
+        "ck_reservation_demand_events_resource",
+        "ck_reservation_demand_events_key_hash",
+        "ck_reservation_demand_events_fingerprint",
+        "uq_reservation_demand_events_source_key",
+    } <= {name for name in event_sql.split() if name.startswith(("ck_", "uq_"))}
+    assert event_indexes[
+        "ix_reservation_demand_events_date_source_reason"
+    ] is False
+
+    downgraded = _alembic(
+        env, "downgrade", "0065_r6b2_waitlist_offers",
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        columns = {
+            item[1] for item in con.execute(
+                "PRAGMA table_info(lista_oczekujacych)"
+            )
+        }
+        event_table = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='reservation_demand_events'"
+        ).fetchone()
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    assert not {
+        "create_key_hash",
+        "create_request_fingerprint",
+        "demand_reason_code",
+        "demand_resource_kind",
+        "attended_at",
+    } & columns
+    assert event_table is None
+    assert revision == "0065_r6b2_waitlist_offers"
+
+
+def test_migracja_0066_blokuje_downgrade_z_historia_popytu(tmp_path):
+    db_file = tmp_path / "_r72_event_lossy_downgrade.db"
+    env = _env(db_file, "r72-event-lossy")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute(
+            "INSERT INTO reservation_demand_events "
+            "(id,source_kind,channel,requested_date,requested_time,party_size,"
+            "reason_code,resource_kind,event_key_hash,request_fingerprint,"
+            "captured_at) VALUES "
+            "(1,'availability','online','2035-07-19','18:00:00',4,"
+            "'no_capacity_match','capacity',?,?, '2026-07-19 09:00:00')",
+            ("e" * 64, "f" * 64),
+        )
+        con.commit()
+
+    downgraded = _alembic(
+        env, "downgrade", "0065_r6b2_waitlist_offers",
+    )
+    output = downgraded.stdout + downgraded.stderr
+    assert downgraded.returncode != 0
+    assert "R72_DOWNGRADE_DATA_LOSS" in output
+    with sqlite3.connect(str(db_file)) as con:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        count = con.execute(
+            "SELECT count(*) FROM reservation_demand_events"
+        ).fetchone()[0]
+    assert revision == HEAD
+    assert count == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        (
+            "UPDATE lista_oczekujacych SET create_key_hash=?, "
+            "create_request_fingerprint=? WHERE id=1",
+            ("k" * 64, "r" * 64),
+        ),
+        (
+            "UPDATE lista_oczekujacych SET "
+            "demand_reason_code='party_policy', "
+            "demand_resource_kind='policy' WHERE id=1",
+            (),
+        ),
+        (
+            "UPDATE lista_oczekujacych SET "
+            "attended_at='2026-07-19 11:00:00' WHERE id=1",
+            (),
+        ),
+    ],
+    ids=["create-idempotency", "classification", "attendance"],
+)
+def test_migracja_0066_blokuje_downgrade_z_danymi_waitlisty(
+    tmp_path, mutation,
+):
+    db_file = tmp_path / "_r72_waitlist_lossy_downgrade.db"
+    env = _env(db_file, "r72-waitlist-lossy")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute(
+            "INSERT INTO lista_oczekujacych "
+            "(id,data,nazwisko,status,utworzono_at) "
+            "VALUES (1,'2035-07-19','Dane R7.2','oczekuje',"
+            "'2026-07-19 09:00:00')"
+        )
+        statement, params = mutation
+        con.execute(statement, params)
+        con.commit()
+
+    downgraded = _alembic(
+        env, "downgrade", "0065_r6b2_waitlist_offers",
+    )
+    output = downgraded.stdout + downgraded.stderr
+    assert downgraded.returncode != 0
+    assert "R72_DOWNGRADE_DATA_LOSS" in output
+    with sqlite3.connect(str(db_file)) as con:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    assert revision == HEAD
+
+
+def test_migracja_0066_partial_adoption_fail_closed(tmp_path):
+    db_file = tmp_path / "_r72_partial_adoption.db"
+    env = _env(db_file, "r72-partial")
+    upgraded = _alembic(env, "upgrade", "0065_r6b2_waitlist_offers")
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute(
+            "ALTER TABLE lista_oczekujacych "
+            "ADD COLUMN create_key_hash VARCHAR(64)"
+        )
+        con.commit()
+
+    adoption = _alembic(env, "upgrade", HEAD)
+    output = adoption.stdout + adoption.stderr
+    assert adoption.returncode != 0
+    assert "R72_PARTIAL_ADOPTION" in output
+
+
+def test_migracja_0066_wrong_event_shape_adoption_fail_closed(tmp_path):
+    db_file = tmp_path / "_r72_wrong_event_shape.db"
+    env = _env(db_file, "r72-wrong-event")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute("DROP TABLE reservation_demand_events")
+        con.execute(
+            "CREATE TABLE reservation_demand_events (id INTEGER PRIMARY KEY)"
+        )
+        con.commit()
+    stamped = _alembic(env, "stamp", "0065_r6b2_waitlist_offers")
+    assert stamped.returncode == 0, stamped.stderr
+
+    adoption = _alembic(env, "upgrade", HEAD)
+    output = adoption.stdout + adoption.stderr
+    assert adoption.returncode != 0
+    assert "R72_PARTIAL_ADOPTION" in output
+
+
+def test_r72_init_db_podnosi_pelny_niewersjonowany_0065(tmp_path):
+    db_file = tmp_path / "_r72_unversioned_0065.db"
+    env = _env(db_file, "r72-unversioned-0065")
+    upgraded = _alembic(env, "upgrade", "0065_r6b2_waitlist_offers")
+    assert upgraded.returncode == 0, upgraded.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute("DROP TABLE alembic_version")
+        con.commit()
+
+    adopted = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert adopted.returncode == 0, adopted.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+        event_table = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='reservation_demand_events'"
+        ).fetchone()
+    assert revision == HEAD
+    assert event_table == ("reservation_demand_events",)
+
+
+def test_r72_init_db_odrzuca_czesciowy_niewersjonowany_head(tmp_path):
+    db_file = tmp_path / "_r72_partial_unversioned_head.db"
+    env = _env(db_file, "r72-partial-unversioned")
+    created = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import database, models; "
+            "models.Base.metadata.create_all(database.engine)",
+        ],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute("DROP TABLE reservation_demand_events")
+        con.commit()
+
+    adopted = subprocess.run(
+        [sys.executable, "-c", "import database; database.init_db()"],
+        cwd=str(BACKEND), env=env, capture_output=True, text=True,
+    )
+    output = adopted.stdout + adopted.stderr
+    assert adopted.returncode != 0
+    assert "Schemat R7.2 jest czesciowy" in output
 
 
 def _sql_closing_parenthesis(sql, opening_index):

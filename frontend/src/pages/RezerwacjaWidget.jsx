@@ -289,6 +289,21 @@ export default function RezerwacjaWidget() {
     return response?.alternatywy || []
   }, [config])
 
+  const recordRejectedDemand = useCallback((requestDate, requestPeople) => {
+    void api('/online/popyt/odrzucony', 'POST', {
+      data: requestDate,
+      liczba_osob: requestPeople,
+    }, {
+      headers: {
+        'X-Reservation-Session': sessionIdRef.current,
+        'Idempotency-Key': nowyKluczIdempotencji('online-rejected-demand'),
+      },
+      credentials: 'include',
+      keepalive: true,
+      sessionHandling: false,
+    }).catch(() => {})
+  }, [])
+
   const searchAvailability = useCallback(async (event) => {
     event?.preventDefault?.()
     const requestPeople = Number(people)
@@ -319,6 +334,7 @@ export default function RezerwacjaWidget() {
       const openSlots = availablePublicSlots(response?.sloty)
       setSlots(openSlots)
       if (openSlots.length === 0) {
+        recordRejectedDemand(date, requestPeople)
         try {
           const nextAlternatives = await loadAlternatives(controller, date, requestPeople)
           if (sequence !== searchSequenceRef.current) return
@@ -338,7 +354,7 @@ export default function RezerwacjaWidget() {
       setAvailabilityStatus('error')
       setSearchError(error?.message || 'Nie udało się sprawdzić dostępności. Sprawdź połączenie i spróbuj ponownie.')
     }
-  }, [date, loadAlternatives, people])
+  }, [date, loadAlternatives, people, recordRejectedDemand])
 
   const selectSlot = async (slot) => {
     if (selectingSlot) return

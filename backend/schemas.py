@@ -1415,6 +1415,22 @@ class ListaOczekujacychIn(PublicznaPrywatnoscIn):
     kanal_komunikacji: KanalKomunikacji = "auto"
     notatka: Optional[str] = Field(default=None, max_length=1000)
 
+
+class OdrzuconyPopytIn(BaseModel):
+    """Minimalny, pozbawiony PII fakt braku dostępności w publicznym widżecie."""
+    data: date
+    godz_od: Optional[time] = None
+    liczba_osob: int = Field(ge=1, le=500)
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("godz_od")
+    @classmethod
+    def _pelna_minuta(cls, value):
+        if value is not None and (value.tzinfo is not None or value.second or value.microsecond):
+            raise ValueError("Godzina musi wskazywać pełną minutę czasu lokalnego.")
+        return value
+
+
 class ZrealizujIn(BaseModel):
     """Realizacja wpisu z listy oczekujących → utworzenie rezerwacji stolika."""
     stolik_id: Optional[int] = None

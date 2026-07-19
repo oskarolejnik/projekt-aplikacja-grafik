@@ -56,7 +56,20 @@ export function DialogFrame({
       window.removeEventListener('keydown', onKeyDown)
       requestAnimationFrame(() => {
         const restoreTarget = restoreFocusRef?.current || previousFocus
-        if (restoreTarget?.isConnected) restoreTarget.focus()
+        if (!restoreTarget?.isConnected) return
+
+        // Przy atomowym przejściu dialog → dialog cleanup starego ekranu
+        // wykonuje się po ustawieniu fokusu w nowym. Nie wolno wtedy przenieść
+        // fokusu do kontrolki pod aktywnym overlayem. Nadal pozwalamy zagnieżdżonemu
+        // dialogowi wrócić do kontrolki wewnątrz modala, który pozostał otwarty.
+        const openModals = document.querySelectorAll([
+          '[role="dialog"][aria-modal="true"]',
+          '[role="alertdialog"][aria-modal="true"]',
+        ].join(','))
+        const topModal = openModals[openModals.length - 1]
+        if (topModal && !topModal.contains(restoreTarget)) return
+
+        restoreTarget.focus()
       })
     }
   }, [initialFocusRef, restoreFocusRef])

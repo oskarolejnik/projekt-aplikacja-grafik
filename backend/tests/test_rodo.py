@@ -226,6 +226,7 @@ def test_anonimizacja_usuwa_rezerwacyjny_fallback_profilu_crm(admin_client, db):
 
 def test_rodo_waitlista_eksportuje_wybory_i_czysci_pii(admin_client, db):
     now = datetime.now()
+    attended_at = now + timedelta(hours=2)
     wpis = models.ListaOczekujacych(
         data=date.today(),
         godz_od=time(18, 0),
@@ -238,6 +239,11 @@ def test_rodo_waitlista_eksportuje_wybory_i_czysci_pii(admin_client, db):
         utworzono_at=now,
         kanal="online",
         token="surowy-token-waitlisty",
+        create_key_hash="k" * 64,
+        create_request_fingerprint="f" * 64,
+        demand_reason_code="resource_occupied",
+        demand_resource_kind="table_or_combination",
+        attended_at=attended_at,
     )
     db.add(wpis)
     db.flush()
@@ -252,7 +258,11 @@ def test_rodo_waitlista_eksportuje_wybory_i_czysci_pii(admin_client, db):
     body = response.json()
     assert body["liczba_rezerwacji"] == 0
     assert body["liczba_wpisow_waitlisty"] == 1
-    assert body["lista_oczekujacych"][0]["status"] == "oczekuje"
+    exported_waitlist = body["lista_oczekujacych"][0]
+    assert exported_waitlist["status"] == "oczekuje"
+    assert exported_waitlist["demand_reason_code"] == "resource_occupied"
+    assert exported_waitlist["demand_resource_kind"] == "table_or_combination"
+    assert exported_waitlist["attended_at"] == attended_at.isoformat()
     consent = body["prywatnosc"]["zgody"][0]
     assert consent["wlasciciel_typ"] == "waitlista"
     assert consent["marketing"] is False
@@ -264,6 +274,8 @@ def test_rodo_waitlista_eksportuje_wybory_i_czysci_pii(admin_client, db):
     assert all(secret_name not in encoded for secret_name in (
         "ip_hash", "token_hash", "session_hash",
     ))
+    assert "k" * 64 not in encoded
+    assert "f" * 64 not in encoded
 
     response = admin_client.post(
         "/api/rodo/anonimizuj-gosc", json={"klucz": KLUCZ},
@@ -281,6 +293,11 @@ def test_rodo_waitlista_eksportuje_wybory_i_czysci_pii(admin_client, db):
     assert stored.email is None
     assert stored.notatka is None
     assert stored.token is None
+    assert stored.create_key_hash is None
+    assert stored.create_request_fingerprint is None
+    assert stored.demand_reason_code == "resource_occupied"
+    assert stored.demand_resource_kind == "table_or_combination"
+    assert stored.attended_at == attended_at
     assert db.query(models.RezerwacjaZgodaPubliczna).count() == 0
 
 

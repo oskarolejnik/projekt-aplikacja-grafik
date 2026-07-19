@@ -75,6 +75,7 @@ const emptyWaitlist = () => ({
   nazwisko: '',
   telefon: '',
   email: '',
+  notatka: '',
   kanal_komunikacji: 'auto',
 })
 const RESERVATION_CREATE_MODES = [
@@ -236,9 +237,11 @@ export default function RezerwacjeStolik({
   const [modalOverrideDraft, setModalOverrideDraft] = useState(emptyOverrideDraft)
   const [modalAllocationPreview, setModalAllocationPreview] = useState(null)
   const [modalAllocationError, setModalAllocationError] = useState(null)
+  const [modalWaitlistEligible, setModalWaitlistEligible] = useState(false)
   const clearModalAllocation = useCallback(() => {
     setModalAllocationPreview(null)
     setModalAllocationError(null)
+    setModalWaitlistEligible(false)
   }, [])
   const clearModalConflict = () => {
     setModalFeedback(null)
@@ -255,6 +258,8 @@ export default function RezerwacjeStolik({
 
   const [listaModal, setListaModal] = useState(false)
   const waitlistTriggerRef = useRef(null)
+  const waitlistNameRef = useRef(null)
+  const focusTransferredWaitlistDraftRef = useRef(false)
   const [nowyOcz, setNowyOcz] = useState(emptyWaitlist)
   const [posadzStolik, setPosadzStolik] = useState({})
   const [waitAdding, setWaitAdding] = useState(false)
@@ -375,6 +380,7 @@ export default function RezerwacjeStolik({
     || nowyOcz.liczba_osob
     || nowyOcz.telefon.trim()
     || nowyOcz.email.trim()
+    || nowyOcz.notatka.trim()
     || nowyOcz.kanal_komunikacji !== 'auto'
   )
 
@@ -505,6 +511,7 @@ export default function RezerwacjeStolik({
     setWaitOverrides({})
     setWaitOverrideDrafts({})
     setWaitCommunicationId(null)
+    focusTransferredWaitlistDraftRef.current = false
     setListaModal(false)
   }
 
@@ -552,6 +559,7 @@ export default function RezerwacjeStolik({
       if (!allocation) {
         const violations = result?.violations || result?.availability?.violations || []
         setModalAllocationError(violations[0]?.message || 'Brak bezpiecznego przydziału dla wybranego terminu.')
+        setModalWaitlistEligible(true)
         return
       }
       setModalAllocationPreview({
@@ -564,10 +572,41 @@ export default function RezerwacjeStolik({
     } catch (error) {
       if (!mutationIsCurrent(mutation) || error?.name === 'AbortError') return
       setModalAllocationError(error.message || 'Nie udało się zaproponować przydziału.')
+      setModalWaitlistEligible(false)
     } finally {
       finishMutation(mutation)
       if (mutationIsCurrent(mutation)) setModalAction(null)
     }
+  }
+
+  const przeniesSzkicDoWaitlisty = () => {
+    if (!modal || modal.id || !modalWaitlistEligible || modalAction) return
+    const targetDay = modal.data || data
+    setNowyOcz({
+      godz_od: modal.godz_od || '',
+      liczba_osob: modal.liczba_osob ?? '',
+      nazwisko: modal.nazwisko || '',
+      telefon: modal.telefon || '',
+      email: modal.email || '',
+      notatka: modal.notatka || '',
+      kanal_komunikacji: modal.kanal_komunikacji || 'auto',
+    })
+    setWaitFeedback({
+      type: 'info',
+      message: 'Przenieśliśmy wpisane dane. Sprawdź je i dodaj gościa do oczekujących.',
+    })
+    waitlistTriggerRef.current = reservationTriggerRef.current
+    focusTransferredWaitlistDraftRef.current = true
+    modalInitial.current = null
+    probaZapisuRef.current = null
+    setModalFeedback(null)
+    setHasManagedPayment(false)
+    setModalOverrideDraft(emptyOverrideDraft())
+    clearModalAllocation()
+    setModal(null)
+    setListaModal(true)
+    onReservationClose?.()
+    if (targetDay !== data) changeDay(targetDay)
   }
 
   const zapisz = async (nadpisanieLimitow = null, { pin = '' } = {}) => {
@@ -789,6 +828,7 @@ export default function RezerwacjeStolik({
           email: nowyOcz.email.trim() || null,
           kanal_komunikacji: nowyOcz.kanal_komunikacji || 'auto',
         } : {}),
+        ...(canViewNotes ? { notatka: nowyOcz.notatka.trim() || null } : {}),
       }, { signal: mutation.controller.signal })
       if (!mutationIsCurrent(mutation)) return
       setLista((current) => replaceById(current, created, sortWaitlist))
@@ -1001,7 +1041,11 @@ export default function RezerwacjeStolik({
         <Button
           variant="ghost"
           size="sm"
-          onClick={(event) => { waitlistTriggerRef.current = event.currentTarget; setListaModal(true) }}
+          onClick={(event) => {
+            waitlistTriggerRef.current = event.currentTarget
+            focusTransferredWaitlistDraftRef.current = false
+            setListaModal(true)
+          }}
           disabled={loading || !!loadError}
         >
           <Icon name="clock" className="h-4 w-4" />
@@ -1219,7 +1263,17 @@ export default function RezerwacjeStolik({
                   Zaproponuj przydział
                 </Button>
               ) : null}
-              {modalAllocationError ? <p role="alert" className="mt-3 text-sm text-danger">{modalAllocationError}</p> : null}
+              {modalAllocationError ? (
+                <div className="mt-3 space-y-3">
+                  <p role="alert" className="text-sm text-danger">{modalAllocationError}</p>
+                  {modalWaitlistEligible && !modal.id ? (
+                    <Button variant="subtle" size="sm" onClick={przeniesSzkicDoWaitlisty} disabled={Boolean(modalAction)}>
+                      <Icon name="clock" className="h-4 w-4" />
+                      Przenieś do oczekujących
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
               {visibleModalAllocation ? (
                 <ReservationAllocationSummary
                   className="mt-4"
@@ -1363,7 +1417,14 @@ export default function RezerwacjeStolik({
       ) : null}
 
       {listaModal ? (
-        <DialogFrame title={`Lista oczekujących · ${data}`} closeLabel="Zamknij listę oczekujących" onClose={closeWaitlist} maxWidth="max-w-xl" restoreFocusRef={waitlistTriggerRef}>
+        <DialogFrame
+          title={`Lista oczekujących · ${data}`}
+          closeLabel="Zamknij listę oczekujących"
+          onClose={closeWaitlist}
+          maxWidth="max-w-xl"
+          initialFocusRef={focusTransferredWaitlistDraftRef.current ? waitlistNameRef : undefined}
+          restoreFocusRef={waitlistTriggerRef}
+        >
           <div className="mb-5 space-y-2">
             <p className="pb-2 text-xs leading-relaxed text-muted">Oferty stolika twórz w widoku Host. System najpierw blokuje tam cały zestaw stolików, a dopiero potem uruchamia komunikację.</p>
             {lista.length === 0 ? <p className="text-sm text-muted">Nikt nie oczekuje w tym dniu.</p> : null}
@@ -1505,7 +1566,7 @@ export default function RezerwacjeStolik({
               <h4 className="mb-4 text-sm font-semibold text-ink">Dodaj oczekujących</h4>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <label className="field-label sm:col-span-2">Nazwisko / klient
-                  <input value={nowyOcz.nazwisko} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, nazwisko: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="name" />
+                  <input ref={waitlistNameRef} value={nowyOcz.nazwisko} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, nazwisko: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" autoComplete="name" />
                 </label>
               <label className="field-label">Preferowana godzina
                 <input type="time" value={nowyOcz.godz_od} disabled={waitAdding} onChange={(event) => { setNowyOcz((current) => ({ ...current, godz_od: event.target.value })); setWaitFeedback(null) }} className="field mt-1.5" />
@@ -1536,6 +1597,17 @@ export default function RezerwacjeStolik({
                   </label>
                   <p className="mt-1.5 text-xs leading-relaxed text-muted">Używany m.in. do powiadomienia „stolik gotowy”.</p>
                 </div>
+                {canViewNotes ? (
+                  <label className="field-label sm:col-span-2">Notatka wewnętrzna
+                    <textarea
+                      rows={3}
+                      value={nowyOcz.notatka}
+                      disabled={waitAdding}
+                      onChange={(event) => { setNowyOcz((current) => ({ ...current, notatka: event.target.value })); setWaitFeedback(null) }}
+                      className="field mt-1.5 resize-y"
+                    />
+                  </label>
+                ) : null}
               </div>
               <InlineFeedback pending={waitAdding ? 'Dodaję do listy…' : null} feedback={waitFeedback} className="mt-3" />
               <div className="mt-4 flex justify-end">

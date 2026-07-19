@@ -231,7 +231,10 @@ def requirement_for(method: str, path: str) -> Requirement | None:
         return Requirement(all_of=(RULES,)) if method == "PUT" else ADMIN_ONLY
 
     if path == "/api/rezerwacje/reguly/symuluj":
-        return Requirement(all_of=(RULES,)) if method == "POST" else ADMIN_ONLY
+        return (
+            Requirement(any_of=(OPERATIONS, HOST, RULES))
+            if method == "POST" else ADMIN_ONLY
+        )
 
     if _RESERVATION_RULE_ROOM_ITEM.fullmatch(path):
         return Requirement(all_of=(RULES,)) if method == "PUT" else ADMIN_ONLY
@@ -272,6 +275,7 @@ def requirement_for(method: str, path: str) -> Requirement | None:
     if path in {
         "/api/analityka/rezerwacje",
         "/api/analityka/rezerwacje/operacyjna",
+        "/api/analityka/rezerwacje/popyt",
         "/api/analityka/oblozenie",
     }:
         return Requirement(all_of=(ANALYTICS,)) if method == "GET" else ADMIN_ONLY

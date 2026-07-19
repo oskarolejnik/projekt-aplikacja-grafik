@@ -1025,9 +1025,36 @@ Zakres:
 wiarygodny baseline zachowania gości i zasobów. Panel nie udaje rekomendacji ani nie zmienia polityki
 przed zebraniem wystarczającej próby.
 
+**Stan R7.2 — odrzucony popyt i skuteczność waitlisty (2026-07-19):**
+
+- [x] Trwałe zdarzenie popytu nie zawiera PII ani identyfikatora gościa. Przechowuje tylko kanoniczną,
+  wyznaczoną przez serwer przyczynę, termin, wielkość grupy, kanał i oczekiwany typ zasobu; klucz
+  idempotencji jest wyłącznie hashem. Limit publiczny jest trwały, a współbieżny replay nie tworzy duplikatu.
+- [x] Publiczne `POST /api/online/popyt/odrzucony` działa tylko po prawdziwym wyniku „brak miejsc”, wymaga
+  sesji dostępności i nagłówków idempotencji oraz ponownie sprawdza dostępność po stronie serwera. Fałszywa
+  deklaracja braku miejsca jest odrzucana i nie wpływa na statystyki.
+- [x] Waitlista zapisuje tę samą klasyfikację popytu i ma bezpieczny replay oparty na rekordzie właściciela,
+  bez cache odpowiedzi zawierającej PII. „Odbyta wizyta” wymaga statusu `odbyla` oraz kompletnego,
+  prawidłowego pomiaru `host_seated_at < host_left_at <= 24 h`; wynik pozostaje trwałym faktem historycznym.
+- [x] `GET /api/analityka/rezerwacje/popyt` wymaga dokładnego `rezerwacje.analityka` i zwraca wyłącznie
+  agregaty przyczyn, godzin, wielkości grup, kanałów i zasobów oraz lejek waitlisty i jakość danych.
+  Publiczna waitlista kontynuuje próbę dostępności zamiast liczyć ją drugi raz, decyzja operatora przy wolnym
+  zasobie nie jest odmową, a `z_waitlista` pozostaje podzbiorem `proby`. Wszystkie procenty używają mianownika
+  „wpisy”, a brak mianownika jest `null`, nigdy sztucznym `0%`.
+- [x] „Popyt i waitlista” jest czwartym, niezależnie odświeżanym fragmentem „Wyników rezerwacji”; zachowuje
+  ostatni poprawny wynik tego samego okresu przy częściowej awarii i nie sugeruje automatycznej zmiany
+  polityki. Widget rejestruje odrzucony popyt best-effort, a recepcja po faktycznej odmowie może przenieść
+  komplet danych do formularza waitlisty bez ponownego wpisywania i bez utraty fokusu w dialogu.
+- [x] Weryfikacja: 13/13 nowych testów R7.2, 52/52 testy R7.2/RODO/publiczne/uprawnień/adopcji,
+  10/10 testów migracji R7.2, pełny frontend 66 plików / 519 testów, kompilacja backendu i build produkcyjny.
+  Smoke 1366×768 i 390×844 potwierdził brak poziomego overflow, cele co najmniej 44 px, poprawny pusty stan,
+  mobilny wybór widoku, kontrolowany stan wyłączonego widgetu oraz czystą konsolę.
+
+**Done R7.2:** administrator i uprawniony manager widzą, gdzie oraz dlaczego lokal traci popyt, a skuteczność
+waitlisty jest liczona od zapisu do potwierdzonej wizyty. Dane pozostają bez PII i nie zmieniają reguł lokalu.
+
 Pozostałe checkpointy R7:
 
-- **R7.2:** odrzucony popyt, przyczyny braku dostępności i skuteczność waitlisty,
 - **R7.3:** kontrolowany eksport, narzędzia jakości danych, łączenie duplikatów i wersjonowane zgody,
 - **R7.4:** rekomendacje z minimalną próbą, symulacja wpływu i jawne przyjęcie albo odrzucenie zmiany.
 
@@ -1151,12 +1178,13 @@ R0a–R5b są zamkniętymi checkpointami. R5c jest technicznie gotowe, lecz zgod
 pozostaje wyłączone do czasu uruchomienia JDG i gotowości merchant. Nie spełnia jeszcze bramy
 produkcyjnej, ale odłożona integracja Stripe nie blokuje niezależnego R6a.
 
-R6b.1–R6b.3 oraz R7.1 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to **R7.2 —
-odrzucony popyt i skuteczność waitlisty**: wspólne, pozbawione PII zdarzenia odmowy powinny wskazać
-kanoniczną przyczynę braku dostępności, wielkość grupy, porę i oczekiwany zasób, a konwersja waitlisty ma
-być liczona od zapisu do faktycznego przyjęcia wizyty. Ten etap nadal tylko opisuje utraconą dostępność;
-nie zmienia reguł lokalu automatycznie. Smoke docelowego urządzenia i współbieżność PostgreSQL pozostają
-bramami rolloutowymi R6a/R6b, nie nowym zakresem funkcjonalnym.
+R6b.1–R6b.3 oraz R7.1–R7.2 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to
+**R7.3 — kontrolowany eksport i jakość danych CRM**: eksport musi respektować dokładne uprawnienia,
+retencję, redakcję oraz audyt; łączenie duplikatów powinno być odwracalne i nie może mieszać historii
+różnych osób, a wersjonowane zgody muszą zachować źródło, zakres i czas pozyskania. R7.2 pozostaje warstwą
+faktów i agregatów bez PII — nie uruchamia rekomendacji ani nie zmienia reguł lokalu automatycznie. Smoke
+docelowego urządzenia i współbieżność PostgreSQL pozostają bramami rolloutowymi R6a/R6b, nie nowym zakresem
+funkcjonalnym.
 
 Produkcyjne testy Stripe płatność–zwrot wrócą dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
 pozostaje osobnym kontekstem i nie może ponownie używać stanu, webhooków ani modeli płatności rezerwacji.

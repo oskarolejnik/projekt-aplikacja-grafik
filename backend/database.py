@@ -421,6 +421,65 @@ _R6B2_CHECK_NAMES = {
     "ck_lista_oczekujacych_offer_kanal",
 }
 _R6B2_INDEX_NAME = "ix_lista_oczekujacych_data_status_priorytet"
+_R72_REVISION = "0066_r72_reservation_demand"
+_R72_TABLES = {"reservation_demand_events"}
+_R72_MODEL_TABLES = {
+    name: Base.metadata.tables[name] for name in _R72_TABLES
+}
+_R72_TABLE_COLUMNS = {
+    name: {column.name for column in table.columns}
+    for name, table in _R72_MODEL_TABLES.items()
+}
+_R72_TABLE_CHECKS = {
+    name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    for name, table in _R72_MODEL_TABLES.items()
+}
+_R72_TABLE_UNIQUES = {
+    name: {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name
+    }
+    for name, table in _R72_MODEL_TABLES.items()
+}
+_R72_TABLE_INDEXES = {
+    name: {
+        index.name: (
+            tuple(column.name for column in index.columns), bool(index.unique),
+        )
+        for index in table.indexes if index.name
+    }
+    for name, table in _R72_MODEL_TABLES.items()
+}
+_R72_TABLE_FOREIGN_KEYS = {
+    name: {
+        (
+            tuple(element.parent.name for element in constraint.elements),
+            constraint.elements[0].column.table.name,
+            tuple(element.column.name for element in constraint.elements),
+            str(constraint.ondelete or "").upper(),
+        )
+        for constraint in table.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    for name, table in _R72_MODEL_TABLES.items()
+}
+_R72_BASE_COLUMNS = {
+    "create_key_hash",
+    "create_request_fingerprint",
+    "demand_reason_code",
+    "demand_resource_kind",
+    "attended_at",
+}
+_R72_WAITLIST_CHECK_NAMES = {
+    "ck_lista_oczekujacych_create_idempotency",
+    "ck_lista_oczekujacych_demand_reason",
+    "ck_lista_oczekujacych_demand_resource",
+}
 _R5B_TABLES = {
     "rezerwacje_wiadomosci_outbox",
     "rezerwacje_wiadomosci_proby",
@@ -3304,6 +3363,188 @@ def _validate_r6b2_adoption_schema(inspector=None) -> bool:
     return True
 
 
+def _validate_r72_adoption_schema(inspector=None) -> bool:
+    """Reject partial or weakened unversioned R7.2 demand schemas."""
+    from sqlalchemy import inspect
+
+    inspector = inspector or inspect(engine)
+    bind = getattr(inspector, "bind", None)
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    dialect_name = dialect_name or engine.dialect.name
+    tables = set(inspector.get_table_names())
+    if not _R72_TABLES.issubset(tables):
+        raise RuntimeError(
+            "Schemat R7.2 nie ma tabeli zdarzen odrzuconego popytu."
+        )
+
+    for table_name in _R72_TABLES:
+        try:
+            _validate_r5a_column_contract(
+                inspector,
+                table_name,
+                _R72_TABLE_COLUMNS[table_name],
+                exact=True,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Schemat R7.2 ma nieprawidlowe kolumny tabeli {table_name}."
+            ) from exc
+
+        model_table = _R72_MODEL_TABLES[table_name]
+        expected_pk = tuple(
+            column.name for column in model_table.primary_key.columns
+        )
+        reflected_pk = tuple(
+            inspector.get_pk_constraint(table_name).get(
+                "constrained_columns",
+            ) or ()
+        )
+        if reflected_pk != expected_pk:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowy PK R7.2."
+            )
+
+        reflected_indexes = {
+            item.get("name"): (
+                tuple(item.get("column_names") or ()),
+                bool(item.get("unique")),
+            )
+            for item in inspector.get_indexes(table_name)
+            if item.get("name")
+        }
+        reflected_uniques = {
+            item.get("name"): tuple(item.get("column_names") or ())
+            for item in inspector.get_unique_constraints(table_name)
+            if item.get("name")
+        }
+        for name, (columns, unique) in reflected_indexes.items():
+            if unique:
+                reflected_uniques.setdefault(name, columns)
+        if reflected_uniques != _R72_TABLE_UNIQUES[table_name]:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe UNIQUE R7.2."
+            )
+        semantic_indexes = {
+            name: shape
+            for name, shape in reflected_indexes.items()
+            if not (
+                shape[1]
+                and _R72_TABLE_UNIQUES[table_name].get(name) == shape[0]
+            )
+        }
+        if semantic_indexes != _R72_TABLE_INDEXES[table_name]:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe indeksy R7.2."
+            )
+
+        reflected_fks = {
+            (
+                tuple(item.get("constrained_columns") or ()),
+                item.get("referred_table"),
+                tuple(item.get("referred_columns") or ()),
+                str((item.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for item in inspector.get_foreign_keys(table_name)
+        }
+        if reflected_fks != _R72_TABLE_FOREIGN_KEYS[table_name]:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe FK R7.2."
+            )
+
+        raw_checks = inspector.get_check_constraints(table_name)
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in raw_checks if item.get("name")
+        }
+        if (
+            len(raw_checks) != len(_R72_TABLE_CHECKS[table_name])
+            or any(not item.get("name") for item in raw_checks)
+            or set(reflected_checks) != set(_R72_TABLE_CHECKS[table_name])
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe CHECK R7.2."
+            )
+        for name, expected in _R72_TABLE_CHECKS[table_name].items():
+            if _r5a_check_signature(
+                reflected_checks[name], dialect_name,
+            ) != _r5a_check_signature(expected, dialect_name):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje R7.2."
+                )
+
+    try:
+        _validate_r5a_column_contract(
+            inspector,
+            "lista_oczekujacych",
+            _R72_BASE_COLUMNS,
+            exact=False,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Schemat R7.2 ma nieprawidlowe kolumny waitlisty."
+        ) from exc
+
+    waitlist_model = Base.metadata.tables["lista_oczekujacych"]
+    expected_checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in waitlist_model.constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name in _R72_WAITLIST_CHECK_NAMES
+    }
+    reflected_checks = {
+        item.get("name"): item.get("sqltext")
+        for item in inspector.get_check_constraints("lista_oczekujacych")
+        if item.get("name") in _R72_WAITLIST_CHECK_NAMES
+    }
+    if set(reflected_checks) != _R72_WAITLIST_CHECK_NAMES:
+        raise RuntimeError("Schemat R7.2 nie ma kompletu CHECK waitlisty.")
+    for name, expected in expected_checks.items():
+        if _r5a_check_signature(
+            reflected_checks[name], dialect_name,
+        ) != _r5a_check_signature(expected, dialect_name):
+            raise RuntimeError(
+                f"CHECK {name} ma nieprawidlowa definicje R7.2."
+            )
+
+    expected_uniques = {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in waitlist_model.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name
+    }
+    reflected_indexes = {
+        item.get("name"): (
+            tuple(item.get("column_names") or ()), bool(item.get("unique")),
+        )
+        for item in inspector.get_indexes("lista_oczekujacych")
+        if item.get("name")
+    }
+    reflected_uniques = {
+        item.get("name"): tuple(item.get("column_names") or ())
+        for item in inspector.get_unique_constraints("lista_oczekujacych")
+        if item.get("name")
+    }
+    for name, (columns, unique) in reflected_indexes.items():
+        if unique:
+            reflected_uniques.setdefault(name, columns)
+    if reflected_uniques != expected_uniques:
+        raise RuntimeError("Schemat R7.2 ma nieprawidlowe UNIQUE waitlisty.")
+
+    expected_indexes = {
+        index.name: (
+            tuple(column.name for column in index.columns), bool(index.unique),
+        )
+        for index in waitlist_model.indexes if index.name
+    }
+    semantic_indexes = {
+        name: shape
+        for name, shape in reflected_indexes.items()
+        if not (shape[1] and expected_uniques.get(name) == shape[0])
+    }
+    if semantic_indexes != expected_indexes:
+        raise RuntimeError("Schemat R7.2 ma nieprawidlowe indeksy waitlisty.")
+    return True
+
+
 def _invalidate_legacy_public_tokens() -> int:
     """Clears reversible plaintext public tokens on the stamp-only adoption path."""
     from sqlalchemy import inspect, text
@@ -3381,10 +3622,13 @@ def init_db():
         #  (b) starsza baza (sprzed Alembica, bez nowszych tabel) → oznacz BASELINE
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
-        historical_model_tables = model_tables - _R6B2_TABLES
+        historical_model_tables = model_tables - _R6B2_TABLES - _R72_TABLES
         complete_current_tables = model_tables.issubset(tables)
+        complete_pre_r72_tables = (
+            model_tables - _R72_TABLES
+        ).issubset(tables)
         complete_pre_r6b2_tables = (
-            historical_model_tables
+            model_tables - _R72_TABLES - _R6B2_TABLES
         ).issubset(tables)
         waitlist_columns = (
             {column["name"] for column in insp.get_columns("lista_oczekujacych")}
@@ -3392,6 +3636,16 @@ def init_db():
         )
         r6b2_columns_present = _R6B2_BASE_COLUMNS & waitlist_columns
         r6b2_tables_present = _R6B2_TABLES & tables
+        r72_columns_present = _R72_BASE_COLUMNS & waitlist_columns
+        r72_tables_present = _R72_TABLES & tables
+        if r72_columns_present and r72_columns_present != _R72_BASE_COLUMNS:
+            raise RuntimeError(
+                "Schemat R7.2 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
+            )
+        if bool(r72_columns_present) != bool(r72_tables_present):
+            raise RuntimeError(
+                "Schemat R7.2 jest czesciowy; brakuje kolumn albo tabeli zdarzen."
+            )
         if r6b2_columns_present and r6b2_columns_present != _R6B2_BASE_COLUMNS:
             raise RuntimeError(
                 "Schemat R6b.2 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
@@ -3400,15 +3654,33 @@ def init_db():
             raise RuntimeError(
                 "Schemat R6b.2 jest czesciowy; brakuje kolumn albo tabeli historii."
             )
+        if r72_columns_present and not (
+            r6b2_columns_present == _R6B2_BASE_COLUMNS
+            and r6b2_tables_present == _R6B2_TABLES
+        ):
+            raise RuntimeError(
+                "Schemat R7.2 nie moze zostac adoptowany bez pelnego R6b.2."
+            )
         complete_current = (
             complete_current_tables
             and r6b2_columns_present == _R6B2_BASE_COLUMNS
             and r6b2_tables_present == _R6B2_TABLES
+            and r72_columns_present == _R72_BASE_COLUMNS
+            and r72_tables_present == _R72_TABLES
+        )
+        complete_r6b2 = (
+            complete_pre_r72_tables
+            and r6b2_columns_present == _R6B2_BASE_COLUMNS
+            and r6b2_tables_present == _R6B2_TABLES
+            and not r72_columns_present
+            and not r72_tables_present
         )
         complete_r6a = (
             complete_pre_r6b2_tables
             and not r6b2_columns_present
             and not r6b2_tables_present
+            and not r72_columns_present
+            and not r72_tables_present
         )
         r6a_tables_present = _R6A_TABLES & tables
         if r6a_tables_present and r6a_tables_present != _R6A_TABLES:
@@ -3547,6 +3819,7 @@ def init_db():
             _validate_r5c_adoption_schema(insp)
             _validate_r6a_adoption_schema(insp)
             _validate_r6b2_adoption_schema(insp)
+            _validate_r72_adoption_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
             _rebuild_rezerwacje_oblozenie_ledger()
@@ -3559,8 +3832,26 @@ def init_db():
             _validate_r5c_adoption_schema(refreshed)
             _validate_r6a_adoption_schema(refreshed)
             _validate_r6b2_adoption_schema(refreshed)
+            _validate_r72_adoption_schema(refreshed)
             _require_alembic_run(
-                lambda command, cfg: command.stamp(cfg, _R6A_REVISION)
+                lambda command, cfg: command.stamp(cfg, _R72_REVISION)
+            )
+            _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
+            return
+        if complete_r6b2:
+            # Pełny niewersjonowany schemat 0065 nie ma jeszcze anonimowych
+            # zdarzeń popytu ani pól skuteczności waitlisty. Migracja 0066
+            # bezpiecznie doda legacy defaults i pustą tabelę zdarzeń.
+            _validate_r1a_audit_schema(insp)
+            _validate_r2_adoption_schema(insp)
+            _validate_r3_adoption_schema(insp)
+            _validate_r5a_adoption_schema(insp)
+            _validate_r5b_adoption_schema(insp)
+            _validate_r5c_adoption_schema(insp)
+            _validate_r6a_adoption_schema(insp)
+            _validate_r6b2_adoption_schema(insp)
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, _R6B2_REVISION)
             )
             _require_alembic_run(lambda command, cfg: command.upgrade(cfg, "head"))
             return

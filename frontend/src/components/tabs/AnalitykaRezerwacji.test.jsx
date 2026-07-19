@@ -78,7 +78,47 @@ const operational = {
   },
 }
 
+const demand = {
+  okres: { start: '2026-06-20', end: '2026-07-19' },
+  odrzucony_popyt: {
+    proby: 12,
+    osoby: 40,
+    z_waitlista: 4,
+    przyczyny: [
+      { kod: 'brak_pojemnosci', etykieta: 'Brak pasującej konfiguracji', proby: 7, osoby: 26 },
+      { kod: 'limit_osob', etykieta: 'Limit nowych osób', proby: 5, osoby: 14 },
+    ],
+    wg_godziny: [
+      { godzina: '19:00', proby: 8, osoby: 30 },
+      { godzina: '20:00', proby: 4, osoby: 10 },
+    ],
+    wg_wielkosci_grupy: [
+      { grupa: '1-2', proby: 4, osoby: 8 },
+      { grupa: '5-6', proby: 8, osoby: 32 },
+    ],
+    kanaly: [],
+    wg_zasobu: [],
+  },
+  waitlista: {
+    wpisy: 10,
+    zaoferowano: 8,
+    zaakceptowano: 7,
+    odbyte: 5,
+    zaoferowano_proc: 80,
+    zaakceptowano_proc: 70,
+    odbyte_proc: 50,
+    mediana_do_oferty_min: 18,
+  },
+  jakosc_danych: {
+    sledzenie_od: '2026-07-01',
+    wpisy_bez_zdarzenia: 1,
+    historyczne_bez_przyczyny: 2,
+    zaakceptowane_bez_potwierdzonej_wizyty: 2,
+  },
+}
+
 const responseFor = (path) => {
+  if (path.startsWith('/analityka/rezerwacje/popyt?')) return demand
   if (path.startsWith('/analityka/rezerwacje/operacyjna?')) return operational
   if (path.startsWith('/analityka/oblozenie?')) return occupancy
   if (path.startsWith('/analityka/rezerwacje?')) return summary
@@ -105,8 +145,8 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('AnalitykaRezerwacji R7.1', () => {
-  it('pobiera trzy anonimowe źródła równolegle i pokazuje spokojny przegląd', async () => {
+describe('AnalitykaRezerwacji R7', () => {
+  it('pobiera cztery anonimowe źródła równolegle i pokazuje spokojny przegląd', async () => {
     render(<AnalitykaRezerwacji />)
 
     expect(await screen.findByText('120')).toBeInTheDocument()
@@ -115,11 +155,12 @@ describe('AnalitykaRezerwacji R7.1', () => {
     expect(screen.getByText('20/25')).toBeInTheDocument()
     expect(screen.getByText('1 h 32 min')).toBeInTheDocument()
     expect(screen.getByText('48%')).toBeInTheDocument()
-    expect(apiMock).toHaveBeenCalledTimes(3)
+    expect(apiMock).toHaveBeenCalledTimes(4)
     expect(apiMock.mock.calls.map(([path]) => path)).toEqual(expect.arrayContaining([
       expect.stringMatching(/^\/analityka\/rezerwacje\?start=/),
       expect.stringMatching(/^\/analityka\/oblozenie\?start=/),
       expect.stringMatching(/^\/analityka\/rezerwacje\/operacyjna\?start=/),
+      expect.stringMatching(/^\/analityka\/rezerwacje\/popyt\?start=/),
     ]))
     apiMock.mock.calls.forEach(([, method, body, options]) => {
       expect(method).toBe('GET')
@@ -127,6 +168,75 @@ describe('AnalitykaRezerwacji R7.1', () => {
       expect(options.signal).toBeInstanceOf(AbortSignal)
     })
     expect(screen.getByText(/Lokalo nie zmienia czasu wizyt ani zasad dostępności automatycznie/)).toBeInTheDocument()
+  })
+
+  it('pokazuje utracony popyt i skuteczność waitlisty bez PII ani automatycznej rekomendacji', async () => {
+    render(<AnalitykaRezerwacji />)
+    await screen.findByText('Najważniejsze fakty')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Popyt i waitlista' }))
+
+    expect(screen.getByText('Popyt i lista oczekujących')).toBeInTheDocument()
+    expect(screen.getByText('Próby bez terminu').parentElement).toHaveTextContent('12')
+    expect(screen.getByText('Osoby w tych próbach').parentElement).toHaveTextContent('40')
+    expect(screen.getByText('Wizyty z waitlisty').parentElement).toHaveTextContent('50%')
+    expect(screen.getByText('Wizyty z waitlisty').parentElement).toHaveTextContent('5 z 10 wpisów')
+    expect(screen.getByText('Brak pasującej konfiguracji')).toBeInTheDocument()
+    expect(screen.getByText(/Pomiar odrzuconych prób działa od 2026-07-01/)).toBeInTheDocument()
+    expect(screen.queryByText(/Nowak|Kowalska|jan@example|500 600/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Zastosuj|Zmień regułę/i })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Przekrój'), { target: { value: 'hours' } })
+    expect(screen.getByText('19:00')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Przekrój'), { target: { value: 'groups' } })
+    expect(screen.getByText('5-6 os.')).toBeInTheDocument()
+  })
+
+  it('odróżnia prawidłowe zero od braku mianownika konwersji', async () => {
+    apiMock.mockImplementation((path) => {
+      if (path.startsWith('/analityka/rezerwacje/popyt?')) {
+        return Promise.resolve({
+          ...demand,
+          odrzucony_popyt: {
+            proby: 0,
+            osoby: 0,
+            z_waitlista: 0,
+            przyczyny: [],
+            wg_godziny: [],
+            wg_wielkosci_grupy: [],
+            kanaly: [],
+            wg_zasobu: [],
+          },
+          waitlista: {
+            wpisy: 0,
+            zaoferowano: 0,
+            zaakceptowano: 0,
+            odbyte: 0,
+            zaoferowano_proc: null,
+            zaakceptowano_proc: null,
+            odbyte_proc: null,
+            mediana_do_oferty_min: null,
+          },
+          jakosc_danych: {
+            sledzenie_od: '2026-06-01',
+            wpisy_bez_zdarzenia: 0,
+            historyczne_bez_przyczyny: 0,
+            zaakceptowane_bez_potwierdzonej_wizyty: 0,
+          },
+        })
+      }
+      return Promise.resolve(responseFor(path))
+    })
+
+    render(<AnalitykaRezerwacji />)
+    await screen.findByText('Najważniejsze fakty')
+    fireEvent.click(screen.getByRole('button', { name: 'Popyt i waitlista' }))
+
+    expect(screen.getByText('Próby bez terminu').parentElement).toHaveTextContent('0')
+    expect(screen.getByText('Wizyty z waitlisty').parentElement).toHaveTextContent('—')
+    expect(screen.getByText('Wizyty z waitlisty').parentElement).not.toHaveTextContent('0%')
+    expect(screen.getByText('W tym okresie nie odnotowano prób bez dostępnego terminu.')).toBeInTheDocument()
+    expect(screen.getByText('W tym okresie nie było wpisów na liście oczekujących.')).toBeInTheDocument()
   })
 
   it('pokazuje brak pomiaru i planu jako kreskę, nigdy jako zero minut', async () => {
@@ -205,10 +315,12 @@ describe('AnalitykaRezerwacji R7.1', () => {
     const nextSummary = deferred()
     const nextOccupancy = deferred()
     const nextOperational = deferred()
+    const nextDemand = deferred()
     apiMock
       .mockImplementationOnce(() => nextSummary.promise)
       .mockImplementationOnce(() => nextOccupancy.promise)
       .mockImplementationOnce(() => nextOperational.promise)
+      .mockImplementationOnce(() => nextDemand.promise)
 
     fireEvent.click(screen.getByRole('button', { name: 'Odśwież' }))
 
@@ -219,58 +331,65 @@ describe('AnalitykaRezerwacji R7.1', () => {
       nextSummary.resolve({ ...summary, covery: { ...summary.covery, suma: 144 } })
       nextOccupancy.resolve(occupancy)
       nextOperational.resolve(operational)
+      nextDemand.resolve(demand)
     })
 
     expect(await screen.findByText('144')).toBeInTheDocument()
     expect(screen.queryByText('Poprzednie wyniki pozostają widoczne.')).not.toBeInTheDocument()
   })
 
-  it('przy częściowej awarii odświeżenia zachowuje poprzedni poprawny fragment zamiast zera', async () => {
+  it('przy awarii źródła popytu zachowuje poprzedni poprawny fragment zamiast zera', async () => {
     render(<AnalitykaRezerwacji />)
     await screen.findByText('120')
 
     const nextSummary = deferred()
     const nextOccupancy = deferred()
     const nextOperational = deferred()
+    const nextDemand = deferred()
     apiMock
       .mockImplementationOnce(() => nextSummary.promise)
       .mockImplementationOnce(() => nextOccupancy.promise)
       .mockImplementationOnce(() => nextOperational.promise)
+      .mockImplementationOnce(() => nextDemand.promise)
 
     fireEvent.click(screen.getByRole('button', { name: 'Odśwież' }))
     await act(async () => {
-      nextSummary.reject(new Error('Podsumowanie niedostępne'))
+      nextSummary.resolve({ ...summary, covery: { ...summary.covery, suma: 144 } })
       nextOccupancy.resolve({
         ...occupancy,
         agregat: { ...occupancy.agregat, oblozenie_stolowe_proc: 61 },
       })
       nextOperational.resolve(operational)
+      nextDemand.reject(new Error('Popyt niedostępny'))
     })
 
-    expect(await screen.findByText('120')).toBeInTheDocument()
+    expect(await screen.findByText('144')).toBeInTheDocument()
     expect(screen.getByText('61%')).toBeInTheDocument()
-    expect(screen.getByText(/Nie udało się odświeżyć: podsumowania/)).toBeInTheDocument()
+    expect(screen.getByText(/Nie udało się odświeżyć: utraconego popytu i waitlisty/)).toBeInTheDocument()
     expect(screen.getByText(/Częściowa aktualizacja/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Popyt i waitlista' }))
+    expect(screen.getByText('Wizyty z waitlisty').parentElement).toHaveTextContent('50%')
   })
 
   it('abortuje poprzedni okres i odrzuca jego spóźnione odpowiedzi', async () => {
-    const first = [deferred(), deferred(), deferred()]
+    const first = [deferred(), deferred(), deferred(), deferred()]
     first.forEach((request) => apiMock.mockImplementationOnce(() => request.promise))
     render(<AnalitykaRezerwacji />)
-    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(3))
-    const firstSignals = apiMock.mock.calls.slice(0, 3).map((call) => call[3].signal)
+    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(4))
+    const firstSignals = apiMock.mock.calls.slice(0, 4).map((call) => call[3].signal)
 
     fireEvent.click(screen.getByRole('button', { name: 'Własny' }))
     fireEvent.change(screen.getByLabelText('Od'), { target: { value: '2026-06-01' } })
     fireEvent.change(screen.getByLabelText('Do'), { target: { value: '2026-06-30' } })
 
-    await waitFor(() => expect(apiMock.mock.calls.length).toBeGreaterThanOrEqual(6))
+    await waitFor(() => expect(apiMock.mock.calls.length).toBeGreaterThanOrEqual(8))
     firstSignals.forEach((signal) => expect(signal.aborted).toBe(true))
 
     await act(async () => {
       first[0].resolve({ ...summary, covery: { ...summary.covery, suma: 999 } })
       first[1].resolve(occupancy)
       first[2].resolve(operational)
+      first[3].resolve(demand)
     })
 
     expect(screen.queryByText('999')).not.toBeInTheDocument()

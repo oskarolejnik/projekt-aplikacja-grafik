@@ -328,6 +328,9 @@ describe('RezerwacjaWidget R5a', () => {
     apiMock.mockImplementation((path, method = 'GET') => {
       if (path === '/online/widget-config') return Promise.resolve(CONFIG_V2)
       if (path.startsWith('/online/dostepnosc')) return Promise.resolve({ sloty: [] })
+      if (path === '/online/popyt/odrzucony' && method === 'POST') {
+        return Promise.reject(new Error('Telemetria chwilowo niedostępna'))
+      }
       if (path.startsWith('/online/alternatywy')) {
         return Promise.resolve({ alternatywy: [{ data: '2035-07-17', godz_od: '19:00', serwis: 'Kolacja' }] })
       }
@@ -340,6 +343,17 @@ describe('RezerwacjaWidget R5a', () => {
     await renderReadyWidget()
     await searchFor()
     expect(await screen.findByRole('button', { name: /17 lipca.*19:00/i })).toBeInTheDocument()
+    const demandCall = apiMock.mock.calls.find(([path, method]) => path === '/online/popyt/odrzucony' && method === 'POST')
+    expect(demandCall[2]).toEqual({ data: '2035-07-16', liczba_osob: 2 })
+    expect(demandCall[3]).toMatchObject({
+      credentials: 'include',
+      keepalive: true,
+      sessionHandling: false,
+      headers: {
+        'X-Reservation-Session': expect.any(String),
+        'Idempotency-Key': 'online-rejected-demand-1',
+      },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Dołącz do listy oczekujących' }))
     expect(await screen.findByRole('heading', { name: 'Lista oczekujących' })).toBeInTheDocument()
 
@@ -353,6 +367,14 @@ describe('RezerwacjaWidget R5a', () => {
       marketing_consent: false,
       sensitive_data: null,
     })
+  })
+
+  it('nie zapisuje odrzuconego popytu, gdy zwrócono wolny slot', async () => {
+    await renderReadyWidget()
+    await searchFor()
+
+    expect(await screen.findByRole('button', { name: 'Wybierz godzinę 18:00' })).toBeInTheDocument()
+    expect(apiMock.mock.calls.some(([path]) => path === '/online/popyt/odrzucony')).toBe(false)
   })
 
   it('nie uruchamia niegotowego wariantu v2 i pokazuje bezpieczny stan niedostępności', async () => {

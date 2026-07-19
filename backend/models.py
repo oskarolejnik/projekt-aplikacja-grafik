@@ -1537,6 +1537,30 @@ class ListaOczekujacych(Base):
             "offer_kanal IS NULL OR offer_kanal IN ('online', 'wewnetrzna')",
             name="ck_lista_oczekujacych_offer_kanal",
         ),
+        CheckConstraint(
+            "(create_key_hash IS NULL AND create_request_fingerprint IS NULL) OR "
+            "(length(create_key_hash) = 64 AND "
+            "length(create_request_fingerprint) = 64)",
+            name="ck_lista_oczekujacych_create_idempotency",
+        ),
+        CheckConstraint(
+            "demand_reason_code IN ("
+            "'service_closed', 'channel_unavailable', 'booking_window', "
+            "'party_policy', 'pacing_limit', 'concurrent_limit', "
+            "'resource_occupied', 'no_capacity_match', "
+            "'operator_decision', 'legacy_unknown', 'other')",
+            name="ck_lista_oczekujacych_demand_reason",
+        ),
+        CheckConstraint(
+            "demand_resource_kind IN ("
+            "'policy', 'service_capacity', 'table_or_combination', "
+            "'capacity', 'available', 'unknown')",
+            name="ck_lista_oczekujacych_demand_resource",
+        ),
+        UniqueConstraint(
+            "create_key_hash",
+            name="uq_lista_oczekujacych_create_key_hash",
+        ),
         Index(
             "ix_lista_oczekujacych_data_status_priorytet",
             "data", "status", "priorytet", "utworzono_at", "id",
@@ -1571,6 +1595,21 @@ class ListaOczekujacych(Base):
     # dzięki czemu replay jest odbudowywany z aktualnymi uprawnieniami operatora.
     offer_key_hash  = Column(String(64), nullable=True)
     offer_request_fingerprint = Column(String(64), nullable=True)
+    # Publiczny create replay jest odbudowywany wyłącznie z wiersza właściciela.
+    # Surowy klucz i odpowiedź z PII nigdy nie są utrwalane osobno.
+    create_key_hash = Column(String(64), nullable=True)
+    create_request_fingerprint = Column(String(64), nullable=True)
+    # Zamknięte, serwerowo wyliczane klasy popytu. Nie zapisujemy komunikatów,
+    # identyfikatorów reguł ani danych klienta w strumieniu analitycznym.
+    demand_reason_code = Column(
+        String(32), nullable=False, default="legacy_unknown",
+        server_default="legacy_unknown",
+    )
+    demand_resource_kind = Column(
+        String(32), nullable=False, default="unknown", server_default="unknown",
+    )
+    # Dowód odbycia wizyty jest snapshotem wyłącznie poprawnego pomiaru hosta.
+    attended_at = Column(DateTime, nullable=True)
     zaoferowano_at  = Column(DateTime, nullable=True)
     oferta_wygasa_at = Column(DateTime, nullable=True)
     zaakceptowano_at = Column(DateTime, nullable=True)
@@ -1589,6 +1628,70 @@ class ListaOczekujacych(Base):
     hold_do         = Column(DateTime, nullable=True)                                         # do kiedy trzymany
     token           = Column(String(64), nullable=True, index=True)                          # magic-link gościa (potwierdzenie holdu)
     kanal           = Column(String(16), nullable=False, default="reczna")                    # reczna|online
+
+
+class ReservationDemandEvent(Base):
+    """Anonimowy fakt odrzuconego popytu do agregatów R7.2.
+
+    Celowo nie ma FK ani identyfikatorów wpisu/rezerwacji/użytkownika. Hash klucza
+    służy wyłącznie idempotencji producenta i nigdy nie opuszcza backendu.
+    """
+    __tablename__ = "reservation_demand_events"
+    __table_args__ = (
+        CheckConstraint(
+            "source_kind IN ('availability', 'waitlist')",
+            name="ck_reservation_demand_events_source",
+        ),
+        CheckConstraint(
+            "channel IN ('online', 'wewnetrzna')",
+            name="ck_reservation_demand_events_channel",
+        ),
+        CheckConstraint(
+            "party_size >= 1 AND party_size <= 500",
+            name="ck_reservation_demand_events_party_size",
+        ),
+        CheckConstraint(
+            "reason_code IN ("
+            "'service_closed', 'channel_unavailable', 'booking_window', "
+            "'party_policy', 'pacing_limit', 'concurrent_limit', "
+            "'resource_occupied', 'no_capacity_match', "
+            "'operator_decision', 'legacy_unknown', 'other')",
+            name="ck_reservation_demand_events_reason",
+        ),
+        CheckConstraint(
+            "resource_kind IN ("
+            "'policy', 'service_capacity', 'table_or_combination', "
+            "'capacity', 'available', 'unknown')",
+            name="ck_reservation_demand_events_resource",
+        ),
+        CheckConstraint(
+            "length(event_key_hash) = 64",
+            name="ck_reservation_demand_events_key_hash",
+        ),
+        CheckConstraint(
+            "length(request_fingerprint) = 64",
+            name="ck_reservation_demand_events_fingerprint",
+        ),
+        UniqueConstraint(
+            "source_kind", "event_key_hash",
+            name="uq_reservation_demand_events_source_key",
+        ),
+        Index(
+            "ix_reservation_demand_events_date_source_reason",
+            "requested_date", "source_kind", "reason_code",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    source_kind = Column(String(16), nullable=False)
+    channel = Column(String(16), nullable=False)
+    requested_date = Column(Date, nullable=False)
+    requested_time = Column(Time, nullable=True)
+    party_size = Column(Integer, nullable=False)
+    reason_code = Column(String(32), nullable=False)
+    resource_kind = Column(String(32), nullable=False)
+    event_key_hash = Column(String(64), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    captured_at = Column(DateTime, nullable=False)
 
 
 class WaitlistOfferOverrideContext(Base):

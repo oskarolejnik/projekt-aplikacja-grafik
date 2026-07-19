@@ -264,11 +264,15 @@ def test_uprawnienie_reguly_steruje_agregatem_symulatorem_i_konfiguracja(
         json=simulation_payload,
     )
     assert simulation.status_code == 200, simulation.text
-    assert client.post(
+    reception_simulation = client.post(
         "/api/rezerwacje/reguly/symuluj",
         headers=reception_headers,
         json=simulation_payload,
-    ).status_code == 403
+    )
+    assert reception_simulation.status_code == 200, reception_simulation.text
+    assert reception_simulation.json()["decision"] in {
+        "allow", "override_required", "deny",
+    }
 
     policy_payload = {
         "okno_wyprzedzenia_dni": 120,

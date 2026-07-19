@@ -218,11 +218,14 @@ def _wpis_waitlisty(wpis) -> dict:
         "offer_auto_przydzielony": wpis.offer_auto_przydzielony,
         "offer_override_authorized": wpis.offer_override_authorized,
         "kanal": wpis.kanal,
+        "demand_reason_code": wpis.demand_reason_code,
+        "demand_resource_kind": wpis.demand_resource_kind,
         "utworzono_at": _iso(wpis.utworzono_at),
         "zrealizowano_at": _iso(wpis.zrealizowano_at),
         "zaoferowano_at": _iso(wpis.zaoferowano_at),
         "oferta_wygasa_at": _iso(wpis.oferta_wygasa_at),
         "zaakceptowano_at": _iso(wpis.zaakceptowano_at),
+        "attended_at": _iso(wpis.attended_at),
         "wygasla_at": _iso(wpis.wygasla_at),
         "anulowano_at": _iso(wpis.anulowano_at),
         "powiadomiono_at": _iso(wpis.powiadomiono_at),
@@ -808,6 +811,8 @@ def _anonimizuj_waitliste(
         wpis.notatka = None
         wpis.offer_override_note = None
         wpis.token = None
+        wpis.create_key_hash = None
+        wpis.create_request_fingerprint = None
     return len(safe_wpisy), len(blocked_ids)
 
 

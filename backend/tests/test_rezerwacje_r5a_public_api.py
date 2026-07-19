@@ -666,7 +666,14 @@ def test_waitlist_v2_records_declined_marketing_without_issuing_token(
         **_privacy_payload(config),
     }
 
-    response = client.post("/api/online/lista-oczekujacych", json=payload)
+    response = client.post(
+        "/api/online/lista-oczekujacych",
+        json=payload,
+        headers={
+            "X-Reservation-Session": SESSION_A,
+            "Idempotency-Key": "r72-waitlist-create-r5a-0001",
+        },
+    )
 
     assert response.status_code == 201, response.text
     assert "token" not in json.dumps(response.json())
