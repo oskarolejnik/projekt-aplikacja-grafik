@@ -12,6 +12,7 @@ import SzefImprezy from '../components/tabs/SzefImprezy'
 import Zeszyt from '../components/tabs/Zeszyt'
 import Rezerwacje from '../components/tabs/Rezerwacje'
 import ReservationsWorkspace from '../components/tabs/ReservationsWorkspace'
+import AnalitykaRezerwacji from '../components/tabs/AnalitykaRezerwacji'
 import {
   clearReservationRoute,
   navigateReservationRoute,
@@ -34,6 +35,13 @@ const TABY = [
     Comp: ReservationsWorkspace,
     wide: true,
     reservationWorkspace: true,
+  },
+  {
+    value: 'wyniki-rezerwacji',
+    label: 'Wyniki rezerwacji',
+    permission: 'rezerwacje.analityka',
+    Comp: AnalitykaRezerwacji,
+    wide: true,
   },
 ]
 

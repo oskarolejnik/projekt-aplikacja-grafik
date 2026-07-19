@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 import models
+import reservation_operational
 import uprawnienia
 from auth import get_current_user
 from database import get_db
@@ -36,6 +37,41 @@ def _mediana(xs):
     if n == 0:
         return 0
     return xs[n // 2] if n % 2 else round((xs[n // 2 - 1] + xs[n // 2]) / 2, 1)
+
+
+def _mediana_lub_none(xs):
+    return _mediana(xs) if xs else None
+
+
+def _srednia_lub_none(xs):
+    return round(sum(xs) / len(xs), 1) if xs else None
+
+
+def _turn_time_summary(rows):
+    actual = [row["actual"] for row in rows]
+    planned = [row["planned"] for row in rows if row["planned"] is not None]
+    deviations = [
+        row["actual"] - row["planned"]
+        for row in rows if row["planned"] is not None
+    ]
+    return {
+        "proba": len(actual),
+        "mediana_min": _mediana_lub_none(actual),
+        "srednia_min": _srednia_lub_none(actual),
+        "planowana_mediana_min": _mediana_lub_none(planned),
+        "odchylenie_min": _mediana_lub_none(deviations),
+    }
+
+
+def _empty_usage():
+    return {"wizyty": 0, "covery": 0, "rzeczywiste_minuty": 0, "pomiary": 0}
+
+
+def _add_usage(target, *, covers, minutes):
+    target["wizyty"] += 1
+    target["covery"] += covers
+    target["rzeczywiste_minuty"] += minutes
+    target["pomiary"] += 1
 
 
 def _waliduj_zakres(start: date, end: date) -> int:
@@ -105,6 +141,134 @@ def analityka_rezerwacje(start: date = Query(...), end: date = Query(...), db: S
         "szczyty": {
             "wg_dnia_tygodnia": [{"dzien": DNI_PL[i], "covery": wg_dnia_tyg.get(i, 0)} for i in range(7)],
             "wg_godziny": [{"godz": f"{h:02d}:00", "covery": wg_godziny[h]} for h in sorted(wg_godziny)],
+        },
+    }
+
+
+@router.get(
+    "/api/analityka/rezerwacje/operacyjna",
+    dependencies=[Depends(_wymagaj_rezerwacje)],
+)
+def analityka_rezerwacje_operacyjna(
+    start: date = Query(...),
+    end: date = Query(...),
+    db: Session = Depends(get_db),
+):
+    """R7.1: faktyczny turn time i wykorzystanie zasobow, bez PII i imputacji."""
+    _waliduj_zakres(start, end)
+    reservations = db.query(models.Termin).filter(
+        models.Termin.rodzaj == "stolik",
+        models.Termin.status == "odbyla",
+        models.Termin.data >= start,
+        models.Termin.data <= end,
+    ).all()
+    allocations = reservation_operational.allocation_snapshots(db, reservations)
+    moved_ids = reservation_operational.moved_during_visit_ids(db, reservations)
+
+    measured = []
+    missing = invalid = 0
+    for reservation in reservations:
+        measurement = reservation_operational.actual_turn_measurement(reservation)
+        if measurement["pomiar"] == "missing":
+            missing += 1
+            continue
+        if measurement["pomiar"] == "invalid":
+            invalid += 1
+            continue
+        measured.append({
+            "reservation": reservation,
+            "actual": measurement["rzeczywisty_czas_min"],
+            "planned": reservation_operational.planned_turn_minutes(reservation),
+            "group": reservation_operational.party_bucket(reservation.liczba_osob),
+            "allocation": allocations.get(reservation.id),
+        })
+
+    group_order = ("1-2", "3-4", "5-6", "7+")
+    turn_time = _turn_time_summary(measured)
+    turn_time["wg_wielkosci_grupy"] = [
+        {"grupa": group, **_turn_time_summary([
+            row for row in measured if row["group"] == group
+        ])}
+        for group in group_order
+    ]
+
+    room_usage, table_usage, combination_usage = {}, {}, {}
+    no_assignment = _empty_usage()
+    for row in measured:
+        reservation = row["reservation"]
+        if reservation.id in moved_ids:
+            continue
+        minutes = row["actual"]
+        covers = max(0, int(reservation.liczba_osob or 0))
+        allocation = row["allocation"] or {
+            "sala_id": None, "sala_nazwa": None, "stoliki": [], "kombinacja": None,
+        }
+        tables = allocation["stoliki"]
+        if not tables:
+            _add_usage(no_assignment, covers=covers, minutes=minutes)
+            continue
+
+        room_key = (allocation["sala_id"], allocation["sala_nazwa"])
+        room = room_usage.setdefault(room_key, {
+            "sala_id": allocation["sala_id"],
+            "nazwa": allocation["sala_nazwa"] or "Bez przypisanej sali",
+            **_empty_usage(),
+        })
+        _add_usage(room, covers=covers, minutes=minutes)
+
+        for table in tables:
+            table_row = table_usage.setdefault(table["id"], {
+                "stolik_id": table["id"],
+                "nazwa": table["nazwa"],
+                "sala_id": allocation["sala_id"],
+                "sala_nazwa": allocation["sala_nazwa"],
+                **_empty_usage(),
+            })
+            _add_usage(table_row, covers=covers, minutes=minutes)
+
+        combination = allocation["kombinacja"]
+        if combination is not None:
+            combination_key = (
+                combination["wersja_id"], combination["id"],
+                tuple(sorted(table["id"] for table in tables)),
+            )
+            combination_row = combination_usage.setdefault(combination_key, {
+                "kombinacja_id": combination["id"],
+                "wersja_id": combination["wersja_id"],
+                "nazwa": combination["nazwa"],
+                "sala_id": allocation["sala_id"],
+                "sala_nazwa": allocation["sala_nazwa"],
+                "stoliki": tables,
+                **_empty_usage(),
+            })
+            _add_usage(combination_row, covers=covers, minutes=minutes)
+
+    complete = len(measured)
+    total = len(reservations)
+    return {
+        "jakosc_danych": {
+            "zakonczone_wizyty": total,
+            "z_pelnym_pomiarem": complete,
+            "bez_pomiaru": missing,
+            "nieprawidlowy_pomiar": invalid,
+            "pominiete_przeniesienia": sum(
+                1 for row in measured if row["reservation"].id in moved_ids
+            ),
+            "kompletnosc_proc": round(complete / total * 100) if total else 0,
+        },
+        "turn_time": turn_time,
+        "wykorzystanie": {
+            "sale": sorted(
+                room_usage.values(), key=lambda row: (-row["rzeczywiste_minuty"], row["nazwa"]),
+            ),
+            "stoliki": sorted(
+                table_usage.values(), key=lambda row: (-row["rzeczywiste_minuty"], row["stolik_id"]),
+            ),
+            "kombinacje": sorted(
+                combination_usage.values(),
+                key=lambda row: (-row["rzeczywiste_minuty"], row["nazwa"]),
+            ),
+            "bez_przydzialu": no_assignment,
         },
     }
 

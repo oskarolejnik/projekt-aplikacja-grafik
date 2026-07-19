@@ -31,6 +31,7 @@ vi.mock('../components/tabs/RaportGodzin', () => ({ default: () => <div>Widok go
 vi.mock('../components/tabs/SzefImprezy', () => ({ default: () => <div>Widok imprez</div> }))
 vi.mock('../components/tabs/Rezerwacje', () => ({ default: () => <div>Widok rezerwacji</div> }))
 vi.mock('../components/tabs/ReservationsWorkspace', () => ({ default: () => <div>Workspace rezerwacji</div> }))
+vi.mock('../components/tabs/AnalitykaRezerwacji', () => ({ default: () => <div>Widok wyników rezerwacji</div> }))
 
 import SzefView from './SzefView'
 
@@ -107,6 +108,16 @@ describe('SzefView permissions', () => {
     expect(await screen.findByText('Widok rezerwacji')).toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: 'Widoki szefa' })).not.toBeInTheDocument()
     expect(screen.queryByText('Workspace rezerwacji')).not.toBeInTheDocument()
+  })
+
+  it('udostępnia wyniki rezerwacji jako osobny widok bez montowania workspace', async () => {
+    authState.permissions = ['rezerwacje.analityka']
+
+    render(<SzefView />)
+
+    expect(await screen.findByText('Widok wyników rezerwacji')).toBeInTheDocument()
+    expect(screen.queryByText('Workspace rezerwacji')).not.toBeInTheDocument()
+    expect(screen.queryByText('Widok rezerwacji')).not.toBeInTheDocument()
   })
 
   it('po odebraniu praw operacyjnych zamyka workspace i usuwa jego deep link', async () => {

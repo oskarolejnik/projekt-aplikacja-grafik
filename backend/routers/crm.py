@@ -10,11 +10,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, time
+import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 import models
+import reservation_operational
 import schemas
 import uprawnienia
 from auth import get_current_user, require_admin
@@ -118,9 +120,15 @@ def _statystyki(lista: list[models.Termin]) -> dict:
     }
 
 
-def _historia_out(lista: list[models.Termin]) -> list[dict]:
-    return [
-        {
+def _historia_out(db: Session, lista: list[models.Termin]) -> list[dict]:
+    limited = lista[:_CRM_HISTORY_LIMIT]
+    allocations = reservation_operational.allocation_snapshots(db, limited)
+    result = []
+    for t in limited:
+        planned = reservation_operational.planned_turn_minutes(t)
+        measurement = reservation_operational.actual_turn_measurement(t)
+        actual = measurement["rzeczywisty_czas_min"]
+        result.append({
             "reservation_id": t.id,
             "data": str(t.data),
             "godz_od": t.godz_od.strftime("%H:%M") if t.godz_od else None,
@@ -128,9 +136,19 @@ def _historia_out(lista: list[models.Termin]) -> list[dict]:
             "status": t.status,
             "stolik_id": t.stolik_id,
             "kanal": t.kanal,
-        }
-        for t in lista[:_CRM_HISTORY_LIMIT]
-    ]
+            "planowany_czas_min": planned,
+            "rzeczywisty_czas_min": actual,
+            "odchylenie_min": (actual - planned if actual is not None and planned is not None else None),
+            "pomiar": measurement["pomiar"],
+            "przydzial": allocations.get(t.id, {
+                "sala_id": None,
+                "sala_nazwa": None,
+                "stoliki": [],
+                "kombinacja": None,
+                "proweniencja": "brak",
+            }),
+        })
+    return result
 
 
 def _profil_rezerwacji_out(db: Session, termin: models.Termin, user) -> dict:
@@ -145,7 +163,7 @@ def _profil_rezerwacji_out(db: Session, termin: models.Termin, user) -> dict:
         "identity": identity,
         "profil": _profil_out(profil, user),
         "statystyki": _statystyki(lista),
-        "historia": _historia_out(lista),
+        "historia": _historia_out(db, lista),
         "historia_total": len(lista),
         "historia_limit": _CRM_HISTORY_LIMIT,
         "ukryte_pola": _ukryte_pola(user),
@@ -178,6 +196,102 @@ def _upsert_profil(db: Session, klucz: str, dane: schemas.ProfilGosciaIn) -> mod
     return p
 
 
+def _normalizuj_wyszukiwanie(value) -> str:
+    text = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return " ".join("".join(char for char in text if not unicodedata.combining(char)).split())
+
+
+def _zbuduj_liste_gosci(db: Session, min_wizyt: int) -> list[dict]:
+    rezerwacje = db.query(models.Termin).filter(
+        models.Termin.rodzaj.in_(_RODZAJE_CRM),
+    ).all()
+    grupy = defaultdict(list)
+    for termin in rezerwacje:
+        klucz = _klucz_crm(termin)
+        if klucz:
+            grupy[klucz].append(termin)
+
+    prepared = []
+    hashes = set()
+    for klucz, lista in grupy.items():
+        lista.sort(key=_sort_key, reverse=True)
+        if len(lista) < min_wizyt:
+            continue
+        profile_hash = _hash_klucz(klucz)
+        hashes.add(profile_hash)
+        prepared.append((profile_hash, lista))
+    profiles = {
+        profile.klucz_hash: profile
+        for profile in (
+            db.query(models.ProfilGoscia)
+            .filter(models.ProfilGoscia.klucz_hash.in_(hashes)).all()
+            if hashes else []
+        )
+    }
+
+    goscie = []
+    for profile_hash, lista in prepared:
+        stats = _statystyki(lista)
+        active = sum(1 for termin in lista if termin.status in _AKTYWNE)
+        closed = stats["odbyte"] + stats["no_show"] + stats["odwolane"]
+        risk = (
+            "wysokie"
+            if closed >= 3 and stats["no_show_proc"] >= 30
+            else ("srednie" if stats["no_show_proc"] > 0 else "niskie")
+        )
+        latest = lista[0]
+        profile = profiles.get(profile_hash)
+        dates = [termin.data for termin in lista]
+        goscie.append({
+            "profil_ref": latest.id,
+            "identity": _identity_parts(latest)[1],
+            "nazwisko": latest.nazwisko,
+            "telefon": latest.telefon,
+            "email": latest.email,
+            "wizyt": len(lista),
+            "odbyte": stats["odbyte"],
+            "no_show": stats["no_show"],
+            "odwolane": stats["odwolane"],
+            "aktywne": active,
+            "no_show_proc": stats["no_show_proc"],
+            "ryzyko": risk,
+            "vip": bool(stats["vip_auto"] or (profile and profile.vip)),
+            "ostatnia_data": str(max(dates)),
+            "pierwsza_data": str(min(dates)),
+            "tagi": (profile.tagi if profile else None) or [],
+            "ma_alergie": bool(profile and profile.alergie),
+            "ma_profil": profile is not None,
+        })
+    return goscie
+
+
+def _sortuj_gosci(goscie: list[dict], sort: str) -> list[dict]:
+    if sort == "nazwisko_asc":
+        return sorted(goscie, key=lambda row: (_normalizuj_wyszukiwanie(row["nazwisko"]), row["profil_ref"]))
+    if sort == "ryzyko_desc":
+        rank = {"wysokie": 2, "srednie": 1, "niskie": 0}
+        return sorted(
+            goscie,
+            key=lambda row: (rank[row["ryzyko"]], row["no_show_proc"], row["wizyt"], row["profil_ref"]),
+            reverse=True,
+        )
+    if sort == "wizyty_desc":
+        return sorted(goscie, key=lambda row: (row["wizyt"], row["odbyte"], row["profil_ref"]), reverse=True)
+    return sorted(goscie, key=lambda row: (row["ostatnia_data"], row["profil_ref"]), reverse=True)
+
+
+def _pasuje_do_crm(row: dict, query: str | None) -> bool:
+    if not query:
+        return True
+    needle = _normalizuj_wyszukiwanie(query)
+    searchable = [row.get("nazwisko"), row.get("telefon"), row.get("email"), *(row.get("tagi") or [])]
+    if any(needle in _normalizuj_wyszukiwanie(value) for value in searchable):
+        return True
+    digits = "".join(char for char in query if char.isdigit())
+    phone_digits = "".join(char for char in str(row.get("telefon") or "") if char.isdigit())
+    return bool(len(digits) >= 3 and digits in phone_digits)
+
+
 @router.get(
     "/api/crm/goscie",
     dependencies=[Depends(_wymagaj_modul_rezerwacje)],
@@ -189,71 +303,47 @@ def crm_goscie(
     _admin: models.User = Depends(require_admin),
 ):
     """Adminowa lista CRM bez klucza kontaktowego w kontrakcie nawigacji."""
-    rezerwacje = db.query(models.Termin).filter(models.Termin.rodzaj.in_(_RODZAJE_CRM)).all()
+    goscie = _sortuj_gosci(
+        _zbuduj_liste_gosci(db, max(1, int(min_wizyt))),
+        "wizyty_desc",
+    )
+    return goscie[:max(1, min(int(limit), 5000))]
 
-    grupy = defaultdict(list)
-    for t in rezerwacje:
-        klucz = _klucz_crm(t)
-        if klucz:
-            grupy[klucz].append(t)
 
-    goscie = []
-    profile_hash_by_ref = {}
-    for klucz, lista in grupy.items():
-        lista.sort(key=_sort_key, reverse=True)
-        wizyt = len(lista)
-        if wizyt < max(1, int(min_wizyt)):
-            continue
-        stats = _statystyki(lista)
-        aktywne = sum(1 for t in lista if t.status in _AKTYWNE)
-        ryzyko = (
-            "wysokie"
-            if stats["odbyte"] + stats["no_show"] + stats["odwolane"] >= 3
-            and stats["no_show_proc"] >= 30
-            else ("srednie" if stats["no_show_proc"] > 0 else "niskie")
-        )
-        najnowsza = lista[0]
-        profil_ref = najnowsza.id
-        profile_hash_by_ref[profil_ref] = _hash_klucz(klucz)
-        daty = [t.data for t in lista]
-        goscie.append(
-            {
-                "profil_ref": profil_ref,
-                "identity": _identity_parts(najnowsza)[1],
-                "nazwisko": najnowsza.nazwisko,
-                "telefon": najnowsza.telefon,
-                "email": najnowsza.email,
-                "wizyt": wizyt,
-                "odbyte": stats["odbyte"],
-                "no_show": stats["no_show"],
-                "odwolane": stats["odwolane"],
-                "aktywne": aktywne,
-                "no_show_proc": stats["no_show_proc"],
-                "ryzyko": ryzyko,
-                "vip": stats["vip_auto"],
-                "ostatnia_data": str(max(daty)),
-                "pierwsza_data": str(min(daty)),
-            }
-        )
-
-    goscie.sort(key=lambda g: (g["wizyt"], g["odbyte"], g["profil_ref"]), reverse=True)
-    goscie = goscie[:max(1, min(int(limit), 5000))]
-
-    hashe = {profile_hash_by_ref[g["profil_ref"]] for g in goscie}
-    if hashe:
-        profile = {
-            p.klucz_hash: p
-            for p in db.query(models.ProfilGoscia)
-            .filter(models.ProfilGoscia.klucz_hash.in_(hashe))
-            .all()
-        }
-        for g in goscie:
-            p = profile.get(profile_hash_by_ref[g["profil_ref"]])
-            g["tagi"] = (p.tagi if p else None) or []
-            g["ma_alergie"] = bool(p and p.alergie)
-            g["ma_profil"] = p is not None
-            g["vip"] = g["vip"] or bool(p and p.vip)
-    return goscie
+@router.post(
+    "/api/crm/goscie/wyszukaj",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_goscie_wyszukaj(
+    dane: schemas.CrmGoscieWyszukajIn,
+    db: Session = Depends(get_db),
+    _admin: models.User = Depends(require_admin),
+):
+    """Kontrolowane wyszukiwanie PII bez umieszczania kryteriow w URL."""
+    goscie = [
+        row for row in _zbuduj_liste_gosci(db, dane.min_wizyt)
+        if _pasuje_do_crm(row, dane.q)
+        and (dane.vip is None or row["vip"] is dane.vip)
+        and (dane.ryzyko is None or row["ryzyko"] == dane.ryzyko)
+    ]
+    goscie = _sortuj_gosci(goscie, dane.sort)
+    total = len(goscie)
+    summary = {
+        "wizyt": sum(row["wizyt"] for row in goscie),
+        "odbyte": sum(row["odbyte"] for row in goscie),
+        "no_show": sum(row["no_show"] for row in goscie),
+        "aktywne": sum(row["aktywne"] for row in goscie),
+        "vip": sum(1 for row in goscie if row["vip"]),
+        "wysokie_ryzyko": sum(1 for row in goscie if row["ryzyko"] == "wysokie"),
+    }
+    page = goscie[dane.offset:dane.offset + dane.limit]
+    return {
+        "goscie": page,
+        "total": total,
+        "offset": dane.offset,
+        "limit": dane.limit,
+        "podsumowanie": summary,
+    }
 
 
 @router.get(
@@ -310,7 +400,7 @@ def crm_gosc_profil(
         "profil": _profil_out(profil),
         "nazwisko": profil.nazwisko if profil and profil.nazwisko else (najnowsza.nazwisko if najnowsza else None),
         "statystyki": _statystyki(lista),
-        "historia": _historia_out(lista),
+        "historia": _historia_out(db, lista),
         "historia_total": len(lista),
         "historia_limit": _CRM_HISTORY_LIMIT,
     }

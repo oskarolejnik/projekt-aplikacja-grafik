@@ -410,6 +410,7 @@ READ_ONLY_WYJATKI = (
 # prefiksowej listy powyżej, żeby przyszła podtrasa zapisu nie odziedziczyła wyjątku.
 READ_ONLY_POST_ODCZYT = frozenset({
     "/api/rezerwacje-stolik/wyszukaj",
+    "/api/crm/goscie/wyszukaj",
     "/api/rezerwacje/reguly/symuluj",
     "/api/rodo/eksport-gosc",
 })

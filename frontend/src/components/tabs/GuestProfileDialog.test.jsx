@@ -33,6 +33,7 @@ const response = ({
   canViewSensitive = true,
   canViewNotes = true,
   confident = true,
+  history = null,
 } = {}) => ({
   reservation_id: reservationId,
   profil_ref: reservationId,
@@ -51,7 +52,7 @@ const response = ({
     marketing_zgoda: false,
   },
   statystyki: { wizyt: 5, odbyte: 4, no_show: 1, odwolane: 0, no_show_proc: 20, vip_auto: false },
-  historia: [{ reservation_id: reservationId, data: '2026-08-21', godz_od: '18:00', liczba_osob: 4, status: 'potwierdzona' }],
+  historia: history || [{ reservation_id: reservationId, data: '2026-08-21', godz_od: '18:00', liczba_osob: 4, status: 'potwierdzona' }],
   historia_total: 1,
   historia_limit: 50,
   ukryte_pola: canViewSensitive || canViewNotes ? [] : ['profil.alergie', 'profil.dieta', 'profil.notatka'],
@@ -189,6 +190,57 @@ describe('GuestProfileDialog', () => {
 
     expect(await screen.findByRole('textbox', { name: 'Notatka wewnętrzna' })).toBeInTheDocument()
     expect(apiMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('pokazuje kompletny rzeczywisty czas i zamrożony historyczny przydział', async () => {
+    apiMock.mockResolvedValueOnce(response({
+      history: [{
+        reservation_id: 42,
+        data: '2026-08-21',
+        godz_od: '18:00',
+        liczba_osob: 4,
+        status: 'odbyla',
+        planowany_czas_min: 120,
+        rzeczywisty_czas_min: 92,
+        odchylenie_min: -28,
+        pomiar: 'complete',
+        przydzial: {
+          sala_id: 3,
+          sala_nazwa: 'Sala główna',
+          stoliki: [{ id: 1, nazwa: 'T1' }, { id: 2, nazwa: 'T2' }],
+          kombinacja: { id: 8, wersja_id: 5, nazwa: 'Układ rodzinny' },
+          proweniencja: 'frozen',
+        },
+      }],
+    }))
+
+    render(<GuestProfileDialog reservationId={42} onClose={vi.fn()} />)
+
+    expect(await screen.findByText('92 min')).toBeInTheDocument()
+    expect(screen.getByText(/plan 120 min · 28 min krócej/)).toBeInTheDocument()
+    expect(screen.getByText('Sala główna · Konfiguracja: Układ rodzinny · Stoły: T1 + T2')).toBeInTheDocument()
+  })
+
+  it('jawnie oznacza brak pomiaru zamiast pokazywać zero', async () => {
+    apiMock.mockResolvedValueOnce(response({
+      history: [{
+        reservation_id: 42,
+        data: '2026-08-21',
+        godz_od: '18:00',
+        liczba_osob: 4,
+        status: 'odbyla',
+        planowany_czas_min: 90,
+        rzeczywisty_czas_min: null,
+        odchylenie_min: null,
+        pomiar: 'missing',
+        przydzial: { sala_id: null, sala_nazwa: null, stoliki: [], kombinacja: null, proweniencja: 'brak' },
+      }],
+    }))
+
+    render(<GuestProfileDialog reservationId={42} onClose={vi.fn()} />)
+
+    expect(await screen.findByText('Czas wizyty: brak pomiaru · plan 90 min')).toBeInTheDocument()
+    expect(screen.queryByText('0 min')).not.toBeInTheDocument()
   })
 
   it('abortuje poprzedni profil i nie pokazuje spóźnionej odpowiedzi', async () => {

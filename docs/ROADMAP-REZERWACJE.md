@@ -998,6 +998,39 @@ Zakres:
 - rekomendacje: „grupy 1–2 siedzą zwykle 82 min; ustawione 120 min”,
 - symulacja wpływu rekomendacji przed jej zastosowaniem.
 
+**Stan R7.1 — fakty operacyjne i bezpieczna baza gości (2026-07-19):**
+
+- [x] `POST /api/crm/goscie/wyszukaj` przyjmuje frazę i filtry wyłącznie w body, ma ścisłe sortowanie,
+  paginację i podsumowanie pełnego wyniku. PII nie trafia do URL ani storage; stary GET zachowuje
+  kompatybilny kontrakt, a POST pozostaje odczytem również przy wygasłej subskrypcji.
+- [x] Historia gościa używa wspólnej definicji pomiaru z `host_seated_at`/`host_left_at`, pokazuje plan,
+  fakt, odchylenie i jakość pomiaru oraz historyczny przydział z nazwami stolików i kombinacji zamrożonymi
+  w wersji planu. Wizyty nocne nie tracą czasu planowanego.
+- [x] `GET /api/analityka/rezerwacje/operacyjna` wymaga dokładnego `rezerwacje.analityka`, zwraca wyłącznie
+  agregaty bez PII i rozdziela pełny, brakujący oraz nieprawidłowy pomiar. Liczy rzeczywiste minuty sal,
+  stołów i kombinacji; przeniesienie w trakcie wizyty pozostaje w turn time, lecz nie przypisuje całego
+  czasu do jednego zasobu.
+- [x] „Baza gości” ma debounce, abort/generation fence, filtry, paginację, lokalny retry, privacy purge,
+  tabelę desktopową i listę mobilną. Karta gościa pokazuje historię czasu i przydziału bez utraty redakcji
+  pól wrażliwych.
+- [x] „Wyniki rezerwacji” łączą trzy niezależne źródła, zachowują poprzedni poprawny fragment przy
+  częściowej awarii, nigdy nie zamieniają braku danych na zero i jawnie odróżniają planowane obłożenie od
+  rzeczywistych pomiarów. Zakresy 7/30/90 dni oraz widoki Przegląd/Czas wizyt/Sale i stoły nie zmieniają
+  reguł lokalu automatycznie.
+- [x] Nowe testy backendu: 14/14; szersza regresja CRM/analityki/uprawnień: 70/70. Frontend: 66 plików /
+  514 testów i build produkcyjny. Smoke 1366×768, 768×1024 i 390×844 potwierdził brak poziomego overflow,
+  cele co najmniej 44 px, bezpieczny URL wyszukiwania i czystą konsolę buildu produkcyjnego.
+
+**Done R7.1:** administrator ma bezpieczną bazę gości, a administrator i uprawniony manager widzą
+wiarygodny baseline zachowania gości i zasobów. Panel nie udaje rekomendacji ani nie zmienia polityki
+przed zebraniem wystarczającej próby.
+
+Pozostałe checkpointy R7:
+
+- **R7.2:** odrzucony popyt, przyczyny braku dostępności i skuteczność waitlisty,
+- **R7.3:** kontrolowany eksport, narzędzia jakości danych, łączenie duplikatów i wersjonowane zgody,
+- **R7.4:** rekomendacje z minimalną próbą, symulacja wpływu i jawne przyjęcie albo odrzucenie zmiany.
+
 **Done:** administrator rozumie, dlaczego traci dostępność, i może świadomie przyjąć lub odrzucić
 konkretną zmianę reguły.
 
@@ -1118,11 +1151,12 @@ R0a–R5b są zamkniętymi checkpointami. R5c jest technicznie gotowe, lecz zgod
 pozostaje wyłączone do czasu uruchomienia JDG i gotowości merchant. Nie spełnia jeszcze bramy
 produkcyjnej, ale odłożona integracja Stripe nie blokuje niezależnego R6a.
 
-R6b.1–R6b.3 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to **R7 — CRM,
-analiza i rekomendacje**. Pierwszy pionowy zakres powinien połączyć wyszukiwanie i historię gościa
-z rzeczywistym turn time oraz wykorzystaniem sal, stołów i kombinacji, bez automatycznej zmiany polityki
-lokalu. Smoke docelowego urządzenia i współbieżność PostgreSQL pozostają bramami rolloutowymi R6a/R6b,
-nie nowym zakresem funkcjonalnym.
+R6b.1–R6b.3 oraz R7.1 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to **R7.2 —
+odrzucony popyt i skuteczność waitlisty**: wspólne, pozbawione PII zdarzenia odmowy powinny wskazać
+kanoniczną przyczynę braku dostępności, wielkość grupy, porę i oczekiwany zasób, a konwersja waitlisty ma
+być liczona od zapisu do faktycznego przyjęcia wizyty. Ten etap nadal tylko opisuje utraconą dostępność;
+nie zmienia reguł lokalu automatycznie. Smoke docelowego urządzenia i współbieżność PostgreSQL pozostają
+bramami rolloutowymi R6a/R6b, nie nowym zakresem funkcjonalnym.
 
 Produkcyjne testy Stripe płatność–zwrot wrócą dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
 pozostaje osobnym kontekstem i nie może ponownie używać stanu, webhooków ani modeli płatności rezerwacji.

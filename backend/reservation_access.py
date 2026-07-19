@@ -88,6 +88,7 @@ _PROTECTED_PREFIXES = (
     "/api/sale-rezerwacyjne",
     "/api/analityka/rezerwacje",
     "/api/analityka/oblozenie",
+    "/api/crm/goscie",
     "/api/crm/rezerwacje",
     "/api/platnosci",
     "/api/polityki-platnosci-rezerwacji",
@@ -268,7 +269,11 @@ def requirement_for(method: str, path: str) -> Requirement | None:
     if path == "/api/plan-sali/pozycje":
         return Requirement(all_of=(FLOOR,)) if method == "PUT" else ADMIN_ONLY
 
-    if path in {"/api/analityka/rezerwacje", "/api/analityka/oblozenie"}:
+    if path in {
+        "/api/analityka/rezerwacje",
+        "/api/analityka/rezerwacje/operacyjna",
+        "/api/analityka/oblozenie",
+    }:
         return Requirement(all_of=(ANALYTICS,)) if method == "GET" else ADMIN_ONLY
 
     return ADMIN_ONLY if _chroniona_przestrzen(path) else None

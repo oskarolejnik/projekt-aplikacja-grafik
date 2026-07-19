@@ -1338,6 +1338,31 @@ class HostStolikIn(HostExactAllocationIn):
 class HostPosadzIn(HostExactAllocationIn):
     """Atomowe posadzenie; brak celu w trybie legacy uruchamia best-fit."""
 
+
+class CrmGoscieWyszukajIn(BaseModel):
+    """PII-safe transport wyszukiwania CRM: kryteria nie trafiaja do URL/logow proxy."""
+
+    q: Optional[str] = Field(default=None, max_length=100)
+    vip: Optional[StrictBool] = None
+    ryzyko: Optional[Literal["niskie", "srednie", "wysokie"]] = None
+    min_wizyt: StrictInt = Field(default=1, ge=1, le=10000)
+    sort: Literal[
+        "ostatnia_data_desc",
+        "wizyty_desc",
+        "nazwisko_asc",
+        "ryzyko_desc",
+    ] = "ostatnia_data_desc"
+    offset: StrictInt = Field(default=0, ge=0, le=100000)
+    limit: StrictInt = Field(default=100, ge=1, le=500)
+
+    @field_validator("q")
+    @classmethod
+    def _oczysc_zapytanie(cls, value):
+        if value is None:
+            return None
+        return " ".join(value.split()) or None
+
+
 class ProfilGosciaIn(BaseModel):
     """Profil gościa 360 (upsert). Alergie/notatka = dane wrażliwe (szyfrowane at-rest)."""
     nazwisko: Optional[str] = None

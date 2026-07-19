@@ -184,6 +184,94 @@ function ProfileForm({ form, setForm, saving }) {
   )
 }
 
+const finiteMinutes = (value) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
+}
+
+const visitTiming = (visit) => {
+  const planned = finiteMinutes(
+    visit.planowany_czas_min
+      ?? visit.planowany_turn_time_min
+      ?? visit.planned_turn_time_min,
+  )
+  const actual = finiteMinutes(
+    visit.rzeczywisty_czas_min
+      ?? visit.rzeczywisty_turn_time_min
+      ?? visit.actual_turn_time_min,
+  )
+  const explicitDelta = finiteMinutes(Math.abs(Number(
+    visit.odchylenie_min
+      ?? visit.odchylenie_czasu_min
+      ?? visit.turn_time_delta_min,
+  )))
+  const delta = actual !== null && planned !== null
+    ? actual - planned
+    : explicitDelta
+  const measurement = visit.pomiar
+  const measured = actual !== null && (
+    measurement == null
+      || measurement === true
+      || measurement === 'pelny'
+      || measurement === 'complete'
+      || measurement?.kompletny === true
+      || measurement?.status === 'pelny'
+      || measurement?.status === 'complete'
+  )
+  return { actual: measured ? actual : null, planned, delta: measured ? delta : null }
+}
+
+const visitAllocation = (visit) => {
+  const allocation = visit.przydzial || visit.allocation || {}
+  const room = allocation.sala?.nazwa
+    || allocation.sala_nazwa
+    || allocation.room?.name
+    || allocation.room_name
+    || visit.sala_nazwa
+    || null
+  const combination = allocation.kombinacja?.nazwa
+    || allocation.kombinacja_nazwa
+    || allocation.combination?.name
+    || allocation.combination_name
+    || visit.kombinacja_nazwa
+    || null
+  const rawTables = allocation.stoliki
+    || allocation.tables
+    || visit.stoliki
+    || []
+  const tables = rawTables
+    .map((table) => typeof table === 'string' ? table : (table?.nazwa || table?.name))
+    .filter(Boolean)
+  const parts = [
+    room,
+    combination ? `Konfiguracja: ${combination}` : null,
+    tables.length ? `Stoły: ${tables.join(' + ')}` : null,
+  ].filter(Boolean)
+  return [...new Set(parts)].join(' · ')
+}
+
+function TimingSummary({ visit }) {
+  const timing = visitTiming(visit)
+  if (timing.actual === null) {
+    return (
+      <span className="text-xs text-muted">
+        Czas wizyty: brak pomiaru{timing.planned !== null ? ` · plan ${timing.planned} min` : ''}
+      </span>
+    )
+  }
+  const difference = timing.delta === null || timing.delta === 0
+    ? 'zgodnie z planem'
+    : timing.delta > 0
+      ? `${Math.abs(timing.delta)} min dłużej`
+      : `${Math.abs(timing.delta)} min krócej`
+  return (
+    <span className="text-xs text-muted">
+      Czas wizyty: <b className="font-semibold text-ink">{timing.actual} min</b>
+      {timing.planned !== null ? ` · plan ${timing.planned} min · ${difference}` : ''}
+    </span>
+  )
+}
+
 function VisitHistory({ data }) {
   const rows = data.historia || []
   if (!rows.length) return null
@@ -195,11 +283,17 @@ function VisitHistory({ data }) {
       </div>
       <div className="mt-3 divide-y divide-line/70">
         {rows.map((visit, index) => (
-          <div key={visit.reservation_id || `${visit.data}-${visit.godz_od}-${index}`} className="flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5 text-sm">
-            <span className="text-ink">
-              {visit.data}{visit.godz_od ? ` · ${visit.godz_od}` : ''}{visit.liczba_osob ? ` · ${visit.liczba_osob} os.` : ''}
-            </span>
-            <span className="text-xs font-semibold text-muted">{STATUS_LABELS[visit.status] || visit.status}</span>
+          <div key={visit.reservation_id || `${visit.data}-${visit.godz_od}-${index}`} className="min-h-16 py-3 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <span className="font-semibold text-ink">
+                {visit.data}{visit.godz_od ? ` · ${visit.godz_od}` : ''}{visit.liczba_osob ? ` · ${visit.liczba_osob} os.` : ''}
+              </span>
+              <span className="text-xs font-semibold text-muted">{STATUS_LABELS[visit.status] || visit.status}</span>
+            </div>
+            <div className="mt-1.5 flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
+              <TimingSummary visit={visit} />
+              {visitAllocation(visit) ? <span className="text-xs text-muted">{visitAllocation(visit)}</span> : null}
+            </div>
           </div>
         ))}
       </div>

@@ -84,8 +84,8 @@ const TABS = [
   { id: 'eksport', label: 'Eksport do Excela', icon: 'download', kat: 'kasa', title: 'Eksport danych', load: loadEksport },
   // Goście — rezerwacje i relacje.
   { id: 'rezerwacje', label: 'Rezerwacje', icon: 'calendar', kat: 'goscie', title: 'Rezerwacje', load: loadReservationsWorkspace, modul: 'modul_rezerwacje' },
-  { id: 'crm-goscie', label: 'Goście (CRM)', icon: 'users', kat: 'goscie', title: 'Goście — CRM i ryzyko no-show', load: loadCrmGoscie, modul: 'modul_rezerwacje' },
-  { id: 'analityka-rezerwacji', label: 'Analityka rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Analityka rezerwacji — covery, no-show, szczyty', load: loadAnalitykaRezerwacji, modul: 'modul_rezerwacje' },
+  { id: 'crm-goscie', label: 'Baza gości', icon: 'users', kat: 'goscie', title: 'Baza gości', load: loadCrmGoscie, modul: 'modul_rezerwacje' },
+  { id: 'analityka-rezerwacji', label: 'Wyniki rezerwacji', icon: 'sparkles', kat: 'goscie', title: 'Wyniki rezerwacji', load: loadAnalitykaRezerwacji, modul: 'modul_rezerwacje' },
   // Imprezy — eventy i zapytania. Rozliczenia wydarzeń pozostają w kalendarzu imprez.
   { id: 'kalendarz', label: 'Kalendarz imprez', icon: 'calendar', kat: 'imprezy', title: 'Kalendarz imprez', load: loadKalendarzImprez, modul: 'modul_imprezy' },
   { id: 'zapytania-imprez', label: 'Zapytania o imprezy', icon: 'sparkles', kat: 'imprezy', title: 'Zapytania o imprezy', load: loadZapytaniaImprez, modul: 'modul_imprezy' },
