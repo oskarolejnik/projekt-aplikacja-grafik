@@ -98,6 +98,30 @@ const floor = {
   podsumowanie: { bez_rezerwacji: 0, zarezerwowane: 2, wstrzymane: 0, nieaktywne: 0, zajete_live: 0 },
 }
 
+const floorWithMoveTarget = {
+  ...floor,
+  stoliki: [
+    ...floor.stoliki,
+    {
+      id: 5, nazwa: 'T5', sala_id: 1, strefa: 'Sala główna', sekcja: 'Środek', pojemnosc: 6,
+      aktywny: true, aktywny_w_planie: true, plan_x: 84, plan_y: 72, szerokosc: 14, wysokosc: 14,
+      obrot: 0, status: 'bez_rezerwacji', rezerwacje: [], live: null,
+    },
+  ],
+}
+
+const placementResponse = (nextReservation, operation, from, to, undoCommand = null) => ({
+  rezerwacja: nextReservation,
+  mutation: {
+    operation,
+    changed: true,
+    from_stoliki: from,
+    to_stoliki: to,
+    replayed: false,
+  },
+  undo_command: undoCommand,
+})
+
 const timeline = {
   data: DAY,
   stoly: [
@@ -881,11 +905,15 @@ describe('Widok hosta R6b.1', () => {
   it('zachowuje wybór stołu po błędzie i pozwala ponowić akcję lokalnie', async () => {
     authState.permissions = ['rezerwacje.dane_kontaktowe']
     let attempts = 0
+    const singleFloor = {
+      ...floor,
+      stoliki: floor.stoliki.map((table) => table.id === 4 ? { ...table, pojemnosc: 6 } : table),
+    }
     apiMock.mockImplementation((path, method, body) => {
-      if (path === `/host/snapshot?data=${DAY}`) return Promise.resolve(makeSnapshot())
+      if (path === `/host/snapshot?data=${DAY}`) return Promise.resolve(makeSnapshot({ nextFloor: singleFloor }))
       if (path === '/host/rezerwacja/7/posadz' && method === 'POST') {
         attempts += 1
-        expect(body).toEqual({ stolik_id: 4 })
+        expect(body).toEqual({ stoliki: [4], oczekiwane_stoliki: [3, 4] })
         const conflict = new Error('Stół został właśnie zajęty.')
         conflict.status = 409
         return attempts === 1
@@ -907,6 +935,34 @@ describe('Widok hosta R6b.1', () => {
     fireEvent.click(retryButton)
     await waitFor(() => expect(attempts).toBe(2))
     expect(await screen.findByText('Posadzono gości. Widok synchronizuje się w tle.')).toBeInTheDocument()
+  })
+
+  it('nie zastępuje po cichu jawnego wyboru, który zniknął po odświeżeniu planu', async () => {
+    vi.useFakeTimers()
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    const initialFloor = {
+      ...floor,
+      stoliki: floor.stoliki.map((table) => table.id === 4 ? { ...table, pojemnosc: 6 } : table),
+    }
+    let snapshotLoads = 0
+    apiMock.mockImplementation((path, method) => {
+      if (path === `/host/snapshot?data=${DAY}`) {
+        snapshotLoads += 1
+        return Promise.resolve(makeSnapshot({ nextFloor: snapshotLoads === 1 ? initialFloor : floor }))
+      }
+      if (method === 'POST') return Promise.reject(new Error('Nie powinno dojść do zapisu.'))
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+    await act(async () => {})
+
+    const select = screen.getByLabelText('Stół dla Kowalska')
+    fireEvent.change(select, { target: { value: '4' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    fireEvent.click(screen.getByRole('button', { name: 'Posadź' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Wybrana konfiguracja nie jest już aktualna')
+    expect(apiMock.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(0)
   })
 
   it('ignoruje spóźniony snapshot poprzedniego dnia', async () => {
@@ -1144,6 +1200,302 @@ describe('Widok hosta R6b.1', () => {
       expect.objectContaining({ stolik_id: 3, faza_hosta: 'posadzony' }),
       expect.objectContaining({ stolik_id: 4, faza_hosta: 'posadzony' }),
     ]))
+  })
+
+  it('pointer-DnD sadza dokładny zestaw tylko raz i nie oferuje niebezpiecznego undo', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    let snapshotLoads = 0
+    apiMock.mockImplementation((path, method, body, options) => {
+      if (path === `/host/snapshot?data=${DAY}`) {
+        snapshotLoads += 1
+        return snapshotLoads === 1 ? Promise.resolve(makeSnapshot()) : new Promise(() => {})
+      }
+      if (path === '/host/rezerwacja/7/posadz' && method === 'POST') {
+        expect(body).toEqual({ stoliki: [3, 4], oczekiwane_stoliki: [3, 4] })
+        expect(options.headers['Idempotency-Key']).toBe('host-seat-test-key')
+        return Promise.resolve(placementResponse(
+          { ...reservation, faza_hosta: 'posadzony', minuty_od_posadzenia: 0 },
+          'seat', [3, 4], [3, 4],
+        ))
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    const handle = await screen.findByRole('button', { name: 'Posadź na planie' })
+    fireEvent.pointerDown(handle, { pointerId: 21, pointerType: 'mouse', clientX: 700, clientY: 220 })
+    const target = await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla Kowalska/ })
+    const originalElementsFromPoint = document.elementsFromPoint
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: vi.fn(() => [target]),
+    })
+    fireEvent.pointerMove(handle, { pointerId: 21, pointerType: 'mouse', clientX: 300, clientY: 320 })
+    fireEvent.pointerUp(handle, { pointerId: 21, pointerType: 'mouse', clientX: 300, clientY: 320 })
+    fireEvent.pointerUp(handle, { pointerId: 21, pointerType: 'mouse', clientX: 300, clientY: 320 })
+
+    expect(await screen.findByText('Posadzono gości przy T3 + T4.')).toBeInTheDocument()
+    expect(apiMock.mock.calls.filter(([path]) => path === '/host/rezerwacja/7/posadz')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Cofnij' })).not.toBeInTheDocument()
+    if (originalElementsFromPoint) {
+      Object.defineProperty(document, 'elementsFromPoint', {
+        configurable: true,
+        value: originalElementsFromPoint,
+      })
+    } else {
+      delete document.elementsFromPoint
+    }
+  })
+
+  it('klawiaturą przechodzi do planu, nawiguje strzałką i Escape oddaje fokus', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    render(<WidokHosta date={DAY} />)
+
+    const handle = await screen.findByRole('button', { name: 'Posadź na planie' })
+    fireEvent.click(handle, { detail: 0 })
+    expect(screen.getByRole('button', { name: 'Sala' })).toHaveAttribute('aria-pressed', 'true')
+    const first = await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla Kowalska/ })
+    const second = screen.getByRole('button', { name: /T4, 2 miejsca.*wybierz dla Kowalska/ })
+    await waitFor(() => expect(first).toHaveFocus())
+    fireEvent.keyDown(first, { key: 'ArrowRight' })
+    expect(second).toHaveFocus()
+    fireEvent.keyDown(second, { key: 'Escape' })
+    await waitFor(() => expect(handle).toHaveFocus())
+    expect(screen.queryByText(/Posadź gości · Kowalska/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Goście' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('po wyborze stołu klawiaturą prowadzi fokus do potwierdzenia i kończy operację', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    let snapshotLoads = 0
+    apiMock.mockImplementation((path, method, body) => {
+      if (path === `/host/snapshot?data=${DAY}`) {
+        snapshotLoads += 1
+        return snapshotLoads === 1 ? Promise.resolve(makeSnapshot()) : new Promise(() => {})
+      }
+      if (path === '/host/rezerwacja/7/posadz' && method === 'POST') {
+        expect(body).toEqual({ stoliki: [3, 4], oczekiwane_stoliki: [3, 4] })
+        return Promise.resolve(placementResponse(
+          { ...reservation, faza_hosta: 'posadzony', minuty_od_posadzenia: 0 },
+          'seat', [3, 4], [3, 4],
+        ))
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    const handle = await screen.findByRole('button', { name: 'Posadź na planie' })
+    fireEvent.click(handle, { detail: 0 })
+    const table = await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla Kowalska/ })
+    await waitFor(() => expect(table).toHaveFocus())
+    fireEvent.click(table, { detail: 0 })
+    const confirm = screen.getByRole('button', { name: 'Posadź · T3 + T4' })
+    await waitFor(() => expect(confirm).toHaveFocus())
+    fireEvent.click(confirm, { detail: 0 })
+
+    expect(await screen.findByText('Posadzono gości przy T3 + T4.')).toBeInTheDocument()
+  })
+
+  it('na ścieżce touch zachowuje exact selection i pokazuje 409 przy planie', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    let snapshotLoads = 0
+    apiMock.mockImplementation((path, method, body) => {
+      if (path === `/host/snapshot?data=${DAY}`) {
+        snapshotLoads += 1
+        return snapshotLoads === 1 ? Promise.resolve(makeSnapshot()) : new Promise(() => {})
+      }
+      if (path === '/host/rezerwacja/7/posadz' && method === 'POST') {
+        expect(body).toEqual({ stoliki: [3, 4], oczekiwane_stoliki: [3, 4] })
+        const error = new Error('T3 + T4 zostały właśnie zajęte.')
+        error.status = 409
+        error.code = 'TABLE_CONFLICT'
+        return Promise.reject(error)
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    const handle = await screen.findByRole('button', { name: 'Posadź na planie' })
+    fireEvent.pointerDown(handle, { pointerId: 31, pointerType: 'touch' })
+    fireEvent.click(handle, { detail: 1 })
+    const target = await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla Kowalska/ })
+    fireEvent.click(target)
+    fireEvent.click(screen.getByRole('button', { name: 'Posadź · T3 + T4' }))
+
+    expect(await screen.findByText('T3 + T4 zostały właśnie zajęte.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Posadź · T3 + T4' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Sala' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('po konflikcie CAS zamyka nieaktualny placement zamiast zapętlać ponowienie', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    let snapshotLoads = 0
+    apiMock.mockImplementation((path, method) => {
+      if (path === `/host/snapshot?data=${DAY}`) {
+        snapshotLoads += 1
+        return snapshotLoads === 1 ? Promise.resolve(makeSnapshot()) : new Promise(() => {})
+      }
+      if (path === '/host/rezerwacja/7/posadz' && method === 'POST') {
+        const error = new Error('Przydział tej rezerwacji zmienił się. Odśwież widok i spróbuj ponownie.')
+        error.status = 409
+        error.code = 'HOST_ASSIGNMENT_CHANGED'
+        return Promise.reject(error)
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Posadź na planie' }))
+    fireEvent.click(await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla Kowalska/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Posadź · T3 + T4' }))
+
+    const feedback = await screen.findByRole('alert')
+    expect(feedback).toHaveTextContent('Przydział tej rezerwacji zmienił się')
+    await waitFor(() => expect(feedback).toHaveFocus())
+    expect(screen.queryByText(/Posadź gości · Kowalska/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Goście' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('nieznany wynik zamyka placement i blokuje kolejne zapisy do odświeżenia', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    apiMock.mockImplementation((path, method) => {
+      if (path === `/host/snapshot?data=${DAY}`) return Promise.resolve(makeSnapshot())
+      if (path === '/host/rezerwacja/7/posadz' && method === 'POST') return Promise.reject(new Error('Sieć przerwana'))
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Posadź na planie' }))
+    fireEvent.click(await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla Kowalska/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Posadź · T3 + T4' }))
+
+    expect(await screen.findByText(/Nie znamy wyniku — odśwież widok/)).toBeInTheDocument()
+    expect(screen.queryByText(/Posadź gości · Kowalska/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Posadź na planie' })).toBeDisabled()
+  })
+
+  it('prowadzi placement przez override i jednorazowy PIN', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe', 'rezerwacje.nadpisuj_limity']
+    authState.workstationSession = { active: true }
+    reauthorizeWorkstationMock.mockResolvedValue({ grant: 'reauth-placement' })
+    let attempts = 0
+    let snapshotLoads = 0
+    apiMock.mockImplementation((path, method, body, options) => {
+      if (path === `/host/snapshot?data=${DAY}`) {
+        snapshotLoads += 1
+        return snapshotLoads === 1 ? Promise.resolve(makeSnapshot()) : new Promise(() => {})
+      }
+      if (path === '/host/rezerwacja/7/posadz' && method === 'POST') {
+        attempts += 1
+        if (attempts === 1) {
+          const error = new Error('Limit coverów został przekroczony.')
+          error.status = 409
+          error.code = 'PACING_COVERS_LIMIT'
+          error.availability = {
+            decision: 'override_required', can_override: true,
+            violations: [{ code: 'PACING_COVERS_LIMIT', message: 'Limit coverów', overrideable_by_operator: true }],
+          }
+          return Promise.reject(error)
+        }
+        expect(body).toEqual(expect.objectContaining({
+          stoliki: [3, 4], oczekiwane_stoliki: [3, 4], przekrocz_limity: true,
+          nadpisanie_limitow: expect.objectContaining({ powod: 'operational_decision', potwierdzone: true }),
+        }))
+        expect(options.headers['X-Lokalo-Workstation-Reauth']).toBe('reauth-placement')
+        return Promise.resolve(placementResponse(
+          { ...reservation, faza_hosta: 'posadzony', minuty_od_posadzenia: 0 },
+          'seat', [3, 4], [3, 4],
+        ))
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Posadź na planie' }))
+    fireEvent.click(await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla Kowalska/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Posadź · T3 + T4' }))
+    fireEvent.change(await screen.findByLabelText('Powód przekroczenia'), { target: { value: 'operational_decision' } })
+    fireEvent.change(screen.getByLabelText('Twój 6-cyfrowy PIN'), { target: { value: '123456' } })
+    fireEvent.click(screen.getByRole('button', { name: /Potwierdź PIN-em i posadź/i }))
+
+    await waitFor(() => expect(attempts).toBe(2))
+    expect(reauthorizeWorkstationMock).toHaveBeenCalledWith(expect.objectContaining({ pin: '123456', scope: 'reservation_override' }))
+    expect(await screen.findByText('Posadzono gości przy T3 + T4.')).toBeInTheDocument()
+  })
+
+  it('przenosi bez zmiany fazy i wykonuje serwerowe Cofnij jako nowy CAS move', async () => {
+    authState.permissions = ['rezerwacje.dane_kontaktowe']
+    const seated = { ...reservation, faza_hosta: 'posadzony', minuty_od_posadzenia: 12 }
+    const seatedQueue = {
+      ...queue,
+      nadchodzace: [],
+      na_sali: [seated],
+      podsumowanie: { ...queue.podsumowanie, nadchodzace: 0, na_sali: 1, coverow_na_sali: 6 },
+    }
+    const undoCommand = {
+      path: '/host/rezerwacja/7/przydziel-stolik',
+      method: 'POST',
+      source_version: 'tables:5',
+      body: { stoliki: [3, 4], oczekiwane_stoliki: [5] },
+    }
+    let writes = 0
+    let snapshotLoads = 0
+    apiMock.mockImplementation((path, method, body, options) => {
+      if (path === `/host/snapshot?data=${DAY}`) {
+        snapshotLoads += 1
+        return snapshotLoads === 1
+          ? Promise.resolve(makeSnapshot({ nextQueue: seatedQueue, nextFloor: floorWithMoveTarget }))
+          : new Promise(() => {})
+      }
+      if (path === '/host/rezerwacja/7/przydziel-stolik' && method === 'POST') {
+        writes += 1
+        if (writes === 1) {
+          expect(body).toEqual({ stoliki: [5], oczekiwane_stoliki: [3, 4] })
+          expect(options.headers['Idempotency-Key']).toBe('host-move-test-key')
+          return Promise.resolve(placementResponse(
+            { ...seated, stolik_id: 5, stoliki_dodatkowe: [], minuty_od_posadzenia: 12 },
+            'move', [3, 4], [5], undoCommand,
+          ))
+        }
+        expect(body).toEqual(undoCommand.body)
+        expect(options.headers['Idempotency-Key']).toBe('host-move-undo-test-key')
+        return Promise.resolve(placementResponse(seated, 'move', [5], [3, 4]))
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Przenieś' }))
+    fireEvent.click(await screen.findByRole('button', { name: /T5, 6 miejsc.*wybierz dla Kowalska/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Przenieś · T5' }))
+    const undo = await screen.findByRole('button', { name: 'Cofnij' })
+    expect(screen.getByText('12 min na sali')).toBeInTheDocument()
+    fireEvent.click(undo)
+
+    await waitFor(() => expect(writes).toBe(2))
+    expect(await screen.findByText('Przywrócono poprzednią konfigurację stolików.')).toBeInTheDocument()
+    expect(screen.getByText('12 min na sali')).toBeInTheDocument()
+  })
+
+  it('redaguje placement bez prawa do danych kontaktowych', async () => {
+    render(<WidokHosta date={DAY} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Posadź na planie' }))
+
+    expect(screen.getByText('Posadź gości · Gość')).toBeInTheDocument()
+    expect(screen.queryByText('Kowalska')).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /T3, 4 miejsca.*wybierz dla gościa/i })).toBeInTheDocument()
+  })
+
+  it('lokalizuje deadline waitlisty na planie', async () => {
+    apiMock.mockImplementation((path) => {
+      if (path === `/host/snapshot?data=${DAY}`) return Promise.resolve(expiringWaitlistSnapshot())
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+    render(<WidokHosta date={DAY} />)
+
+    expect(await screen.findByRole('button', { name: /T3, 4 miejsca, Oferta waitlisty, Gość, oferta do 17:55/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/2030-03-01T16:55:05/)).not.toBeInTheDocument()
   })
 
   it('timer opisuje opóźnienie tekstem, nie tylko kolorem', () => {

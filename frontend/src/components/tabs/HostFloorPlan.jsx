@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from '../../lib/icons'
 
 const FALLBACK_ROOM_ID = '__pozostale__'
@@ -55,7 +55,51 @@ const fallbackState = (table) => {
 
 const placesLabel = (count) => count === 1 ? 'miejsce' : count >= 2 && count <= 4 ? 'miejsca' : 'miejsc'
 
-export default function HostFloorPlan({ floor, queue, offline = false, canViewContacts = false }) {
+const offerDeadlineLabel = (value) => {
+  if (!value) return null
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`
+  const parsed = new Date(normalized)
+  if (Number.isNaN(parsed.getTime())) return null
+  return new Intl.DateTimeFormat('pl-PL', {
+    timeZone: 'Europe/Warsaw',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(parsed)
+}
+
+const directionalTarget = (current, candidates, key) => {
+  const currentX = Number(current?.plan_x ?? 50)
+  const currentY = Number(current?.plan_y ?? 50)
+  return candidates
+    .filter((table) => {
+      const dx = Number(table.plan_x ?? 50) - currentX
+      const dy = Number(table.plan_y ?? 50) - currentY
+      if (key === 'ArrowLeft') return dx < 0
+      if (key === 'ArrowRight') return dx > 0
+      if (key === 'ArrowUp') return dy < 0
+      return dy > 0
+    })
+    .map((table) => {
+      const dx = Math.abs(Number(table.plan_x ?? 50) - currentX)
+      const dy = Math.abs(Number(table.plan_y ?? 50) - currentY)
+      const score = ['ArrowLeft', 'ArrowRight'].includes(key) ? dx + dy * 2 : dy + dx * 2
+      return { table, score }
+    })
+    .sort((first, second) => first.score - second.score || first.table.id - second.table.id)[0]?.table || null
+}
+
+export default function HostFloorPlan({
+  floor,
+  queue,
+  offline = false,
+  canViewContacts = false,
+  placement = null,
+  placementCandidates = [],
+  placementGuestLabel = 'gościa',
+  onPlacementTarget,
+  onPlacementCancel,
+}) {
   const rooms = useMemo(() => {
     const configured = (floor?.sale || []).map((room) => ({
       id: String(room.id),
@@ -70,6 +114,7 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
   }, [floor])
   const [roomId, setRoomId] = useState(null)
   const [selectedTableId, setSelectedTableId] = useState(null)
+  const tableRefs = useRef(new Map())
 
   useEffect(() => {
     if (!rooms.length) {
@@ -115,6 +160,48 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
   const selectedOperational = selectedTable ? operationalState.get(selectedTable.id) : null
   const selectedKind = selectedOperational?.kind || (selectedTable ? fallbackState(selectedTable) : 'free')
   const selectedMeta = stateMeta[selectedKind]
+  const placementTableIds = useMemo(() => new Set(
+    placementCandidates.flatMap((candidate) => candidate.tableIds || []),
+  ), [placementCandidates])
+  const selectedPlacementIds = useMemo(() => new Set(
+    placementCandidates.find((candidate) => candidate.key === placement?.selectedKey)?.tableIds || [],
+  ), [placement?.selectedKey, placementCandidates])
+
+  useEffect(() => {
+    if (!placement || !placementTableIds.size) return
+    const visibleTarget = tables.find((table) => placementTableIds.has(table.id))
+    if (visibleTarget) return
+    const firstTarget = (floor?.stoliki || []).find((table) => placementTableIds.has(table.id))
+    if (!firstTarget) return
+    const targetRoomId = firstTarget.sala_id == null ? FALLBACK_ROOM_ID : String(firstTarget.sala_id)
+    if (rooms.some((room) => room.id === targetRoomId)) setRoomId(targetRoomId)
+  }, [floor, placement, placementTableIds, roomId, rooms, tables])
+
+  useEffect(() => {
+    if (!placement || !placementTableIds.size) return
+    const preferred = tables.find((table) => table.id === placement.targetTableId && placementTableIds.has(table.id))
+      || tables.find((table) => placementTableIds.has(table.id))
+    if (!preferred) return
+    setSelectedTableId(preferred.id)
+    const timer = window.setTimeout(() => tableRefs.current.get(preferred.id)?.focus(), 0)
+    return () => window.clearTimeout(timer)
+  }, [placement?.focusToken, roomId])
+
+  const handleTableKeyDown = (event, table) => {
+    if (!placement) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onPlacementCancel?.()
+      return
+    }
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+    const candidates = tables.filter((candidate) => placementTableIds.has(candidate.id) && candidate.id !== table.id)
+    const next = directionalTarget(table, candidates, event.key)
+    if (!next) return
+    event.preventDefault()
+    setSelectedTableId(next.id)
+    tableRefs.current.get(next.id)?.focus()
+  }
 
   if (!floor || rooms.length === 0) {
     return (
@@ -158,12 +245,20 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
         ) : null}
       </div>
 
+      {placement ? (
+        <p id="host-floor-placement-help" className="sr-only">
+          Wybierz stolik dla {placementGuestLabel}. Użyj Tab lub strzałek, Enter aby wybrać, Escape aby anulować.
+        </p>
+      ) : null}
+
       {tables.length ? (
         <>
           <div className="mt-4 overflow-x-auto pb-2">
             <div
               className="relative aspect-[4/3] w-full min-w-[34rem] overflow-hidden rounded-2xl border border-white/[0.10] bg-surface"
               aria-label={`Plan operacyjny: ${rooms.find((room) => room.id === roomId)?.name || 'sala'}`}
+              aria-describedby={placement ? 'host-floor-placement-help' : undefined}
+              role="group"
             >
               {tables.map((table) => {
                 const operational = operationalState.get(table.id)
@@ -178,14 +273,34 @@ export default function HostFloorPlan({ floor, queue, offline = false, canViewCo
                 const timer = kind === 'occupied' && reservation?.minuty_od_posadzenia != null
                   ? `${reservation.minuty_od_posadzenia} min`
                   : null
+                const offerDeadline = offerDeadlineLabel(waitlist?.hold_do)
+                const targetable = Boolean(placement && placementTableIds.has(table.id) && !offline)
+                const placementSelected = targetable && (
+                  table.id === placement?.targetTableId || selectedPlacementIds.has(table.id)
+                )
+                const placementMuted = Boolean(placement && !targetable)
+                const baseLabel = `${table.nazwa}, ${table.pojemnosc} ${placesLabel(table.pojemnosc)}, ${meta.label}${reservation || waitlist ? `, ${guest}` : ''}${offerDeadline ? `, oferta do ${offerDeadline}` : ''}${timer ? `, ${timer}` : ''}`
                 return (
                   <button
                     key={table.id}
                     type="button"
-                    onClick={() => setSelectedTableId(table.id)}
-                    aria-pressed={selected}
-                    aria-label={`${table.nazwa}, ${table.pojemnosc} ${placesLabel(table.pojemnosc)}, ${meta.label}${reservation || waitlist ? `, ${guest}` : ''}${waitlist?.hold_do ? `, oferta do ${waitlist.hold_do}` : ''}${timer ? `, ${timer}` : ''}`}
-                    className={`absolute z-10 grid min-h-11 min-w-11 place-items-center rounded-xl border text-center shadow-soft transition-[border-color,background-color,box-shadow] duration-150 ${meta.tableClass} ${selected ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : 'hover:border-white/[0.28]'}`}
+                    ref={(node) => {
+                      if (node) tableRefs.current.set(table.id, node)
+                      else tableRefs.current.delete(table.id)
+                    }}
+                    data-host-drop-table={targetable ? table.id : undefined}
+                    onClick={(event) => {
+                      setSelectedTableId(table.id)
+                      if (targetable) onPlacementTarget?.(table.id, {
+                        input: event.detail === 0 ? 'keyboard' : 'activation',
+                      })
+                    }}
+                    onKeyDown={(event) => handleTableKeyDown(event, table)}
+                    tabIndex={placementMuted ? -1 : 0}
+                    aria-pressed={placement ? placementSelected : selected}
+                    aria-disabled={placementMuted || undefined}
+                    aria-label={`${baseLabel}${placement ? targetable ? `, wybierz dla ${placementGuestLabel}` : ', niedostępny jako cel' : ''}`}
+                    className={`absolute z-10 grid min-h-11 min-w-11 place-items-center rounded-xl border text-center shadow-soft transition-[border-color,background-color,box-shadow,opacity] duration-150 ${meta.tableClass} ${placementSelected ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : targetable ? 'border-mint/55 hover:border-mint hover:bg-mint/15' : placementMuted ? 'opacity-40' : selected ? 'ring-2 ring-mint ring-offset-2 ring-offset-bg' : 'hover:border-white/[0.28]'}`}
                     style={{
                       left: `${table.plan_x ?? 50}%`,
                       top: `${table.plan_y ?? 50}%`,

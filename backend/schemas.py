@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
 from datetime import date, datetime, time
 from typing import Any, Literal, Optional, List
 
@@ -1284,12 +1284,59 @@ class HostOverrideIn(BaseModel):
 class AutoPrzydzialIn(HostOverrideIn):
     pass
 
-class HostStolikIn(HostOverrideIn):
-    stolik_id: int                 # ręczny przydział/przeniesienie na konkretny stół
+class HostExactAllocationIn(HostOverrideIn):
+    """Wspólny exact-set kontrakt R6b.3 z kompatybilnym celem legacy."""
 
-class HostPosadzIn(HostOverrideIn):
-    """Atomowe posadzenie; brak stolik_id uruchamia best-fit, gdy rezerwacja nie ma stołu."""
-    stolik_id: Optional[int] = None
+    model_config = ConfigDict(extra="forbid")
+
+    stolik_id: Optional[int] = Field(default=None, gt=0)
+    stoliki: Optional[List[StrictInt]] = Field(default=None, min_length=1, max_length=32)
+    oczekiwane_stoliki: Optional[List[StrictInt]] = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def _waliduj_exact_set(self):
+        exact_requested = self.stoliki is not None or self.oczekiwane_stoliki is not None
+        if exact_requested:
+            if self.stoliki is None or self.oczekiwane_stoliki is None:
+                raise ValueError(
+                    "Nowy przydział wymaga pól stoliki i oczekiwane_stoliki."
+                )
+            if self.stolik_id is not None:
+                raise ValueError("Podaj stoliki albo legacy stolik_id, nie oba pola.")
+            if self.przekrocz_limity and self.nadpisanie_limitow is None:
+                raise ValueError(
+                    "Jawne przekroczenie limitów wymaga wybrania powodu."
+                )
+            for field_name, values in (
+                ("stoliki", self.stoliki),
+                ("oczekiwane_stoliki", self.oczekiwane_stoliki),
+            ):
+                if any(
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or value <= 0
+                    for value in values
+                ):
+                    raise ValueError(
+                        f"{field_name} musi zawierać dodatnie identyfikatory."
+                    )
+                if len(set(values)) != len(values):
+                    raise ValueError(f"{field_name} nie może zawierać duplikatów.")
+        return self
+
+
+class HostStolikIn(HostExactAllocationIn):
+    """Ręczny move exact-set albo zgodny wstecznie pojedynczy stolik."""
+
+    @model_validator(mode="after")
+    def _wymagaj_celu(self):
+        if self.stolik_id is None and self.stoliki is None:
+            raise ValueError("Wybierz co najmniej jeden stolik.")
+        return self
+
+
+class HostPosadzIn(HostExactAllocationIn):
+    """Atomowe posadzenie; brak celu w trybie legacy uruchamia best-fit."""
 
 class ProfilGosciaIn(BaseModel):
     """Profil gościa 360 (upsert). Alergie/notatka = dane wrażliwe (szyfrowane at-rest)."""

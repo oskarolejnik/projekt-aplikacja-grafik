@@ -149,16 +149,22 @@ def test_simulator_manual_i_audytowany_override_maja_ta_sama_decyzje(
 
 
 @pytest.mark.parametrize(
-    ("endpoint", "base_payload", "expects_candidates"),
+    ("endpoint", "base_payload", "expects_candidates", "idempotency_key"),
     [
-        ("/api/rezerwacje-stolik/{rid}/auto-przydziel", {}, True),
-        ("/api/host/rezerwacja/{rid}/przydziel-stolik", {"stolik_id": "target"}, False),
-        ("/api/host/rezerwacja/{rid}/posadz", {"stolik_id": "target"}, False),
+        ("/api/rezerwacje-stolik/{rid}/auto-przydziel", {}, True, None),
+        ("/api/host/rezerwacja/{rid}/przydziel-stolik", {"stolik_id": "target"}, False, None),
+        ("/api/host/rezerwacja/{rid}/posadz", {"stolik_id": "target"}, False, None),
+        (
+            "/api/host/rezerwacja/{rid}/posadz",
+            {"stoliki": ["target"], "oczekiwane_stoliki": []},
+            False,
+            "r6b3-seat-override",
+        ),
     ],
-    ids=("auto", "host-fixed", "host-seat"),
+    ids=("auto", "host-fixed", "host-seat", "host-seat-exact"),
 )
 def test_przydzial_hosta_respektuje_limit_i_pozwala_na_audytowany_override(
-    admin_client, db, endpoint, base_payload, expects_candidates,
+    admin_client, db, endpoint, base_payload, expects_candidates, idempotency_key,
 ):
     booking_date = _day(45)
     occupied = _table(admin_client, "R4 zajety")
@@ -177,10 +183,18 @@ def test_przydzial_hosta_respektuje_limit_i_pozwala_na_audytowany_override(
     rid = pending.json()["id"]
     url = endpoint.format(rid=rid)
     payload = {
-        key: (target["id"] if value == "target" else value)
+        key: (
+            [target["id"]]
+            if value == ["target"]
+            else (target["id"] if value == "target" else value)
+        )
         for key, value in base_payload.items()
     }
-    warning = admin_client.post(url, json=payload)
+    headers = (
+        {"Idempotency-Key": idempotency_key}
+        if idempotency_key else None
+    )
+    warning = admin_client.post(url, json=payload, headers=headers)
     assert warning.status_code == 409, warning.text
     availability = warning.json()["availability"]
     assert availability["decision"] == "override_required"
@@ -188,14 +202,18 @@ def test_przydzial_hosta_respektuje_limit_i_pozwala_na_audytowany_override(
     if expects_candidates:
         assert availability["candidates"]
 
-    confirmed = admin_client.post(url, json={
-        **payload,
-        "nadpisanie_limitow": {
-            "powod": "operational_decision",
-            "notatka": "Host potwierdzil przekroczenie limitu",
-            "potwierdzone": True,
+    confirmed = admin_client.post(
+        url,
+        headers=headers,
+        json={
+            **payload,
+            "nadpisanie_limitow": {
+                "powod": "operational_decision",
+                "notatka": "Host potwierdzil przekroczenie limitu",
+                "potwierdzone": True,
+            },
         },
-    })
+    )
     assert confirmed.status_code == 200, confirmed.text
 
     db.expire_all()

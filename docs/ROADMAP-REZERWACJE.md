@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a, R6b.1 i R6b.2 wdrożone oraz odebrane automatycznie; otwarte bramy środowiskowe · 18 lipca 2026
+> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a i R6b.1–R6b.3 wdrożone oraz odebrane automatycznie; otwarte bramy środowiskowe · 19 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -936,7 +936,7 @@ przejąć aktywnej sesji prostym odgadnięciem PIN-u.
 Aktualizacje live nie ogłaszają całej tablicy czytnikowi ekranu. `aria-live` obejmuje wyłącznie
 wynik konkretnej akcji; timery nie generują cyklicznych komunikatów.
 
-**Stan wdrożenia — 18 lipca 2026: R6b.1 i R6b.2 ukończone oraz odebrane automatycznie.**
+**Stan wdrożenia — 19 lipca 2026: R6b.1–R6b.3 ukończone oraz odebrane automatycznie.**
 
 - [x] `GET /api/host/snapshot` atomowo zasila kolejkę, opublikowany plan sali i oś czasu jednym
   wersjonowanym kontraktem z czasem generacji; odpowiedź pozostaje prywatna i `no-store`.
@@ -967,7 +967,18 @@ wynik konkretnej akcji; timery nie generują cyklicznych komunikatów.
 - [x] Pełny backend aplikacyjny, pełny round-trip migracji, 65 plików / 489 testów frontendu,
   build produkcyjny oraz smoke Host 390×844 przeszły. Test współbieżności PostgreSQL pozostaje
   osobną bramą środowiskową, gdy `TEST_POSTGRES_URL` nie jest dostępny.
-- [ ] R6b.3: walidowany drag-and-drop z równorzędną alternatywą klawiaturową.
+- [x] R6b.3: walidowane sadzanie i przenoszenie na planie działa dla myszy i pióra przez drag-and-drop,
+  a dla dotyku, kliknięcia i klawiatury przez równorzędny wybór celu oraz jawne potwierdzenie.
+- [x] Cel jest dokładnym zestawem stołów. Obsługiwane są zatwierdzone mieszane konfiguracje, między
+  innymi `4+2` i `6+4`; nieaktywne sale i konfiguracje niezgodne z kanałem nie są proponowane.
+- [x] Serwer ponownie sprawdza fazę wizyty, CAS źródłowego zestawu, R3/R4, pacing, pojemność i konflikt.
+  Wymaga klucza idempotencji, zapisuje dokładną proweniencję i odrzuca nieaktualny replay typowanym `409`.
+- [x] Kontrolowane przekroczenie zachowuje PIN, typowany powód i audyt. Niepewny wynik sieciowy blokuje
+  ślepy retry, konflikt odświeża widok, a bezpieczne przeniesienie można cofnąć do poprzedniego zestawu.
+- [x] Pełny frontend: 65 plików / 500 testów i build produkcyjny. Zakres backendu rezerwacji: 119 testów
+  zaliczonych i 1 pominięty wyłącznie z powodu braku `TEST_POSTGRES_URL`. Smoke Host na 1366×768,
+  768×1024 i 390×844 potwierdził brak poziomego overflow, pełny przepływ `4+2 → 6 → cofnij`, cel
+  `Cofnij` 44 px i brak błędów konsoli.
 
 **Done R6b:** host prowadzi cały serwis z jednego widoku, a każda akcja daje lokalny i odwracalny tam,
 gdzie to bezpieczne, feedback.
@@ -1107,10 +1118,11 @@ R0a–R5b są zamkniętymi checkpointami. R5c jest technicznie gotowe, lecz zgod
 pozostaje wyłączone do czasu uruchomienia JDG i gotowości merchant. Nie spełnia jeszcze bramy
 produkcyjnej, ale odłożona integracja Stripe nie blokuje niezależnego R6a.
 
-R6b.1 i R6b.2 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to **R6b.3**:
-walidowany drag-and-drop w host standzie z pełną, równorzędną alternatywą klawiaturową i tym samym
-kontraktem konfliktu oraz odwracalnego feedbacku. Smoke docelowego urządzenia i współbieżność
-PostgreSQL pozostają bramami rolloutowymi R6a/R6b, nie nowym zakresem funkcjonalnym.
+R6b.1–R6b.3 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to **R7 — CRM,
+analiza i rekomendacje**. Pierwszy pionowy zakres powinien połączyć wyszukiwanie i historię gościa
+z rzeczywistym turn time oraz wykorzystaniem sal, stołów i kombinacji, bez automatycznej zmiany polityki
+lokalu. Smoke docelowego urządzenia i współbieżność PostgreSQL pozostają bramami rolloutowymi R6a/R6b,
+nie nowym zakresem funkcjonalnym.
 
 Produkcyjne testy Stripe płatność–zwrot wrócą dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
 pozostaje osobnym kontekstem i nie może ponownie używać stanu, webhooków ani modeli płatności rezerwacji.

@@ -3614,6 +3614,429 @@ def host_snapshot(
                 )
 
 
+def _host_exact_contract(dane) -> bool:
+    return dane.stoliki is not None and dane.oczekiwane_stoliki is not None
+
+
+def _host_exact_idempotency_payload(rid, operation, dane, target_ids, expected_ids):
+    confirmation = (
+        dane.nadpisanie_limitow.model_dump(mode="json")
+        if dane.nadpisanie_limitow is not None else None
+    )
+    return {
+        "reservation_id": int(rid),
+        "operation": operation,
+        "stoliki": list(target_ids),
+        "oczekiwane_stoliki": list(expected_ids),
+        "przekrocz_limity": bool(dane.przekrocz_limity),
+        "nadpisanie_limitow": confirmation,
+    }
+
+
+def _host_assignment_source_version(table_ids) -> str:
+    return "tables:" + ",".join(str(value) for value in sorted(table_ids))
+
+
+def _host_existing_assignment_metadata(db, t, table_ids):
+    rows = {
+        row.id: row for row in db.query(models.Stolik).filter(
+            models.Stolik.id.in_(table_ids),
+        ).all()
+    } if table_ids else {}
+    ordered = [rows[value] for value in table_ids if value in rows]
+    room_ids = {row.sala_id for row in ordered if row.sala_id is not None}
+    room_id = next(iter(room_ids)) if len(room_ids) == 1 else None
+    room = db.get(models.SalaRezerwacyjna, room_id) if room_id is not None else None
+    names = [row.nazwa for row in ordered]
+    capacity = sum(max(0, int(row.pojemnosc or 0)) for row in ordered)
+    przydzial = {
+        "stoliki": list(table_ids),
+        "sala_id": room_id,
+        "nazwa": " + ".join(names) or None,
+        "suma_pojemnosci": capacity,
+        "nadmiar_miejsc": max(0, capacity - max(1, int(t.liczba_osob or 1))),
+        "kombinacja": len(table_ids) > 1,
+        "wersja_planu_id": t.przydzial_wersja_planu_id,
+        "kombinacja_planu_id": t.przydzial_kombinacja_planu_id,
+    }
+    allocation = {
+        "state": "assigned",
+        "visibility": "exact",
+        "visit_end": _hm(t.godz_do),
+        "kind": "combination" if len(table_ids) > 1 else "single_table",
+        "room": (
+            {"id": room_id, "name": room.nazwa if room is not None else None}
+            if room_id is not None else None
+        ),
+        "tables": [
+            {"id": row.id, "name": row.nazwa} for row in ordered
+        ],
+        "capacity": capacity,
+        "reasons": [],
+    }
+    return przydzial, allocation
+
+
+def _host_exact_alternatives(result, target_ids, *, visit_end):
+    target = set(target_ids)
+    rows = []
+    for candidate in result.candidates:
+        if set(candidate.table_ids) == target:
+            continue
+        rows.append({
+            "kind": "resource",
+            "allocation": candidate.to_display_dict(
+                visit_end=visit_end,
+                expose_exact=True,
+            ),
+        })
+        if len(rows) == 3:
+            break
+    return rows
+
+
+class _HostExactAvailabilityAdapter:
+    def __init__(self, evaluation, result, target_ids):
+        self.evaluation = evaluation
+        self.result = result
+        self.target_ids = target_ids
+
+    def to_dict(self):
+        payload = self.evaluation.to_dict()
+        visit_end = payload.get("visit_end")
+        payload.update({
+            "candidates": [
+                candidate.to_dict(expose_exact=True)
+                for candidate in self.result.candidates[:3]
+            ],
+            "alternatives": _host_exact_alternatives(
+                self.result, self.target_ids, visit_end=visit_end,
+            ),
+            "resource_allocation": "unavailable",
+        })
+        return payload
+
+
+def _host_exact_response(t, user, metadata, *, replayed, now=None):
+    mutation = dict(metadata.get("mutation") or {})
+    mutation["replayed"] = bool(replayed)
+    return {
+        "rezerwacja": _host_out(t, now or utcnow_naive(), user=user),
+        "przydzial": metadata.get("przydzial"),
+        "allocation": metadata.get("allocation"),
+        "alternatives": list(metadata.get("alternatives") or []),
+        "mutation": mutation,
+        "undo_command": metadata.get("undo_command"),
+    }
+
+
+def _host_exact_allocation_mutation(
+    *,
+    rid,
+    operation,
+    dane,
+    request,
+    idempotency_key,
+    db,
+    user,
+):
+    """R6b.3: jedna atomowa komenda exact-set dla pointera i klawiatury."""
+    target_ids = tuple(sorted(int(value) for value in dane.stoliki))
+    expected_ids = tuple(sorted(int(value) for value in dane.oczekiwane_stoliki))
+    idem_operation = f"host_{operation}_exact"
+    idem_payload = _host_exact_idempotency_payload(
+        rid, operation, dane, target_ids, expected_ids,
+    )
+    reservation_service.required_idempotency_identity(
+        operation=idem_operation,
+        raw_key=idempotency_key,
+        payload=idem_payload,
+        secret=SECRET_KEY,
+    )
+    override_context = _jawne_nadpisanie_limitow(
+        user, dane.przekrocz_limity, dane.nadpisanie_limitow,
+    )
+    t, guards = _zablokuj_termin(db, rid)
+    if not t or t.rodzaj != "stolik":
+        db.rollback()
+        raise HTTPException(404, "Brak rezerwacji.")
+
+    now = utcnow_naive()
+    idem = reservation_service.begin_idempotency(
+        db,
+        operation=idem_operation,
+        raw_key=idempotency_key,
+        payload=idem_payload,
+        secret=SECRET_KEY,
+        now=now,
+    )
+    if idem.replayed:
+        metadata = dict(idem.response or {})
+        replayed = _termin_z_replay_idempotencji(db, idem)
+        expected_target = tuple(sorted(
+            int(value)
+            for value in (metadata.get("mutation") or {}).get("to_stoliki") or ()
+        ))
+        if (
+            tuple(sorted(_stoly_terminu(replayed))) != expected_target
+            or replayed.status not in REZ_AKTYWNE
+        ):
+            raise reservation_service.ReservationError(
+                409,
+                "IDEMPOTENCY_RESULT_STALE",
+                "Pierwotny wynik tej akcji nie jest już aktualny. Odśwież widok przed kolejną zmianą.",
+                rule="idempotency",
+            )
+        return _host_exact_response(
+            replayed, user, metadata, replayed=True, now=utcnow_naive(),
+        )
+
+    if t.status not in REZ_AKTYWNE:
+        raise reservation_service.ReservationError(
+            409,
+            "RESERVATION_NOT_ACTIVE",
+            "Nie można zmienić stołu zakończonej lub anulowanej rezerwacji.",
+            rule="reservation_lifecycle",
+        )
+    if operation == "move" and t.faza_hosta not in HOST_NA_SALI:
+        raise reservation_service.ReservationError(
+            409,
+            "HOST_MOVE_PHASE_INVALID",
+            "Przeniesienie jest dostępne dopiero po posadzeniu gości.",
+            rule="host_phase",
+        )
+    if operation == "seat" and "posadzony" not in HOST_PRZEJSCIA.get(t.faza_hosta, set()):
+        raise reservation_service.ReservationError(
+            409,
+            "HOST_SEAT_PHASE_INVALID",
+            f"Nie można posadzić rezerwacji w fazie {t.faza_hosta or '—'}.",
+            rule="host_phase",
+        )
+
+    current_ids = tuple(sorted(_stoly_terminu(t)))
+    if current_ids != expected_ids:
+        raise reservation_service.ReservationError(
+            409,
+            "HOST_ASSIGNMENT_CHANGED",
+            "Przydział tej rezerwacji zmienił się. Odśwież widok i spróbuj ponownie.",
+            rule="reservation_state",
+        )
+
+    if operation == "move" and target_ids == current_ids:
+        przydzial, allocation = _host_existing_assignment_metadata(
+            db, t, target_ids,
+        )
+        metadata = {
+            "termin_id": t.id,
+            "przydzial": przydzial,
+            "allocation": allocation,
+            "alternatives": [],
+            "mutation": {
+                "operation": "move",
+                "changed": False,
+                "from_stoliki": list(current_ids),
+                "to_stoliki": list(target_ids),
+                "replayed": False,
+            },
+            "undo_command": None,
+        }
+        reservation_service.complete_idempotency(
+            idem.record,
+            response=metadata,
+            http_status=200,
+            termin_id=t.id,
+            now=now,
+        )
+        db.commit()
+        db.refresh(t)
+        return _host_exact_response(t, user, metadata, replayed=False, now=now)
+
+    if t.godz_od is None:
+        raise reservation_service.ReservationError(
+            400,
+            "INVALID_RESERVATION_INTERVAL",
+            "Rezerwacja bez godziny nie może otrzymać stołu.",
+            rule="interval",
+        )
+    godz_do = t.godz_do or _dodaj_minuty(
+        t.godz_od, _dlugosc_dla(db, t.data, t.godz_od, t.liczba_osob),
+    )
+    _waliduj_przydzial_rezerwacji(
+        db,
+        t.data,
+        t.godz_od,
+        godz_do,
+        target_ids,
+        t.liczba_osob,
+        pomin_id=t.id,
+    )
+    result = _ocen_przydzial_rezerwacji(
+        db,
+        data=t.data,
+        godz_od=t.godz_od,
+        godz_do=godz_do,
+        osoby=t.liczba_osob or 1,
+        kanal=t.kanal,
+        pomin_id=t.id,
+        intent="assign",
+        alternative_limit=9999,
+        now=now,
+    )
+    candidate = _kandydat_zestawu(result, target_ids)
+    if candidate is None:
+        if result.evaluation.decision != "allow" or result.selected is None:
+            _wymagaj_dozwolonego_przydzialu(
+                result,
+                override=bool(
+                    override_context
+                    and result.evaluation.decision == "override_required"
+                ),
+            )
+        payload = result.to_dict(expose_exact=True)
+        raise reservation_service.ReservationError(
+            409,
+            "INVALID_TABLE_COMBINATION",
+            "Wybrany zestaw nie jest aktualną, zatwierdzoną konfiguracją.",
+            rule="table",
+            candidates=(payload.get("candidates") or ())[:3],
+            alternatives=(payload.get("alternatives") or ())[:3],
+        )
+
+    evaluation = _ocen_reguly_slotu(
+        db,
+        data=t.data,
+        godz_od=t.godz_od,
+        godz_do=godz_do,
+        liczba_osob=t.liczba_osob or 1,
+        kanal=t.kanal,
+        sala_id=candidate.room_id,
+        existing_termin_id=t.id,
+        intent="assign",
+        now=now,
+    )
+    override_active = bool(
+        override_context and evaluation.decision == "override_required"
+    )
+    _wymagaj_reautoryzacji_nadpisania(
+        db, request, user, override_active,
+    )
+    try:
+        reservation_rules.enforce_rule_evaluation(
+            evaluation,
+            override=override_active,
+            can_override=override_active,
+        )
+    except reservation_service.ReservationError as exc:
+        exc.availability = _HostExactAvailabilityAdapter(
+            evaluation, result, target_ids,
+        )
+        raise
+
+    before = reservation_audit.reservation_snapshot(t)
+    canonical_ids = tuple(candidate.table_ids)
+    t.stolik_id = canonical_ids[0]
+    t.stoliki_dodatkowe = list(canonical_ids[1:]) or None
+    t.auto_przydzielony = False
+    canonical = _kandydat_legacy_z_alokacji(candidate)
+    _ustaw_proweniencje_przydzialu(t, canonical)
+    t.godz_do = evaluation.godz_do or godz_do
+    if operation == "seat":
+        t.faza_hosta = "posadzony"
+        t.host_seated_at = now
+        if t.status == "rezerwacja":
+            t.status = "potwierdzona"
+            t.potwierdzono_at = now
+
+    alternatives = _host_exact_alternatives(
+        result, canonical_ids, visit_end=_hm(t.godz_do),
+    )
+    przydzial = canonical
+    allocation = candidate.to_display_dict(
+        visit_end=_hm(t.godz_do),
+        expose_exact=True,
+        state="assigned",
+    )
+    undo_command = None
+    if operation == "move":
+        undo_command = {
+            "path": f"/host/rezerwacja/{t.id}/przydziel-stolik",
+            "method": "POST",
+            "source_version": _host_assignment_source_version(canonical_ids),
+            "body": {
+                "stoliki": list(current_ids),
+                "oczekiwane_stoliki": list(canonical_ids),
+            },
+        }
+    metadata = {
+        "termin_id": t.id,
+        "przydzial": przydzial,
+        "allocation": allocation,
+        "alternatives": alternatives,
+        "mutation": {
+            "operation": operation,
+            "changed": True,
+            "from_stoliki": list(current_ids),
+            "to_stoliki": list(canonical_ids),
+            "replayed": False,
+        },
+        "undo_command": undo_command,
+    }
+    try:
+        db.flush()
+        _zastap_ledger_terminu(
+            db,
+            t,
+            stoliki=canonical_ids,
+            enforce_pacing=True,
+            evaluation=evaluation,
+            override=override_active,
+            candidates=[{"stoliki": list(canonical_ids)}],
+            alternatives=alternatives,
+            intent="assign",
+        )
+        reservation_audit.add_reservation_audit(
+            db,
+            termin=t,
+            action="host" if operation == "seat" else "assign",
+            actor=user,
+            before=before,
+            after=t,
+        )
+        override_details = (
+            _szczegoly_nadpisania_r3(
+                evaluation,
+                legacy=bool(override_context and override_context["legacy"]),
+            )
+            if override_active else None
+        )
+        if override_details:
+            reservation_audit.add_reservation_audit(
+                db,
+                termin=t,
+                action="override",
+                actor=user,
+                reason=_powod_audytu_nadpisania(evaluation),
+                before=before,
+                after=t,
+                override_details=override_details,
+                override_reason_code=override_context["reason_code"],
+                override_note=override_context["note"],
+            )
+        reservation_service.complete_idempotency(
+            idem.record,
+            response=metadata,
+            http_status=200,
+            termin_id=t.id,
+            now=now,
+        )
+        _commit_zapis_rezerwacji(db, guards)
+    except IntegrityError as exc:
+        db.rollback()
+        raise reservation_service.translate_integrity_error(exc) from exc
+    db.refresh(t)
+    return _host_exact_response(t, user, metadata, replayed=False, now=now)
+
+
 @app.post("/api/host/rezerwacja/{rid}/faza", dependencies=[Depends(_wymagaj_modul_rezerwacje)])
 def host_zmien_faze(
     rid: int,
@@ -3662,10 +4085,21 @@ def host_przydziel_stolik(
     rid: int,
     dane: schemas.HostStolikIn,
     request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
     """Ręczny przydział/przeniesienie rezerwacji na konkretny stół (walidacja pojemności + kolizji)."""
+    if _host_exact_contract(dane):
+        return _host_exact_allocation_mutation(
+            rid=rid,
+            operation="move",
+            dane=dane,
+            request=request,
+            idempotency_key=idempotency_key,
+            db=db,
+            user=user,
+        )
     override_context = _jawne_nadpisanie_limitow(
         user, dane.przekrocz_limity, dane.nadpisanie_limitow,
     )
@@ -3738,10 +4172,21 @@ def host_posadz_rezerwacje(
     rid: int,
     dane: schemas.HostPosadzIn,
     request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
     """Atomowo dobiera/przypisuje stół i przeprowadza rezerwację do fazy ``posadzony``."""
+    if _host_exact_contract(dane):
+        return _host_exact_allocation_mutation(
+            rid=rid,
+            operation="seat",
+            dane=dane,
+            request=request,
+            idempotency_key=idempotency_key,
+            db=db,
+            user=user,
+        )
     override_context = _jawne_nadpisanie_limitow(
         user, dane.przekrocz_limity, dane.nadpisanie_limitow,
     )

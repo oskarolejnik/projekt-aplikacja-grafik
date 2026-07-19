@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Card, SectionHeader } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Banner } from '../ui/Banner'
@@ -67,7 +68,72 @@ const isVisible = () => typeof document === 'undefined' || document.visibilitySt
 const tableIdsFor = (reservation) => [
   reservation?.stolik_id,
   ...(reservation?.stoliki_dodatkowe || []),
-].filter(Boolean)
+].map(Number).filter((id) => Number.isFinite(id) && id > 0)
+
+const tableSetKey = (ids) => [...new Set((ids || []).map(Number).filter((id) => Number.isFinite(id) && id > 0))]
+  .sort((first, second) => first - second)
+  .join(':')
+
+const placementCandidatesFor = (floor, reservation, mode = 'seat') => {
+  if (!floor || !reservation) return []
+  const people = Math.max(1, Number(reservation.liczba_osob) || 1)
+  const configuredRooms = floor.sale || []
+  const activeRoomIds = new Set(
+    configuredRooms.filter((room) => room.aktywna !== false).map((room) => String(room.id)),
+  )
+  const reservationChannel = reservation.kanal === 'online' ? 'online' : 'wewnetrzna'
+  const activeTables = (floor.stoliki || []).filter((table) => (
+    table.aktywny !== false && table.aktywny_w_planie !== false && table.status !== 'nieaktywny'
+    && (
+      table.sala_id == null
+      || configuredRooms.length === 0
+      || activeRoomIds.has(String(table.sala_id))
+    )
+  ))
+  const activeById = new Map(activeTables.map((table) => [Number(table.id), table]))
+  const sourceIds = tableIdsFor(reservation)
+  const sourceKey = tableSetKey(sourceIds)
+  const candidates = []
+  const addCandidate = (tableIds, source = null, preferred = false) => {
+    const ids = [...new Set((tableIds || []).map(Number).filter((id) => activeById.has(id)))]
+    if (!ids.length || ids.length !== (tableIds || []).length) return
+    const key = tableSetKey(ids)
+    if (!key || (mode === 'move' && key === sourceKey) || candidates.some((candidate) => candidate.key === key)) return
+    const tables = ids.map((id) => activeById.get(id))
+    candidates.push({
+      key,
+      tableIds: ids,
+      label: source?.nazwa || tables.map((table) => table.nazwa || `#${table.id}`).join(' + '),
+      capacity: tables.reduce((sum, table) => sum + Math.max(0, Number(table.pojemnosc) || 0), 0),
+      preferred,
+      priority: Number(source?.priorytet ?? source?.kolejnosc ?? 9999),
+    })
+  }
+
+  if (mode === 'seat' && sourceIds.length && sourceIds.every((id) => activeById.has(id))) {
+    addCandidate(sourceIds, null, true)
+  }
+  for (const combination of floor.kombinacje || []) {
+    if (combination.aktywna === false || combination.aktywna_w_planie === false) continue
+    if (combination.kanal && !['oba', reservationChannel].includes(combination.kanal)) continue
+    const minimum = Math.max(1, Number(combination.pojemnosc_min) || 1)
+    const maximum = Math.max(minimum, Number(combination.pojemnosc_max) || Number.MAX_SAFE_INTEGER)
+    if (people < minimum || people > maximum) continue
+    addCandidate(combination.stoliki || combination.table_ids || [], combination)
+  }
+  for (const table of activeTables) {
+    const minimum = Math.max(1, Number(table.pojemnosc_min) || 1)
+    const maximum = Math.max(minimum, Number(table.pojemnosc) || 1)
+    if (people >= minimum && people <= maximum) addCandidate([table.id], table)
+  }
+  return candidates.sort((first, second) => (
+    Number(second.preferred) - Number(first.preferred)
+    || first.priority - second.priority
+    || first.tableIds.length - second.tableIds.length
+    || first.capacity - second.capacity
+    || first.key.localeCompare(second.key)
+  ))
+}
 
 const waitlistTableIds = (entry) => [
   entry?.hold_stolik_id,
@@ -418,6 +484,7 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
   const [waitOverrides, setWaitOverrides] = useState({})
   const [waitOverrideDrafts, setWaitOverrideDrafts] = useState({})
   const [waitConfirmation, setWaitConfirmation] = useState(null)
+  const [placement, setPlacement] = useState(null)
   const [clockNow, setClockNow] = useState(Date.now())
   const requestId = useRef(0)
   const loadControllerRef = useRef(null)
@@ -426,6 +493,17 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
   const mutationControllersRef = useRef(new Set())
   const waitIdempotencyRef = useRef(new Map())
   const expiredOfferRefreshRef = useRef(new Set())
+  const placementRef = useRef(null)
+  const placementTriggerRef = useRef(null)
+  const placementIdempotencyRef = useRef(new Map())
+  const dragRef = useRef(null)
+  const dragOverlayRef = useRef(null)
+  const dragFrameRef = useRef(null)
+  const suppressPlacementClickRef = useRef(false)
+
+  useEffect(() => {
+    placementRef.current = placement
+  }, [placement])
 
   const updateWaitlistCommunicationSummary = useCallback((summary, owner) => {
     if (owner?.type !== 'waitlist') return
@@ -572,6 +650,11 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
       setWaitOverrides({})
       setWaitOverrideDrafts({})
       setWaitConfirmation(null)
+      setPlacement(null)
+      placementRef.current = null
+      dragRef.current = null
+      placementTriggerRef.current = null
+      placementIdempotencyRef.current.clear()
       waitIdempotencyRef.current.clear()
       expiredOfferRefreshRef.current.clear()
       setRefreshing(false)
@@ -605,6 +688,11 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     setWaitOverrides({})
     setWaitOverrideDrafts({})
     setWaitConfirmation(null)
+    setPlacement(null)
+    placementRef.current = null
+    dragRef.current = null
+    placementTriggerRef.current = null
+    placementIdempotencyRef.current.clear()
     waitIdempotencyRef.current.clear()
     expiredOfferRefreshRef.current.clear()
     if (active && isVisible()) void load({ day: data })
@@ -613,6 +701,9 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
   useEffect(() => {
     if (!active) {
       cancelReadRequests()
+      setPlacement(null)
+      placementRef.current = null
+      dragRef.current = null
       setRefreshing(false)
       return undefined
     }
@@ -728,6 +819,11 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     setWaitOverrides({})
     setWaitOverrideDrafts({})
     setWaitConfirmation(null)
+    setPlacement(null)
+    placementRef.current = null
+    dragRef.current = null
+    placementTriggerRef.current = null
+    placementIdempotencyRef.current.clear()
     waitIdempotencyRef.current.clear()
     expiredOfferRefreshRef.current.clear()
     setLocalDate(nextDay)
@@ -765,20 +861,460 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     applyLocalSnapshot(patched)
   }
 
+  const reservationForPlacement = (state = placementRef.current) => {
+    if (!state?.reservationId) return null
+    return ['nadchodzace', 'na_sali', 'zakonczone']
+      .flatMap((group) => snapshotRef.current?.kolejka?.[group] || [])
+      .find((entry) => entry.id === state.reservationId) || null
+  }
+
+  const candidatesForPlacement = (state = placementRef.current) => placementCandidatesFor(
+    snapshotRef.current?.plan_sali,
+    reservationForPlacement(state),
+    state?.mode,
+  )
+
+  const focusPlacementTrigger = () => {
+    const trigger = placementTriggerRef.current
+    placementTriggerRef.current = null
+    window.setTimeout(() => trigger?.isConnected && trigger.focus(), 0)
+  }
+
+  const cancelPlacement = ({ restoreFocus = true } = {}) => {
+    if (dragFrameRef.current != null) cancelAnimationFrame(dragFrameRef.current)
+    dragFrameRef.current = null
+    dragRef.current = null
+    setPlacement(null)
+    placementRef.current = null
+    setMobileView('guests')
+    if (restoreFocus) focusPlacementTrigger()
+  }
+
+  const beginPlacement = (reservation, mode, input = 'activation', trigger = null) => {
+    if (readOnly || actions[reservation.id]) return
+    const candidates = placementCandidatesFor(snapshotRef.current?.plan_sali, reservation, mode)
+    if (!candidates.length) {
+      setRowFeedback((current) => ({
+        ...current,
+        [reservation.id]: {
+          type: 'error',
+          message: mode === 'move'
+            ? 'Brak innej opublikowanej konfiguracji dla tej grupy.'
+            : 'Brak opublikowanej konfiguracji dla tej grupy.',
+        },
+      }))
+      return
+    }
+    placementTriggerRef.current = trigger || document.activeElement
+    const next = {
+      reservationId: reservation.id,
+      mode,
+      input,
+      sourceIds: tableIdsFor(reservation),
+      targetTableId: null,
+      selectedKey: candidates.length === 1 ? candidates[0].key : null,
+      phase: 'choosing',
+      feedback: null,
+      overrideAvailability: null,
+      overrideDraft: emptyOverrideDraft(),
+      focusToken: `${reservation.id}:${Date.now()}`,
+      dragging: false,
+    }
+    placementRef.current = next
+    setPlacement(next)
+    setRowFeedback((current) => ({ ...current, [reservation.id]: null }))
+    if (input !== 'pointer-drag') setMobileView('floor')
+  }
+
+  const updatePlacement = (updater) => {
+    setPlacement((current) => {
+      const next = typeof updater === 'function' ? updater(current) : updater
+      placementRef.current = next
+      return next
+    })
+  }
+
+  const selectPlacementTarget = (tableId, { input = 'activation', direct = false } = {}) => {
+    const current = placementRef.current
+    if (!current || current.phase === 'pending' || readOnly) return
+    const matches = candidatesForPlacement(current).filter((candidate) => candidate.tableIds.includes(Number(tableId)))
+    if (!matches.length) return
+    const next = {
+      ...current,
+      input,
+      targetTableId: Number(tableId),
+      selectedKey: matches[0].key,
+      phase: 'choosing',
+      feedback: matches.length > 1
+        ? { type: 'info', message: 'Ten stolik pasuje do kilku konfiguracji. Wybierz właściwą poniżej.' }
+        : null,
+      overrideAvailability: null,
+    }
+    placementRef.current = next
+    setPlacement(next)
+    if (direct && matches.length === 1) void submitPlacement(next, matches[0].key)
+  }
+
+  const submitPlacement = async (
+    state = placementRef.current,
+    candidateKey = state?.selectedKey,
+    nadpisanieLimitow = null,
+    { pin = '' } = {},
+  ) => {
+    if (!state || state.phase === 'pending' || readOnly || actions[state.reservationId]) return
+    const reservation = reservationForPlacement(state)
+    const candidate = candidatesForPlacement(state).find((item) => item.key === candidateKey)
+    if (!reservation || !candidate) return
+    const operationDay = dataRef.current
+    const idempotencyName = `${state.mode}:${state.reservationId}:${tableSetKey(state.sourceIds)}:${candidate.key}`
+    const idempotencyKey = placementIdempotencyRef.current.get(idempotencyName)
+      || nowyKluczIdempotencji(`host-${state.mode}`)
+    placementIdempotencyRef.current.set(idempotencyName, idempotencyKey)
+    cancelReadRequests()
+    setActions((current) => ({ ...current, [state.reservationId]: state.mode }))
+    updatePlacement({ ...state, selectedKey: candidate.key, phase: 'pending', feedback: null })
+    const mutation = startMutation()
+    let reauthFailed = false
+    try {
+      let reauthGrant = null
+      if (nadpisanieLimitow && requiresWorkstationReauth) {
+        try {
+          const authorization = await reauthorizeWorkstation({
+            pin,
+            scope: 'reservation_override',
+            signal: mutation.controller.signal,
+          })
+          reauthGrant = authorization?.grant || null
+          if (!reauthGrant) {
+            const error = new Error('Nie udało się potwierdzić operatora. Wpisz PIN ponownie.')
+            error.code = 'WORKSTATION_REAUTH_REQUIRED'
+            throw error
+          }
+        } catch (error) {
+          reauthFailed = true
+          throw error
+        }
+      }
+      const endpoint = state.mode === 'move'
+        ? `/host/rezerwacja/${reservation.id}/przydziel-stolik`
+        : `/host/rezerwacja/${reservation.id}/posadz`
+      const response = await api(endpoint, 'POST', {
+        stoliki: candidate.tableIds,
+        oczekiwane_stoliki: state.sourceIds,
+        ...(nadpisanieLimitow ? {
+          przekrocz_limity: true,
+          nadpisanie_limitow: nadpisanieLimitow,
+        } : {}),
+      }, {
+        signal: mutation.controller.signal,
+        headers: {
+          'Idempotency-Key': idempotencyKey,
+          ...(reauthGrant ? { 'X-Lokalo-Workstation-Reauth': reauthGrant } : {}),
+        },
+      })
+      if (!mutationIsCurrent(mutation) || dataRef.current !== operationDay) return
+      const responseReservation = response?.rezerwacja || response
+      applyMutationResponse(responseReservation)
+      placementIdempotencyRef.current.delete(idempotencyName)
+      const targetIds = response?.mutation?.to_stoliki || tableIdsFor(responseReservation)
+      const targetLabel = targetIds.map((id) => (
+        snapshotRef.current?.plan_sali?.stoliki?.find((table) => table.id === id)?.nazwa || `#${id}`
+      )).join(' + ')
+      setRowFeedback((current) => ({
+        ...current,
+        [reservation.id]: {
+          type: 'success',
+          message: state.mode === 'move'
+            ? `Przeniesiono gości do ${targetLabel || candidate.label}.`
+            : `Posadzono gości przy ${targetLabel || candidate.label}.`,
+          undo: state.mode === 'move' && response?.mutation?.changed !== false
+            ? response?.undo_command || null
+            : null,
+        },
+      }))
+      placementRef.current = null
+      setPlacement(null)
+      placementTriggerRef.current = null
+      setMobileView('guests')
+      void load({ quiet: true, day: operationDay })
+      window.setTimeout(() => document.querySelector(`[data-host-feedback="${reservation.id}"]`)?.focus(), 0)
+    } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError' || dataRef.current !== operationDay) return
+      if (error?.status != null) placementIdempotencyRef.current.delete(idempotencyName)
+      const latest = placementRef.current || state
+      const reauthRequired = requiresWorkstationReauth
+        && Boolean(nadpisanieLimitow)
+        && (
+          reauthFailed
+          || error?.status === 428
+          || String(error?.code || '').startsWith('WORKSTATION_REAUTH')
+        )
+      if (reauthRequired) {
+        updatePlacement({
+          ...latest,
+          phase: 'override',
+          overrideAvailability: latest.overrideAvailability || error.availability || { decision: 'override_required', violations: [] },
+          feedback: {
+            type: 'warning',
+            message: error.message || 'Nie udało się potwierdzić PIN-u. Spróbuj ponownie.',
+            reauthError: error.message || 'Nie udało się potwierdzić PIN-u. Spróbuj ponownie.',
+            reauthRetryAfter: Math.max(0, Number(error.retryAfter) || 0),
+          },
+        })
+        return
+      }
+      if (isLimitOverrideRequired(error) && canOverrideLimits) {
+        updatePlacement({
+          ...latest,
+          phase: 'override',
+          overrideAvailability: error.availability || { decision: 'override_required', violations: [] },
+          feedback: { type: 'warning', message: error.message || 'Ta operacja przekracza ustawiony limit.' },
+        })
+        return
+      }
+      if (error?.status == null) {
+        setConnection(isOnline() ? 'stale' : 'offline')
+        setRefreshError('Nie udało się potwierdzić wyniku ostatniej akcji. Odśwież widok przed kolejnym zapisem.')
+        setRowFeedback((current) => ({
+          ...current,
+          [reservation.id]: {
+            type: 'error',
+            message: 'Połączenie zostało przerwane. Nie znamy wyniku — odśwież widok przed ponowieniem.',
+          },
+        }))
+        cancelPlacement({ restoreFocus: false })
+        window.setTimeout(() => document.querySelector(`[data-host-feedback="${reservation.id}"]`)?.focus(), 0)
+        return
+      }
+      if (error?.code === 'HOST_ASSIGNMENT_CHANGED') {
+        setRowFeedback((current) => ({
+          ...current,
+          [reservation.id]: {
+            type: 'error',
+            message: error.message || 'Przydział został zmieniony na innym stanowisku. Wybierz gościa ponownie po odświeżeniu.',
+          },
+        }))
+        cancelPlacement({ restoreFocus: false })
+        void load({ quiet: true, day: operationDay })
+        window.setTimeout(() => document.querySelector(`[data-host-feedback="${reservation.id}"]`)?.focus(), 0)
+        return
+      }
+      updatePlacement({
+        ...latest,
+        phase: 'conflict',
+        feedback: {
+          type: error.status === 409 || error.status === 422 ? 'warning' : 'error',
+          message: error.message || 'Nie udało się zapisać przydziału. Wybierz inny stolik lub spróbuj ponownie.',
+        },
+      })
+      if (error.status === 409) void load({ quiet: true, day: operationDay })
+    } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
+      setActions((current) => {
+        const next = { ...current }
+        delete next[state.reservationId]
+        return next
+      })
+    }
+  }
+
+  const undoPlacement = async (reservation, command) => {
+    if (!command || actions[reservation.id] || readOnly) return
+    const operationDay = dataRef.current
+    cancelReadRequests()
+    setActions((current) => ({ ...current, [reservation.id]: 'undo' }))
+    const mutation = startMutation()
+    try {
+      const response = await api(
+        command.path || `/host/rezerwacja/${reservation.id}/przydziel-stolik`,
+        command.method || 'POST',
+        command.body || command,
+        {
+          signal: mutation.controller.signal,
+          headers: { 'Idempotency-Key': nowyKluczIdempotencji('host-move-undo') },
+        },
+      )
+      if (!mutationIsCurrent(mutation) || dataRef.current !== operationDay) return
+      applyMutationResponse(response?.rezerwacja || response)
+      setRowFeedback((current) => ({
+        ...current,
+        [reservation.id]: { type: 'success', message: 'Przywrócono poprzednią konfigurację stolików.' },
+      }))
+      void load({ quiet: true, day: operationDay })
+    } catch (error) {
+      if (!mutationIsCurrent(mutation) || error?.name === 'AbortError' || dataRef.current !== operationDay) return
+      if (error?.status == null) {
+        setConnection(isOnline() ? 'stale' : 'offline')
+        setRefreshError('Nie udało się potwierdzić cofnięcia. Odśwież widok przed kolejnym zapisem.')
+      }
+      setRowFeedback((current) => ({
+        ...current,
+        [reservation.id]: {
+          type: 'error',
+          message: error?.status == null
+            ? 'Nie znamy wyniku cofnięcia — odśwież widok.'
+            : (error.message || 'Nie udało się przywrócić poprzednich stolików.'),
+        },
+      }))
+      if (error?.status === 409) void load({ quiet: true, day: operationDay })
+    } finally {
+      finishMutation(mutation)
+      if (!mutationIsCurrent(mutation)) return
+      setActions((current) => {
+        const next = { ...current }
+        delete next[reservation.id]
+        return next
+      })
+    }
+  }
+
+  const updateDragOverlay = (clientX, clientY) => {
+    if (dragFrameRef.current != null) cancelAnimationFrame(dragFrameRef.current)
+    dragFrameRef.current = requestAnimationFrame(() => {
+      dragFrameRef.current = null
+      if (dragOverlayRef.current) {
+        dragOverlayRef.current.style.transform = `translate3d(${clientX + 14}px, ${clientY + 14}px, 0)`
+      }
+    })
+  }
+
+  const placementTargetAtPoint = (clientX, clientY) => {
+    const elements = document.elementsFromPoint?.(clientX, clientY)
+      || [document.elementFromPoint?.(clientX, clientY)].filter(Boolean)
+    const target = elements
+      .map((element) => element?.closest?.('[data-host-drop-table]'))
+      .find(Boolean)
+    const tableId = Number(target?.dataset?.hostDropTable)
+    return Number.isFinite(tableId) && tableId > 0 ? tableId : null
+  }
+
+  const beginPlacementPointer = (event, reservation, mode) => {
+    if (!['mouse', 'pen'].includes(event.pointerType || 'mouse') || readOnly || actions[reservation.id]) return
+    beginPlacement(reservation, mode, 'pointer-drag', event.currentTarget)
+    try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* Safari/jsdom fallback */ }
+    dragRef.current = {
+      pointerId: event.pointerId,
+      reservationId: reservation.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      targetTableId: null,
+    }
+  }
+
+  const movePlacementPointer = (event) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 7) return
+    if (!drag.active) {
+      drag.active = true
+      updatePlacement((current) => current ? { ...current, dragging: true } : current)
+    }
+    event.preventDefault()
+    updateDragOverlay(event.clientX, event.clientY)
+    const targetTableId = placementTargetAtPoint(event.clientX, event.clientY)
+    if (targetTableId === drag.targetTableId) return
+    drag.targetTableId = targetTableId
+    if (targetTableId) selectPlacementTarget(targetTableId, { input: 'pointer-drag' })
+    else updatePlacement((current) => current ? { ...current, targetTableId: null, selectedKey: null } : current)
+  }
+
+  const endPlacementPointer = (event) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    dragRef.current = null
+    if (!drag.active) return
+    event.preventDefault()
+    suppressPlacementClickRef.current = true
+    window.setTimeout(() => { suppressPlacementClickRef.current = false }, 0)
+    if (placementRef.current) {
+      const stopped = { ...placementRef.current, dragging: false }
+      placementRef.current = stopped
+      setPlacement(stopped)
+    }
+    const tableId = placementTargetAtPoint(event.clientX, event.clientY) || drag.targetTableId
+    if (tableId) selectPlacementTarget(tableId, { input: 'pointer-drag', direct: true })
+    else cancelPlacement()
+  }
+
+  const cancelPlacementPointer = (event) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    dragRef.current = null
+    cancelPlacement()
+  }
+
+  const activatePlacement = (event, reservation, mode) => {
+    if (suppressPlacementClickRef.current) return
+    beginPlacement(reservation, mode, event.detail === 0 ? 'keyboard' : 'touch', event.currentTarget)
+  }
+
+  useEffect(() => {
+    if (!readOnly || !placementRef.current) return
+    cancelPlacement({ restoreFocus: false })
+  }, [readOnly])
+
+  useEffect(() => {
+    const current = placementRef.current
+    if (!current || !snapshot) return
+    const reservation = reservationForPlacement(current)
+    const stillOperational = current.mode === 'move'
+      ? queueGroupFor(reservation) === 'na_sali'
+      : queueGroupFor(reservation) === 'nadchodzace'
+    if (reservation && stillOperational) return
+    cancelPlacement()
+  }, [snapshot, placement?.mode, placement?.reservationId])
+
+  useEffect(() => {
+    if (!placement) return undefined
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape' || !placementRef.current) return
+      event.preventDefault()
+      cancelPlacement()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [placement])
+
   const posadz = async (reservation) => {
     if (actions[reservation.id] || readOnly) return
+    const candidates = placementCandidatesFor(snapshotRef.current?.plan_sali, reservation, 'seat')
+    const selectedKey = pick[reservation.id] || ''
+    const selected = selectedKey
+      ? candidates.find((candidate) => candidate.key === selectedKey)
+        || candidates.find((candidate) => candidate.tableIds.length === 1 && String(candidate.tableIds[0]) === String(selectedKey))
+      : null
+    if (selectedKey && !selected) {
+      setPick((current) => ({ ...current, [reservation.id]: '' }))
+      setRowFeedback((current) => ({
+        ...current,
+        [reservation.id]: {
+          type: 'error',
+          message: 'Wybrana konfiguracja nie jest już aktualna. Wybierz ją ponownie albo użyj automatycznego doboru.',
+        },
+      }))
+      return
+    }
     const operationDay = dataRef.current
     cancelReadRequests()
     setActions((current) => ({ ...current, [reservation.id]: 'seat' }))
     setRowFeedback((current) => ({ ...current, [reservation.id]: null }))
     const mutation = startMutation()
     try {
-      const tableId = pick[reservation.id]
-      const response = await api(`/host/rezerwacja/${reservation.id}/posadz`, 'POST', {
-        stolik_id: tableId ? Number(tableId) : null,
-      }, { signal: mutation.controller.signal })
+      const response = await api(
+        `/host/rezerwacja/${reservation.id}/posadz`,
+        'POST',
+        selected ? {
+          stoliki: selected.tableIds,
+          oczekiwane_stoliki: tableIdsFor(reservation),
+        } : { stolik_id: null },
+        selected ? {
+          signal: mutation.controller.signal,
+          headers: { 'Idempotency-Key': nowyKluczIdempotencji('host-seat') },
+        } : { signal: mutation.controller.signal },
+      )
       if (!mutationIsCurrent(mutation) || dataRef.current !== operationDay) return
-      applyMutationResponse(response)
+      applyMutationResponse(response?.rezerwacja || response)
       setPick((current) => ({ ...current, [reservation.id]: '' }))
       setRowFeedback((current) => ({
         ...current,
@@ -1237,6 +1773,13 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
     weekday: 'long', day: 'numeric', month: 'long',
   })
   const summary = liveQueue?.podsumowanie || {}
+  const placementReservation = placement ? reservationForPlacement(placement) : null
+  const placementCandidates = placement && placementReservation
+    ? placementCandidatesFor(snapshot?.plan_sali, placementReservation, placement.mode)
+    : []
+  const placementGuestLabel = canViewContacts && placementReservation?.nazwisko
+    ? placementReservation.nazwisko
+    : 'gościa'
   const retryRowAction = (reservation, retry) => {
     if (retry?.type === 'seat') return posadz(reservation)
     if (retry?.type === 'phase') return changePhase(reservation, retry.phase)
@@ -1308,6 +1851,33 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
               label="Widok serwisu"
             />
 
+            {placement && placementReservation ? (
+              <HostAssignmentBar
+                placement={placement}
+                reservation={placementReservation}
+                candidates={placementCandidates}
+                canViewContacts={canViewContacts}
+                requiresWorkstationReauth={requiresWorkstationReauth}
+                busy={Boolean(actions[placement.reservationId])}
+                onSelectCandidate={(key) => updatePlacement((current) => current ? {
+                  ...current,
+                  selectedKey: key,
+                  phase: 'choosing',
+                  feedback: null,
+                  overrideAvailability: null,
+                } : current)}
+                onConfirm={() => submitPlacement(placementRef.current, placementRef.current?.selectedKey)}
+                onOverrideConfirm={(override, authorization) => submitPlacement(
+                  placementRef.current,
+                  placementRef.current?.selectedKey,
+                  override,
+                  authorization,
+                )}
+                onOverrideDraftChange={(value) => updatePlacement((current) => current ? { ...current, overrideDraft: value } : current)}
+                onCancel={() => cancelPlacement()}
+              />
+            ) : null}
+
             <div className="lg:grid lg:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
               <div
                 className={`${mobileView === 'floor' ? 'block' : 'hidden'} min-w-0 lg:block lg:pr-6`}
@@ -1317,6 +1887,11 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
                   queue={liveQueue}
                   offline={readOnly}
                   canViewContacts={canViewContacts}
+                  placement={placement}
+                  placementCandidates={placementCandidates}
+                  placementGuestLabel={placementGuestLabel}
+                  onPlacementTarget={selectPlacementTarget}
+                  onPlacementCancel={() => cancelPlacement()}
                 />
               </div>
               <div
@@ -1324,7 +1899,7 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
               >
                 <HostQueue
                   queue={liveQueue}
-                  tables={snapshot.plan_sali?.stoliki || []}
+                  floor={snapshot.plan_sali}
                   pick={pick}
                   setPick={setPick}
                   actions={actions}
@@ -1347,6 +1922,12 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
                   now={serverNow}
                   serverNow={serverNow}
                   onSeat={posadz}
+                  onPlacementActivate={activatePlacement}
+                  onPlacementPointerDown={beginPlacementPointer}
+                  onPlacementPointerMove={movePlacementPointer}
+                  onPlacementPointerUp={endPlacementPointer}
+                  onPlacementPointerCancel={cancelPlacementPointer}
+                  onUndoPlacement={undoPlacement}
                   onPhase={changePhase}
                   onRetry={retryRowAction}
                   onPreviewWaitlist={previewWaitlistOffer}
@@ -1369,6 +1950,20 @@ export default function WidokHosta({ date: controlledDate, onDateChange, active 
             >
               <HostTimeline timeline={snapshot.os_czasu} canViewContacts={canViewContacts} />
             </div>
+
+            {placement?.dragging && placementReservation && typeof document !== 'undefined'
+              ? createPortal(
+                  <div
+                    ref={dragOverlayRef}
+                    data-host-drag-overlay
+                    aria-hidden="true"
+                    className="pointer-events-none fixed left-0 top-0 z-[60] max-w-56 rounded-xl border border-mint/50 bg-bg-2/95 px-3 py-2 text-xs font-semibold text-ink shadow-soft motion-reduce:transition-none"
+                  >
+                    {canViewContacts ? placementReservation.nazwisko : 'Gość'} · {placementReservation.liczba_osob || 1} os.
+                  </div>,
+                  document.body,
+                )
+              : null}
           </div>
         ) : null}
       </div>
@@ -1387,7 +1982,7 @@ function Metric({ value, label, accent = false }) {
 
 function HostQueue({
   queue,
-  tables,
+  floor,
   pick,
   setPick,
   actions,
@@ -1410,6 +2005,12 @@ function HostQueue({
   now,
   serverNow,
   onSeat,
+  onPlacementActivate,
+  onPlacementPointerDown,
+  onPlacementPointerMove,
+  onPlacementPointerUp,
+  onPlacementPointerCancel,
+  onUndoPlacement,
   onPhase,
   onRetry,
   onPreviewWaitlist,
@@ -1420,12 +2021,12 @@ function HostQueue({
   onCancelWaitlist,
   onPriorityWaitlist,
 }) {
+  const tables = floor?.stoliki || []
   const tableName = (id) => tables.find((table) => table.id === id)?.nazwa || `#${id}`
   const tableLabel = (reservation) => {
     const ids = tableIdsFor(reservation)
     return ids.length ? ids.map(tableName).join(' + ') : null
   }
-  const availableTables = tables.filter((table) => table.aktywny && table.aktywny_w_planie !== false)
   const empty = !(
     queue?.nadchodzace?.length
     || queue?.na_sali?.length
@@ -1470,7 +2071,7 @@ function HostQueue({
               </div>
               <DaneWrazliwe guest={reservation.gosc} visible={canViewSensitive} compact />
             </div>
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <label className="sr-only" htmlFor={`host-table-${reservation.id}`}>Stół dla {canViewContacts ? reservation.nazwisko : 'gościa'}</label>
               <select
                 id={`host-table-${reservation.id}`}
@@ -1481,7 +2082,9 @@ function HostQueue({
                 className={`${fld} min-h-11 min-w-0 flex-1`}
               >
                 <option value="">Dobierz automatycznie</option>
-                {availableTables.map((table) => <option key={table.id} value={table.id}>{table.nazwa} · {table.pojemnosc} os.</option>)}
+                {placementCandidatesFor(floor, reservation, 'seat').map((candidate) => (
+                  <option key={candidate.key} value={candidate.key}>{candidate.label} · {candidate.capacity} miejsc</option>
+                ))}
               </select>
               <Button
                 id={`host-seat-${reservation.id}`}
@@ -1496,8 +2099,29 @@ function HostQueue({
               >
                 <Icon name="check" className="h-4 w-4" /> Posadź
               </Button>
+              <Button
+                variant="subtle"
+                size="sm"
+                className="w-full cursor-grab active:cursor-grabbing sm:w-auto"
+                disabled={Boolean(actions[reservation.id]) || readOnly}
+                aria-describedby={readOnly ? 'host-readonly-actions' : undefined}
+                onClick={(event) => onPlacementActivate(event, reservation, 'seat')}
+                onPointerDown={(event) => onPlacementPointerDown(event, reservation, 'seat')}
+                onPointerMove={onPlacementPointerMove}
+                onPointerUp={onPlacementPointerUp}
+                onPointerCancel={onPlacementPointerCancel}
+              >
+                <Icon name="pin" className="h-4 w-4" /> Posadź na planie
+              </Button>
             </div>
-            <InlineFeedback value={feedback[reservation.id]} onRetry={() => onRetry(reservation, feedback[reservation.id]?.retry)} disabled={readOnly || Boolean(actions[reservation.id])} />
+            <InlineFeedback
+              reservationId={reservation.id}
+              value={feedback[reservation.id]}
+              onRetry={() => onRetry(reservation, feedback[reservation.id]?.retry)}
+              onAction={() => onUndoPlacement(reservation, feedback[reservation.id]?.undo)}
+              disabled={readOnly || Boolean(actions[reservation.id])}
+              actionBusy={actions[reservation.id] === 'undo'}
+            />
           </div>
         ))}
       </QueueSection>
@@ -1576,11 +2200,28 @@ function HostQueue({
               </div>
               <DaneWrazliwe guest={reservation.gosc} visible={canViewSensitive} />
               <div className="mt-3 flex flex-wrap gap-2">
+                <PhaseButton
+                  disabled={Boolean(actions[reservation.id]) || readOnly}
+                  describedBy={readOnly ? 'host-readonly-actions' : undefined}
+                  onClick={(event) => onPlacementActivate(event, reservation, 'move')}
+                  onPointerDown={(event) => onPlacementPointerDown(event, reservation, 'move')}
+                  onPointerMove={onPlacementPointerMove}
+                  onPointerUp={onPlacementPointerUp}
+                  onPointerCancel={onPlacementPointerCancel}
+                  icon="pin"
+                >Przenieś</PhaseButton>
                 {reservation.faza_hosta === 'posadzony' ? <PhaseButton disabled={Boolean(actions[reservation.id]) || readOnly} describedBy={readOnly ? 'host-readonly-actions' : undefined} onClick={() => onPhase(reservation, 'rachunek')} icon="clipboard">Rachunek</PhaseButton> : null}
                 {['posadzony', 'rachunek'].includes(reservation.faza_hosta) ? <PhaseButton disabled={Boolean(actions[reservation.id]) || readOnly} describedBy={readOnly ? 'host-readonly-actions' : undefined} onClick={() => onPhase(reservation, 'oplacony')} icon="check">Opłacony</PhaseButton> : null}
                 <PhaseButton disabled={Boolean(actions[reservation.id]) || readOnly} describedBy={readOnly ? 'host-readonly-actions' : undefined} onClick={() => onPhase(reservation, 'wyszedl')} icon="close" quiet>Wyszedł</PhaseButton>
               </div>
-              <InlineFeedback value={feedback[reservation.id]} onRetry={() => onRetry(reservation, feedback[reservation.id]?.retry)} disabled={readOnly || Boolean(actions[reservation.id])} />
+              <InlineFeedback
+                reservationId={reservation.id}
+                value={feedback[reservation.id]}
+                onRetry={() => onRetry(reservation, feedback[reservation.id]?.retry)}
+                onAction={() => onUndoPlacement(reservation, feedback[reservation.id]?.undo)}
+                disabled={readOnly || Boolean(actions[reservation.id])}
+                actionBusy={actions[reservation.id] === 'undo'}
+              />
             </div>
           )
         })}
@@ -1596,6 +2237,115 @@ function HostQueue({
           ))}
         </QueueSection>
       ) : null}
+    </section>
+  )
+}
+
+function HostAssignmentBar({
+  placement,
+  reservation,
+  candidates,
+  canViewContacts,
+  requiresWorkstationReauth,
+  busy,
+  onSelectCandidate,
+  onConfirm,
+  onOverrideConfirm,
+  onOverrideDraftChange,
+  onCancel,
+}) {
+  const matching = placement.targetTableId
+    ? candidates.filter((candidate) => candidate.tableIds.includes(placement.targetTableId))
+    : []
+  const selected = candidates.find((candidate) => candidate.key === placement.selectedKey) || null
+  const actionLabel = placement.mode === 'move' ? 'Przenieś' : 'Posadź'
+  const guest = canViewContacts ? reservation.nazwisko || 'Gość' : 'Gość'
+  const canConfirm = Boolean(placement.targetTableId && selected && placement.phase !== 'pending')
+
+  useEffect(() => {
+    if (placement.input !== 'keyboard' || !placement.targetTableId) return undefined
+    const timer = window.setTimeout(() => {
+      const next = matching.length > 1
+        ? document.querySelector('[data-host-placement-choice]')
+        : document.getElementById('host-placement-confirm')
+      next?.focus()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [placement.input, placement.targetTableId])
+
+  return (
+    <section
+      className="sticky top-2 z-30 mb-5 rounded-2xl border border-mint/30 bg-bg-2/95 p-4 shadow-soft backdrop-blur-xl lg:static lg:backdrop-blur-none"
+      aria-labelledby="host-placement-title"
+      aria-busy={busy}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h3 id="host-placement-title" className="text-sm font-semibold text-ink">
+            {placement.mode === 'move' ? 'Przenieś gości' : 'Posadź gości'} · {guest}
+          </h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {reservation.liczba_osob || 1} os. · {placement.targetTableId
+              ? selected ? `wybrano ${selected.label}` : 'wybierz konfigurację poniżej'
+              : 'wybierz stolik na planie'}
+          </p>
+        </div>
+        <Button variant="subtle" size="sm" onClick={onCancel} disabled={busy} className="shrink-0">
+          Anuluj
+        </Button>
+      </div>
+
+      {matching.length > 1 ? (
+        <fieldset className="mt-3 border-y border-line py-3">
+          <legend className="text-xs font-semibold text-ink">Konfiguracja stolików</legend>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {matching.map((candidate) => (
+              <button
+                key={candidate.key}
+                type="button"
+                data-host-placement-choice
+                aria-pressed={candidate.key === placement.selectedKey}
+                onClick={() => onSelectCandidate(candidate.key)}
+                disabled={busy}
+                className={`min-h-11 rounded-xl border px-3 text-xs font-semibold transition ${candidate.key === placement.selectedKey ? 'border-mint/55 bg-mint/12 text-ink' : 'border-line bg-white/[0.03] text-muted hover:bg-white/[0.06] hover:text-ink'}`}
+              >
+                {candidate.label} · {candidate.capacity} miejsc
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
+
+      {placement.feedback ? (
+        <p
+          className={`mt-3 text-xs leading-relaxed ${placement.feedback.type === 'error' ? 'text-danger' : placement.feedback.type === 'warning' ? 'text-lemon' : 'text-muted'}`}
+          role={placement.feedback.type === 'error' ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          {placement.feedback.message}
+        </p>
+      ) : null}
+
+      {placement.phase === 'override' && placement.overrideAvailability ? (
+        <ReservationOverridePanel
+          availability={placement.overrideAvailability}
+          value={placement.overrideDraft || emptyOverrideDraft()}
+          onChange={onOverrideDraftChange}
+          onCancel={() => onSelectCandidate(placement.selectedKey)}
+          onConfirm={onOverrideConfirm}
+          busy={busy}
+          requiresPin={requiresWorkstationReauth}
+          reauthError={placement.feedback?.reauthError}
+          retryAfter={placement.feedback?.reauthRetryAfter}
+          actionLabel={requiresWorkstationReauth ? `Potwierdź PIN-em i ${actionLabel.toLowerCase()}` : `${actionLabel} mimo limitu`}
+        />
+      ) : (
+        <div className="mt-3 flex justify-end">
+          <Button id="host-placement-confirm" onClick={onConfirm} disabled={!canConfirm || busy} loading={busy} loadingLabel="Sprawdzam stoliki…">
+            {selected ? `${actionLabel} · ${selected.label}` : `${actionLabel} po wybraniu stolika`}
+          </Button>
+        </div>
+      )}
     </section>
   )
 }
@@ -1873,10 +2623,11 @@ function EmptyRow({ children }) {
   return <p className="py-6 text-center text-xs text-muted">{children}</p>
 }
 
-function PhaseButton({ onClick, icon, children, quiet = false, disabled, describedBy }) {
+function PhaseButton({ onClick, icon, children, quiet = false, disabled, describedBy, ...props }) {
   return (
     <button
       type="button"
+      {...props}
       onClick={onClick}
       disabled={disabled}
       aria-describedby={describedBy}
@@ -1887,13 +2638,24 @@ function PhaseButton({ onClick, icon, children, quiet = false, disabled, describ
   )
 }
 
-function InlineFeedback({ value, onRetry, disabled }) {
+function InlineFeedback({ reservationId, value, onRetry, onAction, disabled, actionBusy = false }) {
   if (!value) return null
   return (
-    <div className={`mt-2 flex min-h-6 flex-wrap items-center gap-2 text-xs ${value.type === 'error' ? 'text-danger' : value.type === 'warning' ? 'text-lemon' : 'text-success'}`} role={value.type === 'error' ? 'alert' : 'status'} aria-live="polite">
+    <div
+      data-host-feedback={reservationId}
+      tabIndex={-1}
+      className={`mt-2 flex min-h-6 flex-wrap items-center gap-2 rounded-lg text-xs outline-none focus:ring-2 focus:ring-mint/55 focus:ring-offset-2 focus:ring-offset-bg ${value.type === 'error' ? 'text-danger' : value.type === 'warning' ? 'text-lemon' : 'text-success'}`}
+      role={value.type === 'error' ? 'alert' : 'status'}
+      aria-live="polite"
+    >
       <span>{value.message}</span>
       {value.type === 'error' && value.retry ? (
-        <button type="button" onClick={onRetry} disabled={disabled} className="min-h-8 rounded-lg px-2 font-semibold underline decoration-current/40 underline-offset-2 disabled:opacity-50">Ponów</button>
+        <button type="button" onClick={onRetry} disabled={disabled} className="min-h-11 min-w-11 rounded-lg px-2 font-semibold underline decoration-current/40 underline-offset-2 disabled:opacity-50">Ponów</button>
+      ) : null}
+      {value.undo ? (
+        <button type="button" onClick={onAction} disabled={disabled || actionBusy} className="min-h-11 min-w-11 rounded-lg px-2 font-semibold underline decoration-current/40 underline-offset-2 disabled:opacity-50">
+          {actionBusy ? 'Cofam…' : 'Cofnij'}
+        </button>
       ) : null}
     </div>
   )
