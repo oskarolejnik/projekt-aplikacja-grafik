@@ -315,7 +315,9 @@ export default function EmployeeAvailability({ onDirtyChange }) {
                 <Banner variant="danger">Nie udało się zapisać zmian. {saveError}</Banner>
               </div>
             )}
-            <div className={`${saveError ? 'mt-3' : 'mt-6'} sticky bottom-3 z-20 flex flex-col gap-3 rounded-2xl border border-line bg-surface-2/95 p-4 shadow-lg shadow-black/30 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between`}>
+            {/* Na mobile pasek musi „pływać" NAD stałą dolną nawigacją (≈4.2rem + safe-area),
+                inaczej wsuwa się pod nią; na md+ nawigacja dolna znika — wraca bottom-3. */}
+            <div className={`${saveError ? 'mt-3' : 'mt-6'} sticky bottom-[calc(env(safe-area-inset-bottom)+4.9rem)] z-20 flex flex-col gap-3 rounded-2xl border border-line bg-surface-2/95 p-4 shadow-lg shadow-black/30 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between md:bottom-3`}>
               <span className={`text-sm ${saveError ? 'text-danger' : dirty ? 'text-lemon' : 'text-muted'}`} aria-live="polite">
                 {loading
                   ? 'Wczytuję zapisaną dyspozycyjność…'

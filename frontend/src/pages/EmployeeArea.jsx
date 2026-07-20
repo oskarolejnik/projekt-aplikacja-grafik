@@ -258,12 +258,14 @@ export default function EmployeeArea() {
               key={t.value}
               onClick={() => zmienWidok(t.value)}
               aria-current={widok === t.value ? 'page' : undefined}
-              className={`relative flex min-h-[3.75rem] min-w-11 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-xs font-semibold transition active:scale-[0.98] ${
+              className={`relative flex min-h-[3.75rem] min-w-11 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-xs font-semibold transition-colors duration-300 active:scale-[0.98] ${
                 widok === t.value ? 'text-mint' : 'text-muted'
               }`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
-              <span className={`relative grid h-7 min-w-10 place-items-center rounded-full px-2 ${widok === t.value ? 'bg-mint/15' : ''}`}>
+              <span className={`relative grid h-7 min-w-10 place-items-center rounded-full px-2 transition-colors duration-300 ease-snap ${
+                widok === t.value ? 'animate-nav-pop bg-mint/15' : 'bg-transparent'
+              }`}>
                 <Icon name={t.icon} className="h-5 w-5" />
                 {t.badge && <span aria-hidden className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
               </span>
@@ -278,12 +280,14 @@ export default function EmployeeArea() {
               aria-expanded={mobileMoreOpen}
               aria-controls="employee-mobile-more"
               aria-current={pozostaleWidoki.some((t) => t.value === widok) ? 'page' : undefined}
-              className={`flex min-h-[3.75rem] min-w-11 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-xs font-semibold transition active:scale-[0.98] ${
+              className={`flex min-h-[3.75rem] min-w-11 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-xs font-semibold transition-colors duration-300 active:scale-[0.98] ${
                 pozostaleWidoki.some((t) => t.value === widok) ? 'text-mint' : 'text-muted'
               }`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
-              <span className={`grid h-7 min-w-10 place-items-center rounded-full px-2 ${pozostaleWidoki.some((t) => t.value === widok) ? 'bg-mint/15' : ''}`}>
+              <span className={`grid h-7 min-w-10 place-items-center rounded-full px-2 transition-colors duration-300 ease-snap ${
+                pozostaleWidoki.some((t) => t.value === widok) ? 'animate-nav-pop bg-mint/15' : 'bg-transparent'
+              }`}>
                 <Icon name="menu" className="h-5 w-5" />
               </span>
               <span>Więcej</span>
@@ -294,14 +298,14 @@ export default function EmployeeArea() {
 
       {mobileMoreOpen && pozostaleWidoki.length > 0 && (
         <div className="fixed inset-0 z-40 md:hidden">
-          <div aria-hidden className="absolute inset-0 bg-black/65" onClick={() => setMobileMoreOpen(false)} />
+          <div aria-hidden className="absolute inset-0 animate-overlay-in bg-black/65" onClick={() => setMobileMoreOpen(false)} />
           <section
             ref={mobileMoreDialogRef}
             id="employee-mobile-more"
             role="dialog"
             aria-modal="true"
             aria-labelledby={mobileMoreTitleId}
-            className="material absolute inset-x-0 bottom-0 max-h-[75dvh] overflow-y-auto rounded-b-none rounded-t-2xl border-b-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+            className="material absolute inset-x-0 bottom-0 max-h-[75dvh] animate-sheet-in overflow-y-auto rounded-b-none rounded-t-2xl border-b-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           >
             <div className="mb-3 flex items-center justify-between gap-3">
               <h2 id={mobileMoreTitleId} className="font-display text-lg font-semibold text-ink">Więcej widoków</h2>

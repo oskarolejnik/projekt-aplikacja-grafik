@@ -70,6 +70,10 @@ export default {
         toastIn: { '0%': { opacity: '0', transform: 'translateY(-10px) scale(0.97)' }, '100%': { opacity: '1', transform: 'translateY(0) scale(1)' } },
         // Wejście treści zakładki — krótkie, bez teatru (użytkownik jest w zadaniu).
         tabIn: { '0%': { opacity: '0', transform: 'translateY(6px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+        // Pigułka aktywnej zakładki dolnej nawigacji — delikatne „osadzenie", bez odbicia.
+        navPop: { '0%': { transform: 'scale(0.82)' }, '100%': { transform: 'scale(1)' } },
+        // Arkusz mobilny („Więcej") — zjazd od dołu po krzywej szuflady iOS.
+        sheetIn: { '0%': { opacity: '0', transform: 'translateY(18px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
       },
       // Mocne krzywe ease-out (bez odbić i elastyczności)
       transitionTimingFunction: {
@@ -86,6 +90,8 @@ export default {
         'overlay-in': 'overlayIn 0.18s ease-out both',
         'toast-in': 'toastIn 0.24s cubic-bezier(0.23, 1, 0.32, 1) both',
         'tab-in': 'tabIn 0.24s cubic-bezier(0.23, 1, 0.32, 1) both',
+        'nav-pop': 'navPop 0.3s cubic-bezier(0.23, 1, 0.32, 1) both',
+        'sheet-in': 'sheetIn 0.28s cubic-bezier(0.32, 0.72, 0, 1) both',
       },
     },
   },
