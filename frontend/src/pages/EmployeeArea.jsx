@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useId, useRef } from 'react'
+import { BOUNCE } from '../lib/motion'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import { useBranding } from '../context/BrandingContext'
@@ -63,6 +64,18 @@ export default function EmployeeArea() {
       ]
   const glowneWidoki = widoki.slice(0, 3)
   const pozostaleWidoki = widoki.slice(3)
+
+  // Dolna nawigacja: JEDEN wspólny wskaźnik sunący pod aktywną zakładką (wzorzec PillSwitch —
+  // sam transform na kompozytorze). Zakładki z arkusza „Więcej" świecą ostatni slot.
+  const slotCount = glowneWidoki.length + (pozostaleWidoki.length > 0 ? 1 : 0)
+  const glownySlot = glowneWidoki.findIndex((t) => t.value === widok)
+  const aktywnySlot = glownySlot >= 0
+    ? glownySlot
+    : pozostaleWidoki.some((t) => t.value === widok) ? slotCount - 1 : -1
+
+  // Kierunkowe przejście treści (jak swipe w socialach): nowa zakładka wjeżdża z tej strony,
+  // w którą użytkownik „poszedł" po pasku; spoza paska (ogłoszenia) — neutralny tab-in.
+  const [animKlasa, setAnimKlasa] = useState('animate-tab-in')
 
   // Licznik nieprzeczytanych ogłoszeń → odznaka przy skrócie w nagłówku.
   useEffect(() => {
@@ -159,6 +172,11 @@ export default function EmployeeArea() {
 
   const zmienWidok = async (v) => {
     if (v !== widok && widok === 'dyspozycyjnosc' && availabilityDirty && !(await confirmDiscardAvailability())) return
+    const stary = widoki.findIndex((t) => t.value === widok)
+    const nowy = widoki.findIndex((t) => t.value === v)
+    setAnimKlasa(stary >= 0 && nowy >= 0 && stary !== nowy
+      ? (nowy > stary ? 'animate-slide-in-r' : 'animate-slide-in-l')
+      : 'animate-tab-in')
     setWidok(v)
     setMobileMoreOpen(false)
     if (v === 'grafik') setNowyGrafik(false)
@@ -233,8 +251,8 @@ export default function EmployeeArea() {
           ))}
         </nav>
 
-        {/* Treść zakładki: reveal na czystym CSS (kompozytor; brak rAF-stuttera). */}
-        <div key={widok} className="animate-tab-in">
+        {/* Treść zakładki: reveal na czystym CSS (kompozytor; brak rAF-stuttera), kierunkowy. */}
+        <div key={widok} className={animKlasa}>
           {widok === 'dyspozycyjnosc' && <EmployeeAvailability onDirtyChange={setAvailabilityDirty} />}
           {widok === 'grafik' && <EmployeeSchedule onSeen={oznaczWidziany} />}
           {widok === 'gielda' && <EmployeeGielda />}
@@ -251,7 +269,20 @@ export default function EmployeeArea() {
         aria-label="Główna nawigacja mobilna"
         className="fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.08] bg-bg/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
       >
-        <div className="mx-auto flex w-full max-w-3xl px-2 pt-1.5">
+        <div className="relative mx-auto flex w-full max-w-3xl px-2 pt-1.5">
+          {/* Wspólny wskaźnik — sunie między slotami po krzywej szuflady iOS (sam transform, GPU).
+              Zakładka spoza paska (ogłoszenia) → wskaźnik znika zamiast udawać obecność. */}
+          <span
+            aria-hidden
+            className={`pointer-events-none absolute left-2 top-3 h-7 will-change-transform ${aktywnySlot >= 0 ? 'opacity-100' : 'opacity-0'}`}
+            style={{
+              width: `calc((100% - 1rem) / ${slotCount})`,
+              transform: `translateX(${Math.max(0, aktywnySlot) * 100}%)`,
+              transition: `transform 320ms ${BOUNCE}, opacity 200ms ease`,
+            }}
+          >
+            <span className="mx-auto block h-7 w-14 rounded-full bg-mint/15" />
+          </span>
           {glowneWidoki.map((t) => (
             <button
               type="button"
@@ -263,9 +294,7 @@ export default function EmployeeArea() {
               }`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
-              <span className={`relative grid h-7 min-w-10 place-items-center rounded-full px-2 transition-colors duration-300 ease-snap ${
-                widok === t.value ? 'animate-nav-pop bg-mint/15' : 'bg-transparent'
-              }`}>
+              <span className="relative grid h-7 min-w-10 place-items-center rounded-full px-2">
                 <Icon name={t.icon} className="h-5 w-5" />
                 {t.badge && <span aria-hidden className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full bg-coral ring-2 ring-bg" />}
               </span>
@@ -285,9 +314,7 @@ export default function EmployeeArea() {
               }`}
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
-              <span className={`grid h-7 min-w-10 place-items-center rounded-full px-2 transition-colors duration-300 ease-snap ${
-                pozostaleWidoki.some((t) => t.value === widok) ? 'animate-nav-pop bg-mint/15' : 'bg-transparent'
-              }`}>
+              <span className="grid h-7 min-w-10 place-items-center rounded-full px-2">
                 <Icon name="menu" className="h-5 w-5" />
               </span>
               <span>Więcej</span>
