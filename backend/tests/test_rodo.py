@@ -114,9 +114,11 @@ def test_eksport_gosc(admin_client, db):
     assert exported_audit["powod"] == "other"
     assert exported_audit["kod_powodu_nadpisania"] == "operational_decision"
     assert exported_audit["notatka_nadpisania"] == "Gość poprosił o wyjątek"
+    # GET (klucz=PII w query stringu) nie może być obsłużony. Bez zbudowanego SPA FastAPI
+    # zwraca 405 (route POST-only); z montem statyków na "/" GET spada do 404 — oba OK.
     assert admin_client.get(
         "/api/rodo/eksport-gosc", params={"klucz": KLUCZ},
-    ).status_code == 404
+    ).status_code in (404, 405)
     audit = db.query(models.AuditLog).filter_by(akcja="rodo_eksport_gosc").one()
     assert audit.zasob.startswith("guest_ref:")
     assert len(audit.zasob) == len("guest_ref:") + 64
