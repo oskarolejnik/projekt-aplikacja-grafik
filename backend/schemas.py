@@ -665,6 +665,10 @@ class LokalConfigOut(LokalBrandingOut):
     faktura_nazwa: Optional[str] = None
     faktura_adres_l1: Optional[str] = None
     faktura_adres_l2: Optional[str] = None
+    rcp_mobilne: bool = False
+    rcp_geo_lat: Optional[float] = None
+    rcp_geo_lng: Optional[float] = None
+    rcp_geo_promien_m: int = 150
 
 class LokalConfigIn(BaseModel):
     """Częściowa aktualizacja (tylko podane pola są zmieniane)."""
@@ -721,6 +725,12 @@ class LokalConfigIn(BaseModel):
     faktura_nazwa: Optional[str] = None
     faktura_adres_l1: Optional[str] = None
     faktura_adres_l2: Optional[str] = None
+    # RCP mobilne (geofencing): promień 25–2000 m — mniejszy nie ma sensu przy dokładności GPS,
+    # większy przestaje weryfikować obecność w lokalu.
+    rcp_mobilne: Optional[bool] = None
+    rcp_geo_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    rcp_geo_lng: Optional[float] = Field(default=None, ge=-180, le=180)
+    rcp_geo_promien_m: Optional[int] = Field(default=None, ge=25, le=2000)
 
     @field_validator("rozliczenia_tryb_kelnera")
     @classmethod
@@ -747,6 +757,7 @@ class LokalConfigIn(BaseModel):
             raise ValueError("Maksymalnie 20 etykiet.")
         return czyste or None   # pusta lista = wróć do wartości domyślnych
 
+
     @field_validator("imprezy_mapa_sal")
     @classmethod
     def _mapy(cls, v):
@@ -757,6 +768,14 @@ class LokalConfigIn(BaseModel):
         if len(czysta) > 20:
             raise ValueError("Maksymalnie 20 wpisów mapy.")
         return czysta or None   # pusta mapa = wróć do wartości domyślnych
+
+
+class RcpOdbijIn(BaseModel):
+    """Odbicie start/koniec zmiany z telefonu (RCP mobilne z geofencingiem)."""
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    dokladnosc_m: Optional[float] = Field(default=None, ge=0)   # accuracy z GPS (metry)
+
 
 class SubskrypcjaIn(BaseModel):
     """Częściowa aktualizacja subskrypcji/licencji instancji (admin)."""

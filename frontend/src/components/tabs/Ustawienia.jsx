@@ -244,6 +244,10 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
         praca_max_dni_tydzien: Number(cfg.praca_max_dni_tydzien),
         praca_max_dni_miesiac: Number(cfg.praca_max_dni_miesiac),
         impreza_osobne_rozliczenie: cfg.impreza_osobne_rozliczenie,
+        rcp_mobilne: !!cfg.rcp_mobilne,
+        rcp_geo_lat: cfg.rcp_geo_lat === '' || cfg.rcp_geo_lat == null ? null : Number(cfg.rcp_geo_lat),
+        rcp_geo_lng: cfg.rcp_geo_lng === '' || cfg.rcp_geo_lng == null ? null : Number(cfg.rcp_geo_lng),
+        rcp_geo_promien_m: Number(cfg.rcp_geo_promien_m || 150),
         rozliczenia_tryb_kelnera: cfg.rozliczenia_tryb_kelnera || 'indywidualnie',
         rozliczenia_nazwy_kas: kasyText.split(',').map((t) => t.trim()).filter(Boolean),
         rozliczenia_nazwy_terminali: terminaleText.split(',').map((t) => t.trim()).filter(Boolean),
@@ -473,6 +477,37 @@ export default function Ustawienia({ initialSection = 'lokal' }) {
             <input type="number" min="0" value={cfg.praca_max_dni_tydzien ?? 6} onChange={(e) => set('praca_max_dni_tydzien', e.target.value)} className={fld} /></label>
           <label className="text-xs font-semibold text-muted">Maks. dni pracy w miesiącu
             <input type="number" min="0" value={cfg.praca_max_dni_miesiac ?? 22} onChange={(e) => set('praca_max_dni_miesiac', e.target.value)} className={fld} /></label>
+        </div>
+      </Card>
+
+      <Card hidden={widok !== 'operacje'} className="p-6 sm:p-8">
+        <SectionHeader title="Odbijanie zmian telefonem (RCP)" subtitle="Pracownik rozpoczyna i kończy zmianę w swojej aplikacji — serwer sprawdza, czy stoi w lokalu (promień od podanego położenia). Działa bez integracji z kasą POS." />
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center justify-between rounded-xl border border-line bg-surface-2 px-4 py-3">
+            <span className="text-sm text-ink">Włącz odbijanie telefonem</span>
+            <Toggle label="Przełącz: odbijanie telefonem" on={!!cfg.rcp_mobilne} onChange={(v) => set('rcp_mobilne', v)} />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="text-xs font-semibold text-muted">Szerokość geogr. lokalu
+              <input type="number" step="any" value={cfg.rcp_geo_lat ?? ''} onChange={(e) => set('rcp_geo_lat', e.target.value)} placeholder="np. 50.06143" className={fld} /></label>
+            <label className="text-xs font-semibold text-muted">Długość geogr. lokalu
+              <input type="number" step="any" value={cfg.rcp_geo_lng ?? ''} onChange={(e) => set('rcp_geo_lng', e.target.value)} placeholder="np. 19.93658" className={fld} /></label>
+            <label className="text-xs font-semibold text-muted">Promień strefy (m)
+              <input type="number" min="25" max="2000" value={cfg.rcp_geo_promien_m ?? 150} onChange={(e) => set('rcp_geo_promien_m', e.target.value)} className={fld} /></label>
+          </div>
+          <Button variant="ghost" size="md" onClick={() => {
+            if (!navigator.geolocation) { toast('Ta przeglądarka nie udostępnia lokalizacji.', 'error'); return }
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                setCfg((s) => ({ ...s, rcp_geo_lat: pos.coords.latitude, rcp_geo_lng: pos.coords.longitude }))
+                toast('Wstawiono Twoje bieżące położenie — sprawdź i zapisz.', 'success')
+              },
+              () => toast('Nie udało się pobrać lokalizacji — wpisz współrzędne ręcznie (np. z map Google).', 'error'),
+              { enableHighAccuracy: true, timeout: 15000 },
+            )
+          }}>
+            <Icon name="refresh" className="h-4 w-4" /> Użyj mojego bieżącego położenia
+          </Button>
         </div>
       </Card>
 

@@ -72,6 +72,41 @@ export default function EmployeeHours() {
     catch (e) { toast(e.message, 'error') }
   }
 
+  // RCP mobilne (geofencing): odbicie start/koniec zmiany telefonem — serwer weryfikuje
+  // odległość od lokalu, więc tu tylko pobieramy pozycję i pokazujemy wynik.
+  const [rcp, setRcp] = useState(null)
+  const [busyRcp, setBusyRcp] = useState(false)
+  const loadRcp = useCallback(() => {
+    api('/me/rcp').then(setRcp).catch(() => setRcp(null))
+  }, [])
+  useEffect(() => { loadRcp() }, [loadRcp])
+
+  const pobierzPozycje = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error('Ta przeglądarka nie udostępnia lokalizacji.')); return }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos.coords),
+      (err) => reject(new Error(err.code === 1
+        ? 'Brak zgody na lokalizację — włącz ją dla tej strony i spróbuj ponownie.'
+        : 'Nie udało się pobrać lokalizacji. Spróbuj ponownie.')),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    )
+  })
+
+  const odbij = async () => {
+    setBusyRcp(true)
+    try {
+      const c = await pobierzPozycje()
+      const r = await api('/me/rcp/odbij', 'POST', {
+        lat: c.latitude, lng: c.longitude,
+        dokladnosc_m: Number.isFinite(c.accuracy) ? c.accuracy : null,
+      })
+      toast(r.kierunek === 'wejscie'
+        ? `Zmiana rozpoczęta o ${r.czas.slice(11, 16)}. Dobrej zmiany!`
+        : `Zmiana zakończona — ${godzinyHM(r.godziny)}.`, 'success')
+      loadRcp(); load(true)
+    } catch (e) { toast(e.message, 'error') } finally { setBusyRcp(false) }
+  }
+
   // Live: ciche odświeżanie co 20 s (bez spinnera), tylko gdy karta jest widoczna.
   useEffect(() => {
     const id = setInterval(() => {
@@ -122,8 +157,38 @@ export default function EmployeeHours() {
         </div>
       ) : (
         <>
-          {/* Trwająca, niezakończona zmiana — „dziś jesteś na zmianie" (pulsująca kropka). */}
-          {dane?.aktywna_zmiana && (
+          {/* RCP mobilne: odbicie start/koniec zmiany telefonem (geofencing po stronie serwera). */}
+          {rcp?.aktywne && (
+            <Card className={`flex items-center justify-between gap-3 p-4 ${rcp.zmiana ? 'border-mint/30 bg-mint/[0.06]' : ''}`}>
+              <div className="flex min-w-0 items-center gap-3">
+                {rcp.zmiana && (
+                  <span className="relative flex h-3 w-3 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-75" />
+                    <span className="relative inline-flex h-3 w-3 rounded-full bg-mint" />
+                  </span>
+                )}
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-ink">{rcp.zmiana ? 'Zmiana w toku' : 'Zaczynasz pracę?'}</div>
+                  <div className="text-xs text-muted">
+                    {rcp.zmiana
+                      ? `Rozpoczęta o ${rcp.zmiana.wejscie.slice(11, 16)} — zakończ ją wychodząc z lokalu.`
+                      : 'Odbij się telefonem — działa tylko na miejscu, w lokalu.'}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button" onClick={odbij} disabled={busyRcp}
+                className={`min-h-11 shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-50 ${
+                  rcp.zmiana ? 'border border-line bg-white/[0.06] text-ink hover:bg-white/[0.1]' : 'bg-mint text-bg hover:brightness-105'}`}
+              >
+                {busyRcp ? <Spinner className="h-4 w-4" /> : rcp.zmiana ? 'Zakończ zmianę' : 'Rozpocznij zmianę'}
+              </button>
+            </Card>
+          )}
+
+          {/* Trwająca, niezakończona zmiana — „dziś jesteś na zmianie" (pulsująca kropka).
+              Gdy zmiana pochodzi z odbicia telefonem, kartę „w toku" pokazuje już blok RCP wyżej. */}
+          {dane?.aktywna_zmiana && !rcp?.zmiana && (
             <Card className="flex items-center gap-3 border-mint/30 bg-mint/[0.06] p-4">
               <span className="relative flex h-3 w-3 shrink-0">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-75" />

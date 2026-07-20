@@ -8,7 +8,9 @@ role_guard (main) przepuszcza /api/me/* dla KAŻDEGO zalogowanego — bez roli a
 
 from collections import defaultdict
 from datetime import date, time, timedelta
+from math import asin, cos, radians, sin, sqrt
 from typing import List, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -573,6 +575,115 @@ def push_register_native(dane: dict, user: models.User = Depends(get_current_use
     else:
         db.add(models.PushDeviceToken(user_id=user.id, token=token, platform=platform))
     db.commit()
+
+
+# --- RCP MOBILNE (geofencing): pracownik odbija start/koniec zmiany telefonem ---
+
+# Odczyt GPS o gorszej dokładności odrzucamy — zbyt łatwo o odbicie „zza płotu" i o śmieciowe
+# lokalizacje z sieci komórkowej. Limit celowo powyżej promienia domyślnego (150 m).
+RCP_GEO_MAX_DOKLADNOSC_M = 150.0
+# Otwarta zmiana starsza niż tyle godzin = zapomniane odbicie (nikt nie pracuje tyle ciągiem).
+RCP_GEO_ZAPOMNIANE_H = 18
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Odległość po powierzchni Ziemi w metrach (haversine, promień sferyczny 6371 km)."""
+    dlat, dlng = radians(lat2 - lat1), radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return 2 * 6_371_000.0 * asin(sqrt(a))
+
+
+def _rcp_geo_teraz():
+    """Znacznik czasu odbicia — ZAWSZE zegar serwera (anty-spoofing), naiwny lokalny jak
+    timestampy agenta POS; awaryjnie naiwny UTC gdy strefa niedostępna."""
+    return (_teraz_lokalnie() or utcnow_naive()).replace(microsecond=0)
+
+
+def _rcp_geo_skonfigurowane(cfg) -> bool:
+    return bool(cfg.rcp_mobilne and cfg.rcp_geo_lat is not None and cfg.rcp_geo_lng is not None)
+
+
+def _rcp_geo_otwarta(db, pracownik_id: int):
+    """Ostatnia otwarta zmiana GEO pracownika (wejście bez wyjścia). Rekordy agenta POS
+    (inne zrodlo) zostawiamy w spokoju — zamyka je agent."""
+    return (
+        db.query(models.OdbicieRcp)
+        .filter(
+            models.OdbicieRcp.pracownik_id == pracownik_id,
+            models.OdbicieRcp.zrodlo == "geo",
+            models.OdbicieRcp.wyjscie.is_(None),
+            models.OdbicieRcp.wejscie.isnot(None),
+        )
+        .order_by(models.OdbicieRcp.wejscie.desc())
+        .first()
+    )
+
+
+@router.get("/api/me/rcp")
+def moj_rcp_status(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Status odbijania telefonem: czy lokal ma włączone i skonfigurowane RCP mobilne
+    oraz czy pracownik ma otwartą zmianę GEO. NIE zwracamy współrzędnych lokalu —
+    weryfikacja odległości jest wyłącznie po stronie serwera."""
+    cfg = get_lokal_config(db)
+    if not (_rcp_geo_skonfigurowane(cfg) and user.pracownik_id):
+        return {"aktywne": False, "zmiana": None}
+    zmiana = None
+    o = _rcp_geo_otwarta(db, user.pracownik_id)
+    if o and o.wejscie >= _rcp_geo_teraz() - timedelta(hours=RCP_GEO_ZAPOMNIANE_H):
+        zmiana = {"data": o.data.isoformat(), "wejscie": o.wejscie.isoformat()}
+    return {"aktywne": True, "promien_m": cfg.rcp_geo_promien_m, "zmiana": zmiana}
+
+
+@router.post("/api/me/rcp/odbij")
+def moj_rcp_odbij(dane: schemas.RcpOdbijIn,
+                  user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Start/koniec zmiany z telefonu: brak otwartej zmiany GEO → wejście, jest → wyjście.
+    Serwer sprawdza odległość od lokalu (haversine ≤ promień) i sam stempluje czas —
+    współrzędne klienta są tylko dowodem obecności, nie źródłem godziny."""
+    cfg = get_lokal_config(db)
+    if not _rcp_geo_skonfigurowane(cfg):
+        raise HTTPException(409, "Odbijanie telefonem jest wyłączone albo lokal nie ma ustawionego położenia.")
+    if not user.pracownik_id:
+        raise HTTPException(400, "Konto nie jest powiązane z pracownikiem.")
+    if dane.dokladnosc_m is not None and dane.dokladnosc_m > RCP_GEO_MAX_DOKLADNOSC_M:
+        raise HTTPException(400, f"Za słaby sygnał GPS (±{dane.dokladnosc_m:.0f} m). "
+                                 "Włącz lokalizację dokładną i spróbuj ponownie.")
+    dystans = _haversine_m(dane.lat, dane.lng, cfg.rcp_geo_lat, cfg.rcp_geo_lng)
+    promien = int(cfg.rcp_geo_promien_m or 150)
+    if dystans > promien:
+        raise HTTPException(403, f"Jesteś ok. {dystans:.0f} m od lokalu (strefa odbić: {promien} m) — "
+                                 "odbić można tylko na miejscu.")
+
+    teraz = _rcp_geo_teraz()
+    o = _rcp_geo_otwarta(db, user.pracownik_id)
+    if o and o.wejscie < teraz - timedelta(hours=RCP_GEO_ZAPOMNIANE_H):
+        # Zapomniane wyjście: zamykamy z zerem godzin (manager skoryguje w raporcie),
+        # żeby nie blokować startu dzisiejszej zmiany i nie naliczać fikcyjnej doby.
+        o.wyjscie, o.godziny, o.zaktualizowano_at = o.wejscie, 0.0, utcnow_naive()
+        o = None
+
+    if o is None:
+        prac = db.get(models.Pracownik, user.pracownik_id)
+        rec = models.OdbicieRcp(
+            rcp_id=f"geo:{uuid4().hex}",
+            imie_nazwisko=f"{prac.imie} {prac.nazwisko}" if prac else "",
+            pracownik_id=user.pracownik_id, zrodlo="geo",
+            data=teraz.date(), wejscie=teraz,
+            wejscie_lat=dane.lat, wejscie_lng=dane.lng, wejscie_dokladnosc_m=dane.dokladnosc_m,
+            # samoobsługa — pushe „start/koniec zmiany" (ścieżka agenta POS) tu nie mają sensu
+            powiadomiono_wejscie=True, powiadomiono_wyjscie=True,
+            zaktualizowano_at=utcnow_naive(),
+        )
+        db.add(rec); db.commit(); db.refresh(rec)
+        return {"kierunek": "wejscie", "data": rec.data.isoformat(), "czas": rec.wejscie.isoformat()}
+
+    o.wyjscie = teraz
+    o.godziny = round(max(0.0, (o.wyjscie - o.wejscie).total_seconds() / 3600.0), 2)
+    o.wyjscie_lat, o.wyjscie_lng, o.wyjscie_dokladnosc_m = dane.lat, dane.lng, dane.dokladnosc_m
+    o.zaktualizowano_at = utcnow_naive()
+    db.commit()
+    return {"kierunek": "wyjscie", "data": o.data.isoformat(),
+            "czas": o.wyjscie.isoformat(), "godziny": o.godziny}
 
 
 # --- GODZINY Z RCP (miesięczne podsumowanie pracownika) ---

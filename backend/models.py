@@ -474,6 +474,15 @@ class OdbicieRcp(Base):
     powiadomiono_wejscie = Column(Boolean, default=False)   # czy wysłano push „start zmiany"
     powiadomiono_wyjscie = Column(Boolean, default=False)   # czy wysłano push „koniec zmiany"
     zaktualizowano_at    = Column(DateTime, nullable=True)
+    # --- RCP mobilne (geofencing): współrzędne odbicia z telefonu pracownika (zrodlo='geo').
+    #     NULL dla odbić wypchniętych przez agenta POS. Serwer weryfikuje odległość od lokalu
+    #     PRZED zapisem — kolumny są śladem audytowym (skąd faktycznie odbito).
+    wejscie_lat          = Column(Float, nullable=True)
+    wejscie_lng          = Column(Float, nullable=True)
+    wejscie_dokladnosc_m = Column(Float, nullable=True)
+    wyjscie_lat          = Column(Float, nullable=True)
+    wyjscie_lng          = Column(Float, nullable=True)
+    wyjscie_dokladnosc_m = Column(Float, nullable=True)
 
 
 class StanStolow(Base):
@@ -876,6 +885,13 @@ class LokalConfig(Base):
     #     admin przy generowaniu; NULL = brak tokenu (zostaje env RCP_INGEST_TOKEN) ---
     pos_token_hash = Column(String(64), nullable=True)
     pos_token_od   = Column(DateTime, nullable=True)
+    # --- RCP mobilne (geofencing): pracownik odbija start/koniec zmiany w telefonie,
+    #     serwer sprawdza odległość od lokalu (haversine). Dla lokali BEZ agenta POS to
+    #     jedyne źródło godzin; z agentem może współistnieć (osobne rekordy, zrodlo='geo').
+    rcp_mobilne       = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    rcp_geo_lat       = Column(Float, nullable=True)    # położenie lokalu (WGS84); NULL = nie ustawiono
+    rcp_geo_lng       = Column(Float, nullable=True)
+    rcp_geo_promien_m = Column(Integer, nullable=False, default=150, server_default="150")
     # --- Struktura lokalu (dawniej stałe zaszyte pod jeden lokal; NULL = wartości legacy) ---
     sale                       = Column(JSON, nullable=True)   # NULL = sale historyczne (sprzatanie.SALE)
     sprzatanie_sale_codziennie = Column(JSON, nullable=True)   # NULL = ("Parter (R1)","Góra (R1)")

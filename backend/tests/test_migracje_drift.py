@@ -15,7 +15,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0066_r72_reservation_demand"
+HEAD = "0067_rcp_geofencing"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -724,7 +724,8 @@ def test_migracja_0066_blokuje_downgrade_z_historia_popytu(tmp_path):
         count = con.execute(
             "SELECT count(*) FROM reservation_demand_events"
         ).fetchone()[0]
-    assert revision == HEAD
+    # Nowsze migracje (0067+) schodzą czysto — strażnik 0066 zatrzymuje bazę NA 0066, nie na HEAD.
+    assert revision == "0066_r72_reservation_demand"
     assert count == 1
 
 
@@ -779,7 +780,8 @@ def test_migracja_0066_blokuje_downgrade_z_danymi_waitlisty(
         revision = con.execute(
             "SELECT version_num FROM alembic_version"
         ).fetchone()[0]
-    assert revision == HEAD
+    # Jak wyżej: 0067+ schodzi czysto, blokada 0066 zostawia bazę na 0066.
+    assert revision == "0066_r72_reservation_demand"
 
 
 def test_migracja_0066_partial_adoption_fail_closed(tmp_path):
