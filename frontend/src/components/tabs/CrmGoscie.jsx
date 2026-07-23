@@ -5,7 +5,9 @@ import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
+import CrmGovernanceTools from './CrmGovernanceTools'
 import GuestProfileDialog from './GuestProfileDialog'
 
 const PAGE_SIZE = 25
@@ -53,11 +55,15 @@ const resultContext = ({ query, filters, offset }) => JSON.stringify({
 })
 
 export default function CrmGoscie() {
+  const { isAdmin = false, can = () => false } = useAuth() || {}
+  const canManageCrm = isAdmin || can('rezerwacje.crm_zarzadzaj')
+  const canExportCrm = isAdmin || can('rezerwacje.eksport')
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
   const [offset, setOffset] = useState(0)
   const [result, setResult] = useState(null)
+  const [snapshotSearchBody, setSnapshotSearchBody] = useState(null)
   const [snapshotKey, setSnapshotKey] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -103,8 +109,7 @@ export default function CrmGoscie() {
     if (background) setRefreshing(true)
     else setLoading(true)
     setLoadError(null)
-    try {
-      const response = await api('/crm/goscie/wyszukaj', 'POST', {
+    const requestBody = {
         q: debouncedQuery || null,
         vip: filters.vip === '' ? null : filters.vip === 'true',
         ryzyko: filters.ryzyko || null,
@@ -112,9 +117,18 @@ export default function CrmGoscie() {
         sort: filters.sort,
         offset,
         limit: PAGE_SIZE,
-      }, { signal: controller.signal })
+    }
+    try {
+      const response = await api('/crm/goscie/wyszukaj', 'POST', requestBody, {
+        signal: controller.signal,
+      })
       if (controller.signal.aborted || loadGenerationRef.current !== generation) return
       setResult(normalizeResponse(response, offset))
+      setSnapshotSearchBody({
+        ...requestBody,
+        offset: 0,
+        limit: 10000,
+      })
       snapshotKeyRef.current = contextKey
       setSnapshotKey(contextKey)
       setUpdatedAt(new Date())
@@ -148,6 +162,7 @@ export default function CrmGoscie() {
     setFilters(DEFAULT_FILTERS)
     setOffset(0)
     setResult(null)
+    setSnapshotSearchBody(null)
     snapshotKeyRef.current = null
     setSnapshotKey(null)
     setModal(null)
@@ -191,6 +206,11 @@ export default function CrmGoscie() {
   const total = visibleResult?.total || 0
   const pageStart = total ? offset + 1 : 0
   const pageEnd = Math.min(offset + guests.length, total)
+  const exportReady = Boolean(
+    searchSettled
+    && hasCurrentSnapshot
+    && snapshotSearchBody,
+  )
 
   return (
     <Card className="p-5 sm:p-8">
@@ -356,6 +376,16 @@ export default function CrmGoscie() {
             <Button variant="subtle" size="sm" disabled={offset + PAGE_SIZE >= total || refreshing} onClick={() => setOffset((value) => value + PAGE_SIZE)}>Następna</Button>
           </div>
         </div>
+      ) : null}
+
+      {canManageCrm || canExportCrm ? (
+        <CrmGovernanceTools
+          searchBody={snapshotSearchBody || {}}
+          canManage={canManageCrm}
+          canExport={canExportCrm}
+          exportReady={exportReady}
+          onChanged={() => setRetryVersion((value) => value + 1)}
+        />
       ) : null}
 
       {modal ? (

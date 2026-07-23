@@ -192,4 +192,46 @@ export async function pobierzPlik(path, nazwaPliku) {
   URL.revokeObjectURL(url)
 }
 
+// Kontrolowany eksport z filtrami w body. Dane wyszukiwania nie trafiają do URL,
+// historii przeglądarki ani logów proxy.
+export async function pobierzPlikPost(path, body, nazwaPliku, options = {}) {
+  const token = getToken()
+  const workstationCsrf = getWorkstationCsrf()
+  const requestGeneration = credentialGeneration
+  const requestMarker = token || workstationCsrf
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  if (workstationCsrf) headers['X-Lokalo-Workstation-CSRF'] = workstationCsrf
+  const res = await fetch(pelnyUrl(path), {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(body || {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  })
+  if (res.status === 401) {
+    handleSessionResponse(res.status, null, token, requestMarker, requestGeneration)
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    const code = responseCode(data)
+    if (res.status === 423) {
+      handleSessionResponse(res.status, code, token, requestMarker, requestGeneration)
+    }
+    const error = new Error(responseMessage(data, res.statusText))
+    error.status = res.status
+    error.code = code
+    throw error
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = nazwaPliku
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
 export { API }

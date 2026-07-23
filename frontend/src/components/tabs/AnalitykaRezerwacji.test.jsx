@@ -3,10 +3,22 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 
-const { apiMock } = vi.hoisted(() => ({ apiMock: vi.fn() }))
+const { apiMock, confirmMock } = vi.hoisted(() => ({
+  apiMock: vi.fn(),
+  confirmMock: vi.fn(),
+}))
 
-vi.mock('../../lib/api', () => ({ api: apiMock }))
+vi.mock('../../lib/api', () => ({
+  api: apiMock,
+  nowyKluczIdempotencji: () => 'analytics-decision-key',
+}))
 vi.mock('../../lib/icons', () => ({ Icon: ({ name }) => <span aria-hidden="true">{name}</span> }))
+vi.mock('../../context/AuthContext', () => ({
+  useAuth: () => ({ isAdmin: true, can: () => true }),
+}))
+vi.mock('../ui/Toast', () => ({
+  useToast: () => ({ confirm: confirmMock }),
+}))
 
 import AnalitykaRezerwacji from './AnalitykaRezerwacji'
 
@@ -117,7 +129,18 @@ const demand = {
   },
 }
 
+const recommendations = {
+  rekomendacje: [],
+  progi: {
+    minimalna_proba: 20,
+    minimalna_kompletnosc_proc: 70,
+    minimalne_dni_serwisu: 4,
+  },
+  decyzje: [],
+}
+
 const responseFor = (path) => {
+  if (path.startsWith('/analityka/rezerwacje/rekomendacje?')) return recommendations
   if (path.startsWith('/analityka/rezerwacje/popyt?')) return demand
   if (path.startsWith('/analityka/rezerwacje/operacyjna?')) return operational
   if (path.startsWith('/analityka/oblozenie?')) return occupancy
@@ -137,6 +160,8 @@ function deferred() {
 
 beforeEach(() => {
   apiMock.mockReset()
+  confirmMock.mockReset()
+  confirmMock.mockResolvedValue(true)
   apiMock.mockImplementation((path) => Promise.resolve(responseFor(path)))
 })
 
@@ -146,7 +171,7 @@ afterEach(() => {
 })
 
 describe('AnalitykaRezerwacji R7', () => {
-  it('pobiera cztery anonimowe źródła równolegle i pokazuje spokojny przegląd', async () => {
+  it('pobiera pięć anonimowych źródeł równolegle i pokazuje spokojny przegląd', async () => {
     render(<AnalitykaRezerwacji />)
 
     expect(await screen.findByText('120')).toBeInTheDocument()
@@ -155,12 +180,13 @@ describe('AnalitykaRezerwacji R7', () => {
     expect(screen.getByText('20/25')).toBeInTheDocument()
     expect(screen.getByText('1 h 32 min')).toBeInTheDocument()
     expect(screen.getByText('48%')).toBeInTheDocument()
-    expect(apiMock).toHaveBeenCalledTimes(4)
+    expect(apiMock).toHaveBeenCalledTimes(5)
     expect(apiMock.mock.calls.map(([path]) => path)).toEqual(expect.arrayContaining([
       expect.stringMatching(/^\/analityka\/rezerwacje\?start=/),
       expect.stringMatching(/^\/analityka\/oblozenie\?start=/),
       expect.stringMatching(/^\/analityka\/rezerwacje\/operacyjna\?start=/),
       expect.stringMatching(/^\/analityka\/rezerwacje\/popyt\?start=/),
+      expect.stringMatching(/^\/analityka\/rezerwacje\/rekomendacje\?start=/),
     ]))
     apiMock.mock.calls.forEach(([, method, body, options]) => {
       expect(method).toBe('GET')
@@ -316,11 +342,13 @@ describe('AnalitykaRezerwacji R7', () => {
     const nextOccupancy = deferred()
     const nextOperational = deferred()
     const nextDemand = deferred()
+    const nextRecommendations = deferred()
     apiMock
       .mockImplementationOnce(() => nextSummary.promise)
       .mockImplementationOnce(() => nextOccupancy.promise)
       .mockImplementationOnce(() => nextOperational.promise)
       .mockImplementationOnce(() => nextDemand.promise)
+      .mockImplementationOnce(() => nextRecommendations.promise)
 
     fireEvent.click(screen.getByRole('button', { name: 'Odśwież' }))
 
@@ -332,6 +360,7 @@ describe('AnalitykaRezerwacji R7', () => {
       nextOccupancy.resolve(occupancy)
       nextOperational.resolve(operational)
       nextDemand.resolve(demand)
+      nextRecommendations.resolve(recommendations)
     })
 
     expect(await screen.findByText('144')).toBeInTheDocument()
@@ -346,11 +375,13 @@ describe('AnalitykaRezerwacji R7', () => {
     const nextOccupancy = deferred()
     const nextOperational = deferred()
     const nextDemand = deferred()
+    const nextRecommendations = deferred()
     apiMock
       .mockImplementationOnce(() => nextSummary.promise)
       .mockImplementationOnce(() => nextOccupancy.promise)
       .mockImplementationOnce(() => nextOperational.promise)
       .mockImplementationOnce(() => nextDemand.promise)
+      .mockImplementationOnce(() => nextRecommendations.promise)
 
     fireEvent.click(screen.getByRole('button', { name: 'Odśwież' }))
     await act(async () => {
@@ -361,6 +392,7 @@ describe('AnalitykaRezerwacji R7', () => {
       })
       nextOperational.resolve(operational)
       nextDemand.reject(new Error('Popyt niedostępny'))
+      nextRecommendations.resolve(recommendations)
     })
 
     expect(await screen.findByText('144')).toBeInTheDocument()
@@ -372,17 +404,17 @@ describe('AnalitykaRezerwacji R7', () => {
   })
 
   it('abortuje poprzedni okres i odrzuca jego spóźnione odpowiedzi', async () => {
-    const first = [deferred(), deferred(), deferred(), deferred()]
+    const first = [deferred(), deferred(), deferred(), deferred(), deferred()]
     first.forEach((request) => apiMock.mockImplementationOnce(() => request.promise))
     render(<AnalitykaRezerwacji />)
-    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(4))
-    const firstSignals = apiMock.mock.calls.slice(0, 4).map((call) => call[3].signal)
+    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(5))
+    const firstSignals = apiMock.mock.calls.slice(0, 5).map((call) => call[3].signal)
 
     fireEvent.click(screen.getByRole('button', { name: 'Własny' }))
     fireEvent.change(screen.getByLabelText('Od'), { target: { value: '2026-06-01' } })
     fireEvent.change(screen.getByLabelText('Do'), { target: { value: '2026-06-30' } })
 
-    await waitFor(() => expect(apiMock.mock.calls.length).toBeGreaterThanOrEqual(8))
+    await waitFor(() => expect(apiMock.mock.calls.length).toBeGreaterThanOrEqual(10))
     firstSignals.forEach((signal) => expect(signal.aborted).toBe(true))
 
     await act(async () => {
@@ -390,6 +422,7 @@ describe('AnalitykaRezerwacji R7', () => {
       first[1].resolve(occupancy)
       first[2].resolve(operational)
       first[3].resolve(demand)
+      first[4].resolve(recommendations)
     })
 
     expect(screen.queryByText('999')).not.toBeInTheDocument()
@@ -433,5 +466,54 @@ describe('AnalitykaRezerwacji R7', () => {
 
     expect(screen.getByText('Brak pełnych pomiarów w tym okresie.')).toBeInTheDocument()
     expect(screen.queryByText('1-2 os.')).not.toBeInTheDocument()
+  })
+
+  it('zachowuje potwierdzenie decyzji po odświeżeniu i zniknięciu rekomendacji', async () => {
+    const hash = 'analytics-parent-recommendation'
+    let decisionSaved = false
+    apiMock.mockImplementation((path, method) => {
+      if (path.startsWith('/analityka/rezerwacje/rekomendacje?')) {
+        return Promise.resolve({
+          ...recommendations,
+          rekomendacje: decisionSaved ? [] : [{
+            hash,
+            serwis: { id: 7, nazwa: 'Kolacja' },
+            segment: '1-2',
+            proba: 24,
+            kompletnosc_proc: 80,
+            dni_serwisu: 8,
+            obecnie_min: 120,
+            proponowane_min: 105,
+            stan: 'pending',
+          }],
+        })
+      }
+      if (path.endsWith(`/${hash}/symulacja`) && method === 'POST') {
+        return Promise.resolve({
+          simulation_hash: 'analytics-simulation-hash',
+          summary: { sprawdzone_sloty: 40, dostepne_przed: 10, dostepne_po: 12 },
+        })
+      }
+      if (path.endsWith(`/${hash}/decyzja`) && method === 'POST') {
+        decisionSaved = true
+        return Promise.resolve({ stan: 'accepted' })
+      }
+      return Promise.resolve(responseFor(path))
+    })
+
+    render(<AnalitykaRezerwacji />)
+    await screen.findByText('Najważniejsze fakty')
+    fireEvent.click(screen.getByRole('button', { name: 'Rekomendacje' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Sprawdź wpływ' }))
+    await screen.findByText('Wpływ został policzony')
+    fireEvent.click(screen.getByRole('button', { name: 'Przyjmij zmianę' }))
+
+    expect(await screen.findByText(
+      'Rekomendacja została przyjęta. Odświeżono listę, a decyzja pozostaje zapisana w historii.',
+    )).toBeInTheDocument()
+    expect(await screen.findByText('Brak rekomendacji do decyzji')).toBeInTheDocument()
+    expect(screen.getByText(
+      'Rekomendacja została przyjęta. Odświeżono listę, a decyzja pozostaje zapisana w historii.',
+    )).toBeInTheDocument()
   })
 })

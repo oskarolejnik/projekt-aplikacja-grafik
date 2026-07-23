@@ -6,6 +6,7 @@ wraz z kalendarzem.
 """
 
 from datetime import date, timedelta
+import hashlib
 
 import models
 
@@ -14,10 +15,19 @@ _dni_do_poniedzialku = (7 - _dzis.weekday()) % 7 or 7
 _poniedzialek = _dzis + timedelta(days=_dni_do_poniedzialku)
 PON = str(_poniedzialek)
 WTOREK = str(_poniedzialek + timedelta(days=1))
+PUBLIC_SESSION = "online-management-session-0001"
 
 
 def _online_online(admin_client):
-    assert admin_client.put("/api/lokal/config", json={"rezerwacje_online": True}).status_code == 200
+    assert admin_client.put(
+        "/api/lokal/config",
+        json={
+            "rezerwacje_online": True,
+            "rezerwacje_widget_v2": True,
+            "rezerwacje_rodo_kontakt": "rodo@lokalo.test",
+            "rezerwacje_rodo_adres": "ul. Testowa 1, Warszawa",
+        },
+    ).status_code == 200
 
 
 def _stolik(admin_client, nazwa="S1", poj=4):
@@ -33,8 +43,41 @@ def _serwis(admin_client, dzien):
 
 
 def _online_rez(client, data, godz, osoby=2):
-    r = client.post("/api/online/rezerwacja",
-                    json={"data": data, "godz_od": godz, "liczba_osob": osoby, "nazwisko": "Gość Online"})
+    fingerprint = hashlib.sha256(
+        f"{data}:{godz}:{osoby}".encode()
+    ).hexdigest()[:20]
+    hold = client.post(
+        "/api/online/hold",
+        json={"data": data, "godz_od": godz, "liczba_osob": osoby},
+        headers={
+            "X-Reservation-Session": PUBLIC_SESSION,
+            "Idempotency-Key": f"management-hold-{fingerprint}",
+        },
+    )
+    assert hold.status_code == 201, hold.text
+    config = client.get("/api/online/widget-config")
+    assert config.status_code == 200, config.text
+    versions = config.json()
+    r = client.post(
+        "/api/online/rezerwacja",
+        json={
+            "data": data,
+            "godz_od": godz,
+            "liczba_osob": osoby,
+            "nazwisko": "Gość Online",
+            "email": "online-management@example.test",
+            "privacy_notice_acknowledged": True,
+            "privacy_notice_version": versions["privacy"]["notice_version"],
+            "marketing_consent": False,
+            "marketing_consent_version": versions["marketing"]["version"],
+            "sensitive_data_consent": False,
+        },
+        headers={
+            "X-Reservation-Session": PUBLIC_SESSION,
+            "X-Reservation-Hold": hold.json()["hold_token"],
+            "Idempotency-Key": f"management-create-{fingerprint}",
+        },
+    )
     assert r.status_code == 201, r.text
     return r.json()["token"]
 
@@ -102,7 +145,8 @@ def test_edytuj_blackout_odrzucony(admin_client, client):
 
 
 def test_edytuj_respektuje_okno_anulacji(admin_client, client):
-    admin_client.put("/api/lokal/config", json={"rezerwacje_online": True, "rez_anulacja_do_h": 48})
+    _online_online(admin_client)
+    admin_client.put("/api/lokal/config", json={"rez_anulacja_do_h": 48})
     _stolik(admin_client)
     blisko = date.today() + timedelta(days=1)    # jutro — wewnątrz okna 48 h
     _serwis(admin_client, blisko.weekday())
@@ -118,7 +162,8 @@ def test_edytuj_respektuje_okno_anulacji(admin_client, client):
 # ── magic-link: anulacja z egzekwowaniem polityki ────────────────────────────
 
 def test_odwolaj_respektuje_okno_anulacji(admin_client, client):
-    admin_client.put("/api/lokal/config", json={"rezerwacje_online": True, "rez_anulacja_do_h": 48})
+    _online_online(admin_client)
+    admin_client.put("/api/lokal/config", json={"rez_anulacja_do_h": 48})
     _stolik(admin_client)
     blisko = date.today() + timedelta(days=1)
     _serwis(admin_client, blisko.weekday())

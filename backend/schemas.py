@@ -1382,6 +1382,121 @@ class CrmGoscieWyszukajIn(BaseModel):
         return " ".join(value.split()) or None
 
 
+class CrmEksportIn(CrmGoscieWyszukajIn):
+    """Controlled CRM export; filters and PII stay out of the URL."""
+
+    columns: List[Literal[
+        "nazwisko",
+        "telefon",
+        "email",
+        "wizyt",
+        "odbyte",
+        "no_show",
+        "ostatnia_data",
+        "vip",
+        "tagi",
+    ]] = Field(default_factory=lambda: [
+        "nazwisko",
+        "telefon",
+        "email",
+        "wizyt",
+        "odbyte",
+        "no_show",
+        "ostatnia_data",
+        "vip",
+    ], min_length=1, max_length=9)
+    limit: StrictInt = Field(default=5000, ge=1, le=10000)
+
+    @field_validator("columns")
+    @classmethod
+    def _unikalne_kolumny(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("Kolumny eksportu nie mogą się powtarzać.")
+        return value
+
+
+class CrmMergePreviewIn(BaseModel):
+    source_ref: StrictInt = Field(ge=1)
+    target_ref: StrictInt = Field(ge=1)
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _rozne_profile(self):
+        if self.source_ref == self.target_ref:
+            raise ValueError("Wybierz dwie różne osoby.")
+        return self
+
+
+class CrmMergeIn(CrmMergePreviewIn):
+    reason_code: Literal["duplicate_confirmed"] = "duplicate_confirmed"
+    expected_version: StrictInt = Field(default=0, ge=0)
+    confirmed: StrictBool = True
+
+    @model_validator(mode="after")
+    def _wymagaj_potwierdzenia(self):
+        if not self.confirmed:
+            raise ValueError("Scalenie wymaga jawnego potwierdzenia.")
+        return self
+
+
+class CrmMergeUndoIn(BaseModel):
+    expected_version: StrictInt = Field(default=1, ge=1)
+    reason_code: Literal["operator_correction"] = "operator_correction"
+    model_config = ConfigDict(extra="forbid")
+
+
+class CrmConsentEventIn(BaseModel):
+    decision: Literal["grant", "decline", "withdraw"]
+    source: Literal["operator_phone", "operator_in_person", "operator_email"]
+    document_version: str = Field(min_length=1, max_length=64)
+    captured_at: Optional[datetime] = None
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("document_version")
+    @classmethod
+    def _wersja_nie_pusta(cls, value):
+        return value.strip()
+
+
+class ReservationRecommendationRangeIn(BaseModel):
+    start: date
+    end: date
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _zakres(self):
+        if self.end < self.start:
+            raise ValueError("Zakres dat jest odwrócony.")
+        if (self.end - self.start).days >= 366:
+            raise ValueError("Zakres może obejmować maksymalnie 366 dni.")
+        return self
+
+
+class ReservationRecommendationDecisionIn(ReservationRecommendationRangeIn):
+    simulation_hash: str = Field(min_length=64, max_length=64)
+    decyzja: Literal["accepted", "rejected"]
+    powod: Literal[
+        "confirmed_after_simulation",
+        "keep_current_policy",
+        "seasonal_sample",
+        "operational_decision",
+    ]
+
+    @model_validator(mode="after")
+    def _powod_pasuje_do_decyzji(self):
+        if (
+            self.decyzja == "accepted"
+            and self.powod != "confirmed_after_simulation"
+        ):
+            raise ValueError("Przyjęcie wymaga potwierdzenia po symulacji.")
+        if (
+            self.decyzja == "rejected"
+            and self.powod == "confirmed_after_simulation"
+        ):
+            raise ValueError("Wybierz powód odrzucenia rekomendacji.")
+        return self
+
+
 class ProfilGosciaIn(BaseModel):
     """Profil gościa 360 (upsert). Alergie/notatka = dane wrażliwe (szyfrowane at-rest)."""
     nazwisko: Optional[str] = None

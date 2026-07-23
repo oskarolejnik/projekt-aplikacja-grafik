@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+import crm_governance
 import models
 import reservation_audit
 import reservation_communication
@@ -101,6 +102,30 @@ def _waitlista_goscia(db, klucz: str, *, refresh: bool = False):
         for wpis in query.all()
         if _pasuje_do_klucza(wpis, klucz)
     ]
+
+
+def _prawidlowy_subject_hash(value) -> bool:
+    return isinstance(value, str) and len(value) == 64
+
+
+def _subject_hash_wlasciciela(owner) -> Optional[str]:
+    key = _profile_identity_key(owner)
+    return _profile_hash_key(key) if key else None
+
+
+def _subject_hashes_dla_klucza(klucz: str, *owners) -> set[str]:
+    """Zamraża lookup podmiotu bez wiązania historii do mutable owner ID."""
+    raw = (klucz or "").strip()
+    hashes = set()
+    if raw:
+        lookup_key = _normalizuj_numer(raw) or _kanoniczny_tekst(raw)
+        if lookup_key:
+            hashes.add(_profile_hash_key(lookup_key))
+    for owner in owners:
+        subject_hash = _subject_hash_wlasciciela(owner)
+        if subject_hash:
+            hashes.add(subject_hash)
+    return hashes
 
 
 class RodoOwnerLockScopeChanged(RuntimeError):
@@ -233,10 +258,25 @@ def _wpis_waitlisty(wpis) -> dict:
     }
 
 
-def _zgoda_wpis(zgoda) -> dict:
+def _zgoda_wpis(
+    zgoda,
+    *,
+    subject_termin_ids=(),
+    subject_waitlist_ids=(),
+) -> dict:
     """Dowód wyboru gościa bez nieodwracalnego hasha IP."""
     owner_kind = "rezerwacja" if zgoda.termin_id is not None else "waitlista"
-    owner_id = zgoda.termin_id if zgoda.termin_id is not None else zgoda.waitlist_id
+    allowed_ids = (
+        set(subject_termin_ids)
+        if zgoda.termin_id is not None
+        else set(subject_waitlist_ids)
+    )
+    raw_owner_id = (
+        zgoda.termin_id if zgoda.termin_id is not None else zgoda.waitlist_id
+    )
+    # Frozen proof may outlive a contact correction on its owner. Do not expose
+    # that mutable link when the owner no longer belongs to this subject.
+    owner_id = raw_owner_id if raw_owner_id in allowed_ids else None
     return {
         "wlasciciel_typ": owner_kind,
         "wlasciciel_id": owner_id,
@@ -427,6 +467,90 @@ def eksport_komunikacji_operacyjnej(
     return result
 
 
+def _crm_governance_export(
+    db,
+    *,
+    subject_hashes=(),
+    subject_termin_ids=(),
+) -> dict:
+    """Admin subject export without exposing internal identity/idempotency hashes."""
+    hashes = {
+        value for value in subject_hashes
+        if _prawidlowy_subject_hash(value)
+    }
+    ids = {int(value) for value in subject_termin_ids if value is not None}
+
+    consent_conditions = []
+    if hashes:
+        consent_conditions.append(models.CrmConsentEvent.subject_hash.in_(hashes))
+    consent_rows = (
+        db.query(models.CrmConsentEvent)
+        .filter(or_(*consent_conditions))
+        .order_by(models.CrmConsentEvent.captured_at, models.CrmConsentEvent.id)
+        .all()
+        if consent_conditions else []
+    )
+
+    merge_conditions = []
+    if hashes:
+        merge_conditions.extend((
+            models.CrmGuestMerge.source_hash.in_(hashes),
+            models.CrmGuestMerge.target_hash.in_(hashes),
+        ))
+    merge_rows = (
+        db.query(models.CrmGuestMerge)
+        .filter(or_(*merge_conditions))
+        .order_by(models.CrmGuestMerge.created_at, models.CrmGuestMerge.id)
+        .all()
+        if merge_conditions else []
+    )
+
+    consents = [{
+        "id": row.id,
+        "rezerwacja_id": row.termin_id if row.termin_id in ids else None,
+        "cel": row.purpose,
+        "decyzja": row.decision,
+        "wersja_dokumentu": row.document_version,
+        "zrodlo": row.source,
+        "pozyskano_at": _iso(row.captured_at),
+        "zapisano_at": _iso(row.created_at),
+        "operator": row.actor_login,
+    } for row in consent_rows]
+
+    merges = []
+    for row in merge_rows:
+        roles = []
+        if row.source_hash in hashes:
+            roles.append("source")
+        if row.target_hash in hashes:
+            roles.append("target")
+        evidence_types = (
+            row.evidence.get("types", [])
+            if isinstance(row.evidence, dict) else []
+        )
+        merges.append({
+            "id": row.id,
+            "rola_podmiotu": roles,
+            "status": row.status,
+            "wersja": row.version,
+            "powod": row.reason_code,
+            "dowod": {
+                "typy": [
+                    value for value in evidence_types
+                    if value in {"exact_phone", "exact_email"}
+                ],
+            },
+            "utworzono_at": _iso(row.created_at),
+            "utworzyl": row.created_by_login,
+            "cofnieto_at": _iso(row.reverted_at),
+            "cofnal": row.reverted_by_login,
+        })
+    return {
+        "zgody_operatora": consents,
+        "scalenia_crm": merges,
+    }
+
+
 def _metadane_prywatnosci(
     db,
     termin_ids,
@@ -434,16 +558,19 @@ def _metadane_prywatnosci(
     *,
     communication_subject_phone_refs=(),
     communication_subject_email_refs=(),
+    include_crm_governance: bool = False,
+    subject_hashes=(),
 ) -> dict:
+    subject_hashes = {
+        value for value in subject_hashes
+        if _prawidlowy_subject_hash(value)
+    }
     consents_query = db.query(models.RezerwacjaZgodaPubliczna)
-    conditions = []
-    if termin_ids:
-        conditions.append(models.RezerwacjaZgodaPubliczna.termin_id.in_(termin_ids))
-    if waitlist_ids:
-        conditions.append(models.RezerwacjaZgodaPubliczna.waitlist_id.in_(waitlist_ids))
     consents = []
-    if conditions:
-        consents = consents_query.filter(or_(*conditions)).order_by(
+    if subject_hashes:
+        consents = consents_query.filter(
+            models.RezerwacjaZgodaPubliczna.subject_hash.in_(subject_hashes),
+        ).order_by(
             models.RezerwacjaZgodaPubliczna.created_at,
             models.RezerwacjaZgodaPubliczna.id,
         ).all()
@@ -537,14 +664,33 @@ def _metadane_prywatnosci(
                 "utworzono_at": _iso(context.created_at),
             })
 
+    crm_export = (
+        _crm_governance_export(
+            db,
+            subject_hashes=subject_hashes,
+            subject_termin_ids=termin_ids,
+        )
+        if include_crm_governance else {
+            "zgody_operatora": [],
+            "scalenia_crm": [],
+        }
+    )
     return {
-        "zgody": [_zgoda_wpis(consent) for consent in consents],
+        "zgody": [
+            _zgoda_wpis(
+                consent,
+                subject_termin_ids=termin_ids,
+                subject_waitlist_ids=waitlist_ids,
+            )
+            for consent in consents
+        ],
         # Wyłącznie metadane cyklu życia. Hash i surowy capability token nigdy nie
         # opuszczają warstwy uwierzytelnienia.
         "dostepy_zarzadzania": tokens,
         "holdy_publiczne": holds,
         "audyty_rezerwacji": reservation_audits,
         "historia_nadpisan_ofert_waitlisty": waitlist_override_history,
+        **crm_export,
         "komunikacja_operacyjna": eksport_komunikacji_operacyjnej(
             db,
             subject_phone_refs=communication_subject_phone_refs,
@@ -581,9 +727,38 @@ def usun_powiazane_publiczne_sekrety(
     termin_ids,
     *,
     preserve_management_token_ids=(),
+    delete_public_consents_by_owner: bool = True,
 ) -> None:
     if not termin_ids:
         return
+    termin_ids = {int(value) for value in termin_ids if value is not None}
+    preserved = tuple(preserve_management_token_ids or ())
+    owner_hashes = {}
+    consent_rows = []
+    if delete_public_consents_by_owner:
+        owner_hashes = {
+            owner.id: _subject_hash_wlasciciela(owner)
+            for owner in db.query(models.Termin).filter(
+                models.Termin.id.in_(termin_ids),
+            ).all()
+        }
+        consent_rows = db.query(models.RezerwacjaZgodaPubliczna).filter(
+            models.RezerwacjaZgodaPubliczna.termin_id.in_(termin_ids),
+        ).all()
+        mismatched = [
+            row for row in consent_rows
+            if _prawidlowy_subject_hash(row.subject_hash)
+            and row.subject_hash != owner_hashes.get(row.termin_id)
+        ]
+        if mismatched and not preserved:
+            # Hard delete would cascade the old person's proof through Termin.
+            # Refuse that irreversible operation; capability self-service keeps
+            # its management token IDs and does not delete the owner row.
+            raise HTTPException(
+                409,
+                "Rezerwacja ma zamrożone dowody innego podmiotu. "
+                "Najpierw rozlicz jego żądanie RODO.",
+            )
     hold_ids = [
         row[0]
         for row in db.query(models.RezerwacjaPublicznyHold.id).filter(
@@ -597,13 +772,19 @@ def usun_powiazane_publiczne_sekrety(
         db.query(models.RezerwacjaPublicznyHold).filter(
             models.RezerwacjaPublicznyHold.id.in_(hold_ids)
         ).delete(synchronize_session=False)
-    db.query(models.RezerwacjaZgodaPubliczna).filter(
-        models.RezerwacjaZgodaPubliczna.termin_id.in_(termin_ids)
-    ).delete(synchronize_session=False)
+    if delete_public_consents_by_owner:
+        deletable_ids = [
+            row.id for row in consent_rows
+            if row.subject_hash is None
+            or row.subject_hash == owner_hashes.get(row.termin_id)
+        ]
+        if deletable_ids:
+            db.query(models.RezerwacjaZgodaPubliczna).filter(
+                models.RezerwacjaZgodaPubliczna.id.in_(deletable_ids),
+            ).delete(synchronize_session=False)
     token_query = db.query(models.RezerwacjaTokenZarzadzania).filter(
         models.RezerwacjaTokenZarzadzania.termin_id.in_(termin_ids)
     )
-    preserved = tuple(preserve_management_token_ids or ())
     if preserved:
         token_query = token_query.filter(
             ~models.RezerwacjaTokenZarzadzania.id.in_(preserved)
@@ -612,6 +793,93 @@ def usun_powiazane_publiczne_sekrety(
     db.query(models.RezerwacjaIdempotencja).filter(
         models.RezerwacjaIdempotencja.termin_id.in_(termin_ids)
     ).delete(synchronize_session=False)
+
+
+def _usun_frozen_governance_podmiotu(db, subject_hashes) -> int:
+    """Deletes only facts frozen for the selected subject, never mutable owner refs."""
+    hashes = {
+        value for value in subject_hashes
+        if _prawidlowy_subject_hash(value)
+    }
+    if not hashes:
+        return 0
+    deleted = db.query(models.RezerwacjaZgodaPubliczna).filter(
+        models.RezerwacjaZgodaPubliczna.subject_hash.in_(hashes),
+    ).delete(synchronize_session=False)
+    deleted += db.query(models.CrmConsentEvent).filter(
+        models.CrmConsentEvent.subject_hash.in_(hashes),
+    ).delete(synchronize_session=False)
+    deleted += db.query(models.CrmGuestMerge).filter(or_(
+        models.CrmGuestMerge.source_hash.in_(hashes),
+        models.CrmGuestMerge.target_hash.in_(hashes),
+    )).delete(synchronize_session=False)
+    return int(deleted or 0)
+
+
+def _ma_frozen_governance_podmiotu(db, subject_hashes) -> bool:
+    hashes = {
+        value for value in subject_hashes
+        if _prawidlowy_subject_hash(value)
+    }
+    if not hashes:
+        return False
+    if db.query(models.RezerwacjaZgodaPubliczna.id).filter(
+        models.RezerwacjaZgodaPubliczna.subject_hash.in_(hashes),
+    ).first():
+        return True
+    if db.query(models.CrmConsentEvent.id).filter(
+        models.CrmConsentEvent.subject_hash.in_(hashes),
+    ).first():
+        return True
+    return db.query(models.CrmGuestMerge.id).filter(or_(
+        models.CrmGuestMerge.source_hash.in_(hashes),
+        models.CrmGuestMerge.target_hash.in_(hashes),
+    )).first() is not None
+
+
+def _usun_zgody_frozen_dla_wlascicieli(db, owners) -> int:
+    """Owner cleanup is allowed only when its current identity matches the proof."""
+    termin_hashes = {}
+    waitlist_hashes = {}
+    for owner in owners:
+        owner_id = getattr(owner, "id", None)
+        subject_hash = _subject_hash_wlasciciela(owner)
+        if owner_id is None or not subject_hash:
+            continue
+        target = (
+            waitlist_hashes
+            if isinstance(owner, models.ListaOczekujacych)
+            else termin_hashes
+        )
+        target[owner_id] = subject_hash
+
+    conditions = []
+    if termin_hashes:
+        conditions.append(
+            models.RezerwacjaZgodaPubliczna.termin_id.in_(tuple(termin_hashes)),
+        )
+    if waitlist_hashes:
+        conditions.append(
+            models.RezerwacjaZgodaPubliczna.waitlist_id.in_(tuple(waitlist_hashes)),
+        )
+    if not conditions:
+        return 0
+    consent_ids = []
+    for row in db.query(models.RezerwacjaZgodaPubliczna).filter(
+        or_(*conditions),
+    ).all():
+        expected = (
+            termin_hashes.get(row.termin_id)
+            if row.termin_id is not None
+            else waitlist_hashes.get(row.waitlist_id)
+        )
+        if expected and row.subject_hash == expected:
+            consent_ids.append(row.id)
+    if not consent_ids:
+        return 0
+    return int(db.query(models.RezerwacjaZgodaPubliczna).filter(
+        models.RezerwacjaZgodaPubliczna.id.in_(consent_ids),
+    ).delete(synchronize_session=False) or 0)
 
 
 def _usun_zablokowane_wiadomosci(db, message_ids) -> None:
@@ -684,23 +952,53 @@ def usun_powiazane_pii_rezerwacji(
         return blocked_ids
 
     wyczysc_notatki_kontekstu_nadpisan(db, safe_ids)
+    _usun_zgody_frozen_dla_wlascicieli(db, safe_terminy)
 
     def profile_hashes(termin):
         keys = {_profile_identity_key(termin), _klucz(termin)}
         return {_profile_hash_key(key) for key in keys if key}
 
-    candidate_hashes = set().union(
+    candidate_profile_hashes = set().union(
         *(profile_hashes(termin) for termin in safe_terminy)
     ) if safe_terminy else set()
-    if candidate_hashes:
-        remaining_hashes = set()
+    candidate_subject_hashes = {
+        subject_hash
+        for subject_hash in (
+            _subject_hash_wlasciciela(termin) for termin in safe_terminy
+        )
+        if subject_hash
+    }
+    if candidate_profile_hashes or candidate_subject_hashes:
+        crm_governance.lock_governance_graph(db)
+        remaining_profile_hashes = set()
+        remaining_subject_hashes = set()
         for other in db.query(models.Termin).all():
             if other.id not in safe_ids:
-                remaining_hashes.update(profile_hashes(other))
-        delete_hashes = candidate_hashes - remaining_hashes
-        if delete_hashes:
+                remaining_profile_hashes.update(profile_hashes(other))
+                subject_hash = _subject_hash_wlasciciela(other)
+                if subject_hash:
+                    remaining_subject_hashes.add(subject_hash)
+        for other in db.query(models.ListaOczekujacych).all():
+            subject_hash = _subject_hash_wlasciciela(other)
+            if subject_hash:
+                remaining_subject_hashes.add(subject_hash)
+        delete_subject_hashes = (
+            candidate_subject_hashes - remaining_subject_hashes
+        )
+        delete_profile_hashes = (
+            candidate_profile_hashes - remaining_profile_hashes
+        )
+
+        # R7.3 identity links are non-destructive, but retaining an active edge
+        # after erasure could reconnect the anonymised subject to another
+        # profile. Frozen identity is authoritative: mutable reservation IDs
+        # never pull an earlier subject into the current person's erasure.
+        # A hash still owned by any retained reservation/waitlist keeps its facts.
+        if delete_subject_hashes:
+            _usun_frozen_governance_podmiotu(db, delete_subject_hashes)
+        if delete_profile_hashes:
             db.query(models.ProfilGoscia).filter(
-                models.ProfilGoscia.klucz_hash.in_(delete_hashes)
+                models.ProfilGoscia.klucz_hash.in_(delete_profile_hashes)
             ).delete(synchronize_session=False)
 
     db.query(models.WiadomoscImprezy).filter(
@@ -734,7 +1032,11 @@ def _anonimizuj(
     termin_ids = [termin.id for termin in safe_terminy if termin.id is not None]
     # Zgody, capability tokeny, zużyte holdy oraz zaszyfrowany wynik idempotencji
     # mogą odtwarzać historię publicznego przepływu. Usuwamy je atomowo z PII.
-    usun_powiazane_publiczne_sekrety(db, termin_ids)
+    usun_powiazane_publiczne_sekrety(
+        db,
+        termin_ids,
+        delete_public_consents_by_owner=False,
+    )
     n = 0
     for t in safe_terminy:
         audit_before = (
@@ -784,6 +1086,7 @@ def _anonimizuj_waitliste(
     wpisy = list(wpisy)
     waitlist_ids = {wpis.id for wpis in wpisy if wpis.id is not None}
     blocked_ids = set()
+    safe_ids = set()
     if waitlist_ids and not outbox_prepared:
         preparation = usun_outbox_przed_usunieciem_pii(
             db,
@@ -793,9 +1096,6 @@ def _anonimizuj_waitliste(
         blocked_ids = set(preparation.deferred_waitlist_ids)
     if waitlist_ids:
         safe_ids = waitlist_ids - blocked_ids
-        db.query(models.RezerwacjaZgodaPubliczna).filter(
-            models.RezerwacjaZgodaPubliczna.waitlist_id.in_(safe_ids)
-        ).delete(synchronize_session=False)
         db.query(models.WaitlistOfferOverrideContext).filter(
             models.WaitlistOfferOverrideContext.waitlist_id.in_(safe_ids),
             models.WaitlistOfferOverrideContext.note.isnot(None),
@@ -804,6 +1104,32 @@ def _anonimizuj_waitliste(
             synchronize_session=False,
         )
     safe_wpisy = [wpis for wpis in wpisy if wpis.id not in blocked_ids]
+    _usun_zgody_frozen_dla_wlascicieli(db, safe_wpisy)
+    candidate_hashes = {
+        subject_hash
+        for subject_hash in (
+            _subject_hash_wlasciciela(wpis) for wpis in safe_wpisy
+        )
+        if subject_hash
+    }
+    if candidate_hashes:
+        crm_governance.lock_governance_graph(db)
+        remaining_hashes = {
+            subject_hash
+            for owner in (
+                *db.query(models.Termin).all(),
+                *db.query(models.ListaOczekujacych).all(),
+            )
+            if getattr(owner, "id", None) not in (
+                safe_ids if isinstance(owner, models.ListaOczekujacych) else set()
+            )
+            for subject_hash in (_subject_hash_wlasciciela(owner),)
+            if subject_hash
+        }
+        _usun_frozen_governance_podmiotu(
+            db,
+            candidate_hashes - remaining_hashes,
+        )
     for wpis in safe_wpisy:
         wpis.nazwisko = _ANON
         wpis.telefon = None
@@ -851,6 +1177,9 @@ def _wyczysc_wygasle_publiczne_rekordy(
         ).delete(synchronize_session=False)
     else:
         usuniete_holdy = 0
+    usuniete_zgody = db.query(models.RezerwacjaZgodaPubliczna).filter(
+        models.RezerwacjaZgodaPubliczna.retention_until <= now,
+    ).delete(synchronize_session=False)
     usuniete_tokeny = db.query(models.RezerwacjaTokenZarzadzania).filter(
         models.RezerwacjaTokenZarzadzania.expires_at <= now,
     ).delete(synchronize_session=False)
@@ -862,6 +1191,7 @@ def _wyczysc_wygasle_publiczne_rekordy(
         "wygaszono_holdy_i_claimy": int(wygaszone_holdy or 0),
         "wyczyszczono_holdy_waitlisty": int(waitlist_holds or 0),
         "usunieto_holdy_publiczne": int(usuniete_holdy or 0),
+        "usunieto_zgody_publiczne_wygasle": int(usuniete_zgody or 0),
         "usunieto_tokeny_wygasle": int(usuniete_tokeny or 0),
         "usunieto_idempotencje_wygasla": int(usuniete_idempotencje or 0),
         "usunieto_kwoty_wygasle": int(usuniete_kwoty or 0),
@@ -906,18 +1236,45 @@ def _wlasciciele_retencji(
     refresh: bool = False,
 ):
     """Ponownie wyznacza cały zakres retencji po przejęciu blokad dni."""
-    expired_termin_ids = [
-        row[0] for row in db.query(models.RezerwacjaZgodaPubliczna.termin_id).filter(
-            models.RezerwacjaZgodaPubliczna.termin_id.isnot(None),
-            models.RezerwacjaZgodaPubliczna.retention_until <= effective_now,
-        ).all()
-    ]
-    expired_waitlist_ids = [
-        row[0] for row in db.query(models.RezerwacjaZgodaPubliczna.waitlist_id).filter(
-            models.RezerwacjaZgodaPubliczna.waitlist_id.isnot(None),
-            models.RezerwacjaZgodaPubliczna.retention_until <= effective_now,
-        ).all()
-    ]
+    expired_rows = db.query(
+        models.RezerwacjaZgodaPubliczna.termin_id,
+        models.RezerwacjaZgodaPubliczna.waitlist_id,
+        models.RezerwacjaZgodaPubliczna.subject_hash,
+    ).filter(
+        models.RezerwacjaZgodaPubliczna.retention_until <= effective_now,
+    ).all()
+    termin_hashes = {}
+    waitlist_hashes = {}
+    for termin_id, waitlist_id, subject_hash in expired_rows:
+        # A legacy NULL cannot prove whose contact was present when the consent
+        # was captured. It falls back to the venue's ordinary date policy and
+        # may never accelerate retention through a mutable owner ID.
+        if not _prawidlowy_subject_hash(subject_hash):
+            continue
+        if termin_id is not None:
+            termin_hashes.setdefault(termin_id, set()).add(subject_hash)
+        elif waitlist_id is not None:
+            waitlist_hashes.setdefault(waitlist_id, set()).add(subject_hash)
+
+    deadline_terminy_query = db.query(models.Termin).filter(
+        models.Termin.id.in_(tuple(termin_hashes)),
+    )
+    deadline_waitlist_query = db.query(models.ListaOczekujacych).filter(
+        models.ListaOczekujacych.id.in_(tuple(waitlist_hashes)),
+    )
+    if refresh:
+        deadline_terminy_query = deadline_terminy_query.populate_existing()
+        deadline_waitlist_query = deadline_waitlist_query.populate_existing()
+    expired_termin_ids = {
+        owner.id
+        for owner in deadline_terminy_query.all()
+        if _subject_hash_wlasciciela(owner) in termin_hashes.get(owner.id, ())
+    }
+    expired_waitlist_ids = {
+        owner.id
+        for owner in deadline_waitlist_query.all()
+        if _subject_hash_wlasciciela(owner) in waitlist_hashes.get(owner.id, ())
+    }
     termin_deadline = models.Termin.data < prog
     if expired_termin_ids:
         termin_deadline = or_(
@@ -1061,10 +1418,13 @@ def eksport_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_db),
     terminy = _terminy_goscia(db, klucz)
     waitlista = _waitlista_goscia(db, klucz)
     messages = _wiadomosci_podmiotu(db, klucz)
-    if not terminy and not waitlista and not messages:
-        raise HTTPException(404, "Nie znaleziono danych dla podanego klucza.")
     termin_ids = [t.id for t in terminy if t.id is not None]
     waitlist_ids = [wpis.id for wpis in waitlista if wpis.id is not None]
+    subject_hashes = _subject_hashes_dla_klucza(
+        klucz,
+        *terminy,
+        *waitlista,
+    )
     phone_ref, email_ref, _conditions = _refy_komunikacji_podmiotu(klucz)
     privacy = _metadane_prywatnosci(
         db,
@@ -1072,7 +1432,16 @@ def eksport_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_db),
         waitlist_ids,
         communication_subject_phone_refs=[phone_ref] if phone_ref else (),
         communication_subject_email_refs=[email_ref] if email_ref else (),
+        include_crm_governance=True,
+        subject_hashes=subject_hashes,
     )
+    has_frozen_governance = any((
+        privacy["zgody"],
+        privacy["zgody_operatora"],
+        privacy["scalenia_crm"],
+    ))
+    if not terminy and not waitlista and not messages and not has_frozen_governance:
+        raise HTTPException(404, "Nie znaleziono danych dla podanego klucza.")
     _audyt(db, admin, "rodo_eksport_gosc", _referencja_goscia(klucz), request)
     db.commit()
     return {
@@ -1106,7 +1475,17 @@ def anonimizuj_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_d
     # snapshotu pomiędzy wyborem refów a fence/delete.
     reservation_communication.acquire_erasure_planner_lock(db)
     messages = _wiadomosci_podmiotu(db, dane.klucz)
-    if not terminy and not waitlista and not messages:
+    subject_hashes = _subject_hashes_dla_klucza(
+        dane.klucz,
+        *terminy,
+        *waitlista,
+    )
+    crm_governance.lock_governance_graph(db)
+    has_frozen_governance = _ma_frozen_governance_podmiotu(
+        db,
+        subject_hashes,
+    )
+    if not terminy and not waitlista and not messages and not has_frozen_governance:
         raise HTTPException(404, "Nie znaleziono danych dla podanego klucza.")
     current_termin_ids = {termin.id for termin in terminy if termin.id is not None}
     current_waitlist_ids = {wpis.id for wpis in waitlista if wpis.id is not None}
@@ -1151,6 +1530,7 @@ def anonimizuj_gosc(dane: KluczIn, request: Request, db: Session = Depends(get_d
         waitlista,
         outbox_prepared=True,
     )
+    _usun_frozen_governance_podmiotu(db, subject_hashes)
     reservation_service.touch_days(guards)
     _audyt(
         db, admin, "rodo_anonimizuj_gosc", _referencja_goscia(dane.klucz), request,

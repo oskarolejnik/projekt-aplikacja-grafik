@@ -5,11 +5,12 @@ osobny `client` (bez tokenu); admin konfiguruje przez `admin_client`.
 Daty testowe zawsze wskazują dwa kolejne przyszłe poniedziałki (weekday=0).
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import database
 import models
 import reservation_service
+from public_widget_v2_helpers import enable_widget_v2, public_create_v2
 
 _DZIS = date.today()
 _DNI_DO_PONIEDZIALKU = (7 - _DZIS.weekday()) % 7 or 7
@@ -44,7 +45,7 @@ def test_lock_tables_odswieza_stan_z_identity_map(db):
 
 
 def _enable_online(admin_client):
-    assert admin_client.put("/api/lokal/config", json={"rezerwacje_online": True}).status_code == 200
+    enable_widget_v2(admin_client)
 
 
 def _serwis(admin_client, **kw):
@@ -59,6 +60,45 @@ def _stolik(admin_client, nazwa="S1", pojemnosc=4):
     r = admin_client.post("/api/stoliki", json={"nazwa": nazwa, "pojemnosc": pojemnosc})
     assert r.status_code == 201, r.text
     return r.json()
+
+
+def test_usuniecie_serwisu_z_historia_rekomendacji_ma_kontrolowany_konflikt(
+    admin_client,
+    db,
+):
+    service = _serwis(admin_client, nazwa="Serwis z historią")
+    db.add(models.ReservationRecommendationReview(
+        recommendation_hash="a" * 64,
+        simulation_hash="b" * 64,
+        kind="turn_time",
+        service_id=service["id"],
+        segment="1-2",
+        period_start=_PONIEDZIALEK,
+        period_end=_PONIEDZIALEK + timedelta(days=7),
+        recommendation={"proponowane_min": 90},
+        simulation={"wynik": "bezpieczny"},
+        status="simulated",
+        created_at=datetime(2026, 7, 23, 12, 0),
+    ))
+    db.commit()
+
+    blocked = admin_client.delete(f"/api/godziny-otwarcia/{service['id']}")
+
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == (
+        "RESERVATION_SERVICE_HAS_RECOMMENDATION_HISTORY"
+    )
+    assert db.get(models.GodzinyOtwarcia, service["id"]) is not None
+
+    unused = _serwis(
+        admin_client,
+        nazwa="Serwis bez historii",
+        dzien_tygodnia=1,
+    )
+    deleted = admin_client.delete(f"/api/godziny-otwarcia/{unused['id']}")
+    assert deleted.status_code == 204
+    db.expire_all()
+    assert db.get(models.GodzinyOtwarcia, unused["id"]) is None
 
 
 # ── Turn-time zależny od grupy ───────────────────────────────────────────────
@@ -122,8 +162,13 @@ def test_pacing_limit_rezerwacji_blokuje_online(admin_client, client):
     _serwis(admin_client, dlugosc_slotu_min=120, pacing_max_rez=2)
 
     def rez():
-        return client.post("/api/online/rezerwacja", json={
-            "data": PON, "godz_od": "18:00", "liczba_osob": 2, "nazwisko": "X"})
+        return public_create_v2(
+            client,
+            data=PON,
+            godz_od="18:00",
+            liczba_osob=2,
+            nazwisko="X",
+        )
 
     assert rez().status_code == 201
     assert rez().status_code == 201
@@ -142,8 +187,13 @@ def test_pacing_limit_osob(admin_client, client):
     _serwis(admin_client, dlugosc_slotu_min=120, pacing_max_osob=6)
 
     def rez(osoby):
-        return client.post("/api/online/rezerwacja", json={
-            "data": PON, "godz_od": "18:00", "liczba_osob": osoby, "nazwisko": "X"})
+        return public_create_v2(
+            client,
+            data=PON,
+            godz_od="18:00",
+            liczba_osob=osoby,
+            nazwisko="X",
+        )
 
     assert rez(4).status_code == 201           # 4 osoby
     assert rez(4).status_code == 409           # +4 = 8 > 6

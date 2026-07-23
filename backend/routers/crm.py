@@ -8,13 +8,17 @@ kompatybilności, ale nie są już zasilane przez listę CRM ani zwracane w JSON
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime, time
+import csv
+import io
+import json
 import unicodedata
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+import crm_governance
 import models
 import reservation_operational
 import schemas
@@ -62,19 +66,29 @@ def _capabilities(user) -> dict:
 def _profil_out(p, user=None) -> dict | None:
     if not p:
         return None
+    def value(field, default=None):
+        if isinstance(p, dict):
+            return p.get(field, default)
+        return getattr(p, field, default)
+
     wrazliwe = _ma(user, "rezerwacje.dane_wrazliwe")
     notatki = _ma(user, "rezerwacje.notatki_wewnetrzne")
     return {
-        "nazwisko": p.nazwisko,
-        "tagi": (p.tagi or []) if wrazliwe else [],
-        "vip": bool(p.vip),
-        "alergie": p.alergie if wrazliwe else None,
-        "dieta": p.dieta if wrazliwe else None,
-        "preferowana_strefa": p.preferowana_strefa,
-        "notatka": p.notatka if notatki else None,
-        "okazja_typ": p.okazja_typ,
-        "okazja_data": p.okazja_data,
-        "marketing_zgoda": bool(p.marketing_zgoda),
+        "nazwisko": value("nazwisko"),
+        "tagi": (value("tagi") or []) if wrazliwe else [],
+        "vip": bool(value("vip")),
+        "alergie": value("alergie") if wrazliwe else None,
+        "dieta": value("dieta") if wrazliwe else None,
+        "preferowana_strefa": value("preferowana_strefa"),
+        "notatka": value("notatka") if notatki else None,
+        "okazja_typ": value("okazja_typ"),
+        "okazja_data": value("okazja_data"),
+        # R7.3: legacy boolean is not legal proof.  The effective versioned
+        # state is returned separately as ``zgody``.
+        "marketing_zgoda": False,
+        "marketing_legacy_unverified": bool(
+            value("legacy_marketing_unverified", value("marketing_zgoda", False))
+        ),
     }
 
 
@@ -84,6 +98,50 @@ def _wymagaj_modul_rezerwacje(db: Session = Depends(get_db)):
             403,
             "Moduł rezerwacji jest niedostępny w tym planie — odblokujesz go w pakiecie Pro.",
         )
+
+
+def _wymagaj_uprawnien(user, *permissions: str) -> None:
+    if any(not uprawnienia.ma_user(user, permission) for permission in permissions):
+        raise HTTPException(403, "Brak uprawnień do tej operacji CRM.")
+
+
+def _wymagaj_wyszukiwania_crm(user) -> None:
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.operacje",
+        "rezerwacje.dane_kontaktowe",
+    )
+    if not any(
+        uprawnienia.ma_user(user, permission)
+        for permission in ("rezerwacje.eksport", "rezerwacje.crm_zarzadzaj")
+    ):
+        raise HTTPException(403, "Brak uprawnień do tej operacji CRM.")
+
+
+def _audit_crm(db, user, action: str, resource: str, details: dict) -> None:
+    db.add(models.AuditLog(
+        ts=datetime.utcnow(),
+        user_id=getattr(user, "id", None),
+        login=getattr(user, "login", None),
+        akcja=action,
+        zasob=resource,
+        szczegoly=json.dumps(
+            details,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    ))
+
+
+def _zgody_out(db, reservations, profiles=()) -> dict:
+    summary = crm_governance.consent_summary(db, reservations, profiles)
+    # Lazy import avoids the router/main initialisation cycle.
+    import main
+    return {
+        **summary,
+        "current_document_version": main.PUBLIC_MARKETING_CONSENT_VERSION,
+    }
 
 
 def _termin_rezerwacji(db: Session, reservation_id: int, user=None) -> models.Termin:
@@ -102,7 +160,17 @@ def _terminy_dla_klucza(db: Session, klucz: str) -> list[models.Termin]:
     if not klucz:
         return []
     rows = db.query(models.Termin).filter(models.Termin.rodzaj.in_(_RODZAJE_CRM)).all()
-    return sorted((t for t in rows if _klucz_crm(t) == klucz), key=_sort_key, reverse=True)
+    aliases = crm_governance.alias_map(db)
+    requested = crm_governance.canonical_hash(_hash_klucz(klucz), aliases)
+    return sorted(
+        (
+            t for t in rows
+            if crm_governance.canonical_hash(_hash_klucz(_klucz_crm(t)), aliases)
+            == requested
+        ),
+        key=_sort_key,
+        reverse=True,
+    )
 
 
 def _statystyki(lista: list[models.Termin]) -> dict:
@@ -152,20 +220,31 @@ def _historia_out(db: Session, lista: list[models.Termin]) -> list[dict]:
 
 
 def _profil_rezerwacji_out(db: Session, termin: models.Termin, user) -> dict:
-    klucz, identity = _identity_parts(termin)
-    lista = _terminy_dla_klucza(db, klucz)
-    profil = db.query(models.ProfilGoscia).filter_by(klucz_hash=_hash_klucz(klucz)).first()
+    _klucz, identity = _identity_parts(termin)
+    group = crm_governance.group_for_ref(db, termin.id)
+    lista = sorted(group["reservations"], key=_sort_key, reverse=True)
+    profiles = crm_governance.profiles_for_group(db, lista)
+    profil = crm_governance.composite_profile(
+        profiles,
+        preferred_hash=group["canonical_hash"],
+    )
+    consents = _zgody_out(db, lista, profiles)
     najnowsza = lista[0] if lista else termin
     return {
         "reservation_id": termin.id,
         "profil_ref": termin.id,
-        "nazwisko": profil.nazwisko if profil and profil.nazwisko else najnowsza.nazwisko,
+        "nazwisko": (
+            profil.get("nazwisko")
+            if isinstance(profil, dict) and profil.get("nazwisko")
+            else najnowsza.nazwisko
+        ),
         "identity": identity,
         "profil": _profil_out(profil, user),
         "statystyki": _statystyki(lista),
         "historia": _historia_out(db, lista),
         "historia_total": len(lista),
         "historia_limit": _CRM_HISTORY_LIMIT,
+        "zgody": consents,
         "ukryte_pola": _ukryte_pola(user),
         "capabilities": _capabilities(user),
     }
@@ -174,7 +253,10 @@ def _profil_rezerwacji_out(db: Session, termin: models.Termin, user) -> dict:
 def _upsert_profil(db: Session, klucz: str, dane: schemas.ProfilGosciaIn) -> models.ProfilGoscia:
     if not (klucz or "").strip():
         raise HTTPException(400, "Pusty klucz gościa.")
-    kh = _hash_klucz(klucz)
+    kh = crm_governance.canonical_hash(
+        _hash_klucz(klucz),
+        crm_governance.alias_map(db),
+    )
     p = db.query(models.ProfilGoscia).filter_by(klucz_hash=kh).first()
     teraz = datetime.utcnow()
     if not p:
@@ -189,7 +271,8 @@ def _upsert_profil(db: Session, klucz: str, dane: schemas.ProfilGosciaIn) -> mod
     p.notatka = dane.notatka or None
     p.okazja_typ = dane.okazja_typ or None
     p.okazja_data = dane.okazja_data or None
-    p.marketing_zgoda = bool(dane.marketing_zgoda)
+    # A profile edit cannot create or withdraw legal consent.  R7.3 records
+    # those decisions through an append-only, versioned endpoint.
     p.zaktualizowano_at = teraz
     db.commit()
     db.refresh(p)
@@ -205,21 +288,18 @@ def _zbuduj_liste_gosci(db: Session, min_wizyt: int) -> list[dict]:
     rezerwacje = db.query(models.Termin).filter(
         models.Termin.rodzaj.in_(_RODZAJE_CRM),
     ).all()
-    grupy = defaultdict(list)
-    for termin in rezerwacje:
-        klucz = _klucz_crm(termin)
-        if klucz:
-            grupy[klucz].append(termin)
+    aliases = crm_governance.alias_map(db)
+    grupy = crm_governance.group_reservations(rezerwacje, aliases)
 
     prepared = []
     hashes = set()
-    for klucz, lista in grupy.items():
+    for canonical, lista in grupy.items():
         lista.sort(key=_sort_key, reverse=True)
         if len(lista) < min_wizyt:
             continue
-        profile_hash = _hash_klucz(klucz)
-        hashes.add(profile_hash)
-        prepared.append((profile_hash, lista))
+        member_hashes = crm_governance.member_hashes(lista)
+        hashes.update(member_hashes)
+        prepared.append((canonical, member_hashes, lista))
     profiles = {
         profile.klucz_hash: profile
         for profile in (
@@ -230,7 +310,7 @@ def _zbuduj_liste_gosci(db: Session, min_wizyt: int) -> list[dict]:
     }
 
     goscie = []
-    for profile_hash, lista in prepared:
+    for canonical, member_hashes, lista in prepared:
         stats = _statystyki(lista)
         active = sum(1 for termin in lista if termin.status in _AKTYWNE)
         closed = stats["odbyte"] + stats["no_show"] + stats["odwolane"]
@@ -240,7 +320,15 @@ def _zbuduj_liste_gosci(db: Session, min_wizyt: int) -> list[dict]:
             else ("srednie" if stats["no_show_proc"] > 0 else "niskie")
         )
         latest = lista[0]
-        profile = profiles.get(profile_hash)
+        group_profiles = [
+            profiles[profile_hash]
+            for profile_hash in member_hashes
+            if profile_hash in profiles
+        ]
+        profile = crm_governance.composite_profile(
+            group_profiles,
+            preferred_hash=canonical,
+        )
         dates = [termin.data for termin in lista]
         goscie.append({
             "profil_ref": latest.id,
@@ -255,11 +343,11 @@ def _zbuduj_liste_gosci(db: Session, min_wizyt: int) -> list[dict]:
             "aktywne": active,
             "no_show_proc": stats["no_show_proc"],
             "ryzyko": risk,
-            "vip": bool(stats["vip_auto"] or (profile and profile.vip)),
+            "vip": bool(stats["vip_auto"] or (profile and profile["vip"])),
             "ostatnia_data": str(max(dates)),
             "pierwsza_data": str(min(dates)),
-            "tagi": (profile.tagi if profile else None) or [],
-            "ma_alergie": bool(profile and profile.alergie),
+            "tagi": (profile["tagi"] if profile else None) or [],
+            "ma_alergie": bool(profile and profile["alergie"]),
             "ma_profil": profile is not None,
         })
     return goscie
@@ -292,6 +380,16 @@ def _pasuje_do_crm(row: dict, query: str | None) -> bool:
     return bool(len(digits) >= 3 and digits in phone_digits)
 
 
+def _filtrowani_goscie(db: Session, dane) -> list[dict]:
+    goscie = [
+        row for row in _zbuduj_liste_gosci(db, dane.min_wizyt)
+        if _pasuje_do_crm(row, dane.q)
+        and (dane.vip is None or row["vip"] is dane.vip)
+        and (dane.ryzyko is None or row["ryzyko"] == dane.ryzyko)
+    ]
+    return _sortuj_gosci(goscie, dane.sort)
+
+
 @router.get(
     "/api/crm/goscie",
     dependencies=[Depends(_wymagaj_modul_rezerwacje)],
@@ -317,16 +415,11 @@ def crm_goscie(
 def crm_goscie_wyszukaj(
     dane: schemas.CrmGoscieWyszukajIn,
     db: Session = Depends(get_db),
-    _admin: models.User = Depends(require_admin),
+    user: models.User = Depends(get_current_user),
 ):
     """Kontrolowane wyszukiwanie PII bez umieszczania kryteriow w URL."""
-    goscie = [
-        row for row in _zbuduj_liste_gosci(db, dane.min_wizyt)
-        if _pasuje_do_crm(row, dane.q)
-        and (dane.vip is None or row["vip"] is dane.vip)
-        and (dane.ryzyko is None or row["ryzyko"] == dane.ryzyko)
-    ]
-    goscie = _sortuj_gosci(goscie, dane.sort)
+    _wymagaj_wyszukiwania_crm(user)
+    goscie = _filtrowani_goscie(db, dane)
     total = len(goscie)
     summary = {
         "wizyt": sum(row["wizyt"] for row in goscie),
@@ -347,6 +440,313 @@ def crm_goscie_wyszukaj(
 
 
 @router.get(
+    "/api/crm/jakosc",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_jakosc_danych(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """PII-aware quality workspace; suggestions never mutate data."""
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.crm_zarzadzaj",
+        "rezerwacje.dane_kontaktowe",
+    )
+    reservations = db.query(models.Termin).filter(
+        models.Termin.rodzaj.in_(_RODZAJE_CRM),
+    ).all()
+    aliases = crm_governance.alias_map(db)
+    grouped = crm_governance.group_reservations(reservations, aliases)
+    candidates = crm_governance.duplicate_candidates(grouped)
+    reservation_hashes = {
+        _hash_klucz(_klucz_crm(row))
+        for row in reservations
+        if _klucz_crm(row)
+    }
+    profiles = db.query(models.ProfilGoscia).all()
+    orphan_profiles = sum(
+        1 for profile in profiles if profile.klucz_hash not in reservation_hashes
+    )
+    consent_issues = 0
+    for rows in grouped.values():
+        group_profiles = crm_governance.profiles_for_group(db, rows)
+        if crm_governance.consent_summary(
+            db, rows, group_profiles,
+        )["state"] != "granted":
+            consent_issues += 1
+    merges = crm_governance.active_merges(db)
+    return {
+        "podsumowanie": {
+            "goscie": len(grouped),
+            "mozliwe_duplikaty": len(candidates),
+            "bez_kontaktu": sum(
+                1
+                for rows in grouped.values()
+                if all(_identity_parts(row)[1]["confident"] is False for row in rows)
+            ),
+            "zgody_bez_dowodu": consent_issues,
+            "profile_osierocone": orphan_profiles,
+            "aktywne_scalenia": len(merges),
+        },
+        "kandydaci": [
+            {
+                key: value
+                for key, value in candidate.items()
+                if key not in {"source_hash", "target_hash"}
+            }
+            for candidate in candidates
+        ],
+        "aktywne_scalenia": [
+            crm_governance.active_merge_out(db, row) for row in merges
+        ],
+    }
+
+
+@router.post(
+    "/api/crm/scalenia/podglad",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_scalenie_podglad(
+    dane: schemas.CrmMergePreviewIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.crm_zarzadzaj",
+        "rezerwacje.dane_kontaktowe",
+    )
+    return crm_governance.merge_preview(
+        db, dane.source_ref, dane.target_ref,
+    )
+
+
+@router.post(
+    "/api/crm/scalenia",
+    status_code=201,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_scal_profile(
+    dane: schemas.CrmMergeIn,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.crm_zarzadzaj",
+        "rezerwacje.dane_kontaktowe",
+    )
+    try:
+        row, replay = crm_governance.create_merge(
+            db,
+            source_ref=dane.source_ref,
+            target_ref=dane.target_ref,
+            expected_version=dane.expected_version,
+            raw_idempotency_key=idempotency_key,
+            user=user,
+        )
+        _audit_crm(
+            db,
+            user,
+            "crm_guest_merge",
+            f"merge:{row.id}",
+            {
+                "merge_id": row.id,
+                "reason_code": row.reason_code,
+                "version": row.version,
+                "replay": replay,
+                "evidence": row.evidence,
+            },
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        row = crm_governance.converge_create_merge(
+            db,
+            source_ref=dane.source_ref,
+            target_ref=dane.target_ref,
+            expected_version=dane.expected_version,
+            raw_idempotency_key=idempotency_key,
+        )
+        if row is None:
+            raise HTTPException(
+                409,
+                "Dane zmieniły się w innym oknie. Odśwież jakość danych.",
+            ) from exc
+        replay = True
+        _audit_crm(
+            db,
+            user,
+            "crm_guest_merge",
+            f"merge:{row.id}",
+            {
+                "merge_id": row.id,
+                "reason_code": row.reason_code,
+                "version": row.version,
+                "replay": True,
+                "evidence": row.evidence,
+            },
+        )
+        db.commit()
+    db.refresh(row)
+    return {
+        **crm_governance.active_merge_out(db, row),
+        "replay": replay,
+    }
+
+
+@router.post(
+    "/api/crm/scalenia/{merge_id}/cofnij",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_cofnij_scalenie(
+    merge_id: int,
+    dane: schemas.CrmMergeUndoIn,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.crm_zarzadzaj",
+        "rezerwacje.dane_kontaktowe",
+    )
+    try:
+        row, replay = crm_governance.undo_merge(
+            db,
+            merge_id=merge_id,
+            expected_version=dane.expected_version,
+            raw_idempotency_key=idempotency_key,
+            user=user,
+        )
+        _audit_crm(
+            db,
+            user,
+            "crm_guest_merge_undo",
+            f"merge:{row.id}",
+            {
+                "merge_id": row.id,
+                "reason_code": dane.reason_code,
+                "version": row.version,
+                "replay": replay,
+            },
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        row = crm_governance.converge_undo_merge(
+            db,
+            merge_id=merge_id,
+            expected_version=dane.expected_version,
+            raw_idempotency_key=idempotency_key,
+        )
+        if row is None:
+            raise HTTPException(
+                409,
+                "Dane scalenia zmieniły się w innym oknie.",
+            ) from exc
+        replay = True
+        _audit_crm(
+            db,
+            user,
+            "crm_guest_merge_undo",
+            f"merge:{row.id}",
+            {
+                "merge_id": row.id,
+                "reason_code": dane.reason_code,
+                "version": row.version,
+                "replay": True,
+            },
+        )
+        db.commit()
+    db.refresh(row)
+    return {
+        **crm_governance.active_merge_out(db, row),
+        "replay": replay,
+    }
+
+
+_CRM_EXPORT_LABELS = {
+    "nazwisko": "Nazwisko",
+    "telefon": "Telefon",
+    "email": "E-mail",
+    "wizyt": "Wizyty",
+    "odbyte": "Odbyte",
+    "no_show": "No-show",
+    "ostatnia_data": "Ostatnia wizyta",
+    "vip": "VIP",
+    "tagi": "Tagi",
+}
+
+
+@router.post(
+    "/api/crm/eksport",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_eksport(
+    dane: schemas.CrmEksportIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Audited UTF-8 CSV export with formula-injection protection."""
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.eksport",
+        "rezerwacje.dane_kontaktowe",
+    )
+    if "tagi" in dane.columns:
+        _wymagaj_uprawnien(user, "rezerwacje.dane_wrazliwe")
+    guests = _filtrowani_goscie(db, dane)[:dane.limit]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+    writer.writerow([_CRM_EXPORT_LABELS[column] for column in dane.columns])
+    for guest in guests:
+        values = []
+        for column in dane.columns:
+            value = guest.get(column)
+            if column == "vip":
+                value = "tak" if value else "nie"
+            elif column == "tagi":
+                value = ", ".join(value or [])
+            values.append(crm_governance.csv_safe(value))
+        writer.writerow(values)
+    payload = "\ufeff" + output.getvalue()
+    _audit_crm(
+        db,
+        user,
+        "crm_guest_export",
+        f"rows:{len(guests)}",
+        {
+            "rows": len(guests),
+            "columns": list(dane.columns),
+            "filtered": bool(dane.q or dane.vip is not None or dane.ryzyko),
+            "minimum_visits": dane.min_wizyt,
+        },
+    )
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            503,
+            "Nie udało się zapisać audytu. Eksport nie został utworzony.",
+        ) from exc
+    filename = f'goscie_crm_{datetime.utcnow().date().isoformat()}.csv'
+    return Response(
+        content=payload.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get(
     "/api/crm/rezerwacje/{reservation_id}/profil",
     dependencies=[Depends(_wymagaj_modul_rezerwacje)],
 )
@@ -363,6 +763,118 @@ def crm_profil_z_rezerwacji(
         raise HTTPException(403, "Brak uprawnień do profilu gościa.")
     termin = _termin_rezerwacji(db, reservation_id, user)
     return _profil_rezerwacji_out(db, termin, user)
+
+
+@router.get(
+    "/api/crm/rezerwacje/{reservation_id}/zgody",
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_zgody_z_rezerwacji(
+    reservation_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.operacje",
+        "rezerwacje.dane_kontaktowe",
+    )
+    termin = _termin_rezerwacji(db, reservation_id, user)
+    group = crm_governance.group_for_ref(db, termin.id)
+    profiles = crm_governance.profiles_for_group(db, group["reservations"])
+    return _zgody_out(db, group["reservations"], profiles)
+
+
+@router.post(
+    "/api/crm/rezerwacje/{reservation_id}/zgody",
+    status_code=201,
+    dependencies=[Depends(_wymagaj_modul_rezerwacje)],
+)
+def crm_zapisz_zdarzenie_zgody(
+    reservation_id: int,
+    dane: schemas.CrmConsentEventIn,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    _wymagaj_uprawnien(
+        user,
+        "rezerwacje.crm_zarzadzaj",
+        "rezerwacje.dane_kontaktowe",
+    )
+    # Lazy import avoids a module cycle: ``main`` includes this router.
+    import main
+    if dane.document_version != main.PUBLIC_MARKETING_CONSENT_VERSION:
+        raise HTTPException(
+            409,
+            "Treść zgody marketingowej została zaktualizowana.",
+        )
+    # Object scope is checked before any append-only fact or audit is written.
+    termin = _termin_rezerwacji(db, reservation_id, user)
+    try:
+        event, replay = crm_governance.record_consent(
+            db,
+            reservation_id=reservation_id,
+            decision=dane.decision,
+            source=dane.source,
+            document_version=dane.document_version,
+            captured_at=dane.captured_at,
+            raw_idempotency_key=idempotency_key,
+            user=user,
+        )
+        _audit_crm(
+            db,
+            user,
+            "crm_consent_event",
+            f"consent:{event.id}",
+            {
+                "event_id": event.id,
+                "purpose": event.purpose,
+                "decision": event.decision,
+                "document_version": event.document_version,
+                "source": event.source,
+                "replay": replay,
+            },
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        event = crm_governance.converge_consent_event(
+            db,
+            reservation_id=reservation_id,
+            decision=dane.decision,
+            source=dane.source,
+            document_version=dane.document_version,
+            captured_at=dane.captured_at,
+            raw_idempotency_key=idempotency_key,
+        )
+        if event is None:
+            raise HTTPException(
+                409,
+                "Zdarzenie zgody zostało już zapisane w innym oknie.",
+            ) from exc
+        replay = True
+        _audit_crm(
+            db,
+            user,
+            "crm_consent_event",
+            f"consent:{event.id}",
+            {
+                "event_id": event.id,
+                "purpose": event.purpose,
+                "decision": event.decision,
+                "document_version": event.document_version,
+                "source": event.source,
+                "replay": True,
+            },
+        )
+        db.commit()
+    group = crm_governance.group_for_ref(db, termin.id)
+    profiles = crm_governance.profiles_for_group(db, group["reservations"])
+    return {
+        **_zgody_out(db, group["reservations"], profiles),
+        "replay": replay,
+    }
 
 
 @router.put(

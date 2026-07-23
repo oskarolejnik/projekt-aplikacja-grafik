@@ -23,7 +23,9 @@ def _future_day(offset=30):
 def _enable_online(db):
     config = get_lokal_config(db)
     config.rezerwacje_online = True
-    config.rezerwacje_widget_v2 = False
+    config.rezerwacje_widget_v2 = True
+    config.rezerwacje_rodo_kontakt = "rodo@lokalo.test"
+    config.rezerwacje_rodo_adres = "ul. Testowa 1, Warszawa"
     db.commit()
 
 
@@ -31,6 +33,20 @@ def _public_headers(key):
     return {
         "X-Reservation-Session": "r72-public-session-00000001",
         "Idempotency-Key": key,
+    }
+
+
+def _public_waitlist_payload(payload):
+    return {
+        **payload,
+        "email": payload.get("email") or (
+            None if payload.get("telefon") else "waitlist-r72@example.test"
+        ),
+        "privacy_notice_acknowledged": True,
+        "privacy_notice_version": main.PUBLIC_PRIVACY_NOTICE_VERSION,
+        "marketing_consent": False,
+        "marketing_consent_version": main.PUBLIC_MARKETING_CONSENT_VERSION,
+        "sensitive_data_consent": False,
     }
 
 
@@ -199,12 +215,12 @@ def test_public_capture_rejects_client_claim_when_server_finds_availability(
 def test_public_waitlist_replays_from_owner_and_rejects_key_reuse(client, db):
     _enable_online(db)
     day = _future_day(32)
-    payload = {
+    payload = _public_waitlist_payload({
         "data": str(day),
         "godz_od": "20:00",
         "liczba_osob": 6,
         "nazwisko": "Gość idempotentny",
-    }
+    })
     headers = _public_headers("r72-waitlist-owner-key-0001")
 
     first = client.post(
@@ -248,13 +264,13 @@ def test_public_waitlist_unique_race_rolls_back_loser_pii(
     _enable_online(db)
     day = _future_day(37)
     key = "r72-waitlist-concurrent-winner-0001"
-    payload = {
+    payload = _public_waitlist_payload({
         "data": str(day),
         "godz_od": "20:30",
         "liczba_osob": 5,
         "nazwisko": "Jedyny zwycięzca",
         "telefon": "500600701",
-    }
+    })
     original_flush = Session.flush
     injected = False
 

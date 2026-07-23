@@ -480,6 +480,67 @@ _R72_WAITLIST_CHECK_NAMES = {
     "ck_lista_oczekujacych_demand_reason",
     "ck_lista_oczekujacych_demand_resource",
 }
+_R68_REVISION = "0068_reservation_closure"
+_R68_TABLES = {
+    "crm_consent_events",
+    "crm_guest_merges",
+    "reservation_recommendation_reviews",
+}
+_R68_MODEL_TABLES = {
+    name: Base.metadata.tables[name] for name in _R68_TABLES
+}
+_R68_TABLE_COLUMNS = {
+    name: {column.name for column in table.columns}
+    for name, table in _R68_MODEL_TABLES.items()
+}
+_R68_TABLE_CHECKS = {
+    name: {
+        constraint.name: str(constraint.sqltext)
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    for name, table in _R68_MODEL_TABLES.items()
+}
+_R68_TABLE_UNIQUES = {
+    name: {
+        constraint.name: tuple(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if isinstance(constraint, UniqueConstraint) and constraint.name
+    }
+    for name, table in _R68_MODEL_TABLES.items()
+}
+_R68_TABLE_INDEXES = {
+    name: {
+        index.name: (
+            tuple(column.name for column in index.columns), bool(index.unique),
+        )
+        for index in table.indexes if index.name
+    }
+    for name, table in _R68_MODEL_TABLES.items()
+}
+_R68_TABLE_INDEX_PREDICATES = {
+    "crm_consent_events": {},
+    "crm_guest_merges": {
+        "uq_crm_guest_merges_active_source": "status = 'active'",
+    },
+    "reservation_recommendation_reviews": {},
+}
+_R68_TABLE_FOREIGN_KEYS = {
+    name: {
+        (
+            tuple(element.parent.name for element in constraint.elements),
+            constraint.elements[0].column.table.name,
+            tuple(element.column.name for element in constraint.elements),
+            str(constraint.ondelete or "").upper(),
+        )
+        for constraint in table.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    }
+    for name, table in _R68_MODEL_TABLES.items()
+}
+_R68_BASE_TABLE = "rezerwacje_zgody_publiczne"
+_R68_BASE_COLUMNS = {"subject_hash"}
+_R68_BASE_INDEX = "ix_rezerwacje_zgody_publiczne_subject_hash"
 _R5B_TABLES = {
     "rezerwacje_wiadomosci_outbox",
     "rezerwacje_wiadomosci_proby",
@@ -612,9 +673,16 @@ _R5A_BASE_CHECKS = {
     for table_name, constraint_names in _R5A_BASE_CHECK_NAMES.items()
 }
 _R5A_COLUMNS = {
-    table_name: {
-        column.name for column in Base.metadata.tables[table_name].columns
-    }
+    table_name: (
+        {
+            column.name for column in Base.metadata.tables[table_name].columns
+        }
+        - (
+            _R68_BASE_COLUMNS
+            if table_name == _R68_BASE_TABLE
+            else set()
+        )
+    )
     for table_name in _R5A_TABLES
 }
 _R5A_MODEL_TABLES = {
@@ -628,7 +696,7 @@ _R5A_INDEXES = {
             bool(index.unique),
         )
         for index in model_table.indexes
-        if index.name
+        if index.name and index.name != _R68_BASE_INDEX
     }
     for table_name, model_table in _R5A_MODEL_TABLES.items()
 }
@@ -2702,8 +2770,19 @@ def _validate_r5a_adoption_schema(inspector=None) -> bool:
         )
     for table_name, expected_columns in _R5A_COLUMNS.items():
         _validate_r5a_column_contract(
-            inspector, table_name, expected_columns, exact=True,
+            inspector,
+            table_name,
+            expected_columns,
+            exact=(table_name != _R68_BASE_TABLE),
         )
+        if table_name == _R68_BASE_TABLE:
+            actual_columns = {
+                item["name"] for item in inspector.get_columns(table_name)
+            }
+            if actual_columns - expected_columns - _R68_BASE_COLUMNS:
+                raise RuntimeError(
+                    f"Tabela {table_name} ma nieznane kolumny poza kontraktem R5a/0068."
+                )
 
         expected_pk = tuple(
             column.name for column in _R5A_MODEL_TABLES[table_name].primary_key.columns
@@ -3545,6 +3624,169 @@ def _validate_r72_adoption_schema(inspector=None) -> bool:
     return True
 
 
+def _validate_r68_adoption_schema(inspector=None) -> bool:
+    """Fail closed for every structural invariant introduced by revision 0068."""
+    from sqlalchemy import inspect
+
+    inspector = inspector or inspect(engine)
+    bind = getattr(inspector, "bind", None)
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    dialect_name = dialect_name or engine.dialect.name
+    tables = set(inspector.get_table_names())
+    if not _R68_TABLES.issubset(tables):
+        raise RuntimeError("Schemat 0068 nie ma kompletu tabel governance.")
+    if _R68_BASE_TABLE not in tables:
+        raise RuntimeError("Schemat 0068 nie ma bazowej tabeli zgod publicznych.")
+
+    try:
+        _validate_r5a_column_contract(
+            inspector,
+            _R68_BASE_TABLE,
+            _R68_BASE_COLUMNS,
+            exact=False,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Schemat 0068 nie ma poprawnego zamrozonego identyfikatora zgody."
+        ) from exc
+    base_indexes = {
+        item.get("name"): (
+            tuple(item.get("column_names") or ()),
+            bool(item.get("unique")),
+            _normalize_r2_index_predicate(" ".join(
+                str(value)
+                for key, value in (item.get("dialect_options") or {}).items()
+                if key.endswith("_where") and value is not None
+            )),
+        )
+        for item in inspector.get_indexes(_R68_BASE_TABLE)
+        if item.get("name")
+    }
+    if base_indexes.get(_R68_BASE_INDEX) != (("subject_hash",), False, None):
+        raise RuntimeError(
+            f"Indeks {_R68_BASE_INDEX} ma nieprawidlowa definicje 0068."
+        )
+
+    for table_name in sorted(_R68_TABLES):
+        try:
+            _validate_r5a_column_contract(
+                inspector,
+                table_name,
+                _R68_TABLE_COLUMNS[table_name],
+                exact=True,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Schemat 0068 ma nieprawidlowe kolumny tabeli {table_name}."
+            ) from exc
+
+        expected_pk = tuple(
+            column.name
+            for column in _R68_MODEL_TABLES[table_name].primary_key.columns
+        )
+        reflected_pk = tuple(
+            inspector.get_pk_constraint(table_name).get(
+                "constrained_columns",
+            ) or ()
+        )
+        if reflected_pk != expected_pk:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowy PK 0068."
+            )
+
+        reflected_indexes = {
+            item.get("name"): (
+                tuple(item.get("column_names") or ()),
+                bool(item.get("unique")),
+            )
+            for item in inspector.get_indexes(table_name)
+            if item.get("name")
+        }
+        reflected_uniques = {
+            item.get("name"): tuple(item.get("column_names") or ())
+            for item in inspector.get_unique_constraints(table_name)
+            if item.get("name")
+        }
+        for name, (columns, unique) in reflected_indexes.items():
+            if unique and name in _R68_TABLE_UNIQUES[table_name]:
+                reflected_uniques.setdefault(name, columns)
+        if reflected_uniques != _R68_TABLE_UNIQUES[table_name]:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe UNIQUE 0068."
+            )
+
+        semantic_indexes = {
+            name: shape
+            for name, shape in reflected_indexes.items()
+            if not (
+                name in _R68_TABLE_UNIQUES[table_name]
+                and shape[1]
+                and _R68_TABLE_UNIQUES[table_name][name] == shape[0]
+            )
+        }
+        if semantic_indexes != _R68_TABLE_INDEXES[table_name]:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe indeksy 0068."
+            )
+        reflected_index_rows = {
+            item.get("name"): item
+            for item in inspector.get_indexes(table_name)
+            if item.get("name")
+        }
+        for name, expected_predicate in _R68_TABLE_INDEX_PREDICATES[
+            table_name
+        ].items():
+            row = reflected_index_rows.get(name)
+            options = row.get("dialect_options") if row else {}
+            predicate = " ".join(
+                str(value)
+                for key, value in (options or {}).items()
+                if key.endswith("_where") and value is not None
+            )
+            if _normalize_r2_index_predicate(
+                predicate,
+            ) != _normalize_r2_index_predicate(expected_predicate):
+                raise RuntimeError(
+                    f"Indeks {name} ma nieprawidlowy predykat 0068."
+                )
+
+        reflected_fks = {
+            (
+                tuple(item.get("constrained_columns") or ()),
+                item.get("referred_table"),
+                tuple(item.get("referred_columns") or ()),
+                str((item.get("options") or {}).get("ondelete") or "").upper(),
+            )
+            for item in inspector.get_foreign_keys(table_name)
+        }
+        if reflected_fks != _R68_TABLE_FOREIGN_KEYS[table_name]:
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe FK 0068."
+            )
+
+        raw_checks = inspector.get_check_constraints(table_name)
+        reflected_checks = {
+            item.get("name"): item.get("sqltext")
+            for item in raw_checks if item.get("name")
+        }
+        if (
+            len(raw_checks) != len(_R68_TABLE_CHECKS[table_name])
+            or any(not item.get("name") for item in raw_checks)
+            or set(reflected_checks) != set(_R68_TABLE_CHECKS[table_name])
+        ):
+            raise RuntimeError(
+                f"Tabela {table_name} ma nieprawidlowe CHECK 0068."
+            )
+        for name, expected in _R68_TABLE_CHECKS[table_name].items():
+            if _r5a_check_signature(
+                reflected_checks[name], dialect_name,
+            ) != _r5a_check_signature(expected, dialect_name):
+                raise RuntimeError(
+                    f"CHECK {name} ma nieprawidlowa definicje 0068."
+                )
+    return True
+
+
 def _invalidate_legacy_public_tokens() -> int:
     """Clears reversible plaintext public tokens on the stamp-only adoption path."""
     from sqlalchemy import inspect, text
@@ -3622,13 +3864,18 @@ def init_db():
         #  (b) starsza baza (sprzed Alembica, bez nowszych tabel) → oznacz BASELINE
         #      i domigruj do head (0002+: nowe kolumny/tabele + backfill po nazwach).
         model_tables = set(Base.metadata.tables.keys())
-        historical_model_tables = model_tables - _R6B2_TABLES - _R72_TABLES
+        historical_model_tables = (
+            model_tables - _R6B2_TABLES - _R72_TABLES - _R68_TABLES
+        )
         complete_current_tables = model_tables.issubset(tables)
+        complete_pre_r68_tables = (
+            model_tables - _R68_TABLES
+        ).issubset(tables)
         complete_pre_r72_tables = (
-            model_tables - _R72_TABLES
+            model_tables - _R68_TABLES - _R72_TABLES
         ).issubset(tables)
         complete_pre_r6b2_tables = (
-            model_tables - _R72_TABLES - _R6B2_TABLES
+            model_tables - _R68_TABLES - _R72_TABLES - _R6B2_TABLES
         ).issubset(tables)
         waitlist_columns = (
             {column["name"] for column in insp.get_columns("lista_oczekujacych")}
@@ -3638,6 +3885,28 @@ def init_db():
         r6b2_tables_present = _R6B2_TABLES & tables
         r72_columns_present = _R72_BASE_COLUMNS & waitlist_columns
         r72_tables_present = _R72_TABLES & tables
+        public_consent_columns = (
+            {
+                column["name"]
+                for column in insp.get_columns(_R68_BASE_TABLE)
+            }
+            if _R68_BASE_TABLE in tables else set()
+        )
+        r68_columns_present = _R68_BASE_COLUMNS & public_consent_columns
+        r68_tables_present = _R68_TABLES & tables
+        if r68_columns_present and r68_columns_present != _R68_BASE_COLUMNS:
+            raise RuntimeError(
+                "Schemat 0068 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
+            )
+        if r68_tables_present and r68_tables_present != _R68_TABLES:
+            raise RuntimeError(
+                "Schemat 0068 jest czesciowy; brakuje tabel governance."
+            )
+        if bool(r68_columns_present) != bool(r68_tables_present):
+            raise RuntimeError(
+                "Schemat 0068 jest czesciowy; brakuje zamrozonej tozsamosci "
+                "zgody albo tabel governance."
+            )
         if r72_columns_present and r72_columns_present != _R72_BASE_COLUMNS:
             raise RuntimeError(
                 "Schemat R7.2 jest czesciowy; nie mozna bezpiecznie adoptowac bazy."
@@ -3661,12 +3930,30 @@ def init_db():
             raise RuntimeError(
                 "Schemat R7.2 nie moze zostac adoptowany bez pelnego R6b.2."
             )
+        if r68_columns_present and not (
+            r72_columns_present == _R72_BASE_COLUMNS
+            and r72_tables_present == _R72_TABLES
+        ):
+            raise RuntimeError(
+                "Schemat 0068 nie moze zostac adoptowany bez pelnego R7.2."
+            )
         complete_current = (
             complete_current_tables
             and r6b2_columns_present == _R6B2_BASE_COLUMNS
             and r6b2_tables_present == _R6B2_TABLES
             and r72_columns_present == _R72_BASE_COLUMNS
             and r72_tables_present == _R72_TABLES
+            and r68_columns_present == _R68_BASE_COLUMNS
+            and r68_tables_present == _R68_TABLES
+        )
+        complete_r72 = (
+            complete_pre_r68_tables
+            and r6b2_columns_present == _R6B2_BASE_COLUMNS
+            and r6b2_tables_present == _R6B2_TABLES
+            and r72_columns_present == _R72_BASE_COLUMNS
+            and r72_tables_present == _R72_TABLES
+            and not r68_columns_present
+            and not r68_tables_present
         )
         complete_r6b2 = (
             complete_pre_r72_tables
@@ -3674,6 +3961,8 @@ def init_db():
             and r6b2_tables_present == _R6B2_TABLES
             and not r72_columns_present
             and not r72_tables_present
+            and not r68_columns_present
+            and not r68_tables_present
         )
         complete_r6a = (
             complete_pre_r6b2_tables
@@ -3681,6 +3970,8 @@ def init_db():
             and not r6b2_tables_present
             and not r72_columns_present
             and not r72_tables_present
+            and not r68_columns_present
+            and not r68_tables_present
         )
         r6a_tables_present = _R6A_TABLES & tables
         if r6a_tables_present and r6a_tables_present != _R6A_TABLES:
@@ -3820,6 +4111,7 @@ def init_db():
             _validate_r6a_adoption_schema(insp)
             _validate_r6b2_adoption_schema(insp)
             _validate_r72_adoption_schema(insp)
+            _validate_r68_adoption_schema(insp)
             _ensure_schema()
             _rebuild_rezerwacje_ledger()
             _rebuild_rezerwacje_oblozenie_ledger()
@@ -3833,6 +4125,24 @@ def init_db():
             _validate_r6a_adoption_schema(refreshed)
             _validate_r6b2_adoption_schema(refreshed)
             _validate_r72_adoption_schema(refreshed)
+            _validate_r68_adoption_schema(refreshed)
+            _require_alembic_run(
+                lambda command, cfg: command.stamp(cfg, _R68_REVISION)
+            )
+            return
+        if complete_r72:
+            # Pełny niewersjonowany schemat po 0066/0067 nie zawiera jeszcze
+            # governance 0068. Stempel 0066 zachowuje możliwość wykonania
+            # defensywnej migracji geofencingu 0067 i pełnej migracji 0068.
+            _validate_r1a_audit_schema(insp)
+            _validate_r2_adoption_schema(insp)
+            _validate_r3_adoption_schema(insp)
+            _validate_r5a_adoption_schema(insp)
+            _validate_r5b_adoption_schema(insp)
+            _validate_r5c_adoption_schema(insp)
+            _validate_r6a_adoption_schema(insp)
+            _validate_r6b2_adoption_schema(insp)
+            _validate_r72_adoption_schema(insp)
             _require_alembic_run(
                 lambda command, cfg: command.stamp(cfg, _R72_REVISION)
             )

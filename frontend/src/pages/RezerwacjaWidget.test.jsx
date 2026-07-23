@@ -178,6 +178,39 @@ describe('RezerwacjaWidget R5a', () => {
     expect(await screen.findByRole('heading', { name: 'Zwrot jest przetwarzany' })).toBeInTheDocument()
   })
 
+  it('pokazuje wynik płatności także wtedy, gdy nowe rezerwacje online są wyłączone', async () => {
+    window.history.replaceState({}, '', '/?rezerwuj&platnosc=powrot')
+    sessionStorage.setItem('lokalo:public-payment:v2', JSON.stringify({
+      expiresAt: Date.now() + 60_000,
+      reservation: reservation(),
+      payment: { id: 41, status: 'oczekuje', refund_status: 'brak' },
+    }))
+    apiMock.mockImplementation((path, method = 'GET') => {
+      if (path === '/online/widget-config') {
+        return Promise.resolve({ ...CONFIG_V2, ready: false })
+      }
+      if (path === '/online/zarzadzanie/platnosc' && method === 'GET') {
+        return Promise.resolve({
+          rezerwacja: reservation(),
+          platnosc: {
+            id: 41,
+            status: 'oplacona',
+            refund_status: 'brak',
+            amount_minor: 5000,
+          },
+        })
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method} ${path}`))
+    })
+
+    render(<RezerwacjaWidget />)
+
+    expect(await screen.findByRole('heading', { name: 'Zadatek opłacony' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', {
+      name: 'Rezerwacje online są chwilowo niedostępne',
+    })).not.toBeInTheDocument()
+  })
+
   it('nie ogłasza sukcesu przed webhookiem i prowadzi do bezpiecznego checkoutu', async () => {
     const payment = {
       id: 41,
@@ -281,47 +314,53 @@ describe('RezerwacjaWidget R5a', () => {
     expect(document.body).not.toHaveTextContent('management-2')
   })
 
-  it('bezpiecznie działa w trybie v1 bez holda i nie umieszcza tokenu w URL', async () => {
-    apiMock.mockImplementation((path, method = 'GET') => {
-      if (path === '/online/widget-config') return Promise.reject(Object.assign(new Error('Brak endpointu'), { status: 404 }))
-      if (path.startsWith('/online/dostepnosc')) return Promise.resolve({ sloty: [{ godz_od: '18:00', wolne: 1 }] })
-      if (path === '/online/rezerwacja' && method === 'POST') {
-        return Promise.resolve({ token: 'legacy-token', rezerwacja: reservation() })
+  it('po błędzie konfiguracji zatrzymuje widget i pozwala bezpiecznie ponowić próbę', async () => {
+    let configAttempts = 0
+    apiMock.mockImplementation((path) => {
+      if (path !== '/online/widget-config') return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+      configAttempts += 1
+      if (configAttempts === 1) {
+        return Promise.reject(Object.assign(new Error('Brak połączenia'), { status: 503 }))
       }
-      if (path === '/online/zarzadzanie/odwolaj' && method === 'POST') {
-        return Promise.resolve({ ...reservation('odwolana'), management_token: 'legacy-token-2' })
-      }
-      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${method} ${path}`))
+      return Promise.resolve(CONFIG_V2)
     })
 
-    await renderReadyWidget()
-    await searchFor()
-    fireEvent.click(await screen.findByRole('button', { name: 'Wybierz godzinę 18:00' }))
-    expect(await screen.findByRole('heading', { name: 'Dokończ rezerwację' })).toBeInTheDocument()
-    expect(apiMock.mock.calls.some(([path]) => path === '/online/hold')).toBe(false)
+    render(<RezerwacjaWidget />)
+    expect(await screen.findByRole('heading', { name: 'Nie udało się uruchomić rezerwacji' })).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Brak połączenia. Sprawdź połączenie i spróbuj ponownie.')
+    expect(screen.queryByRole('button', { name: 'Pokaż wolne godziny' })).not.toBeInTheDocument()
 
-    fillRequiredGuestData()
-    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź rezerwację' }))
-    expect(await screen.findByRole('heading', { name: 'Rezerwacja potwierdzona' })).toBeInTheDocument()
-    const legacyCreate = apiMock.mock.calls.find(([path, method]) => path === '/online/rezerwacja' && method === 'POST')
-    expect(legacyCreate[2]).toMatchObject({ marketing_consent: false })
-    expect(legacyCreate[2]).not.toHaveProperty('hold_token')
-    expect(legacyCreate[3].headers).not.toHaveProperty('X-Reservation-Hold')
+    fireEvent.click(screen.getByRole('button', { name: 'Spróbuj ponownie' }))
+    expect(await screen.findByRole('heading', { name: 'Znajdź stolik' })).toBeInTheDocument()
+    expect(configAttempts).toBe(2)
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Odwołaj rezerwację' }))
-    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
-      '/online/zarzadzanie/odwolaj',
-      'POST',
-      null,
-      expect.objectContaining({
-        credentials: 'include',
-      }),
-    ))
-    const cancelCall = apiMock.mock.calls.find(([path, method]) => (
-      path === '/online/zarzadzanie/odwolaj' && method === 'POST'
-    ))
-    expect(cancelCall[3].headers).not.toHaveProperty('X-Reservation-Token')
-    expect(apiMock.mock.calls.some(([path]) => path.includes('legacy-token'))).toBe(false)
+  it('traktuje brak konfiguracji 404 jako świadomie wyłączone rezerwacje online', async () => {
+    apiMock.mockImplementation((path) => {
+      if (path === '/online/widget-config') {
+        return Promise.reject(Object.assign(new Error('Nie znaleziono konfiguracji'), { status: 404 }))
+      }
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+
+    render(<RezerwacjaWidget />)
+
+    expect(await screen.findByRole('heading', {
+      name: 'Rezerwacje online są chwilowo niedostępne',
+    })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Nie udało się uruchomić rezerwacji' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Spróbuj ponownie' })).not.toBeInTheDocument()
+  })
+
+  it('nie uruchamia formularza po otrzymaniu starego kontraktu v1', async () => {
+    apiMock.mockImplementation((path) => {
+      if (path === '/online/widget-config') return Promise.resolve({ version: 1, ready: true })
+      return Promise.reject(new Error(`Nieoczekiwany endpoint: ${path}`))
+    })
+
+    render(<RezerwacjaWidget />)
+    expect(await screen.findByRole('heading', { name: 'Nie udało się uruchomić rezerwacji' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Pokaż wolne godziny' })).not.toBeInTheDocument()
   })
 
   it('pokazuje alternatywy i zapisuje na waitlistę bez wymuszania marketingu', async () => {

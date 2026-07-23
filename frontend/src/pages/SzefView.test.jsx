@@ -32,6 +32,7 @@ vi.mock('../components/tabs/SzefImprezy', () => ({ default: () => <div>Widok imp
 vi.mock('../components/tabs/Rezerwacje', () => ({ default: () => <div>Widok rezerwacji</div> }))
 vi.mock('../components/tabs/ReservationsWorkspace', () => ({ default: () => <div>Workspace rezerwacji</div> }))
 vi.mock('../components/tabs/AnalitykaRezerwacji', () => ({ default: () => <div>Widok wyników rezerwacji</div> }))
+vi.mock('../components/tabs/CrmGoscie', () => ({ default: () => <div>Widok bazy gości</div> }))
 
 import SzefView from './SzefView'
 
@@ -118,6 +119,28 @@ describe('SzefView permissions', () => {
     expect(await screen.findByText('Widok wyników rezerwacji')).toBeInTheDocument()
     expect(screen.queryByText('Workspace rezerwacji')).not.toBeInTheDocument()
     expect(screen.queryByText('Widok rezerwacji')).not.toBeInTheDocument()
+  })
+
+  it('udostępnia bazę gości managerowi z kompletnym prawem do eksportu', async () => {
+    authState.permissions = [
+      'rezerwacje.operacje',
+      'rezerwacje.dane_kontaktowe',
+      'rezerwacje.eksport',
+    ]
+
+    render(<SzefView />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Baza gości' }))
+    expect(await screen.findByText('Widok bazy gości')).toBeInTheDocument()
+  })
+
+  it('nie pokazuje martwego wejścia do CRM bez prawa do danych kontaktowych', () => {
+    authState.permissions = ['rezerwacje.operacje', 'rezerwacje.eksport']
+
+    render(<SzefView />)
+
+    expect(screen.queryByRole('button', { name: 'Baza gości' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Widok bazy gości')).not.toBeInTheDocument()
   })
 
   it('po odebraniu praw operacyjnych zamyka workspace i usuwa jego deep link', async () => {

@@ -2,12 +2,22 @@
 blackout) + bufor sprzątania w rdzeniu kolizji. Daty względne do dziś (deterministyczne)."""
 
 import datetime as dt
+import hashlib
 
 DZIS = dt.date.today()
+PUBLIC_SESSION = "policy-widget-session-0001"
 
 
 def _enable(admin_client):
-    assert admin_client.put("/api/lokal/config", json={"rezerwacje_online": True}).status_code == 200
+    assert admin_client.put(
+        "/api/lokal/config",
+        json={
+            "rezerwacje_online": True,
+            "rezerwacje_widget_v2": True,
+            "rezerwacje_rodo_kontakt": "rodo@lokalo.test",
+            "rezerwacje_rodo_adres": "ul. Testowa 1, Warszawa",
+        },
+    ).status_code == 200
 
 
 def _setup_dzis(admin_client, pojemnosc=4):
@@ -28,8 +38,42 @@ def _serwis_dla_daty(admin_client, data):
 
 
 def _rez(client, data, osoby=2, godz="18:00"):
-    return client.post("/api/online/rezerwacja",
-                       json={"data": str(data), "godz_od": godz, "liczba_osob": osoby, "nazwisko": "X"})
+    fingerprint = hashlib.sha256(
+        f"{data}:{osoby}:{godz}".encode()
+    ).hexdigest()[:20]
+    hold = client.post(
+        "/api/online/hold",
+        json={"data": str(data), "godz_od": godz, "liczba_osob": osoby},
+        headers={
+            "X-Reservation-Session": PUBLIC_SESSION,
+            "Idempotency-Key": f"policy-hold-{fingerprint}",
+        },
+    )
+    if hold.status_code != 201:
+        return hold
+    config = client.get("/api/online/widget-config")
+    assert config.status_code == 200, config.text
+    versions = config.json()
+    return client.post(
+        "/api/online/rezerwacja",
+        json={
+            "data": str(data),
+            "godz_od": godz,
+            "liczba_osob": osoby,
+            "nazwisko": "X",
+            "email": "policy@example.test",
+            "privacy_notice_acknowledged": True,
+            "privacy_notice_version": versions["privacy"]["notice_version"],
+            "marketing_consent": False,
+            "marketing_consent_version": versions["marketing"]["version"],
+            "sensitive_data_consent": False,
+        },
+        headers={
+            "X-Reservation-Session": PUBLIC_SESSION,
+            "X-Reservation-Hold": hold.json()["hold_token"],
+            "Idempotency-Key": f"policy-create-{fingerprint}",
+        },
+    )
 
 
 def test_okno_wyprzedzenia(admin_client, client):

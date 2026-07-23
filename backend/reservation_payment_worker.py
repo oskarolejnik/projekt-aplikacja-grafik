@@ -2109,6 +2109,12 @@ def start_worker(
         return True
 
 
+def worker_running() -> bool:
+    """Return payment-loop liveness without exposing the thread object."""
+    with _state_lock:
+        return bool(_thread is not None and _thread.is_alive())
+
+
 def stop_worker(*, timeout_seconds: float = 5.0) -> bool:
     """Stop the optional daemon loop; bounded runners remain independently usable."""
 

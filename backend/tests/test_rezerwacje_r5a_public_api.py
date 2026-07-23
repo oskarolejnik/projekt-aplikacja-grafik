@@ -153,6 +153,63 @@ def test_widget_v2_exposes_ready_versioned_privacy_contract(admin_client, client
     assert config["sensitive"]["optional"] is True
 
 
+def test_public_widget_fails_closed_without_v2_and_rodo_configuration(
+    admin_client, client, db,
+):
+    response = admin_client.put(
+        "/api/lokal/config",
+        json={
+            "modul_rezerwacje": True,
+            "rezerwacje_online": True,
+            "rezerwacje_widget_v2": False,
+            "rezerwacje_rodo_kontakt": "",
+            "rezerwacje_rodo_adres": "",
+        },
+    )
+    assert response.status_code == 200, response.text
+    booking_date = _booking_date()
+    headers = {
+        "X-Reservation-Session": SESSION_A,
+        "X-Reservation-Hold": "unused-hold-token",
+        "Idempotency-Key": CREATE_KEY,
+    }
+
+    assert client.get("/api/online/widget-config").status_code == 404
+    reservation = client.post(
+        "/api/online/rezerwacja",
+        json={
+            "data": booking_date.isoformat(),
+            "godz_od": "18:00",
+            "liczba_osob": 2,
+            "nazwisko": "Nie zapisuj",
+            "email": "fail-closed@example.test",
+        },
+        headers=headers,
+    )
+    waitlist = client.post(
+        "/api/online/lista-oczekujacych",
+        json={
+            "data": booking_date.isoformat(),
+            "godz_od": "18:00",
+            "liczba_osob": 2,
+            "nazwisko": "Nie zapisuj",
+            "email": "fail-closed@example.test",
+        },
+        headers={
+            "X-Reservation-Session": SESSION_A,
+            "Idempotency-Key": "r5a-public-waitlist-fail-closed",
+        },
+    )
+
+    assert reservation.status_code == 404
+    assert waitlist.status_code == 404
+    assert db.query(models.Termin).count() == 0
+    assert db.query(models.ListaOczekujacych).count() == 0
+    assert db.query(models.RezerwacjaZgodaPubliczna).count() == 0
+    assert db.query(models.RezerwacjaIdempotencja).count() == 0
+    assert db.query(models.RezerwacjaPublicznyHold).count() == 0
+
+
 def test_hold_create_transfers_every_table_and_keeps_tokens_hash_only(
     admin_client, client, db,
 ):

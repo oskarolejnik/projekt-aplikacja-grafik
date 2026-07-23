@@ -8,6 +8,7 @@ alokację, pacing, idempotencję albo zwolnienie zasobu.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import hashlib
 
 import pytest
 
@@ -15,6 +16,7 @@ import models
 
 
 BOOKING_DATE = date.today() + timedelta(days=30)
+PUBLIC_SESSION = "r0b-public-session-0001"
 
 
 def _stolik(admin_client, nazwa: str = "S1", pojemnosc: int = 8) -> int:
@@ -52,7 +54,12 @@ def _manual_create(admin_client, table_id: int, **kwargs):
 def _enable_online(admin_client) -> None:
     response = admin_client.put(
         "/api/lokal/config",
-        json={"rezerwacje_online": True},
+        json={
+            "rezerwacje_online": True,
+            "rezerwacje_widget_v2": True,
+            "rezerwacje_rodo_kontakt": "rodo@lokalo.test",
+            "rezerwacje_rodo_adres": "ul. Testowa 1, Warszawa",
+        },
     )
     assert response.status_code == 200, response.text
 
@@ -87,6 +94,34 @@ def _online_create(
     godz_od: str = "18:00",
     headers: dict | None = None,
 ):
+    request_headers = headers if headers is not None else {}
+    fingerprint = hashlib.sha256(
+        f"{BOOKING_DATE}:{godz_od}:{osoby}:{nazwisko}".encode()
+    ).hexdigest()[:20]
+    if "X-Reservation-Hold" not in request_headers:
+        hold = client.post(
+            "/api/online/hold",
+            json={
+                "data": BOOKING_DATE.isoformat(),
+                "godz_od": godz_od,
+                "liczba_osob": osoby,
+            },
+            headers={
+                "X-Reservation-Session": PUBLIC_SESSION,
+                "Idempotency-Key": f"r0b-hold-{fingerprint}",
+            },
+        )
+        if hold.status_code != 201:
+            return hold
+        request_headers["X-Reservation-Session"] = PUBLIC_SESSION
+        request_headers["X-Reservation-Hold"] = hold.json()["hold_token"]
+    request_headers.setdefault(
+        "Idempotency-Key",
+        f"r0b-create-{fingerprint}",
+    )
+    config = client.get("/api/online/widget-config")
+    assert config.status_code == 200, config.text
+    versions = config.json()
     return client.post(
         "/api/online/rezerwacja",
         json={
@@ -94,8 +129,14 @@ def _online_create(
             "godz_od": godz_od,
             "liczba_osob": osoby,
             "nazwisko": nazwisko,
+            "email": f"{fingerprint}@example.test",
+            "privacy_notice_acknowledged": True,
+            "privacy_notice_version": versions["privacy"]["notice_version"],
+            "marketing_consent": False,
+            "marketing_consent_version": versions["marketing"]["version"],
+            "sensitive_data_consent": False,
         },
-        headers=headers,
+        headers=request_headers,
     )
 
 
@@ -261,7 +302,7 @@ def test_public_idempotency_replays_reservation_and_payment_once(admin_client, c
     ).count() == 1
     assert db.query(models.Platnosc).filter_by(termin_id=termin.id).count() == 1
     assert db.query(models.RezerwacjaIdempotencja).filter_by(
-        operation="reservation.create.online:v1",
+        operation="reservation.create.online:v2",
     ).count() == 1
     assert _ledger_counts(db, termin.id) == (120, 1)
 

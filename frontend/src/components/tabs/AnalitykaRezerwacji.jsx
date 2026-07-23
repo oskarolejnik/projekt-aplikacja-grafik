@@ -7,6 +7,8 @@ import { Spinner } from '../ui/Spinner'
 import { Icon } from '../../lib/icons'
 import { api } from '../../lib/api'
 import { warsawDateISO } from '../../lib/date'
+import { useAuth } from '../../context/AuthContext'
+import ReservationRecommendations from './ReservationRecommendations'
 
 const PRESETS = [
   { value: '7', label: '7 dni' },
@@ -20,6 +22,7 @@ const VIEWS = [
   { value: 'timing', label: 'Czas wizyt' },
   { value: 'utilization', label: 'Sale i stoły' },
   { value: 'demand', label: 'Popyt i waitlista' },
+  { value: 'recommendations', label: 'Rekomendacje' },
 ]
 
 const UTILIZATION_TYPES = [
@@ -79,6 +82,7 @@ const formatDelta = (value) => {
 const initialRange = presetRange(30)
 
 export default function AnalitykaRezerwacji() {
+  const { isAdmin, can = () => false } = useAuth()
   const [preset, setPreset] = useState('30')
   const [start, setStart] = useState(initialRange.start)
   const [end, setEnd] = useState(initialRange.end)
@@ -93,6 +97,7 @@ export default function AnalitykaRezerwacji() {
   const [partialErrors, setPartialErrors] = useState([])
   const [updatedAt, setUpdatedAt] = useState(null)
   const [retryVersion, setRetryVersion] = useState(0)
+  const [recommendationNotice, setRecommendationNotice] = useState(null)
   const requestRef = useRef({ generation: 0, controller: null })
   const snapshotKeyRef = useRef(null)
   const snapshotRef = useRef(null)
@@ -120,15 +125,16 @@ export default function AnalitykaRezerwacji() {
       api(`/analityka/oblozenie?${suffix}`, 'GET', null, { signal: controller.signal }),
       api(`/analityka/rezerwacje/operacyjna?${suffix}`, 'GET', null, { signal: controller.signal }),
       api(`/analityka/rezerwacje/popyt?${suffix}`, 'GET', null, { signal: controller.signal }),
+      api(`/analityka/rezerwacje/rekomendacje?${suffix}`, 'GET', null, { signal: controller.signal }),
     ])
     if (controller.signal.aborted || requestRef.current.generation !== generation) return
 
-    const labels = ['podsumowania', 'obłożenia', 'rzeczywistych czasów wizyt', 'utraconego popytu i waitlisty']
+    const labels = ['podsumowania', 'obłożenia', 'rzeczywistych czasów wizyt', 'utraconego popytu i waitlisty', 'rekomendacji']
     const failures = requests
       .map((result, index) => result.status === 'rejected' ? labels[index] : null)
       .filter(Boolean)
-    const [summary, occupancy, operational, demand] = requests.map((result) => result.status === 'fulfilled' ? result.value : null)
-    const hasAnyData = Boolean(summary || occupancy || operational || demand)
+    const [summary, occupancy, operational, demand, recommendations] = requests.map((result) => result.status === 'fulfilled' ? result.value : null)
+    const hasAnyData = Boolean(summary || occupancy || operational || demand || recommendations)
 
     if (hasAnyData) {
       const previous = snapshotKeyRef.current === contextKey ? snapshotRef.current : null
@@ -137,6 +143,7 @@ export default function AnalitykaRezerwacji() {
         occupancy: occupancy ?? previous?.occupancy ?? null,
         operational: operational ?? previous?.operational ?? null,
         demand: demand ?? previous?.demand ?? null,
+        recommendations: recommendations ?? previous?.recommendations ?? null,
       }
       snapshotRef.current = nextSnapshot
       setSnapshot(nextSnapshot)
@@ -167,6 +174,29 @@ export default function AnalitykaRezerwacji() {
   useEffect(() => () => {
     requestRef.current.generation += 1
     requestRef.current.controller?.abort()
+  }, [])
+
+  useEffect(() => {
+    setRecommendationNotice(null)
+  }, [contextKey])
+
+  const handleRecommendationChanged = useCallback((result) => {
+    const decision = String(result?.stan || result?.decyzja || result?.decision || '').toLowerCase()
+    setRecommendationNotice(
+      decision === 'accepted'
+        ? {
+          variant: 'success',
+          text: 'Rekomendacja została przyjęta. Odświeżono listę, a decyzja pozostaje zapisana w historii.',
+        }
+        : decision === 'rejected' ? {
+          variant: 'info',
+          text: 'Rekomendacja została odrzucona. Odświeżono listę, a decyzja pozostaje zapisana w historii.',
+        } : {
+          variant: 'success',
+          text: 'Decyzja została zapisana. Odświeżono listę rekomendacji.',
+        },
+    )
+    setRetryVersion((value) => value + 1)
   }, [])
 
   const selectPreset = (value) => {
@@ -271,6 +301,21 @@ export default function AnalitykaRezerwacji() {
               breakdown={demandBreakdown}
               onBreakdownChange={setDemandBreakdown}
             />
+          ) : null}
+          {view === 'recommendations' ? (
+            <div className="space-y-4">
+              {recommendationNotice ? (
+                <div role="status" aria-live="polite">
+                  <Banner variant={recommendationNotice.variant}>{recommendationNotice.text}</Banner>
+                </div>
+              ) : null}
+              <ReservationRecommendations
+                data={visibleSnapshot.recommendations}
+                range={{ start, end }}
+                canDecide={Boolean(isAdmin || (can('rezerwacje.analityka') && can('rezerwacje.reguly')))}
+                onChanged={handleRecommendationChanged}
+              />
+            </div>
           ) : null}
 
           <Banner variant="info">

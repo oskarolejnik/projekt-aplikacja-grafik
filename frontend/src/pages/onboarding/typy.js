@@ -6,7 +6,7 @@ export const MODULY = [
   { key: 'modul_rezerwacje', ikona: 'pin', label: 'Rezerwacje stolików',
     opis: 'Rezerwacje stolików, baza gości (CRM) i scoring no-show.' },
   { key: 'rezerwacje_online', ikona: 'users', label: 'Widget rezerwacji online', wymaga: 'modul_rezerwacje',
-    opis: 'Publiczny formularz rezerwacji dla gości — bez logowania. Wymaga modułu rezerwacji.' },
+    opis: 'Publiczny formularz dla gości. Włącz go po uzupełnieniu konfiguracji i informacji RODO.' },
   { key: 'modul_imprezy', ikona: 'sparkles', label: 'Imprezy i wesela',
     opis: 'Kalendarz wydarzeń, obsada pod liczbę gości, zadatki, rozliczanie imprez i sal.' },
   { key: 'modul_rozliczenia', ikona: 'clipboard', label: 'Rozliczenia kasowe dnia',
@@ -25,17 +25,17 @@ export const RDZEN = ['Auto-grafik + dyspozycyjność', 'Ewidencja czasu (RCP) �
 // 14 kuratorowanych typów. `moduly` = preset 6 flag. `popularny` → wyżej + znacznik.
 export const TYPY = [
   { id: 'pizzeria', nazwa: 'Pizzeria', ikona: 'menu', popularny: true,
-    opis: 'Grafik pod wieczorne i weekendowe szczyty, rozliczenie utargu z kasy i rezerwacja stolika online dla gości.',
-    moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: true } },
+    opis: 'Grafik pod wieczorne i weekendowe szczyty, rozliczenie utargu z kasy i moduł rezerwacji stolików.',
+    moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: false } },
   { id: 'restauracja-a-la-carte', nazwa: 'Restauracja à la carte', ikona: 'sparkles', popularny: true,
-    opis: 'Klasyczna restauracja na rezerwacjach: stoliki online, żywa sala na POS i domknięta kasa dnia. Od casualu po premium i steakhouse.',
-    moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: true } },
+    opis: 'Klasyczna restauracja na rezerwacjach: baza stolików, żywa sala na POS i domknięta kasa dnia. Od casualu po premium i steakhouse.',
+    moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: false } },
   { id: 'karczma-regionalna', nazwa: 'Karczma / restauracja regionalna', ikona: 'office', popularny: true,
-    opis: 'Pełny profil lokalu grupowo-imprezowego z kuchnią: rezerwacje i widget, imprezy okolicznościowe z zadatkami, POS, rozliczenia i sprzątanie sal.',
-    moduly: { modul_rezerwacje: true, modul_imprezy: true, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: true, rezerwacje_online: true } },
+    opis: 'Pełny profil lokalu grupowo-imprezowego z kuchnią: rezerwacje, imprezy okolicznościowe z zadatkami, POS, rozliczenia i sprzątanie sal.',
+    moduly: { modul_rezerwacje: true, modul_imprezy: true, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: true, rezerwacje_online: false } },
   { id: 'restauracja-z-sala-imprezowa', nazwa: 'Restauracja z salą imprezową', ikona: 'calendar', popularny: false,
     opis: 'Codzienny ruch à la carte z rezerwacjami stolików plus osobna sala na wesela i imprezy zamknięte — dwa modele w jednym.',
-    moduly: { modul_rezerwacje: true, modul_imprezy: true, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: true, rezerwacje_online: true } },
+    moduly: { modul_rezerwacje: true, modul_imprezy: true, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: true, rezerwacje_online: false } },
   { id: 'dom-weselny', nazwa: 'Dom weselny / sala bankietowa', ikona: 'users', popularny: false,
     opis: 'Sprzedaż bloków imprez na sale: wesela i przyjęcia z zadatkami, obsada liczona pod liczbę gości i grafik sprzątania między eventami.',
     moduly: { modul_rezerwacje: false, modul_imprezy: true, modul_rozliczenia: true, modul_pos: false, modul_sprzatanie: true, rezerwacje_online: false } },
@@ -46,11 +46,11 @@ export const TYPY = [
     opis: 'Grafik barmanów pod wieczorne szczyty i mecze, rezerwacja stolika na telefon i rozliczenie utargu zza baru z każdej zmiany.',
     moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: false, modul_sprzatanie: false, rezerwacje_online: false } },
   { id: 'bar-koktajlowy-winiarnia', nazwa: 'Koktajlbar / winiarnia', ikona: 'sparkles', popularny: false,
-    opis: 'Kameralny lokal premium na rezerwacjach: stolik przy barze online, precyzyjny grafik barmanów-specjalistów i rozliczenie co do złotówki.',
-    moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: true } },
+    opis: 'Kameralny lokal premium na rezerwacjach: baza stolików, precyzyjny grafik barmanów-specjalistów i rozliczenie co do złotówki.',
+    moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: false } },
   { id: 'klub-muzyczny', nazwa: 'Klub / dyskoteka', ikona: 'pin', popularny: false,
     opis: 'Duża zmienna ekipa pod eventy, rezerwacje loż VIP, wiele punktów baru na POS i sprzątanie sali po nocy — najbardziej złożony profil.',
-    moduly: { modul_rezerwacje: true, modul_imprezy: true, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: true, rezerwacje_online: true } },
+    moduly: { modul_rezerwacje: true, modul_imprezy: true, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: true, rezerwacje_online: false } },
   { id: 'kawiarnia', nazwa: 'Kawiarnia', ikona: 'bell', popularny: false,
     opis: 'Zmiany baristów, rozliczenie utargu dnia i podgląd kasy z POS. Ruch głównie walk-in, rezerwacja stolika opcjonalnie.',
     moduly: { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: false } },
@@ -69,7 +69,7 @@ export const TYPY = [
 ]
 
 // „Inny / od zera" — sensowny domyślny preset (à la carte) z pełną swobodą.
-export const PRESET_INNY = { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: true }
+export const PRESET_INNY = { modul_rezerwacje: true, modul_imprezy: false, modul_rozliczenia: true, modul_pos: true, modul_sprzatanie: false, rezerwacje_online: false }
 
 export const TYP_PO_ID = Object.fromEntries(TYPY.map((t) => [t.id, t]))
 

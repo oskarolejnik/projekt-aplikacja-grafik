@@ -7,13 +7,17 @@ Gating: moduł rezerwacji (Pro+).
 
 from collections import Counter, defaultdict
 from datetime import date, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import models
 import reservation_demand
 import reservation_operational
+import reservation_recommendations
+import schemas
 import uprawnienia
 from auth import get_current_user
 from database import get_db
@@ -286,6 +290,110 @@ def analityka_rezerwacje_popyt(
     """R7.2: anonimowy odrzucony popyt i lejek waitlisty bez ID, hashy i PII."""
     _waliduj_zakres(start, end)
     return reservation_demand.aggregate_demand(db, start=start, end=end)
+
+
+@router.get(
+    "/api/analityka/rezerwacje/rekomendacje",
+    dependencies=[Depends(_wymagaj_rezerwacje)],
+)
+def analityka_rezerwacje_rekomendacje(
+    start: date = Query(...),
+    end: date = Query(...),
+    db: Session = Depends(get_db),
+):
+    """R7.4: kandydaci wyłącznie z kompletnej, anonimowej próby historycznej."""
+    _waliduj_zakres(start, end)
+    return reservation_recommendations.list_recommendations(db, start, end)
+
+
+@router.post(
+    "/api/analityka/rezerwacje/rekomendacje/{recommendation_hash}/symulacja",
+    dependencies=[Depends(_wymagaj_rezerwacje)],
+)
+def symuluj_rekomendacje_rezerwacji(
+    recommendation_hash: str,
+    dane: schemas.ReservationRecommendationRangeIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Trwały snapshot przed/po; nie zmienia konfiguracji serwisu."""
+    try:
+        result = reservation_recommendations.simulate(
+            db,
+            recommendation_hash,
+            dane.start,
+            dane.end,
+            user,
+        )
+        db.commit()
+        return result
+    except IntegrityError:
+        # Dwie równoległe symulacje tego samego deterministycznego kandydata
+        # zbiegają się do jednego review; druga odpowiedź jest replayem.
+        db.rollback()
+        try:
+            result = reservation_recommendations.simulate(
+                db,
+                recommendation_hash,
+                dane.start,
+                dane.end,
+                user,
+            )
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post(
+    "/api/analityka/rezerwacje/rekomendacje/{recommendation_hash}/decyzja",
+    dependencies=[Depends(_wymagaj_rezerwacje)],
+)
+def zdecyduj_o_rekomendacji_rezerwacji(
+    recommendation_hash: str,
+    dane: schemas.ReservationRecommendationDecisionIn,
+    idempotency_key: Optional[str] = Header(
+        default=None,
+        alias="Idempotency-Key",
+    ),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Jawne accept/reject; konfiguracja zmienia się tylko po aktualnej symulacji."""
+    try:
+        result = reservation_recommendations.decide(
+            db,
+            recommendation_hash,
+            dane,
+            idempotency_key,
+            user,
+        )
+        db.commit()
+        return result
+    except IntegrityError:
+        # Klucz decyzji i review są unikalne. Po wyścigu ponowne wywołanie
+        # zwraca replay albo kontrolowany konflikt domenowy.
+        db.rollback()
+        try:
+            result = reservation_recommendations.decide(
+                db,
+                recommendation_hash,
+                dane,
+                idempotency_key,
+                user,
+            )
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/api/analityka/oblozenie", dependencies=[Depends(_wymagaj_rezerwacje)])

@@ -13,6 +13,7 @@ import Zeszyt from '../components/tabs/Zeszyt'
 import Rezerwacje from '../components/tabs/Rezerwacje'
 import ReservationsWorkspace from '../components/tabs/ReservationsWorkspace'
 import AnalitykaRezerwacji from '../components/tabs/AnalitykaRezerwacji'
+import CrmGoscie from '../components/tabs/CrmGoscie'
 import {
   clearReservationRoute,
   navigateReservationRoute,
@@ -43,6 +44,14 @@ const TABY = [
     Comp: AnalitykaRezerwacji,
     wide: true,
   },
+  {
+    value: 'crm-goscie',
+    label: 'Baza gości',
+    anyPermission: ['rezerwacje.eksport', 'rezerwacje.crm_zarzadzaj'],
+    allPermissions: ['rezerwacje.operacje', 'rezerwacje.dane_kontaktowe'],
+    Comp: CrmGoscie,
+    wide: true,
+  },
 ]
 
 // Panel „Szef" — oversight tylko do odczytu: kto pracuje + godziny (Raport godzin),
@@ -66,6 +75,7 @@ export default function SzefView() {
   const maOperacyjnyDostepRezerwacji = can('rezerwacje.operacje') || can('rezerwacje.host')
   const widoczneTaby = useMemo(() => TABY.filter((tab) => {
     if (tab.legacyReservation && maOperacyjnyDostepRezerwacji) return false
+    if (tab.allPermissions && !tab.allPermissions.every((permission) => can(permission))) return false
     if (tab.anyPermission) return tab.anyPermission.some((permission) => can(permission))
     return can(tab.permission)
   }), [can, maOperacyjnyDostepRezerwacji])

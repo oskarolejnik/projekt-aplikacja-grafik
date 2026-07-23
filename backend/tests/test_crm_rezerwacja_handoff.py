@@ -145,7 +145,8 @@ def test_recepcja_widzi_profil_bez_notatek_i_danych_wrazliwych(admin_client, cli
         "notatka": None,
         "okazja_typ": "urodziny",
         "okazja_data": "05-12",
-        "marketing_zgoda": True,
+        "marketing_zgoda": False,
+        "marketing_legacy_unverified": False,
     }
     assert set(body["ukryte_pola"]) == {
         "profil.tagi", "profil.alergie", "profil.dieta", "profil.notatka",
@@ -275,7 +276,7 @@ def test_dopisanie_kontaktu_migruje_profil_fallbacku(admin_client, db):
     assert admin_client.get(_path(termin)).json()["profil"]["alergie"] == "orzechy"
 
 
-def test_dopisanie_istniejacego_kontaktu_scala_profile_bez_nadpisania_danych(
+def test_dopisanie_istniejacego_kontaktu_nie_scala_profili_automatycznie(
     admin_client,
     db,
 ):
@@ -327,15 +328,26 @@ def test_dopisanie_istniejacego_kontaktu_scala_profile_bez_nadpisania_danych(
     assert response.status_code == 200, response.text
     db.expire_all()
     profiles = db.query(models.ProfilGoscia).all()
-    assert len(profiles) == 1
-    assert profiles[0].tagi == ["staly", "VIP"]
-    assert profiles[0].vip is True
-    assert profiles[0].alergie == "gluten\n---\norzechy"
-    assert profiles[0].dieta == "weganska\n---\ninna"
-    assert profiles[0].notatka == (
-        "Kontakt preferuje cichy stolik\n---\nFallback prosi o miejsce przy oknie"
+    assert len(profiles) == 2
+    contact_profile = next(
+        profile for profile in profiles
+        if profile.klucz_hash == hash_key("+48600777888")
     )
-    assert profiles[0].marketing_zgoda is False
+    fallback_profile = next(
+        profile for profile in profiles
+        if profile.klucz_hash == reservation_fallback_hash(fallback.id)
+    )
+    assert contact_profile.tagi == ["staly"]
+    assert contact_profile.vip is False
+    assert contact_profile.alergie == "gluten"
+    assert contact_profile.dieta == "weganska"
+    assert contact_profile.notatka == "Kontakt preferuje cichy stolik"
+    assert fallback_profile.tagi == ["VIP"]
+    assert fallback_profile.vip is True
+    assert fallback_profile.alergie == "orzechy"
+    assert fallback_profile.dieta == "inna"
+    assert fallback_profile.notatka == "Fallback prosi o miejsce przy oknie"
+    assert db.query(models.CrmGuestMerge).count() == 0
 
 
 def test_zmiana_jedynego_kontaktu_przenosi_profil_bez_sieroty(admin_client, db):

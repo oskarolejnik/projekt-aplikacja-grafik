@@ -1,6 +1,6 @@
 # Roadmapa rezerwacji Lokalo — samodzielny system operacyjny sali
 
-> Status: kierunek zatwierdzony · R0a–R5b wdrożone · R5c gotowe technicznie, lecz wyłączone decyzją właściciela · R6a i R6b.1–R6b.3 wdrożone oraz odebrane automatycznie; otwarte bramy środowiskowe · 19 lipca 2026
+> Status: rdzeń R0a–R8 wdrożony · moduł funkcjonalnie zamknięty · R5c gotowe technicznie, lecz wyłączone do czasu uruchomienia JDG i Stripe · otwarte wyłącznie bramy produkcyjne opisane w R8 · 23 lipca 2026
 >
 > Zakres: administrator, manager, recepcja/host, publiczny widget, CRM i analityka
 >
@@ -85,22 +85,27 @@ Projekt ma więcej gotowych fundamentów, niż pokazuje obecny interfejs.
 - Dopracowany kontrakt interakcji w `RezerwacjeStolik`: lokalne aktualizacje, zachowane szkice,
   jawne pending/error, potwierdzenie destrukcji i przywracanie fokusu.
 
-### Luki krytyczne przed rozbudową UI
+### Historyczne luki krytyczne — zamknięte
+
+Poniższa lista dokumentuje punkt wyjścia roadmapy, a nie aktywny backlog:
 
 1. **Zamknięte w R4/R5a:** publiczny widget korzysta ze wspólnego silnika kombinacji i priorytetów
    oraz trzyma atomowo cały przydzielony zestaw stołów.
-2. Pacing dotyczy startów online; nie opisuje jeszcze całej jednoczesnej pojemności operacyjnej.
-3. **Częściowo zamknięte w R2.1:** sala jest encją z własnym planem i kolejnością; strategia
-   zapełniania oraz limity pozostają w R2.2/R3.
-4. Plan sali nie zaznacza poprawnie wszystkich stołów dodatkowych kombinacji.
+2. **Zamknięte w R3:** pacing obejmuje starty i jednoczesną pojemność operacyjną przez wspólne
+   liczniki obciążenia.
+3. **Zamknięte w R2.1–R3:** sala jest encją z własnym planem i kolejnością, a strategie
+   zapełniania oraz limity są częścią kanonicznej konfiguracji.
+4. **Zamknięte w R0a/R2:** plan sali uwzględnia cały zatwierdzony zestaw stołów kombinacji.
 5. **Zamknięte w R2.2a:** priorytet jawnej kombinacji jest wersjonowany, edytowalny w planie sali
    i wpływa na ocenę kandydata (niższa wartość oznacza wcześniejsze rozpatrywanie).
-6. `Stolik.laczy_sie` i graf sąsiedztwa tworzą dwa potencjalne źródła prawdy.
-7. Edycja lub usunięcie stołu może pozostawić niespójne identyfikatory w polach JSON kombinacji.
+6. **Zamknięte w R0a/R2.2:** wersjonowany graf sąsiedztwa i jawne kombinacje są kanonicznym źródłem
+   topologii, a pola legacy pozostają wyłącznie kontrolowanym adapterem odczytu starszych danych.
+7. **Zamknięte w R0a/R2.2:** edycja, publikacja i usuwanie stołu pilnują integralności kombinacji
+   oraz przyszłych przydziałów.
 8. **Zamknięte w R0b:** sprawdzenie dostępności i zapis są atomowe, a zasoby chroni ledger.
 9. **Zamknięte w R1a:** manager/Recepcja wykonują operacje według granularnych praw zamiast roli admina.
-10. `/api/rezerwacje` i `/api/me/rezerwacje` nadal mogą opierać się na legacy Google Calendar,
-    zamiast na kanonicznej bazie `Termin`.
+10. **Zamknięte w R1b/R8:** `/api/rezerwacje` i `/api/me/rezerwacje` używają kanonicznej bazy
+    `Termin`; runtime legacy/shadow i Google Calendar zostały wycofane.
 11. **Zamknięte w R3/R5a:** ustawienia reguł, kanałów i bezpiecznego widgetu są dostępne w panelu,
     z prostym domyślnym widokiem i konfiguracją RODO per lokal.
 
@@ -915,6 +920,9 @@ wyłącznie faktycznie zweryfikowany zakres oraz jawnie oddziela bramy środowis
   karty z tła.
 - [x] E2E mutacji rezerwacji zapisuje `ReservationAudit.actor_user_id`/`actor_login`; po przełączeniu
   operatora stara sesja dostaje `423` i nie może wykonać kolejnego zapisu.
+
+**Otwarte bramy produkcyjne R8 — nie są zaległym zakresem funkcjonalnym R6a:**
+
 - [ ] Przejść końcowy smoke administratora, managera i recepcji na docelowym urządzeniu/PWA.
 - [ ] Przejść testy współbieżności na PostgreSQL: równoległy unlock, revoke/deactivation podczas
   unlock oraz dwa równoległe nadpisania jednym grantem. Lokalnie brak Postgresa i Dockera.
@@ -1053,28 +1061,79 @@ przed zebraniem wystarczającej próby.
 **Done R7.2:** administrator i uprawniony manager widzą, gdzie oraz dlaczego lokal traci popyt, a skuteczność
 waitlisty jest liczona od zapisu do potwierdzonej wizyty. Dane pozostają bez PII i nie zmieniają reguł lokalu.
 
-Pozostałe checkpointy R7:
+**Stan R7.3 — jakość danych CRM i zarządzanie zgodami (2026-07-23):**
 
-- **R7.3:** kontrolowany eksport, narzędzia jakości danych, łączenie duplikatów i wersjonowane zgody,
-- **R7.4:** rekomendacje z minimalną próbą, symulacja wpływu i jawne przyjęcie albo odrzucenie zmiany.
+- [x] Eksport CSV wymaga osobnego `rezerwacje.eksport`, respektuje redakcję danych i neutralizuje formuły
+  arkusza. Uprawnienia do jakości danych i eksportu nie wynikają już z ogólnego dostępu do CRM.
+- [x] Kandydaci na duplikaty są wykrywani wyłącznie po dokładnym, znormalizowanym telefonie albo e-mailu.
+  Łączenie nie usuwa profilu źródłowego, zachowuje proweniencję i można je odwrócić bez przepisywania
+  historii wizyt. Automatyczna kolizja danych kontaktowych nie scala różnych osób.
+- [x] Zgody są zdarzeniami append-only z wersją treści, zakresem, źródłem, czasem i operatorem. Dawny
+  boolean marketingowy jest prezentowany jako niezweryfikowany fakt historyczny, nigdy jako dowód zgody.
+- [x] Wyszukiwanie, historia i profil gościa są świadome aliasów po kontrolowanym połączeniu; żądanie RODO
+  jednej osoby nie przechodzi automatycznie na dane innej tożsamości.
+- [x] „Baza gości” ma narzędzia jakości, jawne stany pusty/błąd/ponów, eksport i bezpieczne zarządzanie
+  zgodami bez arbitralnego przełącznika marketingowego.
 
-**Done:** administrator rozumie, dlaczego traci dostępność, i może świadomie przyjąć lub odrzucić
-konkretną zmianę reguły.
+**Stan R7.4 — rekomendacje wymagające decyzji człowieka (2026-07-23):**
+
+- [x] Silnik proponuje wyłącznie zmianę turn time dla dokładnego segmentu wielkości grupy. Wymaga minimum
+  20 zakończonych wizyt, co najmniej 70% kompletnych pomiarów, minimum 4 dni serwisu i różnicy co najmniej
+  15 minut; rekomendacja używa 75. percentyla zaokrąglonego w górę do 15 minut.
+- [x] Każdą propozycję można zasymulować na ostatnich 28 dniach wspólnym alokatorem. Wynik pokazuje wpływ
+  na dostępność i odrzucony popyt, nie obiecuje poprawy bez danych i nie zawiera PII.
+- [x] Administrator lub manager z dokładnym uprawnieniem może przyjąć albo odrzucić propozycję. Serwer
+  ponownie waliduje próbę i nieaktualność, zapisuje trwałą decyzję oraz audyt, a retry jest idempotentny.
+- [x] Automat nigdy sam nie zmienia polityki lokalu. Odrzucona lub nieaktualna rekomendacja pozostaje
+  historycznym faktem, a przyjęcie modyfikuje tylko wskazaną regułę.
+
+**Done R7:** administrator rozumie jakość danych, utracony popyt i wykorzystanie zasobów oraz może
+świadomie przyjąć lub odrzucić konkretną, wcześniej zasymulowaną zmianę reguły.
 
 ### R8 — Hardening i rollout
 
 **Cel:** bezpieczne uruchomienie na istniejących lokalach.
 
-- Finalne sterowanie flagami workspace’u, silnika i widgetu wprowadzonymi odpowiednio w R0/R1,
-  R4 i R5; R8 odpowiada za ich rollout i usunięcie ścieżek tymczasowych, nie za późne dodanie flag.
-- Migracja próbna na kopii danych oraz porównanie dostępności starej i nowej ścieżki.
-- Logowanie decyzji silnika bez zapisywania zbędnego PII.
-- Monitoring konfliktów, nadpisań, 409/422, czasu odpowiedzi i niedostarczonych wiadomości.
-- Plan powrotu do poprzedniego UI/silnika bez cofania migracji danych; fallback nadal czyta
-  kanoniczne `Termin` i nigdy nie przywraca Google Calendar jako źródła prawdy.
-- QA admin/manager/recepcja/public, desktop/tablet/mobile, długie dane, offline i błędy.
+- [x] Publiczny widget działa wyłącznie przez kontrakt v2: sesja dostępności, hold, idempotencja i
+  wersjonowana informacja o prywatności. Brak obsługi v2 zamyka ścieżkę bezpiecznie; nie istnieje
+  runtime fallback do v1 ani Google Calendar.
+- [x] Nowy lokal startuje z wyłączonym widgetem. Administrator uruchamia go jawnie dopiero po
+  skonfigurowaniu sal, zasad i publicznej informacji o prywatności.
+- [x] Widoki pracownika, kuchni, recepcji, CRM i analityki mają wspólny język stanów: ładowanie,
+  odświeżanie bez utraty ostatniego wyniku, pusty stan, lokalny błąd i ponowienie. Najważniejsze cele
+  dotykowe mają co najmniej 44 px, a kompaktowe ekrany nie ukrywają operacyjnego kontekstu.
+- [x] Migracja `0068_reservation_closure` domyka tabele zgód, łączeń i decyzji rekomendacji. Adopcja
+  istniejącego schematu jest jawna, częściowy schemat blokuje upgrade, a downgrade z danymi kończy się
+  bez jakiejkolwiek częściowej utraty tabel.
+- [x] Administrator ma PII-free `GET /api/ops/rezerwacje/health`: gotowość schematu, widgetu v2,
+  wersji prywatności, providerów, zagregowanych kolejek i workerów. Endpoint nie wykonuje połączeń
+  do zewnętrznych providerów i rozróżnia `ready`, `attention` oraz `blocked`.
+- [x] Produkcyjny runbook opisuje migrację na kopii, uruchomienie etapami, scenariusze akceptacyjne,
+  monitoring, rollback bez cofania danych i brak powrotu do starej ścieżki rezerwacji.
+- [x] Usunięto nieużywane przełączniki legacy/shadow i konfigurację Google Calendar z przykładowego
+  środowiska produkcyjnego. Stripe pozostaje opcjonalne i wyłączone do decyzji właściciela po JDG.
 
-**Done:** rollout jest stopniowy, mierzalny i odwracalny bez utraty rezerwacji.
+**Weryfikacja końcowa (2026-07-23):**
+
+- [x] Nowe kontrakty R7.3/R7.4/R8: 60/60 testów.
+- [x] Migracje oraz kontrakty publiczne i domenowe: 156/156 testów.
+- [x] Frontend: 69/69 plików i 551/551 testów.
+- [x] Szeroka regresja backendu rezerwacji: 697/697 testów lokalnych przeszło; jeden test
+  współbieżności PostgreSQL pominięto wyłącznie z powodu braku `TEST_POSTGRES_URL`.
+  Po końcowych poprawkach granic CRM/RODO dodatkowy zestaw 79/79 testów przeszedł ponownie.
+  Test wymagający `TEST_POSTGRES_URL` pozostaje otwartą bramą środowiskową, a nie lokalnym sukcesem.
+- [x] Produkcyjny build po ostatnich poprawkach oraz smoke 1366×768 i 390×844 przeszły bez
+  poziomego przepełnienia, z celami operacyjnymi minimum 44 px i bez błędów konsoli. Sprawdzono
+  Dzisiaj, Kalendarz, Bazę, Host, konfigurację sal, CRM, rekomendacje oraz bezpiecznie wyłączony widget.
+
+**Done R8:** rdzeń aplikacyjny jest gotowy do kontrolowanego rolloutu. Do uruchomienia produkcyjnego
+pozostają wyłącznie bramy zależne od docelowego środowiska lub podmiotów zewnętrznych:
+
+- realne konta SMTP/SMS i próba dostarczenia,
+- współbieżność na PostgreSQL przez `TEST_POSTGRES_URL`,
+- smoke na docelowym urządzeniu recepcji oraz instalacja PWA,
+- zaakceptowana przez właściciela/prawnika treść informacji RODO,
+- Stripe i scenariusz płatność–zwrot po uruchomieniu JDG.
 
 ## 10. Zależności i kolejność
 
@@ -1098,27 +1157,27 @@ R1 może rozpocząć budowę wspólnej powłoki i operacji dopiero po R0b. Konfi
 udawać pełnej automatyzacji przed R2–R4. `rezerwacje.nadpisuj_limity` jest widoczne w modelu
 uprawnień wcześniej, lecz realne nadpisanie działa dopiero po evaluatorze R3.
 
-R8 bazowo wymaga R4 i R5a. Jeżeli konkretny rollout obejmuje komunikację, płatności, PIN, host stand
-lub rekomendacje, musi dodatkowo czekać odpowiednio na R5b, R5c, R6a, R6b lub R7. R7 nie jest
-samodzielną bramką wdrożenia widgetu ani silnika.
+R8 bazowo wymaga R4 i R5a. Zależności R5b, R6a, R6b i R7 są wdrożone. R5c pozostaje technicznie
+gotowe, ale wyłączone do czasu uruchomienia JDG i gotowości konta Stripe; nie blokuje to pracy lokalnej,
+telefonicznej, recepcyjnej ani widgetu bez zadatku.
 
-## 11. Pierwszy batch do wdrożenia
+## 11. Pierwszy batch kontrolowanego rolloutu
 
-Najbezpieczniejszy pierwszy checkpoint to **R0a — Kanoniczne dane i integralność kombinacji**.
+R0a–R8 są już wdrożone. Najbezpieczniejszy następny batch nie dodaje kolejnej funkcji, tylko
+uruchamia jeden lokal pilotażowy według `docs/REZERWACJE-CUTOVER.md`:
 
-Proponowany zakres jednego PR/commita:
+1. Wybrać lokal i właściciela odbioru.
+2. Odtworzyć aktualną kopię jego bazy w środowisku próbnym i przejść migrację do `head`.
+3. Skonfigurować sale, stoły, kombinacje, serwisy, limity i politykę prywatności.
+4. Przejść macierz uprawnień oraz scenariusze ręczne, hosta, waitlisty, CRM i rekomendacji.
+5. Potwierdzić raport `/api/ops/rezerwacje/health` i świadomie rozstrzygnąć każde `attention`.
+6. Opublikować widget dopiero po spełnieniu jego bram v2; nie włączać zadatków bez Stripe.
+7. Obserwować pierwszą zmianę i używać wyłącznie rollbacku kanonicznego — bez legacy,
+   shadow-read ani Google Calendar.
 
-1. Test regresji: kombinacja zajmuje wszystkie stoły na planie.
-2. Naprawa planu sali dla `stoliki_dodatkowe`.
-3. Test i naprawa edycji rezerwacji: ręczny stół czyści poprzednią kombinację i flagę auto.
-4. Test i bezpieczna obsługa usuwania stołu użytego w kombinacji.
-5. Podłączenie `KombinacjaStolow.priorytet` do oceny silnika.
-6. Migracja identyfikatora źródła oraz narzędzie raportu/importu legacy z testem idempotencji.
-7. Flaga shadow-read i raport różnic przed wyznaczeniem daty cutoveru.
-
-Ten batch jest weryfikowalny i usuwa błędy, które byłyby bardzo trudne do diagnozowania po
-zbudowaniu nowego UI. Bezpośrednio po nim powstaje osobny checkpoint R0b z atomowym zapisem oraz
-idempotencją; dopiero wtedy wolno rozpocząć R1a.
+Wynik pilotażu zamyka odbiór środowiskowy konkretnego lokalu. Nie otwiera ponownie zakończonych
+checkpointów funkcjonalnych ani nie zastępuje zewnętrznych prób SMTP/SMS, PostgreSQL, PWA,
+produkcyjnej informacji RODO i Stripe.
 
 ## 12. Bramka jakości każdego etapu
 
@@ -1172,19 +1231,13 @@ Metryki nie mogą zawierać numeru telefonu, e-maila, alergii ani pełnego nazwi
 - Nie budujemy dekoracyjnego planu 3D przed poprawnym modelem danych i dostępnością.
 - Nie mieszamy konfiguracji trwałej z ekranem codziennej pracy recepcji.
 
-## 15. Następna decyzja wykonawcza
+## 15. Stan końcowy i następna decyzja
 
-R0a–R5b są zamkniętymi checkpointami. R5c jest technicznie gotowe, lecz zgodnie z decyzją właściciela
-pozostaje wyłączone do czasu uruchomienia JDG i gotowości merchant. Nie spełnia jeszcze bramy
-produkcyjnej, ale odłożona integracja Stripe nie blokuje niezależnego R6a.
+R0a–R8 są zamkniętymi checkpointami funkcjonalnymi. Moduł rezerwacji ma jeden kanoniczny model danych,
+wspólny silnik dla recepcji, hosta i widgetu, konfigurowalne sale oraz łączenia stołów, pacing, waitlistę,
+CRM, analitykę, rekomendacje z akceptacją człowieka, wersjonowane zgody i operacyjną kontrolę gotowości.
+Nie ma kolejnego zaległego etapu funkcjonalnego tej roadmapy.
 
-R6b.1–R6b.3 oraz R7.1–R7.2 są zamkniętymi checkpointami. Najbliższy niezależny krok produktowy to
-**R7.3 — kontrolowany eksport i jakość danych CRM**: eksport musi respektować dokładne uprawnienia,
-retencję, redakcję oraz audyt; łączenie duplikatów powinno być odwracalne i nie może mieszać historii
-różnych osób, a wersjonowane zgody muszą zachować źródło, zakres i czas pozyskania. R7.2 pozostaje warstwą
-faktów i agregatów bez PII — nie uruchamia rekomendacji ani nie zmienia reguł lokalu automatycznie. Smoke
-docelowego urządzenia i współbieżność PostgreSQL pozostają bramami rolloutowymi R6a/R6b, nie nowym zakresem
-funkcjonalnym.
-
-Produkcyjne testy Stripe płatność–zwrot wrócą dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
+Następna decyzja dotyczy już wdrożenia: właściciel wybiera lokal pilotażowy i domyka bramy środowiskowe
+z R8. Stripe wraca do odbioru płatność–zwrot dopiero po gotowości JDG. Rozliczanie subskrypcji Lokalo
 pozostaje osobnym kontekstem i nie może ponownie używać stanu, webhooków ani modeli płatności rezerwacji.

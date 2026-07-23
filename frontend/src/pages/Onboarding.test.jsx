@@ -43,7 +43,7 @@ describe('Kreator lokalu (Onboarding)', () => {
     // Zapis wysyła typ + preset modułów.
     fireEvent.click(screen.getByText(/Zapisz i wejdź/))
     await waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith('/lokal/config', 'PUT', expect.objectContaining({ typ_lokalu: 'pizzeria', modul_imprezy: false, rezerwacje_online: true })))
+      expect(apiMock).toHaveBeenCalledWith('/lokal/config', 'PUT', expect.objectContaining({ typ_lokalu: 'pizzeria', modul_imprezy: false, rezerwacje_online: false })))
   })
 
   it('walidacja: bez danych nie woła bootstrap', () => {

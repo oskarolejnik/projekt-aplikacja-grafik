@@ -15,8 +15,9 @@ import models
 import reservation_communication as communication
 import reservation_audit
 import reservation_service
-from crm_identity import hash_key, reservation_fallback_hash
+from crm_identity import hash_key, identity_hash, reservation_fallback_hash
 from deps import get_lokal_config, utcnow_naive
+from routers import rodo as rodo_router
 from sms import _normalizuj_numer
 
 TEL = "600 100 200"
@@ -76,7 +77,13 @@ def _zgoda(
     waitlist_id=None,
     sensitive=True,
     retention_until=None,
+    freeze_subject=True,
 ):
+    owner = (
+        db.get(models.Termin, termin_id)
+        if termin_id is not None
+        else db.get(models.ListaOczekujacych, waitlist_id)
+    )
     zgoda = models.RezerwacjaZgodaPubliczna(
         termin_id=termin_id,
         waitlist_id=waitlist_id,
@@ -91,6 +98,7 @@ def _zgoda(
         sensitive_data="alergia na orzechy" if sensitive else None,
         retention_until=retention_until or now + timedelta(days=365),
         ip_hash="i" * 64,
+        subject_hash=identity_hash(owner) if freeze_subject and owner else None,
         created_at=now,
     )
     db.add(zgoda)
@@ -374,6 +382,236 @@ def test_rodo_rezerwacji_nie_ujawnia_hashy_i_usuwa_publiczne_sekrety(admin_clien
     assert db.query(models.RezerwacjaStolikClaim).count() == 0
 
 
+def test_rodo_frozen_governance_nie_przechodzi_z_a_na_b(admin_client, db):
+    now = datetime.now()
+    termin = _termin(
+        db,
+        data=date.today(),
+        nazwisko="Kontakt A",
+        telefon="700 610 101",
+    )
+    target = _termin(
+        db,
+        data=date.today() + timedelta(days=1),
+        nazwisko="Cel scalenia",
+        telefon="700 610 303",
+    )
+    subject_a = identity_hash(termin)
+    subject_target = identity_hash(target)
+    frozen_public = _zgoda(db, now=now, termin_id=termin.id)
+    legacy_public = _zgoda(
+        db,
+        now=now,
+        termin_id=termin.id,
+        freeze_subject=False,
+    )
+    manual = models.CrmConsentEvent(
+        subject_hash=subject_a,
+        purpose="marketing",
+        decision="grant",
+        document_version=main.PUBLIC_MARKETING_CONSENT_VERSION,
+        source="operator_in_person",
+        captured_at=now,
+        termin_id=termin.id,
+        actor_login="admin_test",
+        event_key_hash="a" * 64,
+        request_fingerprint="b" * 64,
+        created_at=now,
+    )
+    merge = models.CrmGuestMerge(
+        source_hash=subject_a,
+        target_hash=subject_target,
+        source_reservation_id=termin.id,
+        target_reservation_id=target.id,
+        evidence={"types": ["exact_email"]},
+        reason_code="duplicate_confirmed",
+        status="active",
+        version=1,
+        create_key_hash="c" * 64,
+        created_by_login="admin_test",
+        created_at=now,
+    )
+    db.add_all([manual, merge])
+    db.commit()
+    frozen_public_id = frozen_public.id
+    legacy_public_id = legacy_public.id
+    manual_id = manual.id
+    merge_id = merge.id
+
+    termin.telefon = "700 610 202"
+    db.commit()
+
+    export_b = admin_client.post(
+        "/api/rodo/eksport-gosc",
+        json={"klucz": _normalizuj_numer("700 610 202")},
+    )
+    assert export_b.status_code == 200, export_b.text
+    assert export_b.json()["liczba_rezerwacji"] == 1
+    privacy_b = export_b.json()["prywatnosc"]
+    assert privacy_b["zgody"] == []
+    assert privacy_b["zgody_operatora"] == []
+    assert privacy_b["scalenia_crm"] == []
+
+    # A nie ma już bieżącego Termin, ale nadal może pobrać własne zamrożone fakty.
+    export_a = admin_client.post(
+        "/api/rodo/eksport-gosc",
+        json={"klucz": _normalizuj_numer("700 610 101")},
+    )
+    assert export_a.status_code == 200, export_a.text
+    assert export_a.json()["liczba_rezerwacji"] == 0
+    privacy_a = export_a.json()["prywatnosc"]
+    assert [row["id"] for row in privacy_a["zgody_operatora"]] == [manual_id]
+    assert privacy_a["zgody_operatora"][0]["rezerwacja_id"] is None
+    assert len(privacy_a["zgody"]) == 1
+    assert privacy_a["zgody"][0]["wlasciciel_id"] is None
+    assert privacy_a["scalenia_crm"][0]["id"] == merge_id
+    assert privacy_a["scalenia_crm"][0]["rola_podmiotu"] == ["source"]
+    assert subject_a not in export_a.text
+    # Legacy NULL jest nieprzypisywalne i pozostaje niewidoczne dla obu osób.
+    assert legacy_public_id not in {
+        row.get("id") for row in privacy_a["zgody"]
+    }
+
+    erased_b = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": _normalizuj_numer("700 610 202")},
+    )
+    assert erased_b.status_code == 200, erased_b.text
+    db.expire_all()
+    assert db.get(models.RezerwacjaZgodaPubliczna, frozen_public_id) is not None
+    assert db.get(models.RezerwacjaZgodaPubliczna, legacy_public_id) is not None
+    assert db.get(models.CrmConsentEvent, manual_id) is not None
+    assert db.get(models.CrmGuestMerge, merge_id) is not None
+
+    # Erasure A działa bez aktualnego ownera i nie narusza danych celu scalenia.
+    erased_a = admin_client.post(
+        "/api/rodo/anonimizuj-gosc",
+        json={"klucz": _normalizuj_numer("700 610 101")},
+    )
+    assert erased_a.status_code == 200, erased_a.text
+    assert erased_a.json()["zanonimizowano_lacznie"] == 0
+    db.expire_all()
+    assert db.get(models.RezerwacjaZgodaPubliczna, frozen_public_id) is None
+    assert db.get(models.RezerwacjaZgodaPubliczna, legacy_public_id) is not None
+    assert db.get(models.CrmConsentEvent, manual_id) is None
+    assert db.get(models.CrmGuestMerge, merge_id) is None
+    assert db.get(models.Termin, target.id).telefon == "700 610 303"
+
+
+def test_retencja_nie_uzywa_mutable_owner_id_dla_frozen_lub_legacy_zgody(
+    admin_client,
+    db,
+):
+    now = utcnow_naive()
+    cfg = get_lokal_config(db)
+    cfg.rezerwacje_retencja_dni = 365
+    frozen = _termin(
+        db,
+        data=now.date() - timedelta(days=45),
+        nazwisko="Frozen A",
+        telefon="700 620 101",
+        status="odbyla",
+    )
+    legacy = _termin(
+        db,
+        data=now.date() - timedelta(days=45),
+        nazwisko="Legacy A",
+        telefon="700 620 301",
+        status="odbyla",
+    )
+    _zgoda(
+        db,
+        now=now - timedelta(days=50),
+        termin_id=frozen.id,
+        retention_until=now - timedelta(seconds=1),
+    )
+    _zgoda(
+        db,
+        now=now - timedelta(days=50),
+        termin_id=legacy.id,
+        retention_until=now - timedelta(seconds=1),
+        freeze_subject=False,
+    )
+    db.commit()
+
+    frozen.telefon = "700 620 202"
+    legacy.telefon = "700 620 302"
+    db.commit()
+
+    response = admin_client.post("/api/rodo/retencja")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["usunieto_zgody_publiczne_wygasle"] == 2
+    db.expire_all()
+    assert db.get(models.Termin, frozen.id).nazwisko == "Frozen A"
+    assert db.get(models.Termin, frozen.id).telefon == "700 620 202"
+    assert db.get(models.Termin, legacy.id).nazwisko == "Legacy A"
+    assert db.get(models.Termin, legacy.id).telefon == "700 620 302"
+    assert db.query(models.RezerwacjaZgodaPubliczna).count() == 0
+
+
+def test_owner_cleanup_self_service_nie_kasuje_obcego_frozen_subject(db):
+    now = utcnow_naive()
+    termin = _termin(
+        db,
+        data=now.date(),
+        nazwisko="Self service A",
+        telefon="700 630 101",
+    )
+    frozen_a = _zgoda(db, now=now, termin_id=termin.id)
+    legacy = _zgoda(
+        db,
+        now=now,
+        termin_id=termin.id,
+        freeze_subject=False,
+    )
+    db.commit()
+    frozen_a_id = frozen_a.id
+    legacy_id = legacy.id
+
+    termin.telefon = "700 630 202"
+    db.commit()
+
+    # To jest kolejność używana przez publiczną ścieżkę data:delete w main.py.
+    rodo_router.usun_powiazane_pii_rezerwacji(db, [termin])
+    rodo_router.usun_powiazane_publiczne_sekrety(
+        db,
+        [termin.id],
+        preserve_management_token_ids={999_999},
+    )
+    db.commit()
+
+    db.expire_all()
+    assert db.get(models.RezerwacjaZgodaPubliczna, frozen_a_id) is not None
+    assert db.get(models.RezerwacjaZgodaPubliczna, legacy_id) is None
+
+
+def test_hard_delete_fail_closed_dla_obcego_frozen_subject(admin_client, db):
+    now = utcnow_naive()
+    termin = _termin(
+        db,
+        data=now.date(),
+        nazwisko="Hard delete A",
+        telefon="700 640 101",
+    )
+    frozen_a = _zgoda(db, now=now, termin_id=termin.id)
+    db.commit()
+    termin_id = termin.id
+    consent_id = frozen_a.id
+
+    termin.telefon = "700 640 202"
+    db.commit()
+
+    response = admin_client.delete(f"/api/rezerwacje-stolik/{termin_id}")
+
+    assert response.status_code == 409, response.text
+    assert "700 640 101" not in response.text
+    assert "700 640 202" not in response.text
+    db.expire_all()
+    assert db.get(models.Termin, termin_id) is not None
+    assert db.get(models.RezerwacjaZgodaPubliczna, consent_id) is not None
+
+
 def test_retencja_anonimizuje_stare_zamkniete(admin_client, db):
     stary = _termin(db, data=date.today() - timedelta(days=800), status="odbyla")   # ~2,2 roku
     _old_override_audit, old_context = _override_audit(db, stary)
@@ -478,8 +716,16 @@ def test_retencja_z_configu_czysci_stare_dane_i_zachowuje_aktywny_hold(admin_cli
     stolik = models.Stolik(nazwa="R-retencja", pojemnosc=6, aktywny=True, kolejnosc=0)
     db.add_all([stara_waitlista, swieza_waitlista, stolik])
     db.flush()
-    _zgoda(db, now=now - timedelta(days=90), termin_id=stary.id)
-    _zgoda(db, now=now - timedelta(days=90), waitlist_id=stara_waitlista.id)
+    zgoda_starej_rezerwacji = _zgoda(
+        db,
+        now=now - timedelta(days=90),
+        termin_id=stary.id,
+    )
+    zgoda_starej_waitlisty = _zgoda(
+        db,
+        now=now - timedelta(days=90),
+        waitlist_id=stara_waitlista.id,
+    )
     db.add(models.RezerwacjaTokenZarzadzania(
         termin_id=swiezy.id,
         token_hash="x" * 64,

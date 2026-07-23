@@ -1816,6 +1816,12 @@ def start_worker() -> None:
         _thread.start()
 
 
+def worker_running() -> bool:
+    """Return the delivery-loop liveness without exposing mutable worker state."""
+    with _state_lock:
+        return bool(_thread is not None and _thread.is_alive())
+
+
 def stop_worker() -> None:
     global _thread
     with _state_lock:

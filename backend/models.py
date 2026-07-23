@@ -2173,6 +2173,7 @@ class RezerwacjaZgodaPubliczna(Base):
         Index("ix_rezerwacje_zgody_publiczne_termin_id", "termin_id"),
         Index("ix_rezerwacje_zgody_publiczne_waitlist_id", "waitlist_id"),
         Index("ix_rezerwacje_zgody_publiczne_retention_until", "retention_until"),
+        Index("ix_rezerwacje_zgody_publiczne_subject_hash", "subject_hash"),
     )
     id = Column(Integer, primary_key=True)
     termin_id = Column(
@@ -2192,6 +2193,9 @@ class RezerwacjaZgodaPubliczna(Base):
     sensitive_data = Column(EncryptedText(), nullable=True)
     retention_until = Column(DateTime, nullable=False)
     ip_hash = Column(String(64), nullable=False)
+    # Niezmienny, jednokierunkowy identyfikator osoby z chwili zebrania zgody.
+    # Historyczne rekordy pozostają NULL i nie są traktowane jako aktywny opt-in.
+    subject_hash = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False)
 
 
@@ -2476,6 +2480,246 @@ class ProfilGoscia(Base):
     marketing_zgoda    = Column(Boolean, nullable=False, default=False)    # podstawa przypomnień o okazjach
     utworzono_at       = Column(DateTime, nullable=True)
     zaktualizowano_at  = Column(DateTime, nullable=True)
+
+
+class CrmConsentEvent(Base):
+    """Append-only proof of a CRM marketing-consent decision.
+
+    ``subject_hash`` is the same one-way CRM identity reference used by
+    ``ProfilGoscia``.  Public widget proofs stay in their original owner table;
+    this table records explicit operator events (grant/decline/withdraw) and
+    survives owner deletion without retaining raw contact data.
+    """
+    __tablename__ = "crm_consent_events"
+    __table_args__ = (
+        CheckConstraint(
+            "length(subject_hash) = 64",
+            name="ck_crm_consent_events_subject_hash",
+        ),
+        CheckConstraint(
+            "purpose = 'marketing'",
+            name="ck_crm_consent_events_purpose",
+        ),
+        CheckConstraint(
+            "decision IN ('grant', 'decline', 'withdraw')",
+            name="ck_crm_consent_events_decision",
+        ),
+        CheckConstraint(
+            "source IN ('operator_phone', 'operator_in_person', "
+            "'operator_email', 'import')",
+            name="ck_crm_consent_events_source",
+        ),
+        CheckConstraint(
+            "length(trim(document_version)) > 0",
+            name="ck_crm_consent_events_document_version",
+        ),
+        CheckConstraint(
+            "event_key_hash IS NULL OR length(event_key_hash) = 64",
+            name="ck_crm_consent_events_event_key_hash",
+        ),
+        CheckConstraint(
+            "length(request_fingerprint) = 64",
+            name="ck_crm_consent_events_request_fingerprint",
+        ),
+        UniqueConstraint(
+            "event_key_hash",
+            name="uq_crm_consent_events_event_key_hash",
+        ),
+        Index(
+            "ix_crm_consent_events_subject_captured",
+            "subject_hash", "captured_at",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    subject_hash = Column(String(64), nullable=False)
+    purpose = Column(
+        String(32), nullable=False, default="marketing",
+        server_default="marketing",
+    )
+    decision = Column(String(16), nullable=False)
+    document_version = Column(String(64), nullable=False)
+    source = Column(String(32), nullable=False)
+    captured_at = Column(DateTime, nullable=False)
+    termin_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True,
+    )
+    waitlist_id = Column(
+        Integer,
+        ForeignKey("lista_oczekujacych.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    actor_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    actor_login = Column(String(64), nullable=True)
+    event_key_hash = Column(String(64), nullable=True)
+    request_fingerprint = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class CrmGuestMerge(Base):
+    """Reversible, non-destructive link between two CRM identities.
+
+    No profile or reservation row is copied or deleted.  Reads fold active
+    source identities into the target; undo only deactivates this edge.
+    """
+    __tablename__ = "crm_guest_merges"
+    __table_args__ = (
+        CheckConstraint(
+            "length(source_hash) = 64 AND length(target_hash) = 64",
+            name="ck_crm_guest_merges_hashes",
+        ),
+        CheckConstraint(
+            "source_hash <> target_hash",
+            name="ck_crm_guest_merges_distinct",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'reverted')",
+            name="ck_crm_guest_merges_status",
+        ),
+        CheckConstraint(
+            "reason_code IN ('duplicate_confirmed', 'operator_correction')",
+            name="ck_crm_guest_merges_reason_code",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_crm_guest_merges_version",
+        ),
+        CheckConstraint(
+            "length(create_key_hash) = 64",
+            name="ck_crm_guest_merges_create_key_hash",
+        ),
+        CheckConstraint(
+            "revert_key_hash IS NULL OR length(revert_key_hash) = 64",
+            name="ck_crm_guest_merges_revert_key_hash",
+        ),
+        UniqueConstraint(
+            "create_key_hash",
+            name="uq_crm_guest_merges_create_key_hash",
+        ),
+        UniqueConstraint(
+            "revert_key_hash",
+            name="uq_crm_guest_merges_revert_key_hash",
+        ),
+        Index(
+            "uq_crm_guest_merges_active_source",
+            "source_hash",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index("ix_crm_guest_merges_target_status", "target_hash", "status"),
+    )
+    id = Column(Integer, primary_key=True)
+    source_hash = Column(String(64), nullable=False)
+    target_hash = Column(String(64), nullable=False)
+    source_reservation_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True,
+    )
+    target_reservation_id = Column(
+        Integer, ForeignKey("terminy.id", ondelete="SET NULL"), nullable=True,
+    )
+    evidence = Column(JSON, nullable=False)
+    reason_code = Column(String(32), nullable=False)
+    status = Column(
+        String(16), nullable=False, default="active", server_default="active",
+    )
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    create_key_hash = Column(String(64), nullable=False)
+    revert_key_hash = Column(String(64), nullable=True)
+    created_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    created_by_login = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    reverted_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    reverted_by_login = Column(String(64), nullable=True)
+    reverted_at = Column(DateTime, nullable=True)
+
+
+class ReservationRecommendationReview(Base):
+    """Durable, PII-free simulation and explicit decision for one recommendation."""
+    __tablename__ = "reservation_recommendation_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "length(recommendation_hash) = 64 AND length(simulation_hash) = 64",
+            name="ck_reservation_recommendation_reviews_hashes",
+        ),
+        CheckConstraint(
+            "kind = 'turn_time'",
+            name="ck_reservation_recommendation_reviews_kind",
+        ),
+        CheckConstraint(
+            "segment IN ('1-2', '3-4', '5+')",
+            name="ck_reservation_recommendation_reviews_segment",
+        ),
+        CheckConstraint(
+            "status IN ('simulated', 'accepted', 'rejected')",
+            name="ck_reservation_recommendation_reviews_status",
+        ),
+        CheckConstraint(
+            "period_end >= period_start",
+            name="ck_reservation_recommendation_reviews_period",
+        ),
+        CheckConstraint(
+            "decision_key_hash IS NULL OR length(decision_key_hash) = 64",
+            name="ck_reservation_recommendation_reviews_decision_key",
+        ),
+        CheckConstraint(
+            "decision_fingerprint IS NULL OR length(decision_fingerprint) = 64",
+            name="ck_reservation_recommendation_reviews_decision_fingerprint",
+        ),
+        UniqueConstraint(
+            "recommendation_hash",
+            name="uq_reservation_recommendation_reviews_recommendation_hash",
+        ),
+        UniqueConstraint(
+            "simulation_hash",
+            name="uq_reservation_recommendation_reviews_simulation_hash",
+        ),
+        UniqueConstraint(
+            "decision_key_hash",
+            name="uq_reservation_recommendation_reviews_decision_key_hash",
+        ),
+        Index(
+            "ix_reservation_recommendation_reviews_service_created",
+            "service_id", "created_at",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    recommendation_hash = Column(String(64), nullable=False)
+    simulation_hash = Column(String(64), nullable=False)
+    kind = Column(
+        String(32), nullable=False, default="turn_time", server_default="turn_time",
+    )
+    service_id = Column(
+        Integer,
+        ForeignKey("godziny_otwarcia.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    segment = Column(String(8), nullable=False)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    recommendation = Column(JSON, nullable=False)
+    simulation = Column(JSON, nullable=False)
+    status = Column(
+        String(16), nullable=False, default="simulated", server_default="simulated",
+    )
+    simulated_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    simulated_by_login = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    decision_reason = Column(String(64), nullable=True)
+    decision_key_hash = Column(String(64), nullable=True)
+    decision_fingerprint = Column(String(64), nullable=True)
+    decided_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    decided_by_login = Column(String(64), nullable=True)
+    decided_at = Column(DateTime, nullable=True)
 
 
 class AuditLog(Base):

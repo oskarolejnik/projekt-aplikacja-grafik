@@ -2,6 +2,8 @@
 
 from datetime import date, timedelta
 
+from public_widget_v2_helpers import enable_widget_v2, public_create_v2
+
 
 def _przyszly_poniedzialek():
     dzis = date.today()
@@ -13,7 +15,7 @@ PON = PON_DATA.isoformat()
 
 
 def _online(admin_client):
-    admin_client.put("/api/lokal/config", json={"rezerwacje_online": True})
+    enable_widget_v2(admin_client)
     serwis = admin_client.post("/api/godziny-otwarcia", json={
         "dzien_tygodnia": PON_DATA.weekday(),
         "godz_od": "12:00",
@@ -38,7 +40,13 @@ def _rez_reczna(admin_client, osoby=2, nazwisko="Gość"):
 def test_zadatek_online_tworzy_platnosc_sandbox(admin_client, client):
     _online(admin_client); _stolik(admin_client)
     admin_client.put("/api/lokal/config", json={"zadatek_wymagany": True, "zadatek_kwota_os": 20, "zadatek_prog_osob": 4})
-    r = client.post("/api/online/rezerwacja", json={"data": PON, "godz_od": "18:00", "liczba_osob": 4, "nazwisko": "Grupa"})
+    r = public_create_v2(
+        client,
+        data=PON,
+        godz_od="18:00",
+        liczba_osob=4,
+        nazwisko="Grupa",
+    )
     assert r.status_code == 201, r.text
     pl = r.json()["platnosc"]
     assert pl["kwota"] == 80.0 and pl["status"] == "oczekuje" and "/?platnosc=" in pl["link"]   # 20 zł × 4 os.
@@ -47,13 +55,25 @@ def test_zadatek_online_tworzy_platnosc_sandbox(admin_client, client):
 def test_zadatek_ponizej_progu_brak(admin_client, client):
     _online(admin_client); _stolik(admin_client)
     admin_client.put("/api/lokal/config", json={"zadatek_wymagany": True, "zadatek_kwota_os": 20, "zadatek_prog_osob": 6})
-    r = client.post("/api/online/rezerwacja", json={"data": PON, "godz_od": "18:00", "liczba_osob": 2, "nazwisko": "Para"})
+    r = public_create_v2(
+        client,
+        data=PON,
+        godz_od="18:00",
+        liczba_osob=2,
+        nazwisko="Para",
+    )
     assert r.status_code == 201 and "platnosc" not in r.json()   # 2 < próg 6
 
 
 def test_zadatek_wylaczony_domyslnie_brak(admin_client, client):
     _online(admin_client); _stolik(admin_client)                 # zadatek_wymagany = False (default)
-    r = client.post("/api/online/rezerwacja", json={"data": PON, "godz_od": "18:00", "liczba_osob": 4, "nazwisko": "X"})
+    r = public_create_v2(
+        client,
+        data=PON,
+        godz_od="18:00",
+        liczba_osob=4,
+        nazwisko="X",
+    )
     assert r.status_code == 201 and "platnosc" not in r.json()
 
 

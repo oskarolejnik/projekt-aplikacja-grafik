@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, nowyKluczIdempotencji } from '../lib/api'
 import { useBranding } from '../context/BrandingContext'
 import { useToast } from '../components/ui/Toast'
+import { Button } from '../components/ui/Button'
 import { Logo } from '../components/Logo'
 import PublicReservationSearch from '../components/reservations/PublicReservationSearch'
 import PublicReservationDetails from '../components/reservations/PublicReservationDetails'
@@ -16,7 +17,6 @@ import {
   publicPaymentNeedsPolling,
 } from '../lib/publicPaymentPolling'
 import {
-  LEGACY_WIDGET_CONFIG,
   availablePublicSlots,
   buildConsentPayload,
   buildPublicReservationSubmit,
@@ -58,6 +58,8 @@ export default function RezerwacjaWidget() {
   const today = warsawTodayISO()
 
   const [config, setConfig] = useState(null)
+  const [configError, setConfigError] = useState('')
+  const [configRetry, setConfigRetry] = useState(0)
   const [step, setStep] = useState('search')
   const [mode, setMode] = useState('booking')
   const [date, setDate] = useState(today)
@@ -102,13 +104,27 @@ export default function RezerwacjaWidget() {
 
   useEffect(() => {
     const controller = new AbortController()
+    setConfig(null)
+    setConfigError('')
     api('/online/widget-config', 'GET', null, { signal: controller.signal })
-      .then((value) => setConfig(normalizeWidgetConfig(value)))
+      .then((value) => {
+        const nextConfig = normalizeWidgetConfig(value)
+        if (nextConfig.version !== 2) {
+          throw new Error('Bezpieczny formularz rezerwacji nie jest dostępny.')
+        }
+        setConfig(nextConfig)
+      })
       .catch((error) => {
-        if (!isAbortError(error)) setConfig(LEGACY_WIDGET_CONFIG)
+        if (!isAbortError(error)) {
+          if (error?.status === 404) {
+            setConfig(normalizeWidgetConfig({ version: 2, ready: false }))
+            return
+          }
+          setConfigError(error?.message || 'Nie udało się sprawdzić konfiguracji rezerwacji.')
+        }
       })
     return () => controller.abort()
-  }, [])
+  }, [configRetry])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -269,17 +285,6 @@ export default function RezerwacjaWidget() {
   }
 
   const loadAlternatives = useCallback(async (controller, requestDate, requestPeople) => {
-    if (config.version === 1) {
-      const nearest = await api(
-        `/online/najblizszy-termin?od=${query(requestDate)}&osoby=${requestPeople}&dni=14`,
-        'GET',
-        null,
-        { signal: controller.signal },
-      )
-      return nearest?.data && nearest?.slot
-        ? [{ data: nearest.data, ...nearest.slot }]
-        : []
-    }
     const response = await api(
       `/online/alternatywy?data=${query(requestDate)}&osoby=${requestPeople}&limit=3`,
       'GET',
@@ -287,7 +292,7 @@ export default function RezerwacjaWidget() {
       { signal: controller.signal },
     )
     return response?.alternatywy || []
-  }, [config])
+  }, [])
 
   const recordRejectedDemand = useCallback((requestDate, requestPeople) => {
     void api('/online/popyt/odrzucony', 'POST', {
@@ -367,15 +372,6 @@ export default function RezerwacjaWidget() {
     }
     setSlotError('')
     setHoldExpired(false)
-
-    if (config.version === 1) {
-      setDate(nextSelection.data)
-      setSelection(nextSelection)
-      setMode('booking')
-      setStep('details')
-      setAnnouncement(`Wybrano godzinę ${nextSelection.godz_od}.`)
-      return
-    }
 
     const body = {
       data: nextSelection.data,
@@ -460,7 +456,7 @@ export default function RezerwacjaWidget() {
   const submitReservation = async (event) => {
     event.preventDefault()
     if (busy || !selection) return
-    const errors = validatePublicGuestForm(form, { requireContact: config.version === 2 })
+    const errors = validatePublicGuestForm(form, { requireContact: true })
     setFormErrors(errors)
     if (Object.keys(errors).length > 0) {
       setSubmitError('Sprawdź oznaczone pola i spróbuj ponownie.')
@@ -520,7 +516,7 @@ export default function RezerwacjaWidget() {
       setAnnouncement(mode === 'waitlist' ? 'Dodano do listy oczekujących.' : 'Rezerwacja została przyjęta.')
     } catch (error) {
       if (error?.code === 'IDEMPOTENCY_KEY_REUSED' || error?.status === 409) submitAttemptRef.current = null
-      const holdRejected = mode === 'booking' && config.version === 2
+      const holdRejected = mode === 'booking'
         && (error?.status === 409 || /HOLD|hold|wygas/i.test(`${error?.code || ''} ${error?.message || ''}`))
       if (holdRejected) {
         const rejectedToken = holdRef.current?.hold_token
@@ -646,7 +642,32 @@ export default function RezerwacjaWidget() {
         </header>
 
         <div className="card p-5 sm:p-8">
-          {!config ? (
+          {step === 'result' && result ? (
+            <PublicReservationResult
+              headingRef={resultHeadingRef}
+              result={result}
+              kind={resultKind}
+              cancelling={cancelling}
+              cancelError={cancelError}
+              paymentBusy={paymentBusy}
+              paymentError={paymentError}
+              onCancel={cancelReservation}
+              onRetryPayment={retryPayment}
+              onNewReservation={newReservation}
+            />
+          ) : !config && configError ? (
+            <section className="py-6" aria-labelledby="public-reservation-config-error-title" role="alert">
+              <h2 id="public-reservation-config-error-title" className="font-display text-xl font-semibold tracking-tight text-ink">
+                Nie udało się uruchomić rezerwacji
+              </h2>
+              <p className="mt-2 text-base leading-relaxed text-muted">
+                {configError}{/[.!?]$/.test(configError) ? '' : '.'} Sprawdź połączenie i spróbuj ponownie.
+              </p>
+              <Button className="mt-5 w-full sm:w-auto" variant="ghost" onClick={() => setConfigRetry((value) => value + 1)}>
+                Spróbuj ponownie
+              </Button>
+            </section>
+          ) : !config ? (
             <div className="py-10 text-center" role="status">
               <p className="text-sm text-muted">Przygotowuję rezerwację…</p>
             </div>
@@ -694,19 +715,6 @@ export default function RezerwacjaWidget() {
               onBack={backToSearch}
               onChooseAnother={backToSearch}
               onSubmit={submitReservation}
-            />
-          ) : step === 'result' && result ? (
-            <PublicReservationResult
-              headingRef={resultHeadingRef}
-              result={result}
-              kind={resultKind}
-              cancelling={cancelling}
-              cancelError={cancelError}
-              paymentBusy={paymentBusy}
-              paymentError={paymentError}
-              onCancel={cancelReservation}
-              onRetryPayment={retryPayment}
-              onNewReservation={newReservation}
             />
           ) : null}
         </div>

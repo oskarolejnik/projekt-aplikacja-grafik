@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import text
 
 import models
+from public_widget_v2_helpers import enable_widget_v2, public_create_v2
 
 
 def _day(days=7):
@@ -57,25 +58,25 @@ def test_split_slot_turn_time_i_strict_online(admin_client, client):
     booking_date = _day()
     _service(admin_client, booking_date)
     table = _table(admin_client, "R3-A")
-    assert admin_client.put(
-        "/api/lokal/config", json={"rezerwacje_online": True},
-    ).status_code == 200
+    enable_widget_v2(admin_client)
 
-    offered = client.post("/api/online/rezerwacja", json={
-        "data": str(booking_date),
-        "godz_od": "18:15",
-        "liczba_osob": 2,
-        "nazwisko": "Oferowany slot",
-    })
+    offered = public_create_v2(
+        client,
+        data=booking_date,
+        godz_od="18:15",
+        liczba_osob=2,
+        nazwisko="Oferowany slot",
+    )
     assert offered.status_code == 201, offered.text
     assert offered.json()["rezerwacja"]["godz_do"] == "19:45"
 
-    not_offered = client.post("/api/online/rezerwacja", json={
-        "data": str(booking_date),
-        "godz_od": "18:07",
-        "liczba_osob": 2,
-        "nazwisko": "Nieistniejący slot",
-    })
+    not_offered = public_create_v2(
+        client,
+        data=booking_date,
+        godz_od="18:07",
+        liczba_osob=2,
+        nazwisko="Nieistniejący slot",
+    )
     assert not_offered.status_code == 409
     assert not_offered.json()["code"] == "SLOT_NOT_OFFERED"
 
@@ -300,17 +301,16 @@ def test_online_przechodzi_do_kolejnej_sali_po_limicie_pierwszej(
         pojemnosc=4, aktywny=True, kolejnosc=1,
     )
     db.add_all([first_table, second_table]); db.commit()
-    assert admin_client.put(
-        "/api/lokal/config", json={"rezerwacje_online": True},
-    ).status_code == 200
+    enable_widget_v2(admin_client)
 
     def reserve(name):
-        return client.post("/api/online/rezerwacja", json={
-            "data": str(booking_date),
-            "godz_od": "18:00",
-            "liczba_osob": 2,
-            "nazwisko": name,
-        })
+        return public_create_v2(
+            client,
+            data=booking_date,
+            godz_od="18:00",
+            liczba_osob=2,
+            nazwisko=name,
+        )
 
     first = reserve("Najpierw pierwsza sala")
     second = reserve("Potem druga sala")

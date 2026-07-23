@@ -44,6 +44,8 @@ const GRUPY_PRAW = [
       { key: 'rezerwacje.sala', label: 'Konfiguracja sali', opis: 'Stoły, strefy i ich dostępność.' },
       { key: 'rezerwacje.reguly', label: 'Reguły rezerwacji', opis: 'Godziny, limity i wyjątki kalendarza.' },
       { key: 'rezerwacje.analityka', label: 'Analityka rezerwacji', opis: 'Obłożenie i podsumowania operacyjne.' },
+      { key: 'rezerwacje.eksport', label: 'Eksport danych gości', opis: 'Kontrolowany eksport wyników CRM do pliku CSV.' },
+      { key: 'rezerwacje.crm_zarzadzaj', label: 'Porządkowanie CRM', opis: 'Zgody, kontrola jakości i odwracalne scalanie profili.' },
       { key: 'rezerwacje.dane_kontaktowe', label: 'Dane kontaktowe', opis: 'Telefon i adres e-mail gościa.' },
       { key: 'rezerwacje.notatki_wewnetrzne', label: 'Notatki wewnętrzne', opis: 'Treść notatek dopisanych przez zespół.' },
       { key: 'rezerwacje.dane_wrazliwe', label: 'Dane wrażliwe', opis: 'Informacje o alergiach i szczególnych potrzebach.' },

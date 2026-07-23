@@ -1,102 +1,129 @@
-# Cutover rezerwacji Google/iCal → Lokalo
+# Wdrożenie produkcyjne modułu rezerwacji
 
-Ten runbook przełącza agregaty rezerwacji na kanoniczne `Termin(rodzaj="stolik")` bez trwałego
-dual-write. Samo wdrożenie kodu pozostaje w bezpiecznym trybie `legacy`; przełączenie jest decyzją
-operatora po raporcie różnic.
+Rezerwacje mają jedno źródło prawdy: bazę Lokalo i rekordy `Termin(rodzaj="stolik")`.
+Tryby `legacy`, `shadow` oraz odczyt z Google Calendar zostały wycofane. Nie należy
+ich przywracać jako awaryjnego źródła danych, ponieważ ponownie utworzyłoby to dwa
+rozbieżne kalendarze.
 
-## Warunki wejścia
+## Zakres gotowy bez zewnętrznych dostawców
 
-- aktualny backup bazy,
-- wdrożona migracja `0050_rezerwacje_source_identity`,
-- stały `ENCRYPTION_KEY` (wymagany również przez `--apply`),
-- działające konto Google tylko do odczytu albo poprawny eksport `.ics`,
-- uzgodnione `--start`, `--end` (koniec wyłączny), jawna data odcięcia oraz
-  `--coverage-through` obejmujące cały przyjęty horyzont przyszłych rezerwacji,
-- jedno źródło dla jednego kalendarza: nie importuj tych samych wpisów równolegle przez Google i ICS.
+- ręczne rezerwacje, host, widok sali i lista oczekujących,
+- reguły, limity, wyjątki, priorytety sal i konfiguracje łączonych stołów,
+- publiczny widget v2 z sesją, holdem, idempotencją i wersjonowanymi zgodami,
+- CRM gości, historia, jakość danych, kontrolowany eksport i odwracalne scalanie,
+- analityka, rekomendacje, symulacja oraz jawna decyzja operatora,
+- konta Recepcja / Host i szczegółowe uprawnienia,
+- lokalny sandbox zadatków wyłącznie w środowisku deweloperskim.
 
-W Docker Compose plik Google umieść jako `./secrets/google_sa.json`; kontener widzi go pod
-`/run/secrets/lokalo/google_sa.json`. Ustaw też `GOOGLE_CALENDAR_ID`.
+## Świadomie wyłączone bramki zewnętrzne
 
-## 1. Wdrożenie bez zmiany zachowania
+Nie blokują one funkcjonalnego domknięcia ani ręcznej obsługi rezerwacji. Każda z nich blokuje
+jednak aktywację zależnej funkcji albo końcowy odbiór produkcyjny:
 
-```env
-REZERWACJE_READ_MODE=legacy
-REZERWACJE_CUTOVER_DATE=
-```
+- SMTP i SMS — do czasu podania danych wybranego dostawcy,
+- Stripe — do czasu założenia działalności i konta Stripe,
+- produkcyjna treść informacji RODO — do zatwierdzenia przez właściciela danych
+  lub prawnika,
+- końcowe testy współbieżności — na docelowej bazie PostgreSQL,
+- instalacja PWA i ergonomia — na docelowych urządzeniach lokalu.
 
-Uruchom migracje/start aplikacji i potwierdź, że dotychczasowy agregat nadal działa.
+Jeśli Stripe jest wyłączony, nie aktywuj polityk wymagających zadatku. Brak providera
+nie może prowadzić do cichego przyjęcia płatnej rezerwacji bez płatności.
 
-## 2. Raport dry-run
+## 1. Kopia, próba migracji i wdrożenie
 
-Google:
+1. Wykonaj kopię PostgreSQL i potwierdź, że da się ją odtworzyć.
+2. Odtwórz kopię wraz z konfiguracją lokalu w odizolowanej instancji próbnej.
+3. Na odtworzonej kopii uruchom migracje do bieżącego `head`.
+4. Potwierdź `0068_reservation_closure`, raport gotowości oraz test akceptacyjny z sekcji 4.
+5. Dopiero po zielonej próbie wykonaj nową kopię produkcyjną i zatrzymaj zapisy na czas właściwej migracji.
+6. Wdróż ten sam, zweryfikowany obraz aplikacji i uruchom migrację produkcyjną do `head`.
+7. Nie uruchamiaj aplikacji na schemacie starszym niż wdrożony kod.
 
-```powershell
-cd backend
-python reconcile_rezerwacje.py --source google --start 2026-01-01 --end 2027-01-01 `
-  --cutover-date 2026-07-15 --coverage-through 2027-01-01 `
-  --report rezerwacje-cutover.json
-```
-
-iCal (tylko jawne, niecykliczne VEVENT z godziną i strefą):
-
-```powershell
-python reconcile_rezerwacje.py --source ical --ics export.ics --start 2026-01-01 `
-  --end 2027-01-01 --cutover-date 2026-07-15 --coverage-through 2027-01-01 `
-  --report rezerwacje-cutover.json
-```
-
-Raport nie zawiera nazwisk, telefonu, e-maila ani notatek. `issues[]` wskazuje sprawy przez stabilny
-anonimowy `ref`, datę/godzinę, liczebność, opcjonalny `termin_id` i nazwy zmienionych pól.
-
-`--coverage-through` jest jawną granicą kompletności źródła (dla zakresu z końcem wyłącznym może
-być równe `--end`). Ustal ją co najmniej na koniec całego okna, w którym system legacy przyjmował
-rezerwacje — nie wybieraj krótkiej daty tylko po to, aby uzyskać zielony raport. Narzędzie wymaga,
-aby granica była późniejsza zarówno od uruchomienia raportu, jak i od daty odcięcia; raport pokazuje
-osobno każdy warunek w `coverage`.
-
-Przed zapisem rozwiąż ręcznie `possible_duplicate`, `changed`, `source_missing` i błędy źródła.
-`safe_to_cutover=false` oznacza twardą blokadę przełączenia.
-
-## 3. Jednorazowy import czystych braków
-
-Powtórz to samo polecenie z `--apply`. Import obejmuje wyłącznie jednoznaczne
-`missing_in_termin`, działa w jednej transakcji i po zapisie generuje świeży raport.
+Przykład dla instancji próbnej, a następnie produkcyjnej:
 
 ```powershell
-python reconcile_rezerwacje.py --source google --start 2026-01-01 --end 2027-01-01 `
-  --cutover-date 2026-07-15 --coverage-through 2027-01-01 --apply `
-  --report rezerwacje-cutover-after-apply.json
+docker compose -f docker-compose.prod.yml run --rm app alembic upgrade head
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-Kod wyjścia różny od zera lub `apply.status=error` oznacza brak zatwierdzonego importu. Nie omijaj
-tej bramki ręcznym przełączeniem trybu.
+## 2. Konfiguracja lokalu
 
-## 4. Shadow-read
+Przed opublikowaniem widgetu ustaw:
 
-```env
-REZERWACJE_READ_MODE=shadow
-REZERWACJE_CUTOVER_DATE=2026-07-15
-```
+- godziny serwisów i ostatnie zasiadki,
+- czasy wizyt dla wszystkich wielkości grup,
+- sale, stoły, pojemności i sąsiedztwo,
+- dozwolone konfiguracje łączenia stołów,
+- limity osób i rezerwacji oraz wyjątki kalendarza,
+- kolejność zapełniania sal,
+- kontakt i adres administratora danych,
+- zasady auto-potwierdzenia oraz przypomnień.
 
-Po restarcie użytkownik nadal widzi legacy, a log `rezerwacje_shadow_delta` pokazuje wyłącznie
-anonimowe różnice per data/godzina. `shadow_unavailable` oznacza, że porównanie jest nieważne — nie
-traktuj pustego wyniku jako zgodności.
+Widget pozostaje domyślnie wyłączony po onboardingu. Włącz go dopiero po zapisaniu
+pełnej konfiguracji v2. Backend działa fail-closed: brak v2 nie uruchamia starego
+formularza.
 
-## 5. Finalne odcięcie
+## 3. Konta i minimalny dostęp
 
-1. Zatrzymaj nowe zapisy do Bookero/Google/iCal albo przełącz formularz na Lokalo.
-2. Wykonaj ostatni dry-run i `--apply` na tym samym zakresie.
-3. Wymagaj `safe_to_cutover=true`, pustej listy przyszłych nierozwiązanych problemów i kodu wyjścia 0.
-4. Ustaw datę odcięcia na dzisiaj lub wcześniej i przełącz:
+- Administrator: pełna konfiguracja i operacje.
+- Manager: tylko jawnie przyznane obszary, w tym osobno analityka, reguły, CRM
+  oraz eksport.
+- Recepcja / Host: operacje, host, dane kontaktowe i przekroczenie limitu po
+  ostrzeżeniu; bez finansów, danych wrażliwych, eksportu oraz zarządzania CRM.
+- Pracownik / kuchnia: wyłącznie bezpieczna lista własnego dnia.
 
-```env
-REZERWACJE_READ_MODE=canonical
-REZERWACJE_CUTOVER_DATE=2026-07-15
-```
+Przetestuj cofnięcie każdego uprawnienia na już zalogowanej sesji.
 
-5. Po restarcie sprawdź `/api/rezerwacje` jako admin/manager/pracownik oraz
-   `/api/me/rezerwacje` jako pracownik. Pełne `/api/rezerwacje-stolik` nadal musi być dla pracownika
-   niedostępne.
+## 4. Test akceptacyjny
 
-Tryb `canonical` nigdy nie wraca awaryjnie do Google. Po odcięciu naprawiaj dane kanoniczne i nie
-włączaj ponownie trwałego dual-write; fallback ukryłby problem i ponownie utworzył dwa źródła prawdy.
+Na kopii konfiguracji produkcyjnej wykonaj co najmniej:
+
+1. rezerwację 2-osobową na pojedynczy stół,
+2. rezerwację dużej grupy na różne konfiguracje, np. `4+2` i `6+4`,
+3. konflikt równoległych prób na ten sam zasób,
+4. wpis na waitlistę, ofertę, akceptację i wygaśnięcie,
+5. przekroczenie limitu przez Recepcję po ostrzeżeniu i z podanym powodem,
+6. zmianę stołu w widoku hosta oraz zakończenie wizyty,
+7. publiczną rezerwację oraz jednorazowe wejście z linku zarządzania, po którym zmiana i anulowanie
+   korzystają z szyfrowanej sesji w cookie `HttpOnly` — bez kopiowania surowego tokenu do storage lub URL,
+8. grant i wycofanie zgody, eksport CRM, scalenie oraz cofnięcie scalenia,
+9. rekomendację z symulacją, przyjęciem i odrzuceniem,
+10. brak dostępu do PII po odebraniu odpowiedniego prawa.
+
+## 5. Obserwacja po starcie
+
+Przez pierwszą zmianę sprawdzaj:
+
+- endpoint administratora `/api/ops/rezerwacje/health`,
+- liczbę i wiek oczekujących wiadomości,
+- wpisy `failed`, `uncertain` i wygasłe holdy,
+- błędy 409 jako prawidłowe konflikty biznesowe, a 5xx jako alarm,
+- czas odpowiedzi dostępności i tworzenia rezerwacji,
+- zgodność liczby wizyt na osi hosta z bazą rezerwacji.
+
+Raport gotowości nie zawiera nazwisk, kontaktów, notatek ani treści wiadomości.
+
+### Kryterium go/no-go
+
+- `SCHEMA_0068` musi mieć stan `ok`, a `PUBLIC_WIDGET_V2` dodatkowo raportować
+  `v2=true` i `privacy_ready=true` przed opublikowaniem widgetu.
+- Stan globalny `blocked` zatrzymuje rollout.
+- Każdy stan `attention` musi mieć przypisaną osobę, przyczynę i świadomą decyzję. Nie wolno
+  akceptować `attention` dla funkcji, którą lokal właśnie aktywuje.
+- Brak providera komunikacji jest dopuszczalny tylko przy wyłączonych zależnych przypomnieniach
+  lub kanałach; brak Stripe wyłącznie przy wyłączonych politykach płatności.
+- Po właściwej migracji powtórz test akceptacyjny i dopiero wtedy uruchom zapisy publiczne.
+
+## 6. Bezpieczny rollback
+
+1. Wyłącz `rezerwacje_online`, aby zatrzymać nowe zapisy publiczne.
+2. Pozostaw ręczną obsługę lokalu i nie przełączaj odczytu na Google.
+3. Zabezpiecz bazę oraz logi techniczne bez PII.
+4. Jeśli migracja ma zostać cofnięta, najpierw potwierdź, że nowe tabele są puste.
+   Migracja celowo odmawia destrukcyjnego downgrade przy istniejących danych.
+5. Napraw kod lub dane kanoniczne, uruchom test akceptacyjny i dopiero wtedy
+   ponownie opublikuj widget.
+
+Rollback aplikacji nie może usuwać rezerwacji, historii zgód, decyzji rekomendacji
+ani zapisów audytowych.

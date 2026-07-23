@@ -15,7 +15,7 @@ import models
 import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
-HEAD = "0067_rcp_geofencing"
+HEAD = "0068_reservation_closure"
 
 # Tabele pod nadzorem (rozszerzane w rezerwacjach; drift tu najgroźniejszy).
 _TABELE = [
@@ -36,6 +36,8 @@ _TABELE = [
     "reservation_operator_credentials", "reservation_workstations",
     "reservation_operator_sessions", "reservation_workstation_audit",
     "reservation_demand_events",
+    "crm_consent_events", "crm_guest_merges",
+    "reservation_recommendation_reviews",
 ]
 
 
@@ -387,6 +389,129 @@ def _alembic(env, *args):
         [sys.executable, "-m", "alembic", *args],
         cwd=str(BACKEND), env=env, capture_output=True, text=True,
     )
+
+
+def test_migracja_0068_ma_pusty_round_trip_i_blokuje_utrate_danych(tmp_path):
+    db_file = tmp_path / "_r73_r74_governance.db"
+    env = _env(db_file, "r73-r74-governance")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "INSERT INTO crm_consent_events "
+            "(subject_hash,purpose,decision,document_version,source,captured_at,"
+            "request_fingerprint,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "a" * 64,
+                "marketing",
+                "grant",
+                "privacy-v1",
+                "operator_in_person",
+                "2026-07-23 12:00:00",
+                "b" * 64,
+                "2026-07-23 12:00:00",
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    blocked = _alembic(env, "downgrade", "0067_rcp_geofencing")
+    assert blocked.returncode != 0
+    assert "Refusing to drop non-empty R7 governance table" in blocked.stderr
+
+    con = sqlite3.connect(str(db_file))
+    try:
+        assert con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0] == HEAD
+        assert {
+            "crm_consent_events",
+            "crm_guest_merges",
+            "reservation_recommendation_reviews",
+        } <= {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        con.execute("DELETE FROM crm_consent_events")
+        con.commit()
+    finally:
+        con.close()
+
+    downgraded = _alembic(env, "downgrade", "0067_rcp_geofencing")
+    assert downgraded.returncode == 0, downgraded.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert revision == "0067_rcp_geofencing"
+    assert not {
+        "crm_consent_events",
+        "crm_guest_merges",
+        "reservation_recommendation_reviews",
+    } & tables
+
+
+def test_migracja_0068_odrzuca_czesciowa_adopcje(tmp_path):
+    db_file = tmp_path / "_r73_r74_partial_adoption.db"
+    env = _env(db_file, "r73-r74-partial")
+    base = _alembic(env, "upgrade", "0067_rcp_geofencing")
+    assert base.returncode == 0, base.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        con.execute(
+            "CREATE TABLE crm_consent_events "
+            "(id INTEGER PRIMARY KEY, subject_hash VARCHAR(64) NOT NULL)"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    failed = _alembic(env, "upgrade", HEAD)
+    assert failed.returncode != 0
+    assert "R68_PARTIAL_ADOPTION" in failed.stderr
+    con = sqlite3.connect(str(db_file))
+    try:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert revision == "0067_rcp_geofencing"
+
+
+def test_migracja_0068_odrzuca_pelne_kolumny_bez_wymaganego_indeksu(tmp_path):
+    db_file = tmp_path / "_r73_r74_weakened_contract.db"
+    env = _env(db_file, "r73-r74-weakened")
+    upgraded = _alembic(env, "upgrade", HEAD)
+    assert upgraded.returncode == 0, upgraded.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        con.execute("DROP INDEX uq_crm_guest_merges_active_source")
+        con.execute(
+            "UPDATE alembic_version SET version_num='0067_rcp_geofencing'"
+        )
+        con.commit()
+
+    failed = _alembic(env, "upgrade", HEAD)
+
+    assert failed.returncode != 0
+    assert "Cannot adopt incompatible crm_guest_merges indexes" in failed.stderr
+    with sqlite3.connect(str(db_file)) as con:
+        revision = con.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    assert revision == "0067_rcp_geofencing"
 
 
 def test_migracja_0065_mapuje_legacy_i_ma_lossless_round_trip(tmp_path):

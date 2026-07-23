@@ -27,6 +27,8 @@ HOST = "rezerwacje.host"
 FLOOR = "rezerwacje.sala"
 RULES = "rezerwacje.reguly"
 ANALYTICS = "rezerwacje.analityka"
+EXPORT = "rezerwacje.eksport"
+CRM_MANAGE = "rezerwacje.crm_zarzadzaj"
 CONTACT = "rezerwacje.dane_kontaktowe"
 FINANCE = "rezerwacje.finanse"
 
@@ -54,6 +56,16 @@ _HOST_RESERVATION_ITEM = re.compile(
 )
 _CRM_RESERVATION_PROFILE = re.compile(
     r"^/api/crm/rezerwacje/[1-9]\d*/profil$"
+)
+_CRM_RESERVATION_CONSENTS = re.compile(
+    r"^/api/crm/rezerwacje/[1-9]\d*/zgody$"
+)
+_CRM_MERGE_UNDO = re.compile(
+    r"^/api/crm/scalenia/[1-9]\d*/cofnij$"
+)
+_RESERVATION_RECOMMENDATION_ACTION = re.compile(
+    r"^/api/analityka/rezerwacje/rekomendacje/[0-9a-f]{64}/"
+    r"(?P<action>symulacja|decyzja)$"
 )
 _RESERVATION_ROOM_ITEM = re.compile(
     r"^/api/sale-rezerwacyjne/(?P<id>[1-9]\d*)$"
@@ -165,6 +177,46 @@ def requirement_for(method: str, path: str) -> Requirement | None:
         # Zapis profilu pozostaje admin-only, dopóki produkt nie otrzyma osobnego,
         # granularnego prawa edycji CRM.
         return ADMIN_ONLY
+
+    if _CRM_RESERVATION_CONSENTS.fullmatch(path):
+        if method == "GET":
+            return Requirement(all_of=(OPERATIONS, CONTACT))
+        if method == "POST":
+            return Requirement(all_of=(CRM_MANAGE, CONTACT))
+        return ADMIN_ONLY
+
+    if path == "/api/crm/jakosc":
+        return (
+            Requirement(all_of=(CRM_MANAGE, CONTACT))
+            if method == "GET" else ADMIN_ONLY
+        )
+
+    if path == "/api/crm/eksport":
+        return (
+            Requirement(all_of=(EXPORT, CONTACT))
+            if method == "POST" else ADMIN_ONLY
+        )
+
+    if path == "/api/crm/goscie/wyszukaj":
+        return (
+            Requirement(
+                all_of=(OPERATIONS, CONTACT),
+                any_of=(EXPORT, CRM_MANAGE),
+            )
+            if method == "POST" else ADMIN_ONLY
+        )
+
+    if path in {"/api/crm/scalenia", "/api/crm/scalenia/podglad"}:
+        return (
+            Requirement(all_of=(CRM_MANAGE, CONTACT))
+            if method == "POST" else ADMIN_ONLY
+        )
+
+    if _CRM_MERGE_UNDO.fullmatch(path):
+        return (
+            Requirement(all_of=(CRM_MANAGE, CONTACT))
+            if method == "POST" else ADMIN_ONLY
+        )
 
     match = _RESERVATION_ITEM.fullmatch(path)
     if match:
@@ -279,6 +331,18 @@ def requirement_for(method: str, path: str) -> Requirement | None:
         "/api/analityka/oblozenie",
     }:
         return Requirement(all_of=(ANALYTICS,)) if method == "GET" else ADMIN_ONLY
+
+    if path == "/api/analityka/rezerwacje/rekomendacje":
+        return Requirement(all_of=(ANALYTICS,)) if method == "GET" else ADMIN_ONLY
+
+    recommendation = _RESERVATION_RECOMMENDATION_ACTION.fullmatch(path)
+    if recommendation:
+        action = recommendation.group("action")
+        if action == "symulacja" and method == "POST":
+            return Requirement(all_of=(ANALYTICS,))
+        if action == "decyzja" and method == "POST":
+            return Requirement(all_of=(ANALYTICS, RULES))
+        return ADMIN_ONLY
 
     return ADMIN_ONLY if _chroniona_przestrzen(path) else None
 

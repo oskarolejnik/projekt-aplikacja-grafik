@@ -4,6 +4,7 @@ publiczny zapis online. HOLD blokuje AUTOMATYCZNY dobór (auto-przydział / onli
 from datetime import date, timedelta
 
 import models
+from public_widget_v2_helpers import enable_widget_v2, public_waitlist_v2
 
 DZIEN = (date.today() + timedelta(days=30)).isoformat()
 
@@ -257,9 +258,14 @@ def test_powiadom_kolejkuje_bez_stempla_i_nie_dubluje(admin_client, db):
 
 
 def test_online_zapis_na_liste_oczekujacych(admin_client, client):
-    admin_client.put("/api/lokal/config", json={"rezerwacje_online": True})
-    r = client.post("/api/online/lista-oczekujacych",
-                    json={"data": DZIEN, "godz_od": "18:00", "liczba_osob": 2, "nazwisko": "Online Gość"})
+    enable_widget_v2(admin_client)
+    r = public_waitlist_v2(
+        client,
+        data=DZIEN,
+        godz_od="18:00",
+        liczba_osob=2,
+        nazwisko="Online Gość",
+    )
     assert r.status_code == 201, r.text
     assert "token" not in r.json()
     assert r.json()["wpis"]["status"] == "oczekuje"
@@ -275,14 +281,15 @@ def test_online_zapis_wymaga_wlaczonego_online(admin_client, client):
 
 
 def test_realizacja_online_waitlisty_zachowuje_kanal_i_nie_sadza(admin_client, client):
-    admin_client.put("/api/lokal/config", json={"rezerwacje_online": True})
+    enable_widget_v2(admin_client)
     table_id = _stolik(admin_client, "Online-W", 4)
-    created = client.post("/api/online/lista-oczekujacych", json={
-        "data": DZIEN,
-        "godz_od": "18:00",
-        "liczba_osob": 2,
-        "nazwisko": "Online oczekujący",
-    })
+    created = public_waitlist_v2(
+        client,
+        data=DZIEN,
+        godz_od="18:00",
+        liczba_osob=2,
+        nazwisko="Online oczekujący",
+    )
     assert created.status_code == 201, created.text
     waitlist = admin_client.get(
         f"/api/lista-oczekujacych?data={DZIEN}"

@@ -5,9 +5,18 @@ import '@testing-library/jest-dom/vitest'
 import CrmGoscie from './CrmGoscie'
 import { purgeReservationPrivacy } from '../../lib/reservationPrivacy'
 
-const { apiMock } = vi.hoisted(() => ({ apiMock: vi.fn() }))
+const { apiMock, downloadMock } = vi.hoisted(() => ({
+  apiMock: vi.fn(),
+  downloadMock: vi.fn(),
+}))
 
-vi.mock('../../lib/api', () => ({ api: apiMock }))
+vi.mock('../../lib/api', () => ({
+  api: apiMock,
+  pobierzPlikPost: downloadMock,
+}))
+vi.mock('../../context/AuthContext', () => ({
+  useAuth: () => ({ isAdmin: true, can: () => true }),
+}))
 vi.mock('./GuestProfileDialog', () => ({
   default: ({ reservationId, onClose, onSaved }) => (
     <div role="dialog" aria-label="Testowa karta gościa">
@@ -53,6 +62,8 @@ function deferred() {
 beforeEach(() => {
   apiMock.mockReset()
   apiMock.mockResolvedValue(response())
+  downloadMock.mockReset()
+  downloadMock.mockResolvedValue(undefined)
   window.history.replaceState({}, '', '/?panel=crm')
   localStorage.clear()
   sessionStorage.clear()
@@ -170,6 +181,46 @@ describe('CrmGoscie R7.1', () => {
       { signal: expect.any(AbortSignal) },
     ))
     expect(window.location.href).toBe('http://localhost:3000/?panel=crm')
+  })
+
+  it('uruchamia eksport dopiero po wczytaniu wyniku odpowiadającego nowej frazie', async () => {
+    const nextSearch = deferred()
+    render(<CrmGoscie />)
+    await screen.findAllByText('Anna Kowalska')
+
+    fireEvent.click(screen.getByRole('button', { name: /pokaż narzędzia/i }))
+    expect(await screen.findByRole('button', { name: 'Pobierz CSV' })).toBeEnabled()
+
+    apiMock.mockImplementation((path) => {
+      if (path === '/crm/jakosc') return Promise.resolve({})
+      if (path === '/crm/goscie/wyszukaj') return nextSearch.promise
+      return Promise.resolve({})
+    })
+    const input = screen.getByRole('textbox', { name: 'Nazwisko, telefon lub e-mail' })
+    fireEvent.change(input, { target: { value: 'Ewa' } })
+    fireEvent.submit(screen.getByRole('search'))
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      '/crm/goscie/wyszukaj',
+      'POST',
+      expect.objectContaining({ q: 'Ewa' }),
+      expect.anything(),
+    ))
+    expect(screen.getByRole('button', { name: 'Pobierz CSV' })).toBeDisabled()
+    expect(downloadMock).not.toHaveBeenCalled()
+
+    await act(async () => {
+      nextSearch.resolve(response([{ ...guest, profil_ref: 901, nazwisko: 'Ewa Nowak' }]))
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pobierz CSV' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Pobierz CSV' }))
+
+    await waitFor(() => expect(downloadMock).toHaveBeenCalledWith(
+      '/crm/eksport',
+      expect.objectContaining({ q: 'Ewa', offset: 0, limit: 10000 }),
+      expect.any(String),
+      expect.anything(),
+    ))
   })
 
   it('pokazuje lokalny błąd z retry zamiast fałszywego pustego stanu', async () => {

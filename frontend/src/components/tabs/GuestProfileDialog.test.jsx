@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import GuestProfileDialog from './GuestProfileDialog'
 
-const { apiMock, authState, confirmMock, privacyState } = vi.hoisted(() => ({
+const { apiMock, authState, confirmMock, keyMock, privacyState } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   authState: {
     isAdmin: true,
@@ -12,10 +12,14 @@ const { apiMock, authState, confirmMock, privacyState } = vi.hoisted(() => ({
     can: (permission) => authState.permissions.has(permission),
   },
   confirmMock: vi.fn(),
+  keyMock: vi.fn(),
   privacyState: { callback: null },
 }))
 
-vi.mock('../../lib/api', () => ({ api: apiMock }))
+vi.mock('../../lib/api', () => ({
+  api: apiMock,
+  nowyKluczIdempotencji: keyMock,
+}))
 vi.mock('../../context/AuthContext', () => ({ useAuth: () => authState }))
 vi.mock('../ui/Toast', () => ({ useToast: () => ({ confirm: confirmMock }) }))
 vi.mock('../../lib/reservationPrivacy', () => ({
@@ -34,6 +38,7 @@ const response = ({
   canViewNotes = true,
   confident = true,
   history = null,
+  consent = null,
 } = {}) => ({
   reservation_id: reservationId,
   profil_ref: reservationId,
@@ -61,11 +66,20 @@ const response = ({
     can_view_sensitive: canViewSensitive,
     can_view_internal_notes: canViewNotes,
   },
+  zgody: consent || {
+    state: 'missing',
+    active: false,
+    history: [],
+    history_total: 0,
+    current_document_version: 'marketing-2026-07-v1',
+  },
 })
 
 beforeEach(() => {
   apiMock.mockReset()
   confirmMock.mockReset()
+  keyMock.mockReset()
+  keyMock.mockReturnValue('consent-key-1')
   confirmMock.mockResolvedValue(true)
   authState.isAdmin = true
   authState.permissions = new Set([
@@ -291,5 +305,96 @@ describe('GuestProfileDialog', () => {
     const cleanUnload = new Event('beforeunload', { cancelable: true })
     window.dispatchEvent(cleanUnload)
     expect(cleanUnload.defaultPrevented).toBe(false)
+  })
+
+  it('pozwala zapisać odmowę i blokuje wycofanie, gdy nie ma aktywnej zgody', async () => {
+    apiMock.mockImplementation((path, method, body, options) => {
+      if (path === '/crm/rezerwacje/42/profil' && method === 'GET') {
+        return Promise.resolve(response())
+      }
+      if (path === '/crm/rezerwacje/42/zgody' && method === 'POST') {
+        expect(body).toEqual({
+          decision: 'decline',
+          source: 'operator_phone',
+          document_version: 'marketing-2026-07-v1',
+        })
+        expect(options.headers).toEqual({ 'Idempotency-Key': 'consent-key-1' })
+        return Promise.resolve({
+          state: 'declined',
+          active: false,
+          history: [{
+            decision: 'decline',
+            source: 'operator_phone',
+            document_version: 'marketing-2026-07-v1',
+            captured_at: '2026-07-23T12:00:00Z',
+          }],
+          current_document_version: 'marketing-2026-07-v1',
+        })
+      }
+      return Promise.reject(new Error(`Nieoczekiwane żądanie: ${method} ${path}`))
+    })
+
+    render(<GuestProfileDialog reservationId={42} onClose={vi.fn()} />)
+
+    expect(await screen.findByRole('button', { name: 'Wycofaj zgodę' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz odmowę' }))
+
+    expect(await screen.findByText('Zapisano odmowę udzielenia zgody.')).toBeInTheDocument()
+    expect(keyMock).toHaveBeenCalledOnce()
+  })
+
+  it('przy ponowieniu niejednoznacznego zapisu zgody używa tego samego klucza idempotencji', async () => {
+    let consentAttempts = 0
+    const usedKeys = []
+    apiMock.mockImplementation((path, method, _body, options) => {
+      if (path === '/crm/rezerwacje/42/profil' && method === 'GET') {
+        return Promise.resolve(response())
+      }
+      if (path === '/crm/rezerwacje/42/zgody' && method === 'POST') {
+        consentAttempts += 1
+        usedKeys.push(options.headers['Idempotency-Key'])
+        if (consentAttempts === 1) return Promise.reject(new Error('Połączenie zostało przerwane'))
+        return Promise.resolve({
+          state: 'granted',
+          active: true,
+          history: [],
+          current_document_version: 'marketing-2026-07-v1',
+        })
+      }
+      return Promise.reject(new Error(`Nieoczekiwane żądanie: ${method} ${path}`))
+    })
+
+    render(<GuestProfileDialog reservationId={42} onClose={vi.fn()} />)
+    const grant = await screen.findByRole('button', { name: 'Zapisz zgodę' })
+
+    fireEvent.click(grant)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Połączenie zostało przerwane')
+    fireEvent.click(grant)
+
+    await waitFor(() => expect(consentAttempts).toBe(2))
+    expect(usedKeys).toEqual(['consent-key-1', 'consent-key-1'])
+    expect(keyMock).toHaveBeenCalledOnce()
+  })
+
+  it('interpretuje czas zgody bez strefy jako UTC i pokazuje go w strefie Warszawy', async () => {
+    apiMock.mockResolvedValue(response({
+      consent: {
+        state: 'granted',
+        active: true,
+        history: [{
+          decision: 'grant',
+          source: 'operator_phone',
+          document_version: 'marketing-2026-07-v1',
+          captured_at: '2026-07-23T12:00:00',
+        }],
+        current_document_version: 'marketing-2026-07-v1',
+      },
+    }))
+
+    render(<GuestProfileDialog reservationId={42} onClose={vi.fn()} />)
+
+    expect(await screen.findByText(/23\.07\.2026.*14:00/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zapisz odmowę' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Wycofaj zgodę' })).toBeEnabled()
   })
 })

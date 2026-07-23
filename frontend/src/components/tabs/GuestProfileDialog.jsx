@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../../context/AuthContext'
-import { api } from '../../lib/api'
+import { api, nowyKluczIdempotencji } from '../../lib/api'
 import { Icon } from '../../lib/icons'
 import { subscribeReservationPrivacyPurge } from '../../lib/reservationPrivacy'
 import { Banner } from '../ui/Banner'
@@ -28,7 +28,6 @@ const formFromProfile = (data) => {
     notatka: profile.notatka || '',
     okazja_typ: profile.okazja_typ || '',
     okazja_data: profile.okazja_data || '',
-    marketing_zgoda: Boolean(profile.marketing_zgoda),
   }
 }
 
@@ -44,7 +43,6 @@ const formPayload = (form) => ({
   notatka: form.notatka.trim() || null,
   okazja_typ: form.okazja_typ || null,
   okazja_data: form.okazja_data.trim() || null,
-  marketing_zgoda: form.marketing_zgoda,
 })
 
 function ProfileSkeleton() {
@@ -110,7 +108,6 @@ function ReadOnlyProfile({ data }) {
         <ReadOnlyField label="Preferowana strefa" value={profile.preferowana_strefa} />
         <ReadOnlyField label="Okazja" value={profile.okazja_typ} />
         <ReadOnlyField label="Data okazji" value={profile.okazja_data} />
-        <ReadOnlyField label="Zgoda marketingowa" value={profile.marketing_zgoda ? 'Tak' : 'Nie'} />
       </dl>
 
       {capabilities.can_view_sensitive ? (
@@ -176,11 +173,120 @@ function ProfileForm({ form, setForm, saving }) {
         <input type="checkbox" checked={form.vip} onChange={(event) => update('vip', event.target.checked)} disabled={saving} className="h-4 w-4 accent-mint" />
         VIP oznaczony ręcznie
       </label>
-      <label className="flex min-h-11 items-center gap-3 rounded-xl border border-line px-3 py-2 text-sm font-semibold text-ink">
-        <input type="checkbox" checked={form.marketing_zgoda} onChange={(event) => update('marketing_zgoda', event.target.checked)} disabled={saving} className="h-4 w-4 accent-mint" />
-        Zgoda marketingowa
-      </label>
     </div>
+  )
+}
+
+const CONSENT_STATE = {
+  granted: ['Aktywna', 'text-success'],
+  withdrawn: ['Wycofana', 'text-danger'],
+  declined: ['Nieudzielona', 'text-muted'],
+  mixed: ['Wymaga wyjaśnienia', 'text-lemon'],
+  legacy_unverified: ['Brak dowodu', 'text-lemon'],
+  missing: ['Brak dowodu', 'text-muted'],
+}
+
+const CONSENT_SOURCE = {
+  public_widget: 'Widget online',
+  operator_phone: 'Telefon',
+  operator_in_person: 'Osobiście',
+  operator_email: 'E-mail',
+  import: 'Import',
+}
+
+const consentTimeWarsaw = (value) => {
+  if (!value) return 'Brak czasu'
+  const raw = String(value)
+  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw}Z`
+  const parsed = new Date(normalized)
+  if (Number.isNaN(parsed.getTime())) return 'Nieprawidłowy czas'
+  return new Intl.DateTimeFormat('pl-PL', {
+    timeZone: 'Europe/Warsaw',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(parsed)
+}
+
+function ConsentHistory({
+  consent,
+  canManage,
+  disabled,
+  saving,
+  error,
+  status,
+  onRecord,
+}) {
+  const [source, setSource] = useState('operator_phone')
+  const [label, tone] = CONSENT_STATE[consent?.state] || CONSENT_STATE.missing
+  const history = consent?.history || []
+  const hasActiveConsent = consent?.active === true || consent?.state === 'granted'
+  return (
+    <section className="border-y border-line py-5" aria-labelledby="guest-consent-title">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 id="guest-consent-title" className="text-sm font-semibold text-ink">Zgoda marketingowa</h3>
+          <p className={`mt-1 text-sm font-semibold ${tone}`}>{label}</p>
+          <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted">
+            Zgoda ma wersję, źródło i czas pozyskania. Edycja profilu nie może jej włączyć.
+          </p>
+        </div>
+        {consent?.legacy_unverified ? (
+          <span className="rounded-full bg-lemon/15 px-2.5 py-1 text-xs font-semibold text-lemon">Starszy wpis bez dowodu</span>
+        ) : null}
+      </div>
+
+      {history.length ? (
+        <ol className="mt-4 divide-y divide-line/70" aria-label="Historia zgody marketingowej">
+          {history.slice(0, 5).map((event, index) => (
+            <li key={`${event.captured_at || ''}:${event.source || ''}:${index}`} className="grid gap-1 py-2 text-xs sm:grid-cols-[1fr_auto] sm:gap-4">
+              <span className="text-ink">
+                {event.decision === 'grant' ? 'Udzielona' : event.decision === 'withdraw' ? 'Wycofana' : 'Nieudzielona'}
+                <span className="text-muted"> · {CONSENT_SOURCE[event.source] || event.source}</span>
+              </span>
+              <span className="text-muted">
+                {consentTimeWarsaw(event.captured_at)}
+                {event.document_version ? ` · ${event.document_version}` : ''}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="mt-4 text-sm text-muted">Nie zapisano jeszcze wersjonowanego zdarzenia.</p>}
+
+      {canManage ? (
+        <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(10rem,1fr)_auto_auto_auto] sm:items-end">
+          <label>
+            <span className="field-label">Źródło potwierdzenia</span>
+            <select className="field mt-1.5" value={source} onChange={(event) => setSource(event.target.value)} disabled={disabled || saving}>
+              <option value="operator_phone">Rozmowa telefoniczna</option>
+              <option value="operator_in_person">Osobiście</option>
+              <option value="operator_email">Wiadomość e-mail</option>
+            </select>
+          </label>
+          <Button
+            type="button"
+            variant="subtle"
+            disabled={disabled || saving || hasActiveConsent}
+            onClick={() => onRecord('decline', source)}
+          >
+            Zapisz odmowę
+          </Button>
+          <Button
+            type="button"
+            variant="subtle"
+            disabled={disabled || saving || !hasActiveConsent}
+            onClick={() => onRecord('withdraw', source)}
+          >
+            Wycofaj zgodę
+          </Button>
+          <Button type="button" disabled={disabled || saving} loading={saving} loadingLabel="Zapisuję zgodę" onClick={() => onRecord('grant', source)}>
+            Zapisz zgodę
+          </Button>
+        </div>
+      ) : null}
+      {disabled && canManage ? <p className="mt-2 text-xs text-muted">Najpierw zapisz albo odrzuć zmiany profilu.</p> : null}
+      {error ? <div className="mt-3" role="alert"><Banner variant="danger">{error}</Banner></div> : null}
+      <p className="mt-2 min-h-5 text-xs text-success" role="status" aria-live="polite">{status}</p>
+    </section>
   )
 }
 
@@ -322,10 +428,15 @@ export default function GuestProfileDialog({
   const [saveError, setSaveError] = useState(null)
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [consentSaving, setConsentSaving] = useState(false)
+  const [consentError, setConsentError] = useState(null)
+  const [consentStatus, setConsentStatus] = useState('')
   const [retryVersion, setRetryVersion] = useState(0)
   const requestVersion = useRef(0)
   const readController = useRef(null)
   const writeController = useRef(null)
+  const consentController = useRef(null)
+  const consentKeysRef = useRef(new Map())
   const baseline = useRef('')
   const preserveSafeSnapshotOnNextRead = useRef(false)
   const canViewSensitiveNow = Boolean(isAdmin || can('rezerwacje.dane_wrazliwe'))
@@ -342,6 +453,7 @@ export default function GuestProfileDialog({
     preserveSafeSnapshotOnNextRead.current = false
     readController.current?.abort()
     writeController.current?.abort()
+    consentController.current?.abort()
     readController.current = controller
     writeController.current = null
     setLoading(!preserveSafeSnapshot)
@@ -349,6 +461,10 @@ export default function GuestProfileDialog({
     setSaveError(null)
     setSaved(false)
     setSaving(false)
+    setConsentSaving(false)
+    setConsentError(null)
+    setConsentStatus('')
+    consentKeysRef.current.clear()
     if (!preserveSafeSnapshot) {
       setData(null)
       setForm(null)
@@ -381,6 +497,7 @@ export default function GuestProfileDialog({
     requestVersion.current += 1
     readController.current?.abort()
     writeController.current?.abort()
+    consentController.current?.abort()
   }, [])
 
   useEffect(() => {
@@ -396,6 +513,8 @@ export default function GuestProfileDialog({
     requestVersion.current += 1
     readController.current?.abort()
     writeController.current?.abort()
+    consentController.current?.abort()
+    consentController.current = null
     baseline.current = ''
     setData(null)
     setForm(null)
@@ -404,10 +523,15 @@ export default function GuestProfileDialog({
     setSaved(false)
     setLoading(false)
     setSaving(false)
+    setConsentSaving(false)
+    setConsentError(null)
+    setConsentStatus('')
+    consentKeysRef.current.clear()
     onCloseRef.current?.()
   }), [])
 
   const canEdit = Boolean(isAdmin && data?.capabilities?.can_edit)
+  const canManageConsent = Boolean(isAdmin || can('rezerwacje.crm_zarzadzaj'))
   const dirty = Boolean(canEdit && form && formSnapshot(form) !== baseline.current)
   const returnLabel = closeLabel.startsWith('Wróć') ? closeLabel : (canEdit ? 'Zamknij' : 'Wróć')
   const visibleData = useMemo(() => {
@@ -462,7 +586,7 @@ export default function GuestProfileDialog({
   }, [dirty])
 
   const requestClose = useCallback(async () => {
-    if (saving) return
+    if (saving || consentSaving) return
     if (dirty) {
       const discard = await confirm(
         'Odrzucić niezapisane zmiany w profilu gościa?',
@@ -475,7 +599,7 @@ export default function GuestProfileDialog({
       if (!discard) return
     }
     onClose?.({ dirtyConfirmed: dirty })
-  }, [confirm, dirty, onClose, saving])
+  }, [confirm, consentSaving, dirty, onClose, saving])
 
   const save = useCallback(async (event) => {
     event?.preventDefault()
@@ -510,6 +634,69 @@ export default function GuestProfileDialog({
     }
   }, [canEdit, form, onSaved, reservationId, saving])
 
+  const recordConsent = useCallback(async (decision, source) => {
+    if (!canManageConsent || consentSaving || dirty) return
+    const documentVersion = data?.zgody?.current_document_version
+    if (!documentVersion) {
+      setConsentError('Brak aktualnej wersji treści zgody. Odśwież kartę gościa.')
+      return
+    }
+    const fingerprint = JSON.stringify([
+      String(reservationId),
+      decision,
+      source,
+      documentVersion,
+    ])
+    let idempotencyKey = consentKeysRef.current.get(fingerprint)
+    if (!idempotencyKey) {
+      idempotencyKey = nowyKluczIdempotencji('crm-consent')
+      consentKeysRef.current.set(fingerprint, idempotencyKey)
+    }
+    const controller = new AbortController()
+    consentController.current?.abort()
+    consentController.current = controller
+    setConsentSaving(true)
+    setConsentError(null)
+    setConsentStatus('')
+    try {
+      const response = await api(
+        `/crm/rezerwacje/${encodeURIComponent(String(reservationId))}/zgody`,
+        'POST',
+        {
+          decision,
+          source,
+          document_version: documentVersion,
+        },
+        {
+          signal: controller.signal,
+          headers: {
+            'Idempotency-Key': idempotencyKey,
+          },
+        },
+      )
+      if (controller.signal.aborted) return
+      consentKeysRef.current.delete(fingerprint)
+      setData((current) => current ? { ...current, zgody: response } : current)
+      setConsentStatus(
+        decision === 'grant'
+          ? 'Zapisano dowód udzielenia zgody.'
+          : decision === 'decline'
+            ? 'Zapisano odmowę udzielenia zgody.'
+            : 'Zapisano wycofanie zgody.',
+      )
+      onSaved?.({ consent: response })
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        setConsentError(error.message || 'Nie udało się zapisać zdarzenia zgody.')
+      }
+    } finally {
+      if (consentController.current === controller) {
+        consentController.current = null
+        setConsentSaving(false)
+      }
+    }
+  }, [canManageConsent, consentSaving, data?.zgody?.current_document_version, dirty, onSaved, reservationId])
+
   const title = useMemo(() => data?.nazwisko ? `Karta gościa · ${data.nazwisko}` : 'Karta gościa', [data?.nazwisko])
 
   return (
@@ -540,6 +727,15 @@ export default function GuestProfileDialog({
           ) : null}
 
           {canEdit ? <ProfileForm form={form} setForm={setForm} saving={saving} /> : <ReadOnlyProfile data={visibleData} />}
+          <ConsentHistory
+            consent={visibleData.zgody}
+            canManage={canManageConsent}
+            disabled={dirty || saving}
+            saving={consentSaving}
+            error={consentError}
+            status={consentStatus}
+            onRecord={recordConsent}
+          />
           <VisitHistory data={visibleData} />
 
           {saveError ? <div role="alert"><Banner variant="danger">{saveError}</Banner></div> : null}

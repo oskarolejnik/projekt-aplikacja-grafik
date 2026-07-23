@@ -24,6 +24,12 @@ describe('typy — taksonomia lokali gastro', () => {
     }
   })
 
+  it('żaden preset nie publikuje widgetu przed konfiguracją i uzupełnieniem RODO', () => {
+    for (const t of [...TYPY, { moduly: PRESET_INNY }]) {
+      expect(t.moduly.rezerwacje_online).toBe(false)
+    }
+  })
+
   it('presety są zróżnicowane (nie wszystkie takie same)', () => {
     const podpisy = new Set(TYPY.map((t) => KLUCZE_MODULOW.map((k) => (t.moduly[k] ? '1' : '0')).join('')))
     expect(podpisy.size).toBeGreaterThanOrEqual(6)
